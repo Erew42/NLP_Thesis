@@ -11,6 +11,11 @@ dependencies = [
   # add others you actually use
 ]
 
+[project.optional-dependencies]
+dev = [
+  "pytest",
+]
+
 [build-system]
 requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
