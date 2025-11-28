@@ -8,6 +8,7 @@ from thesis_pkg.pipeline import (
     attach_ccm_links,
     attach_filings,
     build_price_panel,
+    DataStatus,
     merge_histories,
 )
 
@@ -51,10 +52,13 @@ def test_build_price_panel_merges_delistings_and_flags():
         start_date=dt.date(2024, 1, 2),
     ).collect()
 
-    flags = panel.select("CALDT", "price_data_flag").to_dict(as_series=False)
+    flags = panel.select("CALDT", "price_status").to_dict(as_series=False)
     assert flags == {
         "CALDT": [dt.date(2024, 1, 2), dt.date(2024, 1, 3)],
-        "price_data_flag": ["FullData (Primary+Secondary)", "FullData (Primary+Secondary)"],
+        "price_status": [
+            int(DataStatus.FULL_PANEL_DATA),
+            int(DataStatus.FULL_PANEL_DATA),
+        ],
     }
 
     assert panel.filter(pl.col("CALDT") == dt.date(2024, 1, 2)).select("DLRET").item() is None
@@ -78,8 +82,7 @@ def test_add_final_returns_combines_sources():
     assert enriched.select("FINAL_RET").to_series().round(4).to_list() == [0.155, -0.2, 0.05]
     assert enriched.select("FINAL_RETX").to_series().round(4).to_list() == [0.1016, None, 0.0296]
     assert enriched.select("FINAL_PRC").to_series().to_list() == [10.0, 1.5, 3.0]
-    assert enriched.select("ret_source").to_series().to_list() == ["RET*DLRET", "DLRET", "RET"]
-    assert enriched.select("prc_source").to_series().to_list() == ["PRC", "DLPRC", "PRC"]
+    assert enriched.select("prov_flags").to_series().to_list() == [61, 88, 45]
 
 
 def test_attach_filings_aligns_to_trading_days_and_orders():

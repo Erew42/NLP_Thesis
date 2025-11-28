@@ -1,10 +1,32 @@
 from __future__ import annotations
 
 import datetime as dt
+from enum import IntFlag, auto
 from pathlib import Path
 from typing import Iterable
 
 import polars as pl
+
+
+class DataStatus(IntFlag):
+    """Bitmask for data availability and provenance."""
+
+    NONE = 0
+
+    # Core Data Availability (Used in build_price_panel)
+    HAS_RET = auto()  # 1
+    HAS_BIDLO = auto()  # 2
+
+    # Detailed Provenance (Used in add_final_returns)
+    HAS_RETX = auto()  # 4
+    HAS_PRC = auto()  # 8
+    HAS_DLRET = auto()  # 16
+    HAS_DLRETX = auto()  # 32
+    HAS_DLPRC = auto()  # 64
+
+    # Convenience Combinations for Filtering
+    FULL_PANEL_DATA = HAS_RET | HAS_BIDLO
+    ANY_RET_DATA = HAS_RET | HAS_DLRET
 
 
 def _coerce_date(value: dt.date | dt.datetime | str) -> dt.date:
@@ -43,14 +65,10 @@ def build_price_panel(
     dp = sfz_dp.filter(pl.col("CALDT") >= pl.lit(start_dt))
 
     price = dp.join(ds, on=["KYPERMNO", "CALDT"], how="outer_coalesce").with_columns(
-        pl.when(pl.col("RET").is_not_null() & pl.col("BIDLO").is_not_null())
-        .then(pl.lit("FullData (Primary+Secondary)"))
-        .when(pl.col("RET").is_not_null())
-        .then(pl.lit("PrimaryOnly (RET, PRC)"))
-        .when(pl.col("BIDLO").is_not_null())
-        .then(pl.lit("SecondaryOnly (BIDLO, ASKHI)"))
-        .otherwise(pl.lit("NoData"))
-        .alias("price_data_flag")
+        (
+            (pl.col("RET").is_not_null().cast(pl.UInt64) * DataStatus.HAS_RET)
+            | (pl.col("BIDLO").is_not_null().cast(pl.UInt64) * DataStatus.HAS_BIDLO)
+        ).alias("price_status")
     )
 
     last_trade = price.group_by("KYPERMNO").agg(pl.col("CALDT").max().alias("LAST_CALDT"))
@@ -97,45 +115,32 @@ def build_price_panel(
 
 def add_final_returns(price_lf: pl.LazyFrame) -> pl.LazyFrame:
     """Add FINAL_RET/RETX/PRC and provenance flags."""
-    return price_lf.with_columns(
-        pl.when(pl.col("DLRET").is_not_null() & pl.col("RET").is_not_null())
+    flags_expr = (
+        (pl.col("RET").is_not_null().cast(pl.UInt64) * DataStatus.HAS_RET)
+        | (pl.col("RETX").is_not_null().cast(pl.UInt64) * DataStatus.HAS_RETX)
+        | (pl.col("PRC").is_not_null().cast(pl.UInt64) * DataStatus.HAS_PRC)
+        | (pl.col("DLRET").is_not_null().cast(pl.UInt64) * DataStatus.HAS_DLRET)
+        | (pl.col("DLRETX").is_not_null().cast(pl.UInt64) * DataStatus.HAS_DLRETX)
+        | (pl.col("DLPRC").is_not_null().cast(pl.UInt64) * DataStatus.HAS_DLPRC)
+    ).alias("prov_flags")
+
+    return price_lf.with_columns(flags_expr).with_columns(
+        pl.when((pl.col("prov_flags") & (DataStatus.HAS_RET | DataStatus.HAS_DLRET)) == (DataStatus.HAS_RET | DataStatus.HAS_DLRET))
         .then((1.0 + pl.col("RET")) * (1.0 + pl.col("DLRET")) - 1.0)
-        .when(pl.col("DLRET").is_not_null())
+        .when((pl.col("prov_flags") & DataStatus.HAS_DLRET) > 0)
         .then(pl.col("DLRET"))
         .otherwise(pl.col("RET"))
         .alias("FINAL_RET"),
-        pl.when(pl.col("DLRETX").is_not_null() & pl.col("RETX").is_not_null())
+        pl.when((pl.col("prov_flags") & (DataStatus.HAS_RETX | DataStatus.HAS_DLRETX)) == (DataStatus.HAS_RETX | DataStatus.HAS_DLRETX))
         .then((1.0 + pl.col("RETX")) * (1.0 + pl.col("DLRETX")) - 1.0)
-        .when(pl.col("DLRETX").is_not_null())
+        .when((pl.col("prov_flags") & DataStatus.HAS_DLRETX) > 0)
         .then(pl.col("DLRETX"))
         .otherwise(pl.col("RETX"))
         .alias("FINAL_RETX"),
-        pl.when(pl.col("DLPRC").is_not_null())
+        pl.when((pl.col("prov_flags") & DataStatus.HAS_DLPRC) > 0)
         .then(pl.col("DLPRC").abs())
         .otherwise(pl.col("PRC").abs())
         .alias("FINAL_PRC"),
-        pl.when(pl.col("DLRET").is_not_null() & pl.col("RET").is_not_null())
-        .then(pl.lit("RET*DLRET"))
-        .when(pl.col("DLRET").is_not_null())
-        .then(pl.lit("DLRET"))
-        .when(pl.col("RET").is_not_null())
-        .then(pl.lit("RET"))
-        .otherwise(pl.lit("None"))
-        .alias("ret_source"),
-        pl.when(pl.col("DLRETX").is_not_null() & pl.col("RETX").is_not_null())
-        .then(pl.lit("RETX*DLRETX"))
-        .when(pl.col("DLRETX").is_not_null())
-        .then(pl.lit("DLRETX"))
-        .when(pl.col("RETX").is_not_null())
-        .then(pl.lit("RETX"))
-        .otherwise(pl.lit("None"))
-        .alias("retx_source"),
-        pl.when(pl.col("DLPRC").is_not_null())
-        .then(pl.lit("DLPRC"))
-        .when(pl.col("PRC").is_not_null())
-        .then(pl.lit("PRC"))
-        .otherwise(pl.lit("None"))
-        .alias("prc_source"),
     )
 
 
