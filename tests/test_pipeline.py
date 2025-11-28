@@ -52,15 +52,16 @@ def test_build_price_panel_merges_delistings_and_flags():
         start_date=dt.date(2024, 1, 2),
     ).collect()
 
-    flags = panel.select("CALDT", "price_status").to_dict(as_series=False)
+    flags = panel.select("CALDT", "data_status").to_dict(as_series=False)
     assert flags == {
         "CALDT": [dt.date(2024, 1, 2), dt.date(2024, 1, 3)],
-        "price_status": [
+        "data_status": [
             int(DataStatus.FULL_PANEL_DATA),
             int(DataStatus.FULL_PANEL_DATA),
         ],
     }
 
+    assert "price_status" not in panel.columns
     assert panel.filter(pl.col("CALDT") == dt.date(2024, 1, 2)).select("DLRET").item() is None
     assert panel.filter(pl.col("CALDT") == dt.date(2024, 1, 3)).select("DLRET").item() == -0.5
 
@@ -74,6 +75,7 @@ def test_add_final_returns_combines_sources():
             "DLRETX": [0.02, None, -0.01],
             "PRC": [-10.0, -5.0, -3.0],
             "DLPRC": [None, 1.5, None],
+            "data_status": [int(DataStatus.NONE)] * 3,
         }
     )
 
@@ -82,7 +84,8 @@ def test_add_final_returns_combines_sources():
     assert enriched.select("FINAL_RET").to_series().round(4).to_list() == [0.155, -0.2, 0.05]
     assert enriched.select("FINAL_RETX").to_series().round(4).to_list() == [0.1016, None, 0.0296]
     assert enriched.select("FINAL_PRC").to_series().to_list() == [10.0, 1.5, 3.0]
-    assert enriched.select("prov_flags").to_series().to_list() == [61, 88, 45]
+    assert enriched.select("data_status").to_series().to_list() == [61, 88, 45]
+    assert "prov_flags" not in enriched.columns
 
 
 def test_attach_filings_aligns_to_trading_days_and_orders():
@@ -174,13 +177,14 @@ def test_attach_ccm_links_prefers_canonical_primary_link():
     assert link_flag == ["canonical_primary_LC", "no_ccm_link"]
 
 
-def test_merge_histories_combines_good_and_bad_rows(tmp_path: Path):
+def test_merge_histories_keeps_rows_and_sets_attempt_bits(tmp_path: Path):
     price = pl.DataFrame(
         {
             "KYPERMNO": [1, 2],
             "CALDT": [dt.date(2024, 1, 2), dt.date(2024, 1, 2)],
             "KYGVKEY_final": ["1000", None],
             "LIID": ["A", None],
+            "data_status": [0, 0],
         }
     )
 
@@ -207,21 +211,20 @@ def test_merge_histories_combines_good_and_bad_rows(tmp_path: Path):
         }
     )
 
-    output_path = merge_histories(
-        price.lazy(),
-        sec_hist.lazy(),
-        comp_hist.lazy(),
-        tmp_path,
-    )
+    output_path = merge_histories(price.lazy(), sec_hist.lazy(), comp_hist.lazy(), tmp_path)
+    merged = pl.read_parquet(output_path).sort("KYPERMNO")
 
-    merged = pl.read_parquet(output_path)
-    join1 = merged.select("join1_status").to_series().to_list()
-    join2 = merged.select("join2_status").to_series().to_list()
+    assert "join1_status" not in merged.columns
+    assert "join2_status" not in merged.columns
 
-    assert int(DataStatus.CompHist_OK) in join1
-    assert int(DataStatus.NONE) in join1
-    assert int(DataStatus.SecHist_OK) in join2
-    assert int(DataStatus.NONE) in join2
+    with_keys = merged.filter(pl.col("KYGVKEY_final").is_not_null()).select("data_status").item()
+    without_keys = merged.filter(pl.col("KYGVKEY_final").is_null()).select("data_status").item()
+
+    assert with_keys & int(DataStatus.SECHIST_VALID)
+    assert with_keys & int(DataStatus.COMPHIST_VALID)
+    assert with_keys & int(DataStatus.SECHIST_ATTEMPTED)
+    assert with_keys & int(DataStatus.COMPHIST_ATTEMPTED)
+    assert without_keys == int(DataStatus.NONE)
 
 
 def test_merge_histories_open_ended_segments_are_valid(tmp_path: Path):
@@ -257,19 +260,12 @@ def test_merge_histories_open_ended_segments_are_valid(tmp_path: Path):
         }
     )
 
-    output_path = merge_histories(
-        price.lazy(),
-        sec_hist.lazy(),
-        comp_hist.lazy(),
-        tmp_path,
-    )
-
+    output_path = merge_histories(price.lazy(), sec_hist.lazy(), comp_hist.lazy(), tmp_path)
     merged = pl.read_parquet(output_path)
-    join1_status = merged.select("join1_status").item()
-    join2_status = merged.select("join2_status").item()
+    status = merged.select("data_status").item()
 
-    assert join1_status & int(DataStatus.CompHist_OK) == int(DataStatus.CompHist_OK)
-    assert join2_status & int(DataStatus.SecHist_OK) == int(DataStatus.SecHist_OK)
+    assert status & int(DataStatus.COMPHIST_VALID)
+    assert status & int(DataStatus.SECHIST_VALID)
     assert merged.select("HCIK").item() == "CIK1"
     assert merged.select("HTPCI").item() == "USA"
 
@@ -307,17 +303,16 @@ def test_merge_histories_masks_stale_segments(tmp_path: Path):
         }
     )
 
-    output_path = merge_histories(
-        price.lazy(),
-        sec_hist.lazy(),
-        comp_hist.lazy(),
-        tmp_path,
-    )
-
+    output_path = merge_histories(price.lazy(), sec_hist.lazy(), comp_hist.lazy(), tmp_path)
     merged = pl.read_parquet(output_path)
+    status = merged.select("data_status").item()
 
-    assert merged.select("join1_status").item() == int(DataStatus.NONE)
-    assert merged.select("join2_status").item() == int(DataStatus.NONE)
+    assert status & int(DataStatus.SECHIST_MATCHED)
+    assert status & int(DataStatus.SECHIST_STALE)
+    assert status & int(DataStatus.COMPHIST_MATCHED)
+    assert status & int(DataStatus.COMPHIST_STALE)
+    assert status & int(DataStatus.SECHIST_VALID) == 0
+    assert status & int(DataStatus.COMPHIST_VALID) == 0
     assert merged.select("HCIK").item() is None
     assert merged.select("HTPCI").item() is None
     assert merged.select("HEXCNTRY").item() is None
@@ -356,15 +351,53 @@ def test_merge_histories_still_joins_comp_history_without_liid(tmp_path: Path):
         }
     )
 
-    output_path = merge_histories(
-        price.lazy(),
-        sec_hist.lazy(),
-        comp_hist.lazy(),
-        tmp_path,
-    )
-
+    output_path = merge_histories(price.lazy(), sec_hist.lazy(), comp_hist.lazy(), tmp_path)
     merged = pl.read_parquet(output_path)
+    status = merged.select("data_status").item()
 
-    assert merged.select("join1_status").item() & int(DataStatus.CompHist_OK) == int(DataStatus.CompHist_OK)
+    assert status & int(DataStatus.COMPHIST_VALID)
+    assert status & int(DataStatus.SECHIST_ATTEMPTED) == 0
+    assert status & int(DataStatus.SECHIST_CAN_ATTEMPT) == 0
     assert merged.select("HCIK").item() == "CIK1"
     assert merged.select("HNAICS").item() == "1111"
+    assert merged.select("HTPCI").item() is None
+
+
+def test_merge_histories_preserves_uint64_roundtrip(tmp_path: Path):
+    price = pl.DataFrame(
+        {
+            "KYPERMNO": [1],
+            "CALDT": [dt.date(2024, 1, 2)],
+            "KYGVKEY_final": ["1000"],
+            "LIID": ["A"],
+            "data_status": [int(DataStatus.HAS_RET)],
+        }
+    )
+
+    sec_hist = pl.DataFrame(
+        {
+            "KYGVKEY": ["1000"],
+            "KYIID": ["A"],
+            "HSCHGDT": [dt.date(2023, 12, 31)],
+            "HSCHGENDDT": [dt.date(2025, 1, 1)],
+            "HTPCI": ["USA"],
+            "HEXCNTRY": ["US"],
+        }
+    )
+
+    comp_hist = pl.DataFrame(
+        {
+            "KYGVKEY": ["1000"],
+            "HCHGDT": [dt.date(2023, 1, 1)],
+            "HCHGENDDT": [dt.date(2025, 1, 1)],
+            "HCIK": ["CIK1"],
+            "HSIC": [100],
+            "HNAICS": ["1111"],
+            "HGSUBIND": ["Sub"],
+        }
+    )
+
+    output_path = merge_histories(price.lazy(), sec_hist.lazy(), comp_hist.lazy(), tmp_path)
+
+    loaded_schema = pl.scan_parquet(output_path).collect_schema()
+    assert loaded_schema["data_status"] == pl.UInt64

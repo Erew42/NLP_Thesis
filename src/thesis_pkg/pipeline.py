@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import datetime as dt
-from enum import IntFlag, auto
+from enum import IntFlag
 from pathlib import Path
 from typing import Iterable
 
 import polars as pl
+
+
+STATUS_DTYPE = pl.UInt64
 
 
 class DataStatus(IntFlag):
@@ -14,23 +17,48 @@ class DataStatus(IntFlag):
     NONE = 0
 
     # Core Data Availability (Used in build_price_panel)
-    HAS_RET = auto()  # 1
-    HAS_BIDLO = auto()  # 2
+    HAS_RET = 1 << 0
+    HAS_BIDLO = 1 << 1
 
     # Detailed Provenance (Used in add_final_returns)
-    HAS_RETX = auto()  # 4
-    HAS_PRC = auto()  # 8
-    HAS_DLRET = auto()  # 16
-    HAS_DLRETX = auto()  # 32
-    HAS_DLPRC = auto()  # 64
+    HAS_RETX = 1 << 2
+    HAS_PRC = 1 << 3
+    HAS_DLRET = 1 << 4
+    HAS_DLRETX = 1 << 5
+    HAS_DLPRC = 1 << 6
 
-    # History join flags (used in merge_histories)
-    CompHist_OK = auto()  # 128
-    SecHist_OK = auto()  # 256
+    # Company history diagnostics
+    COMPHIST_CAN_ATTEMPT = 1 << 7
+    COMPHIST_ATTEMPTED = 1 << 8
+    COMPHIST_MATCHED = 1 << 9
+    COMPHIST_NO_MATCH = 1 << 10
+    COMPHIST_VALID = 1 << 11
+    COMPHIST_STALE = 1 << 12
+
+    # Security history diagnostics
+    SECHIST_CAN_ATTEMPT = 1 << 13
+    SECHIST_ATTEMPTED = 1 << 14
+    SECHIST_MATCHED = 1 << 15
+    SECHIST_NO_MATCH = 1 << 16
+    SECHIST_VALID = 1 << 17
+    SECHIST_STALE = 1 << 18
 
     # Convenience Combinations for Filtering
     FULL_PANEL_DATA = HAS_RET | HAS_BIDLO
     ANY_RET_DATA = HAS_RET | HAS_DLRET
+
+
+def _ensure_data_status(lf: pl.LazyFrame) -> pl.LazyFrame:
+    """Guarantee presence and dtype of the shared status column."""
+    schema = lf.collect_schema()
+    if "data_status" not in schema:
+        return lf.with_columns(pl.lit(int(DataStatus.NONE), dtype=STATUS_DTYPE).alias("data_status"))
+    return lf.with_columns(pl.col("data_status").cast(STATUS_DTYPE))
+
+
+def _flag_if(expr: pl.Expr, flag: DataStatus) -> pl.Expr:
+    """Helper to promote a boolean to a UInt64 bitmask."""
+    return expr.cast(STATUS_DTYPE) * int(flag)
 
 
 def _coerce_date(value: dt.date | dt.datetime | str) -> dt.date:
@@ -68,11 +96,13 @@ def build_price_panel(
     ds = sfz_ds.filter(pl.col("CALDT") >= pl.lit(start_dt))
     dp = sfz_dp.filter(pl.col("CALDT") >= pl.lit(start_dt))
 
-    price = dp.join(ds, on=["KYPERMNO", "CALDT"], how="outer_coalesce").with_columns(
+    price = dp.join(ds, on=["KYPERMNO", "CALDT"], how="full", coalesce=True).with_columns(
         (
-            (pl.col("RET").is_not_null().cast(pl.UInt64) * DataStatus.HAS_RET)
-            | (pl.col("BIDLO").is_not_null().cast(pl.UInt64) * DataStatus.HAS_BIDLO)
-        ).alias("price_status")
+            _flag_if(pl.col("RET").is_not_null(), DataStatus.HAS_RET)
+            | _flag_if(pl.col("BIDLO").is_not_null(), DataStatus.HAS_BIDLO)
+        )
+        .cast(STATUS_DTYPE)
+        .alias("data_status")
     )
 
     last_trade = price.group_by("KYPERMNO").agg(pl.col("CALDT").max().alias("LAST_CALDT"))
@@ -119,29 +149,40 @@ def build_price_panel(
 
 def add_final_returns(price_lf: pl.LazyFrame) -> pl.LazyFrame:
     """Add FINAL_RET/RETX/PRC and provenance flags."""
-    flags_expr = (
-        (pl.col("RET").is_not_null().cast(pl.UInt64) * DataStatus.HAS_RET)
-        | (pl.col("RETX").is_not_null().cast(pl.UInt64) * DataStatus.HAS_RETX)
-        | (pl.col("PRC").is_not_null().cast(pl.UInt64) * DataStatus.HAS_PRC)
-        | (pl.col("DLRET").is_not_null().cast(pl.UInt64) * DataStatus.HAS_DLRET)
-        | (pl.col("DLRETX").is_not_null().cast(pl.UInt64) * DataStatus.HAS_DLRETX)
-        | (pl.col("DLPRC").is_not_null().cast(pl.UInt64) * DataStatus.HAS_DLPRC)
-    ).alias("prov_flags")
+    lf = _ensure_data_status(price_lf)
 
-    return price_lf.with_columns(flags_expr).with_columns(
-        pl.when((pl.col("prov_flags") & (DataStatus.HAS_RET | DataStatus.HAS_DLRET)) == (DataStatus.HAS_RET | DataStatus.HAS_DLRET))
+    ret_available = pl.col("RET").is_not_null()
+    retx_available = pl.col("RETX").is_not_null()
+    prc_available = pl.col("PRC").is_not_null()
+    dlret_available = pl.col("DLRET").is_not_null()
+    dlretx_available = pl.col("DLRETX").is_not_null()
+    dlprc_available = pl.col("DLPRC").is_not_null()
+
+    availability_flags = (
+        pl.col("data_status").cast(STATUS_DTYPE)
+        | _flag_if(ret_available, DataStatus.HAS_RET)
+        | _flag_if(retx_available, DataStatus.HAS_RETX)
+        | _flag_if(prc_available, DataStatus.HAS_PRC)
+        | _flag_if(dlret_available, DataStatus.HAS_DLRET)
+        | _flag_if(dlretx_available, DataStatus.HAS_DLRETX)
+        | _flag_if(dlprc_available, DataStatus.HAS_DLPRC)
+    ).cast(STATUS_DTYPE).alias("data_status")
+
+    return lf.with_columns(
+        availability_flags,
+        pl.when(ret_available & dlret_available)
         .then((1.0 + pl.col("RET")) * (1.0 + pl.col("DLRET")) - 1.0)
-        .when((pl.col("prov_flags") & DataStatus.HAS_DLRET) > 0)
+        .when(dlret_available)
         .then(pl.col("DLRET"))
         .otherwise(pl.col("RET"))
         .alias("FINAL_RET"),
-        pl.when((pl.col("prov_flags") & (DataStatus.HAS_RETX | DataStatus.HAS_DLRETX)) == (DataStatus.HAS_RETX | DataStatus.HAS_DLRETX))
+        pl.when(retx_available & dlretx_available)
         .then((1.0 + pl.col("RETX")) * (1.0 + pl.col("DLRETX")) - 1.0)
-        .when((pl.col("prov_flags") & DataStatus.HAS_DLRETX) > 0)
+        .when(dlretx_available)
         .then(pl.col("DLRETX"))
         .otherwise(pl.col("RETX"))
         .alias("FINAL_RETX"),
-        pl.when((pl.col("prov_flags") & DataStatus.HAS_DLPRC) > 0)
+        pl.when(dlprc_available)
         .then(pl.col("DLPRC").abs())
         .otherwise(pl.col("PRC").abs())
         .alias("FINAL_PRC"),
@@ -320,29 +361,43 @@ def merge_histories(
     temp_path = output_dir / temp_name
     final_path = output_dir / final_name
 
-    status_dtype = pl.UInt16
-    comp_hist_ok = pl.lit(int(DataStatus.CompHist_OK), dtype=status_dtype)
-    sec_hist_ok = pl.lit(int(DataStatus.SecHist_OK), dtype=status_dtype)
-    status_none = pl.lit(int(DataStatus.NONE), dtype=status_dtype)
+    sec_schema = sec_hist_lf.collect_schema()
+    comp_schema = comp_hist_lf.collect_schema()
 
-    good_keys = price_lf.filter(pl.col("KYGVKEY_final").is_not_null() & pl.col("LIID").is_not_null())
+    base = _ensure_data_status(price_lf).with_columns(
+        pl.col("CALDT").cast(pl.Date, strict=False).alias("CALDT"),
+        pl.col("data_status").cast(STATUS_DTYPE),
+    )
+
+    base_schema = base.collect_schema()
+    if "LIID" in base_schema:
+        base = base.with_columns(pl.col("LIID").cast(sec_schema.get("KYIID", pl.Utf8)))
 
     sec_hist = sec_hist_lf.select(
-        "KYGVKEY", "KYIID",
+        "KYGVKEY",
+        "KYIID",
         pl.col("HSCHGDT").alias("HIST_START_DATE_SEC"),
         pl.col("HSCHGENDDT").alias("HCHGENDDT_SEC"),
-        "HTPCI", "HEXCNTRY",
+        "HTPCI",
+        "HEXCNTRY",
     ).sort("KYGVKEY", "KYIID", "HIST_START_DATE_SEC")
 
     comp_hist = comp_hist_lf.select(
         "KYGVKEY",
         pl.col("HCHGDT").alias("HIST_START_DATE_COMP"),
         pl.col("HCHGENDDT").alias("HCHGENDDT_COMP"),
-        "HCIK", "HSIC", "HNAICS", "HGSUBIND",
+        "HCIK",
+        "HSIC",
+        "HNAICS",
+        "HGSUBIND",
     ).sort("KYGVKEY", "HIST_START_DATE_COMP")
 
-    step1 = (
-        good_keys.sort("KYGVKEY_final", "LIID", "CALDT")
+    # Security history join (requires GVKEY + LIID)
+    sec_keys = pl.col("KYGVKEY_final").is_not_null() & pl.col("LIID").is_not_null()
+    sec_candidates = base.filter(sec_keys)
+
+    sec_joined = (
+        sec_candidates.sort("KYGVKEY_final", "LIID", "CALDT")
         .join_asof(
             sec_hist,
             left_on="CALDT",
@@ -351,20 +406,56 @@ def merge_histories(
             by_right=["KYGVKEY", "KYIID"],
             strategy="backward",
         )
-        .with_columns(
-            pl.when(pl.col("HCHGENDDT_SEC").is_null()).then(status_none)
-            .when(pl.col("CALDT") > pl.col("HCHGENDDT_SEC")).then(status_none)
-            .otherwise(sec_hist_ok).alias("join2_status"),
-        )
         .select(pl.all().exclude(["KYGVKEY", "KYIID"]))
     )
-    step1.sink_parquet(temp_path, compression="zstd")
 
-    step1_loaded = pl.scan_parquet(temp_path)
+    sec_matched = pl.col("HIST_START_DATE_SEC").is_not_null()
+    sec_valid = sec_matched & (pl.col("HCHGENDDT_SEC").is_null() | (pl.col("CALDT") <= pl.col("HCHGENDDT_SEC")))
+    sec_stale = sec_matched & pl.col("HCHGENDDT_SEC").is_not_null() & (pl.col("CALDT") > pl.col("HCHGENDDT_SEC"))
 
-    step2 = (
-        step1_loaded
-        .sort("KYGVKEY_final", "CALDT")
+    sec_status = (
+        pl.col("data_status").cast(STATUS_DTYPE)
+        | pl.lit(int(DataStatus.SECHIST_CAN_ATTEMPT | DataStatus.SECHIST_ATTEMPTED), dtype=STATUS_DTYPE)
+        | _flag_if(sec_matched, DataStatus.SECHIST_MATCHED)
+        | _flag_if(sec_valid, DataStatus.SECHIST_VALID)
+        | _flag_if(sec_stale, DataStatus.SECHIST_STALE)
+        | _flag_if(sec_matched.not_(), DataStatus.SECHIST_NO_MATCH)
+    ).alias("data_status")
+
+    sec_joined = sec_joined.with_columns(
+        sec_status,
+        pl.when(sec_valid).then(pl.col("HTPCI")).otherwise(pl.lit(None, dtype=pl.String)).alias("HTPCI"),
+        pl.when(sec_valid).then(pl.col("HEXCNTRY")).otherwise(pl.lit(None, dtype=pl.String)).alias("HEXCNTRY"),
+        pl.when(sec_valid).then(pl.col("HIST_START_DATE_SEC")).otherwise(pl.lit(None).cast(pl.Date)).alias("HIST_START_DATE_SEC"),
+        pl.when(sec_valid).then(pl.col("HCHGENDDT_SEC")).otherwise(pl.lit(None).cast(pl.Date)).alias("HCHGENDDT_SEC"),
+    )
+
+    sec_missing = base.filter(sec_keys.not_()).with_columns(
+        pl.col("data_status").cast(STATUS_DTYPE),
+        pl.lit(None).cast(pl.Date).alias("HIST_START_DATE_SEC"),
+        pl.lit(None).cast(pl.Date).alias("HCHGENDDT_SEC"),
+        pl.lit(None, dtype=pl.String).alias("HTPCI"),
+        pl.lit(None, dtype=pl.String).alias("HEXCNTRY"),
+    )
+
+    sec_combined = pl.concat([sec_joined, sec_missing], how="vertical_relaxed").with_columns(
+        pl.col("data_status").cast(STATUS_DTYPE)
+    )
+    sec_combined.sink_parquet(temp_path, compression="zstd")
+
+    sec_loaded = pl.scan_parquet(temp_path).with_columns(pl.col("data_status").cast(STATUS_DTYPE))
+
+    # Company history join (requires GVKEY only)
+    comp_keys = pl.col("KYGVKEY_final").is_not_null()
+    comp_candidates = sec_loaded.filter(comp_keys)
+
+    hcik_dtype = comp_schema.get("HCIK", pl.String)
+    hsic_dtype = comp_schema.get("HSIC", pl.Int32)
+    hnaics_dtype = comp_schema.get("HNAICS", pl.String)
+    hgsubind_dtype = comp_schema.get("HGSUBIND", pl.String)
+
+    comp_joined = (
+        comp_candidates.sort("KYGVKEY_final", "CALDT")
         .join_asof(
             comp_hist,
             left_on="CALDT",
@@ -373,46 +464,44 @@ def merge_histories(
             by_right="KYGVKEY",
             strategy="backward",
         )
-        .with_columns(
-            pl.when(pl.col("HCHGENDDT_COMP").is_null()).then(status_none)
-            .when(pl.col("CALDT") > pl.col("HCHGENDDT_COMP")).then(status_none)
-            .otherwise(comp_hist_ok).alias("join1_status"),
-        )
         .select(pl.all().exclude(["KYGVKEY"]))
     )
 
-    bad_keys_lf = price_lf.filter(
-        pl.col("KYGVKEY_final").is_null() | pl.col("LIID").is_null()
+    comp_matched = pl.col("HIST_START_DATE_COMP").is_not_null()
+    comp_valid = comp_matched & (pl.col("HCHGENDDT_COMP").is_null() | (pl.col("CALDT") <= pl.col("HCHGENDDT_COMP")))
+    comp_stale = comp_matched & pl.col("HCHGENDDT_COMP").is_not_null() & (pl.col("CALDT") > pl.col("HCHGENDDT_COMP"))
+
+    comp_status = (
+        pl.col("data_status").cast(STATUS_DTYPE)
+        | pl.lit(int(DataStatus.COMPHIST_CAN_ATTEMPT | DataStatus.COMPHIST_ATTEMPTED), dtype=STATUS_DTYPE)
+        | _flag_if(comp_matched, DataStatus.COMPHIST_MATCHED)
+        | _flag_if(comp_valid, DataStatus.COMPHIST_VALID)
+        | _flag_if(comp_stale, DataStatus.COMPHIST_STALE)
+        | _flag_if(comp_matched.not_(), DataStatus.COMPHIST_NO_MATCH)
+    ).alias("data_status")
+
+    comp_joined = comp_joined.with_columns(
+        comp_status,
+        pl.when(comp_valid).then(pl.col("HCIK")).otherwise(pl.lit(None, dtype=hcik_dtype)).alias("HCIK"),
+        pl.when(comp_valid).then(pl.col("HSIC")).otherwise(pl.lit(None, dtype=hsic_dtype)).alias("HSIC"),
+        pl.when(comp_valid).then(pl.col("HNAICS")).otherwise(pl.lit(None, dtype=hnaics_dtype)).alias("HNAICS"),
+        pl.when(comp_valid).then(pl.col("HGSUBIND")).otherwise(pl.lit(None, dtype=hgsubind_dtype)).alias("HGSUBIND"),
+        pl.when(comp_valid).then(pl.col("HIST_START_DATE_COMP")).otherwise(pl.lit(None).cast(pl.Date)).alias("HIST_START_DATE_COMP"),
+        pl.when(comp_valid).then(pl.col("HCHGENDDT_COMP")).otherwise(pl.lit(None).cast(pl.Date)).alias("HCHGENDDT_COMP"),
     )
 
-    final_cols = step2.collect_schema().names()
-    hic_schema = comp_hist_lf.collect_schema()
-    hcik_dtype = hic_schema.get("HCIK", pl.String)
-
-    bad_rows_processed = (
-        bad_keys_lf.with_columns(
-            pl.lit(None).cast(pl.Date).alias("HIST_START_DATE_COMP"),
-            pl.lit(None).cast(pl.Date).alias("HCHGENDDT_COMP"),
-            pl.lit(None, dtype=hcik_dtype).alias("HCIK"),
-            pl.lit(None).cast(pl.Int32).alias("HSIC"),
-            pl.lit(None).cast(pl.String).alias("HNAICS"),
-            pl.lit(None).cast(pl.String).alias("HGSUBIND"),
-            pl.lit(None).cast(pl.Date).alias("HIST_START_DATE_SEC"),
-            pl.lit(None).cast(pl.Date).alias("HCHGENDDT_SEC"),
-            pl.lit(None).cast(pl.String).alias("HTPCI"),
-            pl.lit(None).cast(pl.String).alias("HEXCNTRY"),
-            pl.when(pl.col("KYGVKEY_final").is_null())
-            .then(status_none)
-            .otherwise(comp_hist_ok)
-            .alias("join1_status"),
-            status_none.alias("join2_status"),
-        )
-        .select(final_cols)
+    comp_missing = sec_loaded.filter(comp_keys.not_()).with_columns(
+        pl.col("data_status").cast(STATUS_DTYPE),
+        pl.lit(None).cast(pl.Date).alias("HIST_START_DATE_COMP"),
+        pl.lit(None).cast(pl.Date).alias("HCHGENDDT_COMP"),
+        pl.lit(None, dtype=hcik_dtype).alias("HCIK"),
+        pl.lit(None, dtype=hsic_dtype).alias("HSIC"),
+        pl.lit(None, dtype=hnaics_dtype).alias("HNAICS"),
+        pl.lit(None, dtype=hgsubind_dtype).alias("HGSUBIND"),
     )
 
-    final_output = pl.concat(
-        [step2, bad_rows_processed],
-        how="vertical_relaxed",
+    final_output = pl.concat([comp_joined, comp_missing], how="vertical_relaxed").with_columns(
+        pl.col("data_status").cast(STATUS_DTYPE)
     )
 
     final_output.sink_parquet(final_path, compression="zstd")
