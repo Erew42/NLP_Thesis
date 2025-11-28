@@ -9,7 +9,7 @@ import polars as pl
 
 
 class DataStatus(IntFlag):
-    """Bitmask for data availability and provenance."""
+    """Bitmask for data availability, provenance, and join results."""
 
     NONE = 0
 
@@ -23,6 +23,10 @@ class DataStatus(IntFlag):
     HAS_DLRET = auto()  # 16
     HAS_DLRETX = auto()  # 32
     HAS_DLPRC = auto()  # 64
+
+    # History join flags (used in merge_histories)
+    CompHist_OK = auto()  # 128
+    SecHist_OK = auto()  # 256
 
     # Convenience Combinations for Filtering
     FULL_PANEL_DATA = HAS_RET | HAS_BIDLO
@@ -316,6 +320,11 @@ def merge_histories(
     temp_path = output_dir / temp_name
     final_path = output_dir / final_name
 
+    status_dtype = pl.UInt16
+    comp_hist_ok = pl.lit(int(DataStatus.CompHist_OK), dtype=status_dtype)
+    sec_hist_ok = pl.lit(int(DataStatus.SecHist_OK), dtype=status_dtype)
+    status_none = pl.lit(int(DataStatus.NONE), dtype=status_dtype)
+
     good_keys = price_lf.filter(pl.col("KYGVKEY_final").is_not_null() & pl.col("LIID").is_not_null())
 
     sec_hist = sec_hist_lf.select(
@@ -343,9 +352,9 @@ def merge_histories(
             strategy="backward",
         )
         .with_columns(
-            pl.when(pl.col("HCHGENDDT_SEC").is_null()).then(pl.lit("No SecHist Match"))
-            .when(pl.col("CALDT") > pl.col("HCHGENDDT_SEC")).then(pl.lit("Stale SecHist"))
-            .otherwise(pl.lit("SecHist OK")).alias("join2_status"),
+            pl.when(pl.col("HCHGENDDT_SEC").is_null()).then(status_none)
+            .when(pl.col("CALDT") > pl.col("HCHGENDDT_SEC")).then(status_none)
+            .otherwise(sec_hist_ok).alias("join2_status"),
         )
         .select(pl.all().exclude(["KYGVKEY", "KYIID"]))
     )
@@ -365,9 +374,9 @@ def merge_histories(
             strategy="backward",
         )
         .with_columns(
-            pl.when(pl.col("HCHGENDDT_COMP").is_null()).then(pl.lit("No CompHist Match"))
-            .when(pl.col("CALDT") > pl.col("HCHGENDDT_COMP")).then(pl.lit("Stale CompHist"))
-            .otherwise(pl.lit("CompHist OK")).alias("join1_status"),
+            pl.when(pl.col("HCHGENDDT_COMP").is_null()).then(status_none)
+            .when(pl.col("CALDT") > pl.col("HCHGENDDT_COMP")).then(status_none)
+            .otherwise(comp_hist_ok).alias("join1_status"),
         )
         .select(pl.all().exclude(["KYGVKEY"]))
     )
@@ -393,13 +402,10 @@ def merge_histories(
             pl.lit(None).cast(pl.String).alias("HTPCI"),
             pl.lit(None).cast(pl.String).alias("HEXCNTRY"),
             pl.when(pl.col("KYGVKEY_final").is_null())
-            .then(pl.lit("No GVKEY_final"))
-            .otherwise(pl.lit("CompHist OK"))
+            .then(status_none)
+            .otherwise(comp_hist_ok)
             .alias("join1_status"),
-            pl.when(pl.col("KYGVKEY_final").is_null()).then(pl.lit("NA (Join 1 Failed)"))
-            .when(pl.col("LIID").is_null()).then(pl.lit("No LIID"))
-            .otherwise(pl.lit("NA (Unknown Error)"))
-            .alias("join2_status"),
+            status_none.alias("join2_status"),
         )
         .select(final_cols)
     )

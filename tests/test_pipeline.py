@@ -218,7 +218,7 @@ def test_merge_histories_combines_good_and_bad_rows(tmp_path: Path):
     join1 = merged.select("join1_status").to_series().to_list()
     join2 = merged.select("join2_status").to_series().to_list()
 
-    assert "CompHist OK" in join1
-    assert "No GVKEY_final" in join1
-    assert "SecHist OK" in join2
-    assert "NA (Join 1 Failed)" in join2
+    assert int(DataStatus.CompHist_OK) in join1
+    assert int(DataStatus.NONE) in join1
+    assert int(DataStatus.SecHist_OK) in join2
+    assert int(DataStatus.NONE) in join2
