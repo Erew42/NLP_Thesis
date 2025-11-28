@@ -222,3 +222,149 @@ def test_merge_histories_combines_good_and_bad_rows(tmp_path: Path):
     assert int(DataStatus.NONE) in join1
     assert int(DataStatus.SecHist_OK) in join2
     assert int(DataStatus.NONE) in join2
+
+
+def test_merge_histories_open_ended_segments_are_valid(tmp_path: Path):
+    price = pl.DataFrame(
+        {
+            "KYPERMNO": [1],
+            "CALDT": [dt.date(2024, 2, 1)],
+            "KYGVKEY_final": ["1000"],
+            "LIID": ["A"],
+        }
+    )
+
+    sec_hist = pl.DataFrame(
+        {
+            "KYGVKEY": ["1000"],
+            "KYIID": ["A"],
+            "HSCHGDT": [dt.date(2024, 1, 1)],
+            "HSCHGENDDT": [None],
+            "HTPCI": ["USA"],
+            "HEXCNTRY": ["US"],
+        }
+    )
+
+    comp_hist = pl.DataFrame(
+        {
+            "KYGVKEY": ["1000"],
+            "HCHGDT": [dt.date(2023, 1, 1)],
+            "HCHGENDDT": [None],
+            "HCIK": ["CIK1"],
+            "HSIC": [100],
+            "HNAICS": ["1111"],
+            "HGSUBIND": ["Sub"],
+        }
+    )
+
+    output_path = merge_histories(
+        price.lazy(),
+        sec_hist.lazy(),
+        comp_hist.lazy(),
+        tmp_path,
+    )
+
+    merged = pl.read_parquet(output_path)
+    join1_status = merged.select("join1_status").item()
+    join2_status = merged.select("join2_status").item()
+
+    assert join1_status & int(DataStatus.CompHist_OK) == int(DataStatus.CompHist_OK)
+    assert join2_status & int(DataStatus.SecHist_OK) == int(DataStatus.SecHist_OK)
+    assert merged.select("HCIK").item() == "CIK1"
+    assert merged.select("HTPCI").item() == "USA"
+
+
+def test_merge_histories_masks_stale_segments(tmp_path: Path):
+    price = pl.DataFrame(
+        {
+            "KYPERMNO": [1],
+            "CALDT": [dt.date(2024, 2, 1)],
+            "KYGVKEY_final": ["1000"],
+            "LIID": ["A"],
+        }
+    )
+
+    sec_hist = pl.DataFrame(
+        {
+            "KYGVKEY": ["1000"],
+            "KYIID": ["A"],
+            "HSCHGDT": [dt.date(2024, 1, 1)],
+            "HSCHGENDDT": [dt.date(2024, 1, 15)],
+            "HTPCI": ["USA"],
+            "HEXCNTRY": ["US"],
+        }
+    )
+
+    comp_hist = pl.DataFrame(
+        {
+            "KYGVKEY": ["1000"],
+            "HCHGDT": [dt.date(2023, 1, 1)],
+            "HCHGENDDT": [dt.date(2023, 12, 31)],
+            "HCIK": ["CIK1"],
+            "HSIC": [100],
+            "HNAICS": ["1111"],
+            "HGSUBIND": ["Sub"],
+        }
+    )
+
+    output_path = merge_histories(
+        price.lazy(),
+        sec_hist.lazy(),
+        comp_hist.lazy(),
+        tmp_path,
+    )
+
+    merged = pl.read_parquet(output_path)
+
+    assert merged.select("join1_status").item() == int(DataStatus.NONE)
+    assert merged.select("join2_status").item() == int(DataStatus.NONE)
+    assert merged.select("HCIK").item() is None
+    assert merged.select("HTPCI").item() is None
+    assert merged.select("HEXCNTRY").item() is None
+
+
+def test_merge_histories_still_joins_comp_history_without_liid(tmp_path: Path):
+    price = pl.DataFrame(
+        {
+            "KYPERMNO": [1],
+            "CALDT": [dt.date(2024, 2, 1)],
+            "KYGVKEY_final": ["1000"],
+            "LIID": [None],
+        }
+    )
+
+    sec_hist = pl.DataFrame(
+        {
+            "KYGVKEY": ["1000"],
+            "KYIID": ["A"],
+            "HSCHGDT": [dt.date(2024, 1, 1)],
+            "HSCHGENDDT": [dt.date(2024, 12, 31)],
+            "HTPCI": ["USA"],
+            "HEXCNTRY": ["US"],
+        }
+    )
+
+    comp_hist = pl.DataFrame(
+        {
+            "KYGVKEY": ["1000"],
+            "HCHGDT": [dt.date(2023, 1, 1)],
+            "HCHGENDDT": [dt.date(2025, 1, 1)],
+            "HCIK": ["CIK1"],
+            "HSIC": [100],
+            "HNAICS": ["1111"],
+            "HGSUBIND": ["Sub"],
+        }
+    )
+
+    output_path = merge_histories(
+        price.lazy(),
+        sec_hist.lazy(),
+        comp_hist.lazy(),
+        tmp_path,
+    )
+
+    merged = pl.read_parquet(output_path)
+
+    assert merged.select("join1_status").item() & int(DataStatus.CompHist_OK) == int(DataStatus.CompHist_OK)
+    assert merged.select("HCIK").item() == "CIK1"
+    assert merged.select("HNAICS").item() == "1111"
