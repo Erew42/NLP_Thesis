@@ -53,7 +53,7 @@ def _ensure_data_status(lf: pl.LazyFrame) -> pl.LazyFrame:
     schema = lf.collect_schema()
     if "data_status" not in schema:
         return lf.with_columns(pl.lit(int(DataStatus.NONE), dtype=STATUS_DTYPE).alias("data_status"))
-    return lf.with_columns(pl.col("data_status").cast(STATUS_DTYPE))
+    return lf.with_columns(pl.col("data_status").cast(STATUS_DTYPE).fill_null(int(DataStatus.NONE)))
 
 
 def _flag_if(expr: pl.Expr, flag: DataStatus) -> pl.Expr:
@@ -363,6 +363,10 @@ def merge_histories(
 
     sec_schema = sec_hist_lf.collect_schema()
     comp_schema = comp_hist_lf.collect_schema()
+    ky_dtype = sec_schema.get("KYGVKEY", comp_schema.get("KYGVKEY", pl.Utf8))
+    liid_dtype = sec_schema.get("KYIID", pl.Utf8)
+    htpi_dtype = sec_schema.get("HTPCI", pl.String)
+    hexcntry_dtype = sec_schema.get("HEXCNTRY", pl.String)
 
     base = _ensure_data_status(price_lf).with_columns(
         pl.col("CALDT").cast(pl.Date, strict=False).alias("CALDT"),
@@ -370,22 +374,27 @@ def merge_histories(
     )
 
     base_schema = base.collect_schema()
+    cast_cols: list[pl.Expr] = []
+    if "KYGVKEY_final" in base_schema:
+        cast_cols.append(pl.col("KYGVKEY_final").cast(ky_dtype))
     if "LIID" in base_schema:
-        base = base.with_columns(pl.col("LIID").cast(sec_schema.get("KYIID", pl.Utf8)))
+        cast_cols.append(pl.col("LIID").cast(liid_dtype))
+    if cast_cols:
+        base = base.with_columns(cast_cols)
 
     sec_hist = sec_hist_lf.select(
-        "KYGVKEY",
-        "KYIID",
-        pl.col("HSCHGDT").alias("HIST_START_DATE_SEC"),
-        pl.col("HSCHGENDDT").alias("HCHGENDDT_SEC"),
-        "HTPCI",
-        "HEXCNTRY",
+        pl.col("KYGVKEY").cast(ky_dtype).alias("KYGVKEY"),
+        pl.col("KYIID").cast(liid_dtype).alias("KYIID"),
+        pl.col("HSCHGDT").cast(pl.Date, strict=False).alias("HIST_START_DATE_SEC"),
+        pl.col("HSCHGENDDT").cast(pl.Date, strict=False).alias("HCHGENDDT_SEC"),
+        pl.col("HTPCI").cast(htpi_dtype).alias("HTPCI"),
+        pl.col("HEXCNTRY").cast(hexcntry_dtype).alias("HEXCNTRY"),
     ).sort("KYGVKEY", "KYIID", "HIST_START_DATE_SEC")
 
     comp_hist = comp_hist_lf.select(
-        "KYGVKEY",
-        pl.col("HCHGDT").alias("HIST_START_DATE_COMP"),
-        pl.col("HCHGENDDT").alias("HCHGENDDT_COMP"),
+        pl.col("KYGVKEY").cast(ky_dtype).alias("KYGVKEY"),
+        pl.col("HCHGDT").cast(pl.Date, strict=False).alias("HIST_START_DATE_COMP"),
+        pl.col("HCHGENDDT").cast(pl.Date, strict=False).alias("HCHGENDDT_COMP"),
         "HCIK",
         "HSIC",
         "HNAICS",
@@ -424,8 +433,8 @@ def merge_histories(
 
     sec_joined = sec_joined.with_columns(
         sec_status,
-        pl.when(sec_valid).then(pl.col("HTPCI")).otherwise(pl.lit(None, dtype=pl.String)).alias("HTPCI"),
-        pl.when(sec_valid).then(pl.col("HEXCNTRY")).otherwise(pl.lit(None, dtype=pl.String)).alias("HEXCNTRY"),
+        pl.when(sec_valid).then(pl.col("HTPCI")).otherwise(pl.lit(None, dtype=htpi_dtype)).alias("HTPCI"),
+        pl.when(sec_valid).then(pl.col("HEXCNTRY")).otherwise(pl.lit(None, dtype=hexcntry_dtype)).alias("HEXCNTRY"),
         pl.when(sec_valid).then(pl.col("HIST_START_DATE_SEC")).otherwise(pl.lit(None).cast(pl.Date)).alias("HIST_START_DATE_SEC"),
         pl.when(sec_valid).then(pl.col("HCHGENDDT_SEC")).otherwise(pl.lit(None).cast(pl.Date)).alias("HCHGENDDT_SEC"),
     )
@@ -434,8 +443,8 @@ def merge_histories(
         pl.col("data_status").cast(STATUS_DTYPE),
         pl.lit(None).cast(pl.Date).alias("HIST_START_DATE_SEC"),
         pl.lit(None).cast(pl.Date).alias("HCHGENDDT_SEC"),
-        pl.lit(None, dtype=pl.String).alias("HTPCI"),
-        pl.lit(None, dtype=pl.String).alias("HEXCNTRY"),
+        pl.lit(None, dtype=htpi_dtype).alias("HTPCI"),
+        pl.lit(None, dtype=hexcntry_dtype).alias("HEXCNTRY"),
     )
 
     sec_combined = pl.concat([sec_joined, sec_missing], how="vertical_relaxed").with_columns(
@@ -443,7 +452,11 @@ def merge_histories(
     )
     sec_combined.sink_parquet(temp_path, compression="zstd")
 
-    sec_loaded = pl.scan_parquet(temp_path).with_columns(pl.col("data_status").cast(STATUS_DTYPE))
+    sec_loaded = pl.scan_parquet(temp_path).with_columns(
+        pl.col("data_status").cast(STATUS_DTYPE),
+        pl.col("KYGVKEY_final").cast(ky_dtype),
+        pl.col("LIID").cast(liid_dtype),
+    )
 
     # Company history join (requires GVKEY only)
     comp_keys = pl.col("KYGVKEY_final").is_not_null()
