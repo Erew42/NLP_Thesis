@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import math
 from enum import IntFlag
 from pathlib import Path
 from typing import Iterable
@@ -83,6 +84,46 @@ def load_tables(base_dirs: Iterable[Path], wanted: Iterable[str]) -> dict[str, p
                 continue
             tables[key] = pl.scan_parquet(path)
     return tables
+
+
+def sink_exact_firm_sample_from_parquet(
+    full_source: Path | pl.LazyFrame,
+    sample_path: Path | None = None,
+    firm_col: str = "KYPERMNO",
+    frac: float = 0.01,
+    seed: int = 42,
+    compression: str = "zstd",
+    save_firm_list_path: Path | None = None,
+) -> Path | pl.LazyFrame:
+    """
+    Sample an exact fraction of firms; optionally persist the result.
+
+    Returns a Path when `sample_path` is provided, otherwise the filtered LazyFrame.
+    """
+    if not (0 < frac <= 1):
+        raise ValueError("frac must be in (0, 1].")
+
+    lf = full_source if isinstance(full_source, pl.LazyFrame) else pl.scan_parquet(full_source)
+
+    firms = (
+        lf.select(pl.col(firm_col).unique().drop_nulls())
+        .collect()
+        .get_column(firm_col)
+    )
+
+    k = max(1, math.ceil(len(firms) * frac))
+    chosen_df = pl.DataFrame({firm_col: firms.sample(n=k, with_replacement=False, seed=seed)})
+
+    if save_firm_list_path is not None:
+        chosen_df.write_parquet(save_firm_list_path, compression=compression)
+
+    sampled = lf.join(chosen_df.lazy(), on=firm_col, how="inner")
+
+    if sample_path is not None:
+        sampled.sink_parquet(sample_path, compression=compression)
+        return sample_path
+
+    return sampled
 
 
 def build_price_panel(
