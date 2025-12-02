@@ -355,11 +355,30 @@ def merge_histories(
     output_dir: Path,
     temp_name: str = "temp_step1_sec_merge.parquet",
     final_name: str = "final_flagged_data.parquet",
+    verbose: int = 0,
 ) -> Path:
     """RAM-safe merge of security and company histories without dropping bad rows."""
     output_dir.mkdir(parents=True, exist_ok=True)
     temp_path = output_dir / temp_name
     final_path = output_dir / final_name
+
+    def _debug_concat(label: str, left: pl.LazyFrame, right: pl.LazyFrame) -> None:
+        """Optional schema diff to diagnose concat failures."""
+        if not verbose:
+            return
+        left_schema = left.collect_schema()
+        right_schema = right.collect_schema()
+        left_only = sorted(set(left_schema) - set(right_schema))
+        right_only = sorted(set(right_schema) - set(left_schema))
+        dtype_mismatch = [
+            (name, str(left_schema[name]), str(right_schema[name]))
+            for name in set(left_schema) & set(right_schema)
+            if left_schema[name] != right_schema[name]
+        ]
+        print(
+            f"[merge_histories][{label}] cols_left={len(left_schema)} cols_right={len(right_schema)} "
+            f"left_only={left_only} right_only={right_only} dtype_mismatch={dtype_mismatch}"
+        )
 
     sec_schema = sec_hist_lf.collect_schema()
     comp_schema = comp_hist_lf.collect_schema()
@@ -447,6 +466,7 @@ def merge_histories(
         pl.lit(None, dtype=hexcntry_dtype).alias("HEXCNTRY"),
     )
 
+    _debug_concat("sec_concat", sec_joined, sec_missing)
     sec_combined = pl.concat([sec_joined, sec_missing], how="vertical_relaxed").with_columns(
         pl.col("data_status").cast(STATUS_DTYPE)
     )
@@ -513,6 +533,7 @@ def merge_histories(
         pl.lit(None, dtype=hgsubind_dtype).alias("HGSUBIND"),
     )
 
+    _debug_concat("comp_concat", comp_joined, comp_missing)
     final_output = pl.concat([comp_joined, comp_missing], how="vertical_relaxed").with_columns(
         pl.col("data_status").cast(STATUS_DTYPE)
     )
