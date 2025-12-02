@@ -380,6 +380,17 @@ def merge_histories(
             f"left_only={left_only} right_only={right_only} dtype_mismatch={dtype_mismatch}"
         )
 
+    def _align_to_schema(lf: pl.LazyFrame, target: pl.Schema) -> pl.LazyFrame:
+        """Project/append columns so frame matches target schema exactly."""
+        have = lf.collect_schema()
+        exprs: list[pl.Expr] = []
+        for name, dtype in target.items():
+            if name in have:
+                exprs.append(pl.col(name).cast(dtype, strict=False))
+            else:
+                exprs.append(pl.lit(None, dtype=dtype).alias(name))
+        return lf.select(exprs)
+
     sec_schema = sec_hist_lf.collect_schema()
     comp_schema = comp_hist_lf.collect_schema()
     ky_dtype = sec_schema.get("KYGVKEY", comp_schema.get("KYGVKEY", pl.Utf8))
@@ -467,7 +478,11 @@ def merge_histories(
     ).drop("KYGVKEY", strict=False)  # drop raw KYGVKEY to match sec_joined schema
 
     _debug_concat("sec_concat", sec_joined, sec_missing)
-    sec_combined = pl.concat([sec_joined, sec_missing], how="vertical_relaxed").with_columns(
+    sec_target = sec_joined.collect_schema()
+    sec_combined = pl.concat(
+        [_align_to_schema(sec_joined, sec_target), _align_to_schema(sec_missing, sec_target)],
+        how="vertical",
+    ).with_columns(
         pl.col("data_status").cast(STATUS_DTYPE)
     )
     sec_combined.sink_parquet(temp_path, compression="zstd")
@@ -534,7 +549,11 @@ def merge_histories(
     )
 
     _debug_concat("comp_concat", comp_joined, comp_missing)
-    final_output = pl.concat([comp_joined, comp_missing], how="vertical_relaxed").with_columns(
+    comp_target = comp_joined.collect_schema()
+    final_output = pl.concat(
+        [_align_to_schema(comp_joined, comp_target), _align_to_schema(comp_missing, comp_target)],
+        how="vertical",
+    ).with_columns(
         pl.col("data_status").cast(STATUS_DTYPE)
     )
 
