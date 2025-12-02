@@ -464,7 +464,7 @@ def merge_histories(
         pl.lit(None).cast(pl.Date).alias("HCHGENDDT_SEC"),
         pl.lit(None, dtype=htpi_dtype).alias("HTPCI"),
         pl.lit(None, dtype=hexcntry_dtype).alias("HEXCNTRY"),
-    )
+    ).drop("KYGVKEY", strict=False)  # drop raw KYGVKEY to match sec_joined schema
 
     _debug_concat("sec_concat", sec_joined, sec_missing)
     sec_combined = pl.concat([sec_joined, sec_missing], how="vertical_relaxed").with_columns(
