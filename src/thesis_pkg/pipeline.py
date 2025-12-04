@@ -401,31 +401,34 @@ def attach_company_description(
     """
     Attach description availability and harmonized CIK from the company description feed.
 
-    This expects the company history merge to have already run so we can prefer HCIK over
-    description-derived CIK values when both are available.
+    Expects that KYGVKEY_final already exists (e.g., after CCM linking).
+    Prefers HCIK (from company history) over existing CIK_final over description-derived CIK.
     """
     lf = _ensure_data_status(flagged_lf)
 
     schema = lf.collect_schema()
     gvkey_dtype = schema.get("KYGVKEY_final", pl.Utf8)
 
-    # 1) Keys for existence flag
+    # --- 1) Existence flag map (keep a marker column; do NOT depend on join key surviving) ---
     desc_keys = (
         comp_desc_lf
-        .select(pl.col(desc_key_col).cast(gvkey_dtype, strict=False).alias("KYGVKEY_desc"))
-        .drop_nulls()
-        .unique(subset=["KYGVKEY_desc"])
+        .select([
+            pl.col(desc_key_col).cast(gvkey_dtype, strict=False).alias("KYGVKEY_final"),
+            pl.lit(True).alias("_has_comp_desc"),
+        ])
+        .drop_nulls(subset=["KYGVKEY_final"])
+        .unique(subset=["KYGVKEY_final"])
         .collect()
     )
 
-    # 2) Deterministic CIK map: choose MODE (most frequent) CIK per GVKEY
+    # --- 2) Deterministic-ish CIK map (mode per GVKEY) ---
     cik_map = (
         comp_desc_lf
         .select([
-            pl.col(desc_key_col).cast(gvkey_dtype, strict=False).alias("KYGVKEY_map"),
+            pl.col(desc_key_col).cast(gvkey_dtype, strict=False).alias("KYGVKEY_final"),
             pl.col(desc_cik_col).cast(pl.Utf8, strict=False).alias("CIK_raw"),
         ])
-        .drop_nulls(subset=["KYGVKEY_map"])
+        .drop_nulls(subset=["KYGVKEY_final"])
         .with_columns(
             pl.col("CIK_raw")
               .str.strip_chars()
@@ -439,7 +442,7 @@ def attach_company_description(
               .otherwise(None)
               .alias("CIK_desc_10")
         )
-        .group_by("KYGVKEY_map")
+        .group_by("KYGVKEY_final")
         .agg([
             pl.col("CIK_desc_10").drop_nulls().mode().first().alias("CIK_desc_10"),
             pl.col("CIK_desc_10").drop_nulls().n_unique().alias("n_cik_desc_uniq"),
@@ -449,29 +452,33 @@ def attach_company_description(
 
     out = (
         lf
-        .join(desc_keys.lazy(), left_on="KYGVKEY_final", right_on="KYGVKEY_desc", how="left")
+        .join(desc_keys.lazy(), on="KYGVKEY_final", how="left")
         .with_columns(
             (
                 pl.col("data_status").cast(STATUS_DTYPE)
-                | _flag_if(pl.col("KYGVKEY_desc").is_not_null(), DataStatus.HAS_COMP_DESC)
+                | _flag_if(pl.col("_has_comp_desc").fill_null(False), DataStatus.HAS_COMP_DESC)
             ).alias("data_status")
         )
-        .drop("KYGVKEY_desc")
-        .join(cik_map.lazy(), left_on="KYGVKEY_final", right_on="KYGVKEY_map", how="left")
-        .drop("KYGVKEY_map")
+        .drop("_has_comp_desc", strict=False)
+        .join(cik_map.lazy(), on="KYGVKEY_final", how="left")
     )
 
-    # Normalize CompHist CIK too (optional but recommended for consistent coalescing)
-    hcik_expr = (
-        pl.col("HCIK").cast(pl.Utf8, strict=False)
-        if "HCIK" in schema else pl.lit(None, dtype=pl.Utf8)
-    )
-    out = out.with_columns(
-        hcik_expr
-        .str.replace_all(r"\D", "")
-        .str.zfill(10)
-        .alias("HCIK_10")
-    )
+    # Normalize CompHist CIK too (avoid turning empty-string into "0000000000")
+    if "HCIK" in schema:
+        out = out.with_columns(
+            pl.col("HCIK").cast(pl.Utf8, strict=False)
+              .str.strip_chars()
+              .str.replace_all(r"\.0$", "")
+              .str.replace_all(r"\D", "")
+              .alias("_HCIK_digits")
+        ).with_columns(
+            pl.when(pl.col("_HCIK_digits").str.len_chars() > 0)
+              .then(pl.col("_HCIK_digits").str.zfill(10))
+              .otherwise(None)
+              .alias("HCIK_10")
+        ).drop("_HCIK_digits", strict=False)
+    else:
+        out = out.with_columns(pl.lit(None, dtype=pl.Utf8).alias("HCIK_10"))
 
     existing_cik_final = pl.col("CIK_final") if "CIK_final" in schema else pl.lit(None, dtype=pl.Utf8)
 

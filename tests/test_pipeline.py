@@ -5,6 +5,7 @@ import polars as pl
 
 from thesis_pkg.pipeline import (
     add_final_returns,
+    attach_company_description,
     attach_ccm_links,
     attach_filings,
     build_price_panel,
@@ -175,6 +176,38 @@ def test_attach_ccm_links_prefers_canonical_primary_link():
 
     assert chosen[attached.columns.index("KYGVKEY_final")] == "1000"
     assert link_flag == ["canonical_primary_LC", "no_ccm_link"]
+
+
+def test_attach_company_description_coalesces_and_flags():
+    price = pl.DataFrame(
+        {
+            "KYGVKEY_final": ["1000", "2000", "3000"],
+            "HCIK": [" 123456789 ", "", None],
+            "CIK_final": ["7777777777", "8888888888", None],
+        }
+    )
+
+    comp_desc = pl.DataFrame(
+        {
+            "KYGVKEY": ["1000", "2000", "3000"],
+            "CIK": ["123456789", " 000012345 ", "54321.0"],
+        }
+    )
+
+    attached = attach_company_description(price.lazy(), comp_desc.lazy()).collect().sort("KYGVKEY_final")
+
+    assert all(v & int(DataStatus.HAS_COMP_DESC) for v in attached.select("data_status").to_series().to_list())
+    assert attached.select("CIK_final").to_series().to_list() == [
+        "0123456789",
+        "8888888888",
+        "0000054321",
+    ]
+    assert (
+        attached.filter(pl.col("KYGVKEY_final") == "2000")
+        .select("HCIK_10")
+        .item()
+        is None
+    )
 
 
 def test_merge_histories_keeps_rows_and_sets_attempt_bits(tmp_path: Path):
