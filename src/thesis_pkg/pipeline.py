@@ -44,6 +44,9 @@ class DataStatus(IntFlag):
     SECHIST_VALID = 1 << 17
     SECHIST_STALE = 1 << 18
 
+    # Auxiliary metadata
+    HAS_COMP_DESC = 1 << 19
+
     # Convenience Combinations for Filtering
     FULL_PANEL_DATA = HAS_RET | HAS_BIDLO
     ANY_RET_DATA = HAS_RET | HAS_DLRET
@@ -386,6 +389,94 @@ def attach_ccm_links(price_filings_lf: pl.LazyFrame, link_lf: pl.LazyFrame) -> p
         .then(pl.lit("canonical_other"))
         .otherwise(pl.lit("noncanonical"))
         .alias("link_quality_flag"),
+    )
+
+
+def attach_company_description(
+    flagged_lf: pl.LazyFrame,
+    comp_desc_lf: pl.LazyFrame,
+    desc_key_col: str = "KYGVKEY",
+    desc_cik_col: str = "CIK",
+) -> pl.LazyFrame:
+    """
+    Attach description availability and harmonized CIK from the company description feed.
+
+    This expects the company history merge to have already run so we can prefer HCIK over
+    description-derived CIK values when both are available.
+    """
+    lf = _ensure_data_status(flagged_lf)
+
+    schema = lf.collect_schema()
+    gvkey_dtype = schema.get("KYGVKEY_final", pl.Utf8)
+
+    # 1) Keys for existence flag
+    desc_keys = (
+        comp_desc_lf
+        .select(pl.col(desc_key_col).cast(gvkey_dtype, strict=False).alias("KYGVKEY_desc"))
+        .drop_nulls()
+        .unique(subset=["KYGVKEY_desc"])
+        .collect()
+    )
+
+    # 2) Deterministic CIK map: choose MODE (most frequent) CIK per GVKEY
+    cik_map = (
+        comp_desc_lf
+        .select([
+            pl.col(desc_key_col).cast(gvkey_dtype, strict=False).alias("KYGVKEY_map"),
+            pl.col(desc_cik_col).cast(pl.Utf8, strict=False).alias("CIK_raw"),
+        ])
+        .drop_nulls(subset=["KYGVKEY_map"])
+        .with_columns(
+            pl.col("CIK_raw")
+              .str.strip_chars()
+              .str.replace_all(r"\.0$", "")
+              .str.replace_all(r"\D", "")
+              .alias("CIK_digits")
+        )
+        .with_columns(
+            pl.when(pl.col("CIK_digits").str.len_chars() > 0)
+              .then(pl.col("CIK_digits").str.zfill(10))
+              .otherwise(None)
+              .alias("CIK_desc_10")
+        )
+        .group_by("KYGVKEY_map")
+        .agg([
+            pl.col("CIK_desc_10").drop_nulls().mode().first().alias("CIK_desc_10"),
+            pl.col("CIK_desc_10").drop_nulls().n_unique().alias("n_cik_desc_uniq"),
+        ])
+        .collect()
+    )
+
+    out = (
+        lf
+        .join(desc_keys.lazy(), left_on="KYGVKEY_final", right_on="KYGVKEY_desc", how="left")
+        .with_columns(
+            (
+                pl.col("data_status").cast(STATUS_DTYPE)
+                | _flag_if(pl.col("KYGVKEY_desc").is_not_null(), DataStatus.HAS_COMP_DESC)
+            ).alias("data_status")
+        )
+        .drop("KYGVKEY_desc")
+        .join(cik_map.lazy(), left_on="KYGVKEY_final", right_on="KYGVKEY_map", how="left")
+        .drop("KYGVKEY_map")
+    )
+
+    # Normalize CompHist CIK too (optional but recommended for consistent coalescing)
+    hcik_expr = (
+        pl.col("HCIK").cast(pl.Utf8, strict=False)
+        if "HCIK" in schema else pl.lit(None, dtype=pl.Utf8)
+    )
+    out = out.with_columns(
+        hcik_expr
+        .str.replace_all(r"\D", "")
+        .str.zfill(10)
+        .alias("HCIK_10")
+    )
+
+    existing_cik_final = pl.col("CIK_final") if "CIK_final" in schema else pl.lit(None, dtype=pl.Utf8)
+
+    return out.with_columns(
+        pl.coalesce([pl.col("HCIK_10"), existing_cik_final, pl.col("CIK_desc_10")]).alias("CIK_final")
     )
 
 

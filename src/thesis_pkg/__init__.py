@@ -4,6 +4,7 @@ from .pipeline import (
     add_final_returns,
     attach_filings,
     attach_ccm_links,
+    attach_company_description,
     merge_histories,
 )
 
@@ -13,5 +14,6 @@ __all__ = [
     "add_final_returns",
     "attach_filings",
     "attach_ccm_links",
+    "attach_company_description",
     "merge_histories",
 ]
