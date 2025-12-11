@@ -4,7 +4,7 @@ import datetime as dt
 import math
 from enum import IntFlag
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Literal
 
 import polars as pl
 
@@ -95,7 +95,7 @@ def sink_exact_firm_sample_from_parquet(
     firm_col: str = "KYPERMNO",
     frac: float = 0.01,
     seed: int = 42,
-    compression: str = "zstd",
+    compression: Literal["lz4", "uncompressed", "snappy", "gzip", "lzo", "brotli", "zstd"] = "zstd",
     save_firm_list_path: Path | None = None,
 ) -> Path | pl.LazyFrame:
     """
