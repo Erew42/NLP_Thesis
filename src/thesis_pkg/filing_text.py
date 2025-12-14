@@ -2,15 +2,19 @@ from __future__ import annotations
 
 import gc
 import io
+import json
 import re
 import shutil
 import tempfile
+import time
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
 import polars as pl
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 
 FILENAME_PATTERN = re.compile(
@@ -195,3 +199,101 @@ def process_zip_year_raw_text(
         gc.collect()
 
     return written
+
+
+def concat_parquets_arrow(
+    in_files: list[Path],
+    out_path: Path,
+    batch_size: int = 32_000,
+    compression: str = "zstd",
+    compression_level: int | None = 1,
+) -> Path:
+    """
+    Stream-concatenate parquet files without loading everything into memory.
+    """
+    if not in_files:
+        raise ValueError("in_files is empty; nothing to concatenate.")
+
+    writer: pq.ParquetWriter | None = None
+    try:
+        for f in in_files:
+            pf = pq.ParquetFile(f)
+            for batch in pf.iter_batches(batch_size=batch_size):
+                tbl = pa.Table.from_batches([batch])
+                if writer is None:
+                    writer = pq.ParquetWriter(
+                        out_path,
+                        tbl.schema,
+                        compression=compression,
+                        compression_level=compression_level if compression == "zstd" else None,
+                    )
+                writer.write_table(tbl)
+    finally:
+        if writer is not None:
+            writer.close()
+
+    return out_path
+
+
+def merge_yearly_batches(
+    batch_dir: Path,
+    out_dir: Path,
+    checkpoint_path: Path | None = None,
+    batch_size: int = 32_000,
+    compression: str = "zstd",
+    compression_level: int | None = 1,
+    sleep_between_years: float | None = None,
+) -> list[Path]:
+    """
+    Merge per-year parquet batches (e.g., 2020_batch_0001.parquet) into one parquet per year.
+    Returns paths of merged parquet files.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    done: set[str] = set()
+    if checkpoint_path and checkpoint_path.exists():
+        try:
+            done = set(json.loads(checkpoint_path.read_text()))
+        except Exception:
+            done = set()
+
+    files_by_year: dict[str, list[Path]] = {}
+    for p in batch_dir.glob("*_batch_*.parquet"):
+        m = re.match(r"(?P<year>\d{4})_batch_", p.name)
+        if not m:
+            continue
+        year = m.group("year")
+        files_by_year.setdefault(year, []).append(p)
+
+    if not files_by_year:
+        raise ValueError(f"No batch files found in {batch_dir}")
+
+    merged: list[Path] = []
+    for year in sorted(files_by_year):
+        out_path = out_dir / f"{year}.parquet"
+        if year in done and out_path.exists():
+            continue
+
+        files = sorted(files_by_year[year])
+        tmp_path = out_dir / f"_{year}.parquet"
+        if tmp_path.exists():
+            tmp_path.unlink()
+
+        concat_parquets_arrow(
+            files,
+            tmp_path,
+            batch_size=batch_size,
+            compression=compression,
+            compression_level=compression_level,
+        )
+        tmp_path.replace(out_path)
+        merged.append(out_path)
+
+        if checkpoint_path:
+            done.add(year)
+            checkpoint_path.write_text(json.dumps(sorted(done)))
+
+        if sleep_between_years:
+            time.sleep(sleep_between_years)
+
+    return merged
