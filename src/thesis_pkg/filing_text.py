@@ -297,3 +297,80 @@ def merge_yearly_batches(
             time.sleep(sleep_between_years)
 
     return merged
+
+
+def summarize_year_parquets(parquet_dir: Path) -> list[dict]:
+    """
+    Inspect yearly parquet files and return a summary per file.
+    Each summary includes: path, year, rows, size_bytes, columns, and status.
+    """
+    summaries: list[dict] = []
+    for path in sorted(parquet_dir.glob("*.parquet")):
+        year = path.stem
+        size_bytes = path.stat().st_size
+        try:
+            lf = pl.scan_parquet(path)
+            columns = lf.collect_schema().names()
+            rows = lf.select(pl.len()).collect().item()
+
+            if "full_text" not in columns:
+                status = "WARN_NO_TEXT"
+            elif "cik" not in columns:
+                status = "ERR_NO_CIK"
+            elif rows == 0:
+                status = "EMPTY"
+            else:
+                status = "OK"
+        except Exception as exc:  # keep going if a file is corrupt
+            columns = []
+            rows = None
+            status = f"ERROR: {exc}"
+
+        summaries.append(
+            {
+                "path": path,
+                "year": year,
+                "rows": rows,
+                "size_bytes": size_bytes,
+                "columns": columns,
+                "status": status,
+            }
+        )
+
+    return summaries
+
+
+def build_light_metadata_dataset(
+    parquet_dir: Path | list[Path],
+    out_path: Path,
+    drop_columns: tuple[str, ...] = ("full_text",),
+    sort_columns: tuple[str, ...] = ("file_date_filename", "cik"),
+    compression: str = "zstd",
+) -> Path:
+    """
+    Merge yearly parquet files into a single metadata-only parquet (drops full_text).
+
+    Accepts either a directory containing per-year parquets or an explicit list of paths.
+    """
+    files: list[Path]
+    if isinstance(parquet_dir, list):
+        files = parquet_dir
+    else:
+        files = sorted(Path(parquet_dir).glob("*.parquet"))
+
+    if not files:
+        raise ValueError(f"No parquet files found in {parquet_dir}")
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    lf = pl.scan_parquet(files)
+    available_cols = lf.collect_schema().names()
+    cols_to_keep = [c for c in available_cols if c not in set(drop_columns)]
+    lf_light = lf.select(cols_to_keep)
+
+    sort_cols = [c for c in sort_columns if c in cols_to_keep]
+    if sort_cols:
+        lf_light = lf_light.sort(sort_cols)
+
+    lf_light.sink_parquet(out_path, compression=compression)
+    return out_path
