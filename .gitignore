@@ -11,3 +11,4 @@ build/
 .DS_Store
 .pytest_cache/
 .mypy_cache/
+agents_spec_nlp_thesis.md
