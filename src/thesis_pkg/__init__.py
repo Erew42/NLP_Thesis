@@ -10,7 +10,9 @@ from .pipeline import (
 from .filing_text import (
     parse_filename_minimal,
     process_zip_year_raw_text,
+    process_zip_year,
     RawTextSchema,
+    ParsedFilingSchema,
 )
 
 __all__ = [
@@ -23,5 +25,7 @@ __all__ = [
     "merge_histories",
     "parse_filename_minimal",
     "process_zip_year_raw_text",
+    "process_zip_year",
     "RawTextSchema",
+    "ParsedFilingSchema",
 ]

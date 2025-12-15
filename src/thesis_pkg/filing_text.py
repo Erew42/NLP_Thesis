@@ -27,6 +27,12 @@ FILENAME_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+HEADER_SEARCH_LIMIT_DEFAULT = 5000
+
+CIK_HEADER_PATTERN = re.compile(r"CENTRAL INDEX KEY:\s*(\d+)")
+DATE_HEADER_PATTERN = re.compile(r"FILED AS OF DATE:\s*(\d{8})")
+ACC_HEADER_PATTERN = re.compile(r"ACCESSION NUMBER:\s*([\d-]+)")
+
 
 def _digits_only(s: str | None) -> str | None:
     if not s:
@@ -107,12 +113,74 @@ class RawTextSchema:
     }
 
 
+@dataclass
+class ParsedFilingSchema:
+    schema = {
+        "doc_id": pl.Utf8,
+        "cik": pl.Int64,
+        "cik_10": pl.Utf8,
+        "accession_number": pl.Utf8,
+        "accession_nodash": pl.Utf8,
+        "filing_date": pl.Utf8,  # will cast to Date on write
+        "filing_date_header": pl.Utf8,
+        "file_date_filename": pl.Utf8,  # will cast to Date on write
+        "document_type_filename": pl.Utf8,
+        "filename": pl.Utf8,
+        "zip_member_path": pl.Utf8,
+        "filename_parse_ok": pl.Boolean,
+        "cik_header_primary": pl.Utf8,
+        "ciks_header_secondary": pl.List(pl.Utf8),
+        "accession_header": pl.Utf8,
+        "cik_conflict": pl.Boolean,
+        "accession_conflict": pl.Boolean,
+        "full_text": pl.Utf8,
+    }
+
+
+def parse_header(full_text: str, header_search_limit: int = HEADER_SEARCH_LIMIT_DEFAULT) -> dict:
+    """
+    Extract header metadata (CIKs, accession, filing date) from the top of a filing.
+    """
+    header = full_text[:header_search_limit]
+
+    header_ciks = CIK_HEADER_PATTERN.findall(header)
+    header_ciks_int_set = {int(c) for c in header_ciks if c.isdigit()}
+
+    date_match = DATE_HEADER_PATTERN.search(header)
+    header_filing_date_str = date_match.group(1) if date_match else None
+
+    acc_match = ACC_HEADER_PATTERN.search(header)
+    header_accession_str = acc_match.group(1) if acc_match else None
+
+    primary_header_cik = header_ciks[0] if header_ciks else None
+    secondary_ciks = header_ciks[1:] if len(header_ciks) > 1 else []
+
+    return {
+        "header_ciks_int_set": header_ciks_int_set,
+        "header_filing_date_str": header_filing_date_str,
+        "header_accession_str": header_accession_str,
+        "primary_header_cik": primary_header_cik,
+        "secondary_ciks": secondary_ciks,
+    }
+
+
 def _flush_batch(records: list[dict], out_path: Path, compression: str) -> None:
     if not records:
         return
     df = pl.DataFrame(records, schema=RawTextSchema.schema)
     df = df.with_columns(
         pl.col("file_date_filename").str.strptime(pl.Date, "%Y%m%d", strict=False)
+    )
+    df.write_parquet(out_path, compression=compression)
+
+
+def _flush_parsed_batch(records: list[dict], out_path: Path, compression: str) -> None:
+    if not records:
+        return
+    df = pl.DataFrame(records, schema=ParsedFilingSchema.schema)
+    df = df.with_columns(
+        pl.col("filing_date").str.strptime(pl.Date, "%Y%m%d", strict=False),
+        pl.col("file_date_filename").str.strptime(pl.Date, "%Y%m%d", strict=False),
     )
     df.write_parquet(out_path, compression=compression)
 
@@ -233,6 +301,111 @@ def concat_parquets_arrow(
             writer.close()
 
     return out_path
+
+
+def process_zip_year(
+    zip_path: Path,
+    out_dir: Path,
+    batch_max_rows: int = 2000,
+    batch_max_text_bytes: int = 250 * 1024 * 1024,  # 250 MB
+    header_search_limit: int = HEADER_SEARCH_LIMIT_DEFAULT,
+    tmp_dir: Path | None = None,
+    encoding: str = "utf-8",
+    compression: Literal["zstd", "snappy", "gzip", "uncompressed"] = "zstd",
+) -> list[Path]:
+    """
+    Parse a yearly ZIP of filings into parquet batches with header metadata and conflict flags.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    tmp_dir = tmp_dir or Path(tempfile.gettempdir())
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+
+    src_zip = zip_path
+    local_zip = tmp_dir / f"{zip_path.stem}.zip"
+    cleanup_local = False
+    if src_zip.resolve() == local_zip.resolve():
+        local_zip = src_zip
+    else:
+        if local_zip.exists():
+            local_zip.unlink()
+        shutil.copyfile(src_zip, local_zip)
+        cleanup_local = True
+
+    written: list[Path] = []
+    records: list[dict] = []
+    batch_idx = 1
+    text_bytes = 0
+
+    try:
+        with zipfile.ZipFile(local_zip, "r") as zf:
+            members = [m for m in zf.namelist() if m.lower().endswith(".txt")]
+            members.sort()
+
+            for member in members:
+                filename = Path(member).name
+                meta = parse_filename_minimal(filename)
+
+                with zf.open(member, "r") as bf:
+                    txt = io.TextIOWrapper(bf, encoding=encoding, errors="replace").read()
+
+                hdr = parse_header(txt, header_search_limit=header_search_limit)
+
+                filename_cik = meta.get("cik")
+                filename_acc = meta.get("accession_number")
+
+                cik_conflict = False
+                if filename_cik is not None and hdr["header_ciks_int_set"]:
+                    if filename_cik not in hdr["header_ciks_int_set"]:
+                        cik_conflict = True
+
+                accession_conflict = False
+                if filename_acc and hdr["header_accession_str"]:
+                    accession_conflict = filename_acc != hdr["header_accession_str"]
+
+                final_accession = hdr["header_accession_str"] or filename_acc
+                final_accession_nodash = _digits_only(final_accession)
+                final_date = hdr["header_filing_date_str"] or meta.get("file_date_filename")
+
+                rec = {
+                    **meta,
+                    "filename": filename,
+                    "zip_member_path": member,
+                    "full_text": txt,
+                    "filing_date": final_date,
+                    "filing_date_header": hdr["header_filing_date_str"],
+                    "cik_header_primary": hdr["primary_header_cik"],
+                    "ciks_header_secondary": hdr["secondary_ciks"],
+                    "accession_header": hdr["header_accession_str"],
+                    "cik_conflict": cik_conflict,
+                    "accession_conflict": accession_conflict,
+                    "accession_number": final_accession,
+                    "accession_nodash": final_accession_nodash,
+                    "doc_id": _make_doc_id(meta.get("cik_10"), final_accession),
+                }
+
+                records.append(rec)
+                text_bytes += len(txt.encode("utf-8", errors="ignore"))
+
+                if len(records) >= batch_max_rows or text_bytes >= batch_max_text_bytes:
+                    out_file = out_dir / f"{zip_path.stem}_batch_{batch_idx:04d}.parquet"
+                    _flush_parsed_batch(records, out_file, compression)
+                    written.append(out_file)
+                    records = []
+                    batch_idx += 1
+                    text_bytes = 0
+                    gc.collect()
+
+            if records:
+                out_file = out_dir / f"{zip_path.stem}_batch_{batch_idx:04d}.parquet"
+                _flush_parsed_batch(records, out_file, compression)
+                written.append(out_file)
+
+    finally:
+        if cleanup_local:
+            local_zip.unlink(missing_ok=True)
+        gc.collect()
+
+    return written
 
 
 def merge_yearly_batches(
@@ -374,3 +547,40 @@ def build_light_metadata_dataset(
 
     lf_light.sink_parquet(out_path, compression=compression)
     return out_path
+
+
+def merge_parquet_files_arrow(
+    in_files: list[Path],
+    out_path: Path,
+    batch_size: int = 32_000,
+    compression: str = "zstd",
+    compression_level: int | None = 1,
+) -> Path:
+    """
+    Compatibility wrapper around concat_parquets_arrow (streaming append).
+    """
+    return concat_parquets_arrow(
+        in_files=in_files,
+        out_path=out_path,
+        batch_size=batch_size,
+        compression=compression,
+        compression_level=compression_level,
+    )
+
+
+def build_light_metadata(
+    year_files: list[Path],
+    out_path: Path,
+    sort_columns: tuple[str, ...] = ("filing_date", "cik"),
+    compression: str = "zstd",
+) -> Path:
+    """
+    Compatibility wrapper that drops `full_text` and sorts by filing_date, cik when present.
+    """
+    return build_light_metadata_dataset(
+        parquet_dir=year_files,
+        out_path=out_path,
+        drop_columns=("full_text",),
+        sort_columns=sort_columns,
+        compression=compression,
+    )
