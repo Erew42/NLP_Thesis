@@ -7,6 +7,8 @@ from thesis_pkg.filing_text import (
     parse_filename_minimal,
     process_zip_year_raw_text,
     process_zip_year,
+    concat_parquets_arrow,
+    merge_yearly_batches,
     ParsedFilingSchema,
     RawTextSchema,
 )
@@ -94,3 +96,56 @@ FILED AS OF DATE: 20240105
     assert conflict["cik_conflict"] is True
     assert conflict["accession_conflict"] is False
     assert conflict["filing_date"].isoformat() == "2024-01-05"
+
+
+def test_merge_yearly_batches_stages_and_merges(tmp_path: Path):
+    batch_root = tmp_path / "batches"
+    year_dir = batch_root / "2012"
+    year_dir.mkdir(parents=True, exist_ok=True)
+
+    df1 = pl.DataFrame({"doc_id": ["a", "b"], "full_text": ["alpha", "bravo"]})
+    df2 = pl.DataFrame({"doc_id": ["c"], "full_text": ["charlie"]})
+
+    df1.write_parquet(year_dir / "2012_batch_0001.parquet")
+    df2.write_parquet(year_dir / "2012_batch_0002.parquet")
+
+    out_dir = tmp_path / "year_merged"
+    work_dir = tmp_path / "work"
+    merged = merge_yearly_batches(
+        batch_dir=batch_root,
+        out_dir=out_dir,
+        local_work_dir=work_dir,
+        validate_inputs=False,
+        stage_inputs_locally=True,
+    )
+
+    assert merged == [out_dir / "2012.parquet"]
+    assert merged[0].exists()
+    assert pl.read_parquet(merged[0]).height == 3
+
+
+def test_concat_parquets_arrow_reports_bad_file(tmp_path: Path):
+    good = tmp_path / "good.parquet"
+    bad = tmp_path / "bad.parquet"
+    out = tmp_path / "out.parquet"
+
+    df = pl.DataFrame({"doc_id": ["a", "b"], "full_text": ["alpha", "bravo"]})
+    df.write_parquet(good)
+    df.write_parquet(bad)
+
+    data = bytearray(bad.read_bytes())
+    assert data[:4] == b"PAR1"
+    assert data[-4:] == b"PAR1"
+    mid = len(data) // 2
+    for i in range(mid, min(mid + 32, len(data) - 4)):
+        data[i] ^= 0xFF
+    data[:4] = b"PAR1"
+    data[-4:] = b"PAR1"
+    bad.write_bytes(data)
+
+    try:
+        concat_parquets_arrow([good, bad], out)
+    except OSError as exc:
+        assert bad.name in str(exc)
+    else:
+        raise AssertionError("Expected concat_parquets_arrow to fail on a corrupted parquet.")
