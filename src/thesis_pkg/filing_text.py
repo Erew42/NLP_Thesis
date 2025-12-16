@@ -193,10 +193,11 @@ def process_zip_year_raw_text(
     tmp_dir: Path | None = None,
     encoding: str = "utf-8",
     compression: Literal["zstd", "snappy", "gzip", "uncompressed"] = "zstd",
+    local_work_dir: Path | None = None,
 ) -> list[Path]:
     """
     Step 1: Read yearly ZIP, parse filename fields, store full_text + filename-derived metadata in parquet batches.
-    Writes batches to out_dir and returns list of batch paths.
+    Writes batches to a local work dir first, then moves them to out_dir and returns list of final batch paths.
 
     Notes:
       - Streams from ZIP without unpacking to disk.
@@ -205,6 +206,10 @@ def process_zip_year_raw_text(
     out_dir.mkdir(parents=True, exist_ok=True)
     tmp_dir = tmp_dir or Path(tempfile.gettempdir())
     tmp_dir.mkdir(parents=True, exist_ok=True)
+    local_root = local_work_dir or (Path(tempfile.gettempdir()) / "_batch_work")
+    local_root.mkdir(parents=True, exist_ok=True)
+    local_out_dir = local_root / zip_path.stem
+    local_out_dir.mkdir(parents=True, exist_ok=True)
 
     # 1) Copy ZIP local for speed/stability
     src_zip = zip_path
@@ -247,9 +252,15 @@ def process_zip_year_raw_text(
                 text_bytes += len(raw)
 
                 if len(records) >= batch_max_rows or text_bytes >= batch_max_text_bytes:
-                    out_file = out_dir / f"{zip_path.stem}_batch_{batch_idx:04d}.parquet"
-                    _flush_batch(records, out_file, compression)
-                    written.append(out_file)
+                    local_file = local_out_dir / f"{zip_path.stem}_batch_{batch_idx:04d}.parquet"
+                    if local_file.exists():
+                        local_file.unlink()
+                    _flush_batch(records, local_file, compression)
+                    final_out_file = out_dir / local_file.name
+                    if final_out_file.exists():
+                        final_out_file.unlink()
+                    shutil.move(str(local_file), str(final_out_file))
+                    written.append(final_out_file)
 
                     records = []
                     batch_idx += 1
@@ -258,9 +269,15 @@ def process_zip_year_raw_text(
 
             # final batch
             if records:
-                out_file = out_dir / f"{zip_path.stem}_batch_{batch_idx:04d}.parquet"
-                _flush_batch(records, out_file, compression)
-                written.append(out_file)
+                local_file = local_out_dir / f"{zip_path.stem}_batch_{batch_idx:04d}.parquet"
+                if local_file.exists():
+                    local_file.unlink()
+                _flush_batch(records, local_file, compression)
+                final_out_file = out_dir / local_file.name
+                if final_out_file.exists():
+                    final_out_file.unlink()
+                shutil.move(str(local_file), str(final_out_file))
+                written.append(final_out_file)
 
     finally:
         if cleanup_local:
@@ -313,13 +330,20 @@ def process_zip_year(
     tmp_dir: Path | None = None,
     encoding: str = "utf-8",
     compression: Literal["zstd", "snappy", "gzip", "uncompressed"] = "zstd",
+    local_work_dir: Path | None = None,
 ) -> list[Path]:
     """
     Parse a yearly ZIP of filings into parquet batches with header metadata and conflict flags.
+
+    Batches are written to a local work directory first, then moved to out_dir (helps when out_dir is remote).
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     tmp_dir = tmp_dir or Path(tempfile.gettempdir())
     tmp_dir.mkdir(parents=True, exist_ok=True)
+    local_root = local_work_dir or (Path(tempfile.gettempdir()) / "_batch_work")
+    local_root.mkdir(parents=True, exist_ok=True)
+    local_out_dir = local_root / zip_path.stem
+    local_out_dir.mkdir(parents=True, exist_ok=True)
 
     src_zip = zip_path
     local_zip = tmp_dir / f"{zip_path.stem}.zip"
@@ -389,18 +413,30 @@ def process_zip_year(
                 text_bytes += len(raw)
 
                 if len(records) >= batch_max_rows or text_bytes >= batch_max_text_bytes:
-                    out_file = out_dir / f"{zip_path.stem}_batch_{batch_idx:04d}.parquet"
-                    _flush_parsed_batch(records, out_file, compression)
-                    written.append(out_file)
+                    local_file = local_out_dir / f"{zip_path.stem}_batch_{batch_idx:04d}.parquet"
+                    if local_file.exists():
+                        local_file.unlink()
+                    _flush_parsed_batch(records, local_file, compression)
+                    final_out_file = out_dir / local_file.name
+                    if final_out_file.exists():
+                        final_out_file.unlink()
+                    shutil.move(str(local_file), str(final_out_file))
+                    written.append(final_out_file)
                     records = []
                     batch_idx += 1
                     text_bytes = 0
                     gc.collect()
 
             if records:
-                out_file = out_dir / f"{zip_path.stem}_batch_{batch_idx:04d}.parquet"
-                _flush_parsed_batch(records, out_file, compression)
-                written.append(out_file)
+                local_file = local_out_dir / f"{zip_path.stem}_batch_{batch_idx:04d}.parquet"
+                if local_file.exists():
+                    local_file.unlink()
+                _flush_parsed_batch(records, local_file, compression)
+                final_out_file = out_dir / local_file.name
+                if final_out_file.exists():
+                    final_out_file.unlink()
+                shutil.move(str(local_file), str(final_out_file))
+                written.append(final_out_file)
 
     finally:
         if cleanup_local:
