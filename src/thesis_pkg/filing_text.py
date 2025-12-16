@@ -3,6 +3,7 @@ from __future__ import annotations
 import gc
 import io
 import json
+import os
 import re
 import shutil
 import tempfile
@@ -32,6 +33,123 @@ HEADER_SEARCH_LIMIT_DEFAULT = 5000
 CIK_HEADER_PATTERN = re.compile(r"CENTRAL INDEX KEY:\s*(\d+)")
 DATE_HEADER_PATTERN = re.compile(r"FILED AS OF DATE:\s*(\d{8})")
 ACC_HEADER_PATTERN = re.compile(r"ACCESSION NUMBER:\s*([\d-]+)")
+
+PARQUET_MAGIC = b"PAR1"
+
+
+def _assert_parquet_magic(path: Path) -> None:
+    """
+    Quick integrity check for common truncation/corruption cases:
+    parquet files must start and end with the magic bytes PAR1.
+    """
+    try:
+        size = path.stat().st_size
+    except FileNotFoundError as exc:
+        raise OSError(f"Parquet file not found: {path}") from exc
+
+    if size < 8:
+        raise OSError(f"Parquet file too small to be valid ({size} bytes): {path}")
+
+    with path.open("rb") as f:
+        start = f.read(4)
+        if start != PARQUET_MAGIC:
+            raise OSError(f"Parquet magic header missing for {path} (got {start!r})")
+        f.seek(-4, io.SEEK_END)
+        end = f.read(4)
+        if end != PARQUET_MAGIC:
+            raise OSError(f"Parquet magic footer missing for {path} (got {end!r})")
+
+
+def _copy_file_stream(src: Path, dst: Path, buffer_size: int = 16 * 1024 * 1024) -> None:
+    """
+    Stream copy with explicit flush/fsync for stability on network/remote mounts.
+    """
+    with src.open("rb") as r, dst.open("wb") as w:
+        shutil.copyfileobj(r, w, length=buffer_size)
+        w.flush()
+        try:
+            os.fsync(w.fileno())
+        except OSError:
+            # Some filesystems (e.g., FUSE mounts) may not support fsync reliably.
+            pass
+
+
+def _safe_copy_atomic(
+    src: Path,
+    dst: Path,
+    *,
+    max_retries: int = 5,
+    sleep_base: float = 1.0,
+    verify_parquet_magic: bool = False,
+) -> None:
+    """
+    Copy `src` to `dst` via a temporary file and atomic rename, with retries.
+
+    This avoids consumers observing a partially written destination file (common on
+    Google Drive mounts) and verifies the copy completed.
+    """
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    expected_size = src.stat().st_size
+
+    tmp = dst.with_name(dst.name + ".tmp")
+    last_exc: Exception | None = None
+    for attempt in range(max_retries):
+        try:
+            if tmp.exists():
+                tmp.unlink()
+
+            _copy_file_stream(src, tmp)
+
+            copied_size = tmp.stat().st_size
+            if copied_size != expected_size:
+                raise OSError(
+                    f"Short copy for {src} -> {dst}: expected {expected_size} bytes, got {copied_size} bytes"
+                )
+
+            if verify_parquet_magic:
+                _assert_parquet_magic(tmp)
+
+            os.replace(tmp, dst)
+            return
+        except Exception as exc:
+            last_exc = exc
+            try:
+                tmp.unlink(missing_ok=True)
+            except Exception:
+                pass
+            if attempt < max_retries - 1:
+                time.sleep(sleep_base * (attempt + 1))
+
+    raise OSError(f"Failed copying {src} -> {dst} after {max_retries} attempts") from last_exc
+
+
+def _safe_move_atomic(
+    src: Path,
+    dst: Path,
+    *,
+    max_retries: int = 5,
+    sleep_base: float = 1.0,
+    verify_parquet_magic: bool = False,
+) -> None:
+    """
+    Move `src` to `dst` robustly across filesystems (copy+verify+atomic replace).
+    """
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.replace(src, dst)
+        return
+    except OSError:
+        # Cross-device moves (e.g., local -> Drive mount) require copy+delete.
+        pass
+
+    _safe_copy_atomic(
+        src,
+        dst,
+        max_retries=max_retries,
+        sleep_base=sleep_base,
+        verify_parquet_magic=verify_parquet_magic,
+    )
+    src.unlink(missing_ok=True)
 
 
 def _digits_only(s: str | None) -> str | None:
@@ -164,6 +282,73 @@ def parse_header(full_text: str, header_search_limit: int = HEADER_SEARCH_LIMIT_
     }
 
 
+def _fsync_file(path: Path) -> None:
+    """
+    Best-effort fsync to reduce risk of half-written files on network mounts.
+    """
+    try:
+        with path.open("rb") as fh:
+            os.fsync(fh.fileno())
+    except Exception:
+        return
+
+
+def _validate_parquet_quick(path: Path) -> None:
+    """
+    Minimal integrity check: ensure footer/row-group headers are readable.
+    """
+    if path.stat().st_size == 0:
+        raise OSError(f"File is empty: {path}")
+    pf = pq.ParquetFile(path)
+    _ = pf.metadata
+    if pf.num_row_groups:
+        pf.read_row_group(0, columns=[])
+
+
+def _copy_with_verify(
+    src: Path,
+    dst: Path,
+    *,
+    retries: int = 3,
+    sleep: float = 1.0,
+    validate: bool = True,
+) -> Path:
+    """
+    Copy src -> dst with size check, optional parquet validation, and retries.
+    Useful for flaky mounts (e.g., Drive).
+    """
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    last_error: Exception | None = None
+
+    for attempt in range(1, retries + 1):
+        tmp = dst.with_suffix(dst.suffix + ".partial")
+        if tmp.exists():
+            tmp.unlink()
+
+        shutil.copy2(src, tmp)
+        _fsync_file(tmp)
+
+        ok = tmp.stat().st_size == src.stat().st_size
+        if ok and validate:
+            try:
+                _validate_parquet_quick(tmp)
+            except Exception as exc:
+                last_error = exc
+                ok = False
+
+        if ok:
+            if dst.exists():
+                dst.unlink()
+            tmp.replace(dst)
+            return dst
+
+        tmp.unlink(missing_ok=True)
+        if attempt < retries:
+            time.sleep(sleep * attempt)
+
+    raise OSError(f"Failed to copy {src} to {dst} after {retries} attempts") from last_error
+
+
 def _flush_batch(records: list[dict], out_path: Path, compression: str) -> None:
     if not records:
         return
@@ -171,7 +356,15 @@ def _flush_batch(records: list[dict], out_path: Path, compression: str) -> None:
     df = df.with_columns(
         pl.col("file_date_filename").str.strptime(pl.Date, "%Y%m%d", strict=False)
     )
-    df.write_parquet(out_path, compression=compression)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = out_path.with_name(out_path.name + ".tmp")
+    try:
+        tmp_path.unlink(missing_ok=True)
+        df.write_parquet(tmp_path, compression=compression)
+        _assert_parquet_magic(tmp_path)
+        os.replace(tmp_path, out_path)
+    finally:
+        tmp_path.unlink(missing_ok=True)
 
 
 def _flush_parsed_batch(records: list[dict], out_path: Path, compression: str) -> None:
@@ -182,7 +375,15 @@ def _flush_parsed_batch(records: list[dict], out_path: Path, compression: str) -
         pl.col("filing_date").str.strptime(pl.Date, "%Y%m%d", strict=False),
         pl.col("file_date_filename").str.strptime(pl.Date, "%Y%m%d", strict=False),
     )
-    df.write_parquet(out_path, compression=compression)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = out_path.with_name(out_path.name + ".tmp")
+    try:
+        tmp_path.unlink(missing_ok=True)
+        df.write_parquet(tmp_path, compression=compression)
+        _assert_parquet_magic(tmp_path)
+        os.replace(tmp_path, out_path)
+    finally:
+        tmp_path.unlink(missing_ok=True)
 
 
 def process_zip_year_raw_text(
@@ -194,14 +395,18 @@ def process_zip_year_raw_text(
     encoding: str = "utf-8",
     compression: Literal["zstd", "snappy", "gzip", "uncompressed"] = "zstd",
     local_work_dir: Path | None = None,
+    copy_retries: int = 3,
+    copy_sleep: float = 1.0,
+    validate_on_copy: bool = True,
 ) -> list[Path]:
     """
     Step 1: Read yearly ZIP, parse filename fields, store full_text + filename-derived metadata in parquet batches.
-    Writes batches to a local work dir first, then moves them to out_dir and returns list of final batch paths.
+    Writes batches to a local work dir first, then copies them to out_dir with validation/retries and returns the final batch paths.
 
     Notes:
       - Streams from ZIP without unpacking to disk.
       - Copies ZIP to local tmp_dir first (important when source is a network mount like Drive).
+      - Each batch copy is verified (size + quick parquet read) to reduce Drive corruption.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     tmp_dir = tmp_dir or Path(tempfile.gettempdir())
@@ -257,10 +462,15 @@ def process_zip_year_raw_text(
                         local_file.unlink()
                     _flush_batch(records, local_file, compression)
                     final_out_file = out_dir / local_file.name
-                    if final_out_file.exists():
-                        final_out_file.unlink()
-                    shutil.move(str(local_file), str(final_out_file))
+                    _copy_with_verify(
+                        local_file,
+                        final_out_file,
+                        retries=copy_retries,
+                        sleep=copy_sleep,
+                        validate=validate_on_copy,
+                    )
                     written.append(final_out_file)
+                    local_file.unlink(missing_ok=True)
 
                     records = []
                     batch_idx += 1
@@ -274,10 +484,15 @@ def process_zip_year_raw_text(
                     local_file.unlink()
                 _flush_batch(records, local_file, compression)
                 final_out_file = out_dir / local_file.name
-                if final_out_file.exists():
-                    final_out_file.unlink()
-                shutil.move(str(local_file), str(final_out_file))
+                _copy_with_verify(
+                    local_file,
+                    final_out_file,
+                    retries=copy_retries,
+                    sleep=copy_sleep,
+                    validate=validate_on_copy,
+                )
                 written.append(final_out_file)
+                local_file.unlink(missing_ok=True)
 
     finally:
         if cleanup_local:
@@ -303,17 +518,24 @@ def concat_parquets_arrow(
     writer: pq.ParquetWriter | None = None
     try:
         for f in in_files:
-            pf = pq.ParquetFile(f)
-            for batch in pf.iter_batches(batch_size=batch_size):
-                tbl = pa.Table.from_batches([batch])
-                if writer is None:
-                    writer = pq.ParquetWriter(
-                        out_path,
-                        tbl.schema,
-                        compression=compression,
-                        compression_level=compression_level if compression == "zstd" else None,
-                    )
-                writer.write_table(tbl)
+            try:
+                pf = pq.ParquetFile(f)
+            except Exception as exc:
+                raise OSError(f"Failed to open parquet file {f}") from exc
+
+            try:
+                for batch in pf.iter_batches(batch_size=batch_size):
+                    tbl = pa.Table.from_batches([batch])
+                    if writer is None:
+                        writer = pq.ParquetWriter(
+                            out_path,
+                            tbl.schema,
+                            compression=compression,
+                            compression_level=compression_level if compression == "zstd" else None,
+                        )
+                    writer.write_table(tbl)
+            except Exception as exc:
+                raise OSError(f"Failed while reading batches from {f}") from exc
     finally:
         if writer is not None:
             writer.close()
@@ -331,11 +553,14 @@ def process_zip_year(
     encoding: str = "utf-8",
     compression: Literal["zstd", "snappy", "gzip", "uncompressed"] = "zstd",
     local_work_dir: Path | None = None,
+    copy_retries: int = 3,
+    copy_sleep: float = 1.0,
+    validate_on_copy: bool = True,
 ) -> list[Path]:
     """
     Parse a yearly ZIP of filings into parquet batches with header metadata and conflict flags.
 
-    Batches are written to a local work directory first, then moved to out_dir (helps when out_dir is remote).
+    Batches are written to a local work directory first, then copied to out_dir with validation/retries (helps when out_dir is remote).
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     tmp_dir = tmp_dir or Path(tempfile.gettempdir())
@@ -418,10 +643,15 @@ def process_zip_year(
                         local_file.unlink()
                     _flush_parsed_batch(records, local_file, compression)
                     final_out_file = out_dir / local_file.name
-                    if final_out_file.exists():
-                        final_out_file.unlink()
-                    shutil.move(str(local_file), str(final_out_file))
+                    _copy_with_verify(
+                        local_file,
+                        final_out_file,
+                        retries=copy_retries,
+                        sleep=copy_sleep,
+                        validate=validate_on_copy,
+                    )
                     written.append(final_out_file)
+                    local_file.unlink(missing_ok=True)
                     records = []
                     batch_idx += 1
                     text_bytes = 0
@@ -433,10 +663,15 @@ def process_zip_year(
                     local_file.unlink()
                 _flush_parsed_batch(records, local_file, compression)
                 final_out_file = out_dir / local_file.name
-                if final_out_file.exists():
-                    final_out_file.unlink()
-                shutil.move(str(local_file), str(final_out_file))
+                _copy_with_verify(
+                    local_file,
+                    final_out_file,
+                    retries=copy_retries,
+                    sleep=copy_sleep,
+                    validate=validate_on_copy,
+                )
                 written.append(final_out_file)
+                local_file.unlink(missing_ok=True)
 
     finally:
         if cleanup_local:
@@ -455,13 +690,16 @@ def merge_yearly_batches(
     compression: str = "zstd",
     compression_level: int | None = 1,
     sleep_between_years: float | None = None,
+    validate_inputs: bool = True,
+    copy_retries: int = 3,
+    copy_sleep: float = 1.0,
 ) -> list[Path]:
     """
     Merge per-year parquet batches (e.g., 2020_batch_0001.parquet) into one parquet per year.
     Returns paths of merged parquet files.
 
     Designed for slow/remote filesystems (e.g., Drive): writes to a local work dir
-    first, then moves the result to `out_dir`.
+    first, validates inputs (optional), then copies the result to `out_dir` with validation/retries.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     local_work_dir = local_work_dir or (Path(tempfile.gettempdir()) / "_merge_work")
@@ -505,6 +743,10 @@ def merge_yearly_batches(
             continue
 
         files = sorted(files_by_year[year])
+        if validate_inputs:
+            for f in files:
+                _validate_parquet_quick(f)
+
         tmp_path = local_work_dir / f"{year}.parquet"
         if tmp_path.exists():
             tmp_path.unlink()
@@ -516,7 +758,14 @@ def merge_yearly_batches(
             compression=compression,
             compression_level=compression_level,
         )
-        shutil.move(str(tmp_path), str(out_path))
+        _copy_with_verify(
+            tmp_path,
+            out_path,
+            retries=copy_retries,
+            sleep=copy_sleep,
+            validate=True,
+        )
+        tmp_path.unlink(missing_ok=True)
         merged.append(out_path)
 
         if checkpoint_path:
