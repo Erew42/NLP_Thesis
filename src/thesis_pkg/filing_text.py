@@ -232,9 +232,10 @@ def process_zip_year_raw_text(
                 filename = Path(member).name
                 meta = parse_filename_minimal(filename)
 
-                # read and decode filing
+                # read and decode filing once; avoid re-encoding just to count bytes
                 with zf.open(member, "r") as bf:
-                    txt = io.TextIOWrapper(bf, encoding=encoding, errors="replace").read()
+                    raw = bf.read()
+                txt = raw.decode(encoding, errors="replace")
 
                 rec = {
                     **meta,
@@ -243,7 +244,7 @@ def process_zip_year_raw_text(
                     "full_text": txt,
                 }
                 records.append(rec)
-                text_bytes += len(txt.encode("utf-8", errors="ignore"))
+                text_bytes += len(raw)
 
                 if len(records) >= batch_max_rows or text_bytes >= batch_max_text_bytes:
                     out_file = out_dir / f"{zip_path.stem}_batch_{batch_idx:04d}.parquet"
@@ -346,7 +347,8 @@ def process_zip_year(
                 meta = parse_filename_minimal(filename)
 
                 with zf.open(member, "r") as bf:
-                    txt = io.TextIOWrapper(bf, encoding=encoding, errors="replace").read()
+                    raw = bf.read()
+                txt = raw.decode(encoding, errors="replace")
 
                 hdr = parse_header(txt, header_search_limit=header_search_limit)
 
@@ -384,7 +386,7 @@ def process_zip_year(
                 }
 
                 records.append(rec)
-                text_bytes += len(txt.encode("utf-8", errors="ignore"))
+                text_bytes += len(raw)
 
                 if len(records) >= batch_max_rows or text_bytes >= batch_max_text_bytes:
                     out_file = out_dir / f"{zip_path.stem}_batch_{batch_idx:04d}.parquet"
@@ -412,6 +414,7 @@ def merge_yearly_batches(
     batch_dir: Path,
     out_dir: Path,
     checkpoint_path: Path | None = None,
+    local_work_dir: Path | None = None,
     batch_size: int = 32_000,
     compression: str = "zstd",
     compression_level: int | None = 1,
@@ -420,8 +423,13 @@ def merge_yearly_batches(
     """
     Merge per-year parquet batches (e.g., 2020_batch_0001.parquet) into one parquet per year.
     Returns paths of merged parquet files.
+
+    Designed for slow/remote filesystems (e.g., Drive): writes to a local work dir
+    first, then moves the result to `out_dir`.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
+    local_work_dir = local_work_dir or (Path(tempfile.gettempdir()) / "_merge_work")
+    local_work_dir.mkdir(parents=True, exist_ok=True)
 
     done: set[str] = set()
     if checkpoint_path and checkpoint_path.exists():
@@ -431,15 +439,28 @@ def merge_yearly_batches(
             done = set()
 
     files_by_year: dict[str, list[Path]] = {}
-    for p in batch_dir.glob("*_batch_*.parquet"):
-        m = re.match(r"(?P<year>\d{4})_batch_", p.name)
-        if not m:
+
+    # Prefer nested layout: batch_dir/<YYYY>/<YYYY>_batch_*.parquet
+    for year_dir in batch_dir.iterdir():
+        if not (year_dir.is_dir() and year_dir.name.isdigit() and len(year_dir.name) == 4):
             continue
-        year = m.group("year")
-        files_by_year.setdefault(year, []).append(p)
+        files = sorted(year_dir.glob(f"{year_dir.name}_batch_*.parquet"))
+        if files:
+            files_by_year[year_dir.name] = files
+
+    # Fallback to flat layout: batch_dir/<YYYY>_batch_*.parquet
+    if not files_by_year:
+        for p in batch_dir.glob("*_batch_*.parquet"):
+            m = re.match(r"(?P<year>\d{4})_batch_", p.name)
+            if not m:
+                continue
+            year = m.group("year")
+            files_by_year.setdefault(year, []).append(p)
 
     if not files_by_year:
-        raise ValueError(f"No batch files found in {batch_dir}")
+        raise ValueError(
+            f"No batch files found under {batch_dir} (expected <YYYY>/<YYYY>_batch_*.parquet or <YYYY>_batch_*.parquet)"
+        )
 
     merged: list[Path] = []
     for year in sorted(files_by_year):
@@ -448,7 +469,7 @@ def merge_yearly_batches(
             continue
 
         files = sorted(files_by_year[year])
-        tmp_path = out_dir / f"_{year}.parquet"
+        tmp_path = local_work_dir / f"{year}.parquet"
         if tmp_path.exists():
             tmp_path.unlink()
 
@@ -459,7 +480,7 @@ def merge_yearly_batches(
             compression=compression,
             compression_level=compression_level,
         )
-        tmp_path.replace(out_path)
+        shutil.move(str(tmp_path), str(out_path))
         merged.append(out_path)
 
         if checkpoint_path:
