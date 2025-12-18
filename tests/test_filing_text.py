@@ -255,6 +255,57 @@ def test_extract_filing_items_handles_inline_toc_on_one_line():
     assert "Actual business text" in (items[0]["full_text"] or "")
 
 
+def test_extract_filing_items_treats_moderately_long_lines_as_sparse_layout():
+    # Regression: some filings have very long lines (e.g., ~6-7k chars) but still below the 8k sparse cutoff.
+    # Headings can appear mid-line (e.g., "... PART I ITEM 1 ..."), so we need the sparse-layout heuristics.
+    pad = "X" * 6000
+    text = (
+        "<Header></Header>\n"
+        "CONTENTS PAGE PART I ITEM 1. BUSINESS 3 ITEM 2. PROPERTIES 4 "
+        "PART I ITEM 1. BUSINESS Actual business text. "
+        "ITEM 2. PROPERTIES Actual properties text. "
+        + pad
+    )
+    items = extract_filing_items(text)
+    assert [it["item"] for it in items] == ["I:1", "I:2"]
+    assert "Actual business text" in (items[0]["full_text"] or "")
+
+
+def test_extract_filing_items_does_not_mask_real_items_on_toc_page_header():
+    # Regression: repeated "Table of Contents" page headers can cause TOC masking to accidentally
+    # suppress real item headings (and yield zero extracted items).
+    text = """<Header></Header>
+Item 6. Selected Financial Data.
+Not applicable.
+Table of Contents
+Item 7. Management's Discussion and Analysis.
+Alpha
+Item 7A. Quantitative and Qualitative Disclosures About Market Risk.
+Bravo
+Item 8. Financial Statements and Supplementary Data.
+Charlie
+Item 9. Changes in and Disagreements with Accountants.
+Delta
+"""
+    items = extract_filing_items(text)
+    assert [it["item"] for it in items] == ["6", "7", "7A", "8", "9"]
+
+
+def test_extract_filing_items_continued_filter_is_local_to_heading():
+    # Regression: in very long lines, the word "continued" can appear later in the narrative;
+    # it should not cause all headings on that line to be rejected.
+    text = (
+        "<Header></Header>\n"
+        "PART I ITEM 1. Business Alpha. "
+        + ("X" * 2500)
+        + ". ITEM 2. Properties Bravo. "
+        + ("Y" * 2500)
+        + "We continued to grow."
+    )
+    items = extract_filing_items(text)
+    assert [it["item"] for it in items] == ["I:1", "I:2"]
+
+
 def test_extract_filing_items_normalizes_roman_item_numbers():
     text = """<Header></Header>
 PART I

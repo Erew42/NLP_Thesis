@@ -37,7 +37,9 @@ ACC_HEADER_PATTERN = re.compile(r"ACCESSION NUMBER:\s*([\d-]+)")
 PARQUET_MAGIC = b"PAR1"
 
 TOC_MARKER_PATTERN = re.compile(
-    r"\btable\s+of\s+contents?\b|\btable\s+of\s+content\b|\bindex\b",
+    # Be conservative: "INDEX" appears in many non-TOC contexts (e.g., "Exhibit Index"),
+    # and false TOC masking can suppress real item headings.
+    r"\btable\s+of\s+contents?\b|\btable\s+of\s+content\b",
     re.IGNORECASE,
 )
 TOC_HEADER_LINE_PATTERN = re.compile(r"^\s*table\s+of\s+contents?\s*$", re.IGNORECASE)
@@ -309,13 +311,45 @@ def _detect_toc_line_ranges(lines: list[str], *, max_lines: int = 400) -> list[t
 
         followed = 0
         for li in cl:
+            # TOC entries often include a page number (or dot leaders + page) on the same line.
+            s = lines[li].strip()
+            if re.search(r"\.{3,}\s*\d{1,3}\s*$", s) or re.search(r"\s\d{1,3}\s*$", s):
+                followed += 1
+                continue
             for j in (li + 1, li + 2, li + 3):
                 if j < n and _pageish(lines[j]):
                     followed += 1
                     break
+
         has_marker_near = any((cl[0] - 10) <= mi <= (cl[-1] + 10) for mi in toc_markers)
-        # A TOC cluster either has nearby explicit markers or a strong page-number follow pattern.
-        if has_marker_near or followed >= 2:
+
+        # Consider the whole block: a true TOC block is mostly headings and pagination markers,
+        # while real content contains narrative lines that break this density.
+        nonempty_block = [lines[i].strip() for i in range(cl[0], cl[-1] + 1) if lines[i].strip()]
+        if nonempty_block:
+            headingish = 0
+            for s in nonempty_block:
+                m = ITEM_LINESTART_PATTERN.match(s)
+                if m and _normalize_item_id(m.group("num"), m.group("let")) is not None:
+                    headingish += 1
+                    continue
+                if PART_LINESTART_PATTERN.match(s) is not None:
+                    headingish += 1
+                    continue
+                if TOC_HEADER_LINE_PATTERN.match(s):
+                    headingish += 1
+                    continue
+                if _pageish(s):
+                    headingish += 1
+                    continue
+            headingish_ratio = headingish / len(nonempty_block)
+        else:
+            headingish_ratio = 0.0
+
+        # Require either an explicit marker nearby or strong page-number evidence, plus a high
+        # density of headings in the block. This avoids masking real item starts when a TOC header
+        # repeats as a page header inside the filing.
+        if headingish_ratio >= 0.75 and (has_marker_near or followed >= 2):
             chosen.append((cl[0], cl[-1]))
 
     ranges.extend(chosen)
@@ -466,11 +500,17 @@ def extract_filing_items(
     body = _normalize_newlines(_strip_leading_header_block(full_text))
     body = _repair_wrapped_headings(body)
     lines = body.split("\n")
-    max_line_len = max((len(l) for l in lines[: min(len(lines), 400)]), default=0)
-    sparse_layout = max_line_len >= 8_000
-
-    toc_ranges = _detect_toc_line_ranges(lines)
-    toc_mask = _line_ranges_to_mask(toc_ranges)
+    head = lines[: min(len(lines), 400)]
+    head_nonempty_lens = [len(l) for l in head if l]
+    max_line_len = max(head_nonempty_lens, default=0)
+    avg_line_len = (sum(head_nonempty_lens) / len(head_nonempty_lens)) if head_nonempty_lens else 0.0
+    # Some filings have relatively few lines but many long lines (e.g., HTML/PDF conversions).
+    # Those often place headings mid-line; treat them like "sparse layout" even when max_line_len < 8000.
+    sparse_layout = (
+        max_line_len >= 8_000
+        or (len(lines) <= 200 and max_line_len >= 2_000)
+        or (len(lines) <= 300 and avg_line_len >= 1_000 and max_line_len >= 4_000)
+    )
 
     # Precompute line start offsets (for slicing via absolute positions)
     line_starts: list[int] = []
@@ -479,114 +519,132 @@ def extract_filing_items(
         line_starts.append(pos)
         pos += len(line) + 1  # '\n'
 
-    toc_end_pos = _infer_toc_end_pos(body)
-    if toc_end_pos is None and toc_ranges:
-        max_end_line = max(e for _, e in toc_ranges)
-        if max_end_line + 1 < len(line_starts):
-            toc_end_pos = line_starts[max_end_line + 1]
-        else:
-            toc_end_pos = len(body)
-
+    # First pass: normal TOC masking + TOC cutoff. If that yields no items, do a relaxed pass
+    # that disables TOC suppression (some filings include spurious TOC headers) and forces sparse
+    # scanning to recover mid-line headings.
+    attempt = 0
     boundaries: list[_ItemBoundary] = []
-    current_part: str | None = None
+    while True:
+        toc_ranges = [] if attempt else _detect_toc_line_ranges(lines)
+        toc_mask = set() if attempt else _line_ranges_to_mask(toc_ranges)
 
-    # Build candidates by scanning lines in order while tracking PART markers within each line.
-    for i, line in enumerate(lines):
-        if i in toc_mask:
-            continue
+        toc_end_pos = None if attempt else _infer_toc_end_pos(body)
+        if toc_end_pos is None and toc_ranges and not attempt:
+            max_end_line = max(e for _, e in toc_ranges)
+            if max_end_line + 1 < len(line_starts):
+                toc_end_pos = line_starts[max_end_line + 1]
+            else:
+                toc_end_pos = len(body)
 
-        # Skip obvious page-header TOC repeats inside items (keep content otherwise).
-        if TOC_HEADER_LINE_PATTERN.match(line):
-            continue
+        scan_sparse_layout = True if attempt else sparse_layout
+        boundaries = []
+        current_part: str | None = None
 
-        events: list[tuple[int, str, str | None, re.Match[str] | None]] = []
+        # Build candidates by scanning lines in order while tracking PART markers within each line.
+        for i, line in enumerate(lines):
+            if i in toc_mask:
+                continue
 
-        if sparse_layout:
-            for m in PART_MARKER_PATTERN.finditer(line):
-                part = m.group("part").upper()
-                if part in allowed_parts:
-                    events.append((m.start(), "part", part, m))
-        else:
-            m = PART_LINESTART_PATTERN.match(line)
-            if m is not None:
-                part = m.group("part").upper()
-                if part in allowed_parts:
-                    events.append((m.start(), "part", part, m))
+            # Skip obvious page-header TOC repeats inside items (keep content otherwise).
+            if TOC_HEADER_LINE_PATTERN.match(line):
+                continue
 
-        for m in ITEM_CANDIDATE_PATTERN.finditer(line):
-            events.append((m.start(), "item", None, m))
+            events: list[tuple[int, str, str | None, re.Match[str] | None]] = []
 
-        if not events:
-            continue
+            if scan_sparse_layout:
+                for m in PART_MARKER_PATTERN.finditer(line):
+                    part = m.group("part").upper()
+                    if part in allowed_parts:
+                        events.append((m.start(), "part", part, m))
+            else:
+                m = PART_LINESTART_PATTERN.match(line)
+                if m is not None:
+                    part = m.group("part").upper()
+                    if part in allowed_parts:
+                        events.append((m.start(), "part", part, m))
 
-        events.sort(key=lambda t: t[0])
-        last_part_end: int | None = None
-        for _, kind, part, m in events:
-            if kind == "part":
+            for m in ITEM_CANDIDATE_PATTERN.finditer(line):
+                events.append((m.start(), "item", None, m))
+
+            if not events:
+                continue
+
+            events.sort(key=lambda t: t[0])
+            last_part_end: int | None = None
+            for _, kind, part, m in events:
+                if kind == "part":
+                    assert m is not None
+                    current_part = part
+                    last_part_end = m.end()
+                    continue
+
                 assert m is not None
-                current_part = part
-                last_part_end = m.end()
-                continue
-
-            assert m is not None
-            item_id = _normalize_item_id(
-                m.group("num"),
-                m.group("let"),
-                max_item=max_item_number,
-            )
-            if item_id is None:
-                continue
-
-            # Basic TOC-line filters (only for reasonably short early lines).
-            if i < 400:
-                item_words = len(ITEM_WORD_PATTERN.findall(line))
-                if item_words >= 3 and len(line) <= 5_000:
-                    continue
-                if TOC_MARKER_PATTERN.search(line) and item_words >= 1 and len(line) <= 8_000:
-                    continue
-
-            abs_start = line_starts[i] + m.start()
-            if toc_end_pos is not None and abs_start < toc_end_pos:
-                continue
-
-            # Heuristics to avoid cross-references:
-            prefix = line[: m.start()]
-            is_line_start = prefix.strip() == ""
-            part_near_item = last_part_end is not None and (m.start() - last_part_end) <= 60
-
-            # Only accept headings that look like real section starts (line-start or 'PART .. ITEM ..').
-            # This intentionally rejects mid-sentence cross-references like "Part II, Item 7 ...".
-            accept = is_line_start or part_near_item
-            if not accept and sparse_layout:
-                # For filings with very few line breaks, headings often follow sentence punctuation.
-                # Keep this strict elsewhere to avoid mid-sentence cross-reference matches.
-                k = abs_start - 1
-                while k >= 0 and body[k].isspace():
-                    k -= 1
-                prev_char = body[k] if k >= 0 else ""
-                if prev_char in ".:;!?":
-                    prev = prefix[-16:].lower()
-                    if not re.search(r"(see|in|under|from|to)\s+$", prev):
-                        accept = True
-
-            if not accept:
-                continue
-
-            key = (current_part, item_id)
-            # Ignore "(continued)" headings; they are typically page-header repeats.
-            if CONTINUED_PATTERN.search(line[m.end() :]):
-                continue
-
-            start_abs = line_starts[i] + m.start()
-            content_start_abs = line_starts[i] + m.end()
-            boundaries.append(
-                _ItemBoundary(
-                    start=start_abs,
-                    content_start=content_start_abs,
-                    item_part=current_part,
-                    item_id=item_id,
+                item_id = _normalize_item_id(
+                    m.group("num"),
+                    m.group("let"),
+                    max_item=max_item_number,
                 )
-            )
+                if item_id is None:
+                    continue
+
+                # Basic TOC-line filters (only for reasonably short early lines).
+                if i < 400:
+                    item_words = len(ITEM_WORD_PATTERN.findall(line))
+                    if item_words >= 3 and len(line) <= 5_000:
+                        continue
+                # Only skip TOC-marker lines when they look like true TOC listings (many ITEM tokens).
+                # Some filings embed a repeated "Table of Contents" page header alongside real headings.
+                if TOC_MARKER_PATTERN.search(line) and item_words >= 3 and len(line) <= 8_000:
+                    continue
+
+                abs_start = line_starts[i] + m.start()
+                if toc_end_pos is not None and abs_start < toc_end_pos:
+                    continue
+
+                # Heuristics to avoid cross-references:
+                prefix = line[: m.start()]
+                is_line_start = prefix.strip() == ""
+                part_near_item = last_part_end is not None and (m.start() - last_part_end) <= 60
+
+                # Only accept headings that look like real section starts (line-start or 'PART .. ITEM ..').
+                # This intentionally rejects mid-sentence cross-references like "Part II, Item 7 ...".
+                accept = is_line_start or part_near_item
+                if not accept and scan_sparse_layout:
+                    # For filings with very few line breaks, headings often follow sentence punctuation.
+                    # Keep this strict elsewhere to avoid mid-sentence cross-reference matches.
+                    k = abs_start - 1
+                    while k >= 0 and body[k].isspace():
+                        k -= 1
+                    prev_char = body[k] if k >= 0 else ""
+                    if prev_char in ".:;!?":
+                        prev = prefix[-16:].lower()
+                        if not re.search(r"(see|in|under|from|to)\s+$", prev):
+                            accept = True
+
+                if not accept:
+                    continue
+
+                # Ignore "(continued)" headings; they are typically page-header repeats.
+                # Only treat it as a continuation marker when it appears immediately after the heading,
+                # not elsewhere later in the same (potentially very long) line.
+                suffix = line[m.end() : m.end() + 64]
+                if re.search(r"(?i)^\s*[\(\[]?\s*continued\b", suffix):
+                    continue
+
+                start_abs = line_starts[i] + m.start()
+                content_start_abs = line_starts[i] + m.end()
+                boundaries.append(
+                    _ItemBoundary(
+                        start=start_abs,
+                        content_start=content_start_abs,
+                        item_part=current_part,
+                        item_id=item_id,
+                    )
+                )
+
+        if boundaries or attempt:
+            break
+        attempt += 1
 
     if not boundaries:
         return []
