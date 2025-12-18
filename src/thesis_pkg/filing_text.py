@@ -36,6 +36,34 @@ ACC_HEADER_PATTERN = re.compile(r"ACCESSION NUMBER:\s*([\d-]+)")
 
 PARQUET_MAGIC = b"PAR1"
 
+TOC_MARKER_PATTERN = re.compile(
+    r"\btable\s+of\s+contents?\b|\btable\s+of\s+content\b|\bindex\b",
+    re.IGNORECASE,
+)
+TOC_HEADER_LINE_PATTERN = re.compile(r"^\s*table\s+of\s+contents?\s*$", re.IGNORECASE)
+ITEM_WORD_PATTERN = re.compile(r"\bITEM\b", re.IGNORECASE)
+PART_MARKER_PATTERN = re.compile(r"\bPART\s+(?P<part>IV|III|II|I)\b(?!\s*,)", re.IGNORECASE)
+PART_LINESTART_PATTERN = re.compile(r"^\s*PART\s+(?P<part>IV|III|II|I)\b", re.IGNORECASE)
+ITEM_CANDIDATE_PATTERN = re.compile(
+    r"\bITEM\s+(?P<num>\d+|[IVXLCDM]+)(?P<let>[A-Z])?\s*[\.:]?",
+    re.IGNORECASE,
+)
+ITEM_LINESTART_PATTERN = re.compile(
+    r"^\s*(?:PART\s+[IVXLCDM]+\s*[:\-]?\s*)?ITEM\s+(?P<num>\d+|[IVXLCDM]+)(?P<let>[A-Z])?\b",
+    re.IGNORECASE,
+)
+CONTINUED_PATTERN = re.compile(r"\bcontinued\b", re.IGNORECASE)
+
+PAGE_HYPHEN_PATTERN = re.compile(r"^\s*-\d{1,4}-\s*$")
+PAGE_NUMBER_PATTERN = re.compile(r"^\s*\d{1,4}\s*$")
+PAGE_ROMAN_PATTERN = re.compile(r"^\s*[ivxlcdm]{1,6}\s*$", re.IGNORECASE)
+PAGE_OF_PATTERN = re.compile(r"^\s*page\s+\d+\s*(?:of\s+\d+)?\s*$", re.IGNORECASE)
+
+EMPTY_ITEM_PATTERN = re.compile(
+    r"^\s*(?:\(?[a-z]\)?\s*)?(?:none\.?|n/?a\.?|not applicable\.?|not required\.?|\[reserved\]|reserved)\s*$",
+    re.IGNORECASE,
+)
+
 
 def _assert_parquet_magic(path: Path) -> None:
     """
@@ -92,6 +120,517 @@ def _make_doc_id(cik10: str | None, acc: str | None) -> str | None:
     if acc is None:
         return None
     return f"{cik10}:{acc}" if cik10 else f"UNK:{acc}"
+
+
+def _normalize_newlines(text: str) -> str:
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _strip_leading_header_block(full_text: str) -> str:
+    """
+    Remove the synthetic <Header>...</Header> block when present.
+    Keeps all remaining text unchanged.
+    """
+    idx = full_text.find("</Header>")
+    if idx == -1:
+        return full_text
+    return full_text[idx + len("</Header>") :]
+
+
+def _roman_to_int(s: str) -> int | None:
+    """
+    Convert a roman numeral (I, II, IV, ...) to int.
+    Returns None if the string is not a valid roman numeral.
+    """
+    s = s.strip().upper()
+    if not s or not re.fullmatch(r"[IVXLCDM]+", s):
+        return None
+
+    values = {"I": 1, "V": 5, "X": 10, "L": 50, "C": 100, "D": 500, "M": 1000}
+    total = 0
+    prev = 0
+    for ch in reversed(s):
+        v = values[ch]
+        if v < prev:
+            total -= v
+        else:
+            total += v
+            prev = v
+    # Validate by round-trip to reduce false positives.
+    if total <= 0:
+        return None
+    return total
+
+
+def _normalize_item_id(num_raw: str, let_raw: str | None, *, max_item: int = 20) -> str | None:
+    """
+    Normalize item number + optional letter to a canonical ID like '1', '1A', ...
+    Filters out non-filing items (e.g., Item 405) via max_item.
+    """
+    num_raw = (num_raw or "").strip()
+    if not num_raw:
+        return None
+
+    n: int | None
+    if num_raw.isdigit():
+        n = int(num_raw)
+    else:
+        n = _roman_to_int(num_raw)
+
+    if n is None or n <= 0 or n > max_item:
+        return None
+
+    letter = (let_raw or "").strip().upper()
+    if letter and not re.fullmatch(r"[A-Z]", letter):
+        letter = ""
+    return f"{n}{letter}" if letter else str(n)
+
+
+_WRAPPED_TABLE_OF_CONTENTS_PATTERN = re.compile(
+    r"(?im)^\s*table\s*\n+\s*of(?:\s*\n+\s*|\s+)\s*contents?\b"
+)
+_WRAPPED_PART_PATTERN = re.compile(r"(?im)^(?P<lead>\s*part)\s*\n+\s*(?P<part>iv|iii|ii|i)\b")
+_WRAPPED_ITEM_PATTERN = re.compile(
+    r"(?im)^(?P<lead>\s*item)\s*\n+\s*(?P<num>\d+|[ivxlcdm]+)\s*(?P<let>[a-z])?\s*(?P<punc>[\.:])?"
+)
+
+
+def _repair_wrapped_headings(body: str) -> str:
+    """
+    Many filings come from PDF/HTML conversions where headings are wrapped like:
+      - 'TABLE\\nOF CONTENTS'
+      - 'PART\\nII'
+      - 'Item\\n 1.'
+
+    This helper repairs these cases so line-based heuristics can work reliably.
+    """
+    if not body:
+        return body
+
+    body = _WRAPPED_TABLE_OF_CONTENTS_PATTERN.sub("TABLE OF CONTENTS", body)
+
+    def _fix_part(m: re.Match[str]) -> str:
+        lead = m.group("lead")
+        part = m.group("part").upper()
+        return f"{lead} {part}"
+
+    body = _WRAPPED_PART_PATTERN.sub(_fix_part, body)
+
+    def _fix_item(m: re.Match[str]) -> str:
+        lead = m.group("lead")
+        num = m.group("num").upper()
+        let = (m.group("let") or "").upper()
+        punc = m.group("punc") or ""
+        return f"{lead} {num}{let}{punc}"
+
+    body = _WRAPPED_ITEM_PATTERN.sub(_fix_item, body)
+    return body
+
+
+def _detect_toc_line_ranges(lines: list[str], *, max_lines: int = 400) -> list[tuple[int, int]]:
+    """
+    Best-effort detection of a Table of Contents block near the top of a filing.
+    Returns inclusive (start_line, end_line) ranges.
+    """
+    n = min(len(lines), max_lines)
+    if n == 0:
+        return []
+
+    ranges: list[tuple[int, int]] = []
+
+    # 1) Inline TOC lines (many ITEM tokens on the same line) and lines explicitly marked as TOC/Index.
+    inline_lines: list[int] = []
+    for i in range(n):
+        line = lines[i]
+        line_len = len(line)
+        item_words = len(ITEM_WORD_PATTERN.findall(line))
+        # Avoid flagging extremely long lines (some filings have most content on one line);
+        # for those, we rely on the character-based TOC cutoff instead.
+        if item_words >= 3 and line_len <= 5_000:
+            inline_lines.append(i)
+            continue
+        if TOC_MARKER_PATTERN.search(line) and item_words >= 1 and line_len <= 8_000:
+            inline_lines.append(i)
+
+    for i in inline_lines:
+        ranges.append((i, i))
+
+    # 2) Multi-line TOC clusters: many line-start ITEM headings close together near the top.
+    heading_lines: list[int] = []
+    for i in range(n):
+        m = ITEM_LINESTART_PATTERN.match(lines[i])
+        if not m:
+            continue
+        if _normalize_item_id(m.group("num"), m.group("let")) is None:
+            continue
+        heading_lines.append(i)
+
+    clusters: list[list[int]] = []
+    if heading_lines:
+        cur = [heading_lines[0]]
+        for idx in heading_lines[1:]:
+            if idx - cur[-1] <= 6:
+                cur.append(idx)
+            else:
+                clusters.append(cur)
+                cur = [idx]
+        clusters.append(cur)
+
+    def _pageish(line: str) -> bool:
+        return bool(
+            PAGE_NUMBER_PATTERN.match(line)
+            or PAGE_HYPHEN_PATTERN.match(line)
+            or PAGE_ROMAN_PATTERN.match(line)
+            or PAGE_OF_PATTERN.match(line)
+        )
+
+    toc_markers = {i for i in range(n) if TOC_MARKER_PATTERN.search(lines[i])}
+
+    # Handle split markers like:
+    #   TABLE
+    #   OF CONTENTS
+    # and similar 2-line patterns.
+    for i in range(n - 1):
+        a = lines[i].strip().lower()
+        b = lines[i + 1].strip().lower()
+        if a == "table" and b.startswith("of contents"):
+            toc_markers.add(i)
+            toc_markers.add(i + 1)
+        if a == "table of" and b.startswith("contents"):
+            toc_markers.add(i)
+            toc_markers.add(i + 1)
+
+    chosen: list[tuple[int, int]] = []
+    for cl in clusters:
+        if len(cl) < 4:
+            continue
+        if cl[0] > 300:  # TOC is typically early
+            continue
+
+        followed = 0
+        for li in cl:
+            for j in (li + 1, li + 2, li + 3):
+                if j < n and _pageish(lines[j]):
+                    followed += 1
+                    break
+        has_marker_near = any((cl[0] - 10) <= mi <= (cl[-1] + 10) for mi in toc_markers)
+        # A TOC cluster either has nearby explicit markers or a strong page-number follow pattern.
+        if has_marker_near or followed >= 2:
+            chosen.append((cl[0], cl[-1]))
+
+    ranges.extend(chosen)
+
+    # Merge overlapping/adjacent ranges.
+    if not ranges:
+        return []
+    ranges.sort()
+    merged: list[tuple[int, int]] = [ranges[0]]
+    for s, e in ranges[1:]:
+        ps, pe = merged[-1]
+        if s <= pe + 1:
+            merged[-1] = (ps, max(pe, e))
+        else:
+            merged.append((s, e))
+    return merged
+
+
+def _infer_toc_end_pos(body: str, *, max_chars: int = 20_000) -> int | None:
+    """
+    Character-based TOC cutoff for filings with very few line breaks.
+    Returns the end position (in `body`) of a likely TOC region, or None.
+    """
+    m = re.search(r"table\s+of\s+contents?", body, flags=re.IGNORECASE)
+    if not m:
+        return None
+
+    start = m.start()
+    end = min(len(body), start + max_chars)
+    window = body[start:end]
+
+    toc_entry = re.compile(
+        r"\bITEM\s+(?P<num>\d+|[IVXLCDM]+)(?P<let>[A-Z])?\s*[\.:]?\s+.{0,120}?\b(?P<page>\d{1,3})\b(?=\s+(?:ITEM|PART)\b|\s*$)",
+        re.IGNORECASE | re.DOTALL,
+    )
+
+    last_end: int | None = None
+    count = 0
+    for mm in toc_entry.finditer(window):
+        item_id = _normalize_item_id(mm.group("num"), mm.group("let"))
+        if item_id is None:
+            continue
+        try:
+            page = int(mm.group("page"))
+        except Exception:
+            continue
+        if page <= 0 or page > 500:
+            continue
+        count += 1
+        last_end = start + mm.end()
+
+    if count >= 4 and last_end is not None:
+        return last_end
+    return None
+
+
+def _line_ranges_to_mask(ranges: list[tuple[int, int]]) -> set[int]:
+    mask: set[int] = set()
+    for s, e in ranges:
+        for i in range(s, e + 1):
+            mask.add(i)
+    return mask
+
+
+def _remove_pagination(text: str) -> str:
+    """
+    Remove common page-number and page-header artifacts while preserving table rows.
+    """
+    text = _normalize_newlines(text)
+    lines = text.split("\n")
+    if not lines:
+        return text
+
+    out: list[str] = []
+    for i, line in enumerate(lines):
+        s = line.strip()
+        prev_blank = i > 0 and lines[i - 1].strip() == ""
+        next_blank = i + 1 < len(lines) and lines[i + 1].strip() == ""
+
+        if not s:
+            out.append("")
+            continue
+
+        if TOC_HEADER_LINE_PATTERN.match(s):
+            continue
+        if PAGE_OF_PATTERN.match(s):
+            continue
+        if PAGE_HYPHEN_PATTERN.match(s):
+            continue
+        if PAGE_ROMAN_PATTERN.match(s) and (prev_blank or next_blank):
+            continue
+        if PAGE_NUMBER_PATTERN.match(s):
+            try:
+                v = int(s)
+            except Exception:
+                v = None
+            if v is not None and v <= 500 and (prev_blank or next_blank):
+                continue
+
+        out.append(line)
+
+    cleaned = "\n".join(out)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+    return cleaned
+
+
+@dataclass(frozen=True)
+class _ItemBoundary:
+    start: int
+    content_start: int
+    item_part: str | None
+    item_id: str
+
+
+def _is_empty_item_text(text: str | None) -> bool:
+    if not text:
+        return True
+    return bool(EMPTY_ITEM_PATTERN.match(text.strip()))
+
+
+def extract_filing_items(
+    full_text: str,
+    *,
+    form_type: str | None = None,
+    max_item_number: int = 20,
+) -> list[dict[str, str | None]]:
+    """
+    Extract filing item sections from `full_text`.
+
+    Returns a list of dicts with:
+      - item_part: roman numeral part when detected (e.g., 'I', 'II'); may be None
+      - item_id: normalized item id (e.g., '1', '1A')
+      - item: combined key '<part>:<id>' when part exists, else '<id>'
+      - full_text: extracted text for the item (pagination artifacts removed)
+
+    The function does not emit TOC rows; TOC is only used internally to avoid false starts.
+    """
+    if not full_text:
+        return []
+
+    form = (form_type or "").strip().upper()
+    if form.startswith("10Q") or form.startswith("10-Q"):
+        allowed_parts = {"I", "II"}
+    else:
+        # Default to 10-K style parts (I-IV). This also prevents accidental matches like "Part D".
+        allowed_parts = {"I", "II", "III", "IV"}
+
+    body = _normalize_newlines(_strip_leading_header_block(full_text))
+    body = _repair_wrapped_headings(body)
+    lines = body.split("\n")
+    max_line_len = max((len(l) for l in lines[: min(len(lines), 400)]), default=0)
+    sparse_layout = max_line_len >= 8_000
+
+    toc_ranges = _detect_toc_line_ranges(lines)
+    toc_mask = _line_ranges_to_mask(toc_ranges)
+
+    # Precompute line start offsets (for slicing via absolute positions)
+    line_starts: list[int] = []
+    pos = 0
+    for line in lines:
+        line_starts.append(pos)
+        pos += len(line) + 1  # '\n'
+
+    toc_end_pos = _infer_toc_end_pos(body)
+    if toc_end_pos is None and toc_ranges:
+        max_end_line = max(e for _, e in toc_ranges)
+        if max_end_line + 1 < len(line_starts):
+            toc_end_pos = line_starts[max_end_line + 1]
+        else:
+            toc_end_pos = len(body)
+
+    boundaries: list[_ItemBoundary] = []
+    current_part: str | None = None
+
+    # Build candidates by scanning lines in order while tracking PART markers within each line.
+    for i, line in enumerate(lines):
+        if i in toc_mask:
+            continue
+
+        # Skip obvious page-header TOC repeats inside items (keep content otherwise).
+        if TOC_HEADER_LINE_PATTERN.match(line):
+            continue
+
+        events: list[tuple[int, str, str | None, re.Match[str] | None]] = []
+
+        if sparse_layout:
+            for m in PART_MARKER_PATTERN.finditer(line):
+                part = m.group("part").upper()
+                if part in allowed_parts:
+                    events.append((m.start(), "part", part, m))
+        else:
+            m = PART_LINESTART_PATTERN.match(line)
+            if m is not None:
+                part = m.group("part").upper()
+                if part in allowed_parts:
+                    events.append((m.start(), "part", part, m))
+
+        for m in ITEM_CANDIDATE_PATTERN.finditer(line):
+            events.append((m.start(), "item", None, m))
+
+        if not events:
+            continue
+
+        events.sort(key=lambda t: t[0])
+        last_part_end: int | None = None
+        for _, kind, part, m in events:
+            if kind == "part":
+                assert m is not None
+                current_part = part
+                last_part_end = m.end()
+                continue
+
+            assert m is not None
+            item_id = _normalize_item_id(
+                m.group("num"),
+                m.group("let"),
+                max_item=max_item_number,
+            )
+            if item_id is None:
+                continue
+
+            # Basic TOC-line filters (only for reasonably short early lines).
+            if i < 400:
+                item_words = len(ITEM_WORD_PATTERN.findall(line))
+                if item_words >= 3 and len(line) <= 5_000:
+                    continue
+                if TOC_MARKER_PATTERN.search(line) and item_words >= 1 and len(line) <= 8_000:
+                    continue
+
+            abs_start = line_starts[i] + m.start()
+            if toc_end_pos is not None and abs_start < toc_end_pos:
+                continue
+
+            # Heuristics to avoid cross-references:
+            prefix = line[: m.start()]
+            is_line_start = prefix.strip() == ""
+            part_near_item = last_part_end is not None and (m.start() - last_part_end) <= 60
+
+            # Only accept headings that look like real section starts (line-start or 'PART .. ITEM ..').
+            # This intentionally rejects mid-sentence cross-references like "Part II, Item 7 ...".
+            accept = is_line_start or part_near_item
+            if not accept and sparse_layout:
+                # For filings with very few line breaks, headings often follow sentence punctuation.
+                # Keep this strict elsewhere to avoid mid-sentence cross-reference matches.
+                k = abs_start - 1
+                while k >= 0 and body[k].isspace():
+                    k -= 1
+                prev_char = body[k] if k >= 0 else ""
+                if prev_char in ".:;!?":
+                    prev = prefix[-16:].lower()
+                    if not re.search(r"(see|in|under|from|to)\s+$", prev):
+                        accept = True
+
+            if not accept:
+                continue
+
+            key = (current_part, item_id)
+            # Ignore "(continued)" headings; they are typically page-header repeats.
+            if CONTINUED_PATTERN.search(line[m.end() :]):
+                continue
+
+            start_abs = line_starts[i] + m.start()
+            content_start_abs = line_starts[i] + m.end()
+            boundaries.append(
+                _ItemBoundary(
+                    start=start_abs,
+                    content_start=content_start_abs,
+                    item_part=current_part,
+                    item_id=item_id,
+                )
+            )
+
+    if not boundaries:
+        return []
+
+    boundaries.sort(key=lambda b: b.start)
+
+    # De-duplicate per (part, item_id) by preferring the boundary that yields the most content.
+    # This helps when TOCs or page-header repeats leak through and appear before the real section start.
+    best_by_key: dict[tuple[str | None, str], tuple[int, int, _ItemBoundary]] = {}
+    for idx, b in enumerate(boundaries):
+        end = boundaries[idx + 1].start if idx + 1 < len(boundaries) else len(body)
+        chunk = body[b.content_start : end]
+        chunk = chunk.lstrip(" \t:-")
+        chunk = _remove_pagination(chunk)
+        score = len(chunk.strip())
+        key = (b.item_part, b.item_id)
+        prev = best_by_key.get(key)
+        if prev is None or score > prev[0] or (score == prev[0] and b.start > prev[1]):
+            best_by_key[key] = (score, b.start, b)
+
+    boundaries = [t[2] for t in best_by_key.values()]
+    boundaries.sort(key=lambda b: b.start)
+
+    out_items: list[dict[str, str | None]] = []
+    for idx, b in enumerate(boundaries):
+        end = boundaries[idx + 1].start if idx + 1 < len(boundaries) else len(body)
+        chunk = body[b.content_start : end]
+        chunk = chunk.lstrip(" \t:-")
+        chunk = _remove_pagination(chunk)
+
+        part = b.item_part
+        item_id = b.item_id
+        item_key = f"{part}:{item_id}" if part else item_id
+
+        out_items.append(
+            {
+                "item_part": part,
+                "item_id": item_id,
+                "item": item_key,
+                "full_text": chunk,
+            }
+        )
+
+    return out_items
 
 
 def parse_filename_minimal(filename: str) -> dict:
@@ -173,6 +712,24 @@ class ParsedFilingSchema:
         "accession_header": pl.Utf8,
         "cik_conflict": pl.Boolean,
         "accession_conflict": pl.Boolean,
+        "full_text": pl.Utf8,
+    }
+
+
+@dataclass
+class FilingItemSchema:
+    schema = {
+        "doc_id": pl.Utf8,
+        "cik": pl.Int64,
+        "cik_10": pl.Utf8,
+        "accession_number": pl.Utf8,
+        "accession_nodash": pl.Utf8,
+        "file_date_filename": pl.Date,
+        "document_type_filename": pl.Utf8,
+        "filename": pl.Utf8,
+        "item_part": pl.Utf8,
+        "item_id": pl.Utf8,
+        "item": pl.Utf8,
         "full_text": pl.Utf8,
     }
 
@@ -311,6 +868,22 @@ def _flush_parsed_batch(records: list[dict], out_path: Path, compression: str) -
         pl.col("filing_date").str.strptime(pl.Date, "%Y%m%d", strict=False),
         pl.col("file_date_filename").str.strptime(pl.Date, "%Y%m%d", strict=False),
     )
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = out_path.with_name(out_path.name + ".tmp")
+    try:
+        tmp_path.unlink(missing_ok=True)
+        df.write_parquet(tmp_path, compression=compression)
+        _assert_parquet_magic(tmp_path)
+        os.replace(tmp_path, out_path)
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
+def _flush_item_batch(records: list[dict], out_path: Path, compression: str) -> None:
+    if not records:
+        return
+    df = pl.DataFrame(records, schema=FilingItemSchema.schema)
+    df = df.with_columns(pl.col("file_date_filename").cast(pl.Date, strict=False))
     out_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = out_path.with_name(out_path.name + ".tmp")
     try:
@@ -859,6 +1432,286 @@ def build_light_metadata_dataset(
 
     lf_light.sink_parquet(out_path, compression=compression)
     return out_path
+
+
+def process_year_parquet_extract_items(
+    year_parquet_path: Path,
+    out_dir: Path,
+    *,
+    parquet_batch_rows: int = 16,
+    out_batch_max_rows: int = 50_000,
+    out_batch_max_text_bytes: int = 250 * 1024 * 1024,  # 250 MB
+    tmp_dir: Path | None = None,
+    compression: Literal["zstd", "snappy", "gzip", "uncompressed"] = "zstd",
+    local_work_dir: Path | None = None,
+    copy_retries: int = 3,
+    copy_sleep: float = 1.0,
+    validate_on_copy: bool | Literal["quick", "full"] = True,
+) -> Path:
+    """
+    Expand a merged yearly filing parquet (one row per filing with `full_text`)
+    into a yearly item parquet (one row per extracted item).
+
+    Output schema:
+      - filing identifiers (doc_id, cik, accession_number, ...)
+      - item_part, item_id, item
+      - full_text contains the extracted item text (pagination artifacts removed)
+
+    Writes intermediate batches to a local work directory and then copies the final
+    yearly parquet to `out_dir` with retries/validation (helps on remote mounts).
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    tmp_dir = tmp_dir or Path(tempfile.gettempdir())
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+
+    local_work_dir = local_work_dir or (Path(tempfile.gettempdir()) / "_item_work")
+    local_work_dir.mkdir(parents=True, exist_ok=True)
+    local_year_dir = local_work_dir / year_parquet_path.stem
+    local_year_dir.mkdir(parents=True, exist_ok=True)
+
+    # Stage input locally for stability/speed.
+    src = year_parquet_path
+    local_in = tmp_dir / year_parquet_path.name
+    cleanup_local = False
+    if src.resolve() == local_in.resolve():
+        local_in = src
+    else:
+        _copy_with_verify(
+            src,
+            local_in,
+            retries=copy_retries,
+            sleep=copy_sleep,
+            validate=True,
+        )
+        cleanup_local = True
+
+    year = year_parquet_path.stem
+    out_path = out_dir / f"{year}.parquet"
+
+    columns = [
+        "doc_id",
+        "cik",
+        "cik_10",
+        "accession_number",
+        "accession_nodash",
+        "file_date_filename",
+        "document_type_filename",
+        "filename",
+        "full_text",
+    ]
+
+    written_batches: list[Path] = []
+    records: list[dict] = []
+    text_bytes = 0
+    batch_idx = 1
+
+    filing_rows = 0
+    item_rows = 0
+    empty_items = 0
+    no_item_filings = 0
+
+    pf: pq.ParquetFile | None = None
+    try:
+        pf = pq.ParquetFile(local_in)
+        for batch in pf.iter_batches(batch_size=parquet_batch_rows, columns=columns):
+            tbl = pa.Table.from_batches([batch])
+            df = pl.from_arrow(tbl)
+
+            for row in df.iter_rows(named=True):
+                filing_rows += 1
+                filing_text = row.get("full_text")
+                if not filing_text:
+                    no_item_filings += 1
+                    continue
+
+                items = extract_filing_items(
+                    filing_text,
+                    form_type=row.get("document_type_filename"),
+                )
+                if not items:
+                    no_item_filings += 1
+                    continue
+
+                for item in items:
+                    txt = item.get("full_text") or ""
+                    if _is_empty_item_text(txt):
+                        empty_items += 1
+                    rec = {
+                        "doc_id": row.get("doc_id"),
+                        "cik": row.get("cik"),
+                        "cik_10": row.get("cik_10"),
+                        "accession_number": row.get("accession_number"),
+                        "accession_nodash": row.get("accession_nodash"),
+                        "file_date_filename": row.get("file_date_filename"),
+                        "document_type_filename": row.get("document_type_filename"),
+                        "filename": row.get("filename"),
+                        "item_part": item.get("item_part"),
+                        "item_id": item.get("item_id"),
+                        "item": item.get("item"),
+                        "full_text": txt,
+                    }
+                    records.append(rec)
+                    item_rows += 1
+                    text_bytes += len(txt)
+
+                    if len(records) >= out_batch_max_rows or text_bytes >= out_batch_max_text_bytes:
+                        local_batch = local_year_dir / f"{year}_items_batch_{batch_idx:04d}.parquet"
+                        if local_batch.exists():
+                            local_batch.unlink()
+                        _flush_item_batch(records, local_batch, compression)
+                        written_batches.append(local_batch)
+                        records = []
+                        text_bytes = 0
+                        batch_idx += 1
+                        gc.collect()
+
+        if records:
+            local_batch = local_year_dir / f"{year}_items_batch_{batch_idx:04d}.parquet"
+            if local_batch.exists():
+                local_batch.unlink()
+            _flush_item_batch(records, local_batch, compression)
+            written_batches.append(local_batch)
+
+    finally:
+        if pf is not None:
+            try:
+                pf.close()
+            except Exception:
+                pass
+        if cleanup_local:
+            local_in.unlink(missing_ok=True)
+        gc.collect()
+
+    if not written_batches:
+        # Write an empty file with the expected schema.
+        empty_df = pl.DataFrame(schema=FilingItemSchema.schema)
+        tmp_out = local_year_dir / f"{year}.parquet"
+        if tmp_out.exists():
+            tmp_out.unlink()
+        empty_df.write_parquet(tmp_out, compression=compression)
+    else:
+        tmp_out = local_year_dir / f"{year}.parquet"
+        if tmp_out.exists():
+            tmp_out.unlink()
+        concat_parquets_arrow(
+            in_files=written_batches,
+            out_path=tmp_out,
+            batch_size=32_000,
+            compression=compression,
+            compression_level=1,
+            stage_dir=None,
+        )
+        _assert_parquet_magic(tmp_out)
+
+    _copy_with_verify(
+        tmp_out,
+        out_path,
+        retries=copy_retries,
+        sleep=copy_sleep,
+        validate=validate_on_copy,
+    )
+
+    # Keep local output for debugging if needed, but remove intermediate batches.
+    for b in written_batches:
+        b.unlink(missing_ok=True)
+
+    print(
+        f"[items] {year} filings={filing_rows} items={item_rows} "
+        f"items_per_filing={item_rows / filing_rows if filing_rows else 0:.2f} "
+        f"no_item_filings={no_item_filings} empty_items={empty_items} -> {out_path}"
+    )
+
+    return out_path
+
+
+def process_year_dir_extract_items(
+    year_dir: Path,
+    out_dir: Path,
+    *,
+    years: list[str] | None = None,
+    parquet_batch_rows: int = 16,
+    out_batch_max_rows: int = 50_000,
+    out_batch_max_text_bytes: int = 250 * 1024 * 1024,
+    tmp_dir: Path | None = None,
+    compression: Literal["zstd", "snappy", "gzip", "uncompressed"] = "zstd",
+    local_work_dir: Path | None = None,
+    copy_retries: int = 3,
+    copy_sleep: float = 1.0,
+    validate_on_copy: bool | Literal["quick", "full"] = True,
+) -> list[Path]:
+    """
+    Process a directory of per-year merged filing parquets (e.g., 2024.parquet) into
+    per-year item parquets in `out_dir`.
+    """
+    year_dir = Path(year_dir)
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    wanted = set(years) if years else None
+    out_paths: list[Path] = []
+    for p in sorted(year_dir.glob("*.parquet")):
+        if wanted is not None and p.stem not in wanted:
+            continue
+        out_paths.append(
+            process_year_parquet_extract_items(
+                year_parquet_path=p,
+                out_dir=out_dir,
+                parquet_batch_rows=parquet_batch_rows,
+                out_batch_max_rows=out_batch_max_rows,
+                out_batch_max_text_bytes=out_batch_max_text_bytes,
+                tmp_dir=tmp_dir,
+                compression=compression,
+                local_work_dir=local_work_dir,
+                copy_retries=copy_retries,
+                copy_sleep=copy_sleep,
+                validate_on_copy=validate_on_copy,
+            )
+        )
+
+    return out_paths
+
+
+def summarize_item_year_parquets(parquet_dir: Path) -> list[dict]:
+    """
+    Inspect yearly item parquet files and return a summary per file.
+    Each summary includes: path, year, rows, unique_doc_ids (if present), and status.
+    """
+    summaries: list[dict] = []
+    for path in sorted(Path(parquet_dir).glob("*.parquet")):
+        year = path.stem
+        size_bytes = path.stat().st_size
+        try:
+            lf = pl.scan_parquet(path)
+            columns = lf.collect_schema().names()
+            rows = lf.select(pl.len()).collect().item()
+            doc_ids = None
+            if "doc_id" in columns:
+                doc_ids = lf.select(pl.col("doc_id").n_unique()).collect().item()
+
+            status = "OK"
+            if rows == 0:
+                status = "EMPTY"
+            elif "item" not in columns or "full_text" not in columns:
+                status = "WARN_SCHEMA"
+        except Exception as exc:
+            columns = []
+            rows = None
+            doc_ids = None
+            status = f"ERROR: {exc}"
+
+        summaries.append(
+            {
+                "path": path,
+                "year": year,
+                "rows": rows,
+                "unique_doc_ids": doc_ids,
+                "size_bytes": size_bytes,
+                "columns": columns,
+                "status": status,
+            }
+        )
+
+    return summaries
 
 
 def merge_parquet_files_arrow(

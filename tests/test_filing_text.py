@@ -5,6 +5,7 @@ import polars as pl
 
 from thesis_pkg.filing_text import (
     parse_filename_minimal,
+    extract_filing_items,
     process_zip_year_raw_text,
     process_zip_year,
     concat_parquets_arrow,
@@ -149,3 +150,154 @@ def test_concat_parquets_arrow_reports_bad_file(tmp_path: Path):
         assert bad.name in str(exc)
     else:
         raise AssertionError("Expected concat_parquets_arrow to fail on a corrupted parquet.")
+
+
+def test_extract_filing_items_handles_toc_and_part_collisions():
+    text = """<Header>
+<SEC-Header>
+ACCESSION NUMBER: 0000000-00-000000
+</SEC-Header>
+</Header>
+
+TABLE OF CONTENTS
+PART I
+Item 1. Financial Statements
+Item 2. Management's Discussion and Analysis
+Item 3. Quantitative and Qualitative Disclosures About Market Risk
+Item 4. Controls and Procedures
+PART II
+Item 1. Legal Proceedings
+Item 1A. Risk Factors
+Item 2. Unregistered Sales of Equity Securities and Use of Proceeds
+Item 3. Defaults on Senior Securities
+Item 4. Mine Safety Disclosures
+Item 5. Other Information
+Item 6. Exhibits
+
+FILLER
+FILLER
+FILLER
+FILLER
+FILLER
+FILLER
+FILLER
+FILLER
+
+PART I
+ITEM 1. Financial Statements.
+Alpha
+3
+
+ITEM 2. Management's Discussion and Analysis.
+Bravo
+
+ITEM 3. Quantitative and Qualitative Disclosures About Market Risk.
+Charlie
+
+ITEM 4. Controls and Procedures.
+Delta
+
+PART II: OTHER INFORMATION
+ITEM 1. Legal Proceedings.
+None.
+
+ITEM 1A. Risk Factors.
+Not applicable.
+
+ITEM 2. Unregistered Sales of Equity Securities and Use of Proceeds.
+Echo
+
+ITEM 3. Defaults on Senior Securities.
+None
+
+ITEM 4. Mine Safety Disclosures.
+None.
+
+ITEM 5. Other Information.
+Foxtrot
+
+ITEM 6. Exhibits.
+Golf
+"""
+    items = extract_filing_items(text)
+    keys = [it["item"] for it in items]
+
+    assert keys == [
+        "I:1",
+        "I:2",
+        "I:3",
+        "I:4",
+        "II:1",
+        "II:1A",
+        "II:2",
+        "II:3",
+        "II:4",
+        "II:5",
+        "II:6",
+    ]
+    # Pagination cleanup: the standalone page number line should be removed from the item text.
+    first = next(it for it in items if it["item"] == "I:1")["full_text"] or ""
+    assert "\n3\n" not in f"\n{first}\n"
+
+
+def test_extract_filing_items_handles_inline_toc_on_one_line():
+    pad = "X" * 9000
+    text = (
+        "<Header></Header>\n"
+        "TABLE OF CONTENTS PAGE PART I ITEM 1. BUSINESS 3 ITEM 2. PROPERTIES 4 ITEM 3. LEGAL PROCEEDINGS 5 ITEM 4. CONTROLS 6 "
+        "PART I ITEM 1. BUSINESS Actual business text. "
+        "ITEM 2. PROPERTIES Actual properties text."
+        + pad
+    )
+    items = extract_filing_items(text)
+    keys = [it["item"] for it in items]
+    assert keys == ["I:1", "I:2"]
+    assert "Actual business text" in (items[0]["full_text"] or "")
+
+
+def test_extract_filing_items_normalizes_roman_item_numbers():
+    text = """<Header></Header>
+PART I
+ITEM I. BUSINESS
+Alpha
+-7-
+
+ITEM 2. PROPERTIES
+Bravo
+"""
+    items = extract_filing_items(text)
+    assert [it["item"] for it in items] == ["I:1", "I:2"]
+    assert "-7-" not in (items[0]["full_text"] or "")
+
+
+def test_extract_filing_items_handles_wrapped_part_and_item_headings():
+    # Simulate common PDF/HTML-to-text wrapping where headings are split across lines.
+    text = """<Header></Header>
+PART
+I
+ITEM
+1.
+Business
+Alpha
+
+ITEM
+2.
+Properties
+Bravo
+"""
+    items = extract_filing_items(text)
+    assert [it["item"] for it in items] == ["I:1", "I:2"]
+    assert "Alpha" in (items[0]["full_text"] or "")
+    assert "Bravo" in (items[1]["full_text"] or "")
+
+
+def test_extract_filing_items_does_not_treat_medicare_part_d_as_filing_part():
+    text = """<Header></Header>
+PART II
+ITEM 1. Legal Proceedings
+This section discusses Medicare Part D coverage and other matters.
+ITEM 2. Other Information
+More text.
+"""
+    items = extract_filing_items(text, form_type="10-Q")
+    assert [it["item"] for it in items] == ["II:1", "II:2"]
