@@ -12,3 +12,5 @@ build/
 .pytest_cache/
 .mypy_cache/
 agents_spec_nlp_thesis.md
+visualizations/
+visualize_*.py
