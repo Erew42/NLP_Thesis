@@ -571,6 +571,10 @@ def extract_filing_items(
 
             events.sort(key=lambda t: t[0])
             last_part_end: int | None = None
+            is_toc_marker = TOC_MARKER_PATTERN.search(line) is not None
+            item_word_count = 0
+            if i < 400 or is_toc_marker:
+                item_word_count = len(ITEM_WORD_PATTERN.findall(line))
             for _, kind, part, m in events:
                 if kind == "part":
                     assert m is not None
@@ -589,12 +593,11 @@ def extract_filing_items(
 
                 # Basic TOC-line filters (only for reasonably short early lines).
                 if i < 400:
-                    item_words = len(ITEM_WORD_PATTERN.findall(line))
-                    if item_words >= 3 and len(line) <= 5_000:
+                    if item_word_count >= 3 and len(line) <= 5_000:
                         continue
                 # Only skip TOC-marker lines when they look like true TOC listings (many ITEM tokens).
                 # Some filings embed a repeated "Table of Contents" page header alongside real headings.
-                if TOC_MARKER_PATTERN.search(line) and item_words >= 3 and len(line) <= 8_000:
+                if is_toc_marker and item_word_count >= 3 and len(line) <= 8_000:
                     continue
 
                 abs_start = line_starts[i] + m.start()
@@ -1582,10 +1585,24 @@ def process_year_parquet_extract_items(
                     no_item_filings += 1
                     continue
 
-                items = extract_filing_items(
-                    filing_text,
-                    form_type=row.get("document_type_filename"),
-                )
+                try:
+                    items = extract_filing_items(
+                        filing_text,
+                        form_type=row.get("document_type_filename"),
+                    )
+                except Exception as exc:
+                    print(
+                        "[items][error] "
+                        f"year={year} row={filing_rows} "
+                        f"doc_id={row.get('doc_id')} cik={row.get('cik')} "
+                        f"accession={row.get('accession_number')} "
+                        f"form={row.get('document_type_filename')} "
+                        f"file_date={row.get('file_date_filename')} "
+                        f"filename={row.get('filename')} "
+                        f"error={type(exc).__name__}: {exc} "
+                        f"text_len={len(filing_text)}"
+                    )
+                    raise
                 if not items:
                     no_item_filings += 1
                     continue
