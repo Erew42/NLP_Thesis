@@ -363,6 +363,7 @@ def merge_yearly_batches(
     copy_retries: int = 3,
     copy_sleep: float = 1.0,
     stage_inputs_locally: bool | None = None,
+    years: list[str] | None = None,
 ) -> list[Path]:
     """
     Merge per-year parquet batches (e.g., 2020_batch_0001.parquet) into one parquet per year.
@@ -370,6 +371,7 @@ def merge_yearly_batches(
 
     Designed for slow/remote filesystems (e.g., Drive): writes to a local work dir
     first, optionally stages/validates inputs, then copies the result to `out_dir` with validation/retries.
+    When `years` is provided, only those YYYY folders/files are merged.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     local_work_dir = local_work_dir or (Path(tempfile.gettempdir()) / "_merge_work")
@@ -411,6 +413,12 @@ def merge_yearly_batches(
         raise ValueError(
             f"No batch files found under {batch_dir} (expected <YYYY>/<YYYY>_batch_*.parquet or <YYYY>_batch_*.parquet)"
         )
+
+    if years:
+        wanted = {str(y) for y in years}
+        files_by_year = {year: files for year, files in files_by_year.items() if year in wanted}
+        if not files_by_year:
+            raise ValueError(f"No batch files found for years={sorted(wanted)} under {batch_dir}")
 
     merged: list[Path] = []
     for year in sorted(files_by_year):
