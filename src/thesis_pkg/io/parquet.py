@@ -199,6 +199,7 @@ def concat_parquets_arrow(
     stage_dir: Path | None = None,
     stage_copy_retries: int = 3,
     stage_copy_sleep: float = 1.0,
+    stage_validate: bool | Literal["none", "quick", "full"] = False,
 ) -> Path:
     """
     Stream-concatenate parquet files without loading everything into memory.
@@ -206,49 +207,77 @@ def concat_parquets_arrow(
     if not in_files:
         raise ValueError("in_files is empty; nothing to concatenate.")
 
+    validate_mode: Literal["none", "quick", "full"]
+    if stage_validate is True:
+        validate_mode = "quick"
+    elif stage_validate is False:
+        validate_mode = "none"
+    else:
+        validate_mode = stage_validate
+
     writer: pq.ParquetWriter | None = None
     try:
         for f in in_files:
             read_path = f
             staged_path: Path | None = None
-            pf: pq.ParquetFile | None = None
             try:
                 if stage_dir is not None:
                     stage_dir.mkdir(parents=True, exist_ok=True)
                     staged_path = stage_dir / f.name
+                    validate_copy: bool | Literal["quick", "full"] = False
+                    if validate_mode != "none":
+                        validate_copy = validate_mode
                     _copy_with_verify(
                         f,
                         staged_path,
                         retries=stage_copy_retries,
                         sleep=stage_copy_sleep,
-                        validate=False,
+                        validate=validate_copy,
                     )
                     read_path = staged_path
 
-                try:
-                    pf = pq.ParquetFile(read_path)
-                except Exception as exc:
-                    raise OSError(f"Failed to open parquet file {f} (read from {read_path})") from exc
-
-                try:
-                    for batch in pf.iter_batches(batch_size=batch_size):
-                        tbl = pa.Table.from_batches([batch])
-                        if writer is None:
-                            writer = pq.ParquetWriter(
-                                out_path,
-                                tbl.schema,
-                                compression=compression,
-                                compression_level=compression_level if compression == "zstd" else None,
-                            )
-                        writer.write_table(tbl)
-                except Exception as exc:
-                    raise OSError(f"Failed while reading batches from {f} (read from {read_path})") from exc
-            finally:
-                if pf is not None:
+                attempts = 0
+                while True:
+                    attempts += 1
+                    pf: pq.ParquetFile | None = None
                     try:
-                        pf.close()
-                    except Exception:
-                        pass
+                        pf = pq.ParquetFile(read_path)
+                    except Exception as exc:
+                        raise OSError(f"Failed to open parquet file {f} (read from {read_path})") from exc
+
+                    try:
+                        for batch in pf.iter_batches(batch_size=batch_size):
+                            tbl = pa.Table.from_batches([batch])
+                            if writer is None:
+                                writer = pq.ParquetWriter(
+                                    out_path,
+                                    tbl.schema,
+                                    compression=compression,
+                                    compression_level=compression_level if compression == "zstd" else None,
+                                )
+                            writer.write_table(tbl)
+                        break
+                    except Exception as exc:
+                        if stage_dir is not None and attempts == 1 and validate_mode != "full":
+                            if staged_path is not None:
+                                staged_path.unlink(missing_ok=True)
+                            _copy_with_verify(
+                                f,
+                                staged_path or (stage_dir / f.name),
+                                retries=stage_copy_retries,
+                                sleep=stage_copy_sleep,
+                                validate="full",
+                            )
+                            read_path = staged_path or (stage_dir / f.name)
+                            continue
+                        raise OSError(f"Failed while reading batches from {f} (read from {read_path})") from exc
+                    finally:
+                        if pf is not None:
+                            try:
+                                pf.close()
+                            except Exception:
+                                pass
+            finally:
                 if staged_path is not None:
                     staged_path.unlink(missing_ok=True)
     finally:

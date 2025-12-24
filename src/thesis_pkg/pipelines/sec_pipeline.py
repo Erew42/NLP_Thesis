@@ -452,6 +452,7 @@ def merge_yearly_batches(
                 stage_dir=(local_work_dir / "_concat_stage" / year) if stage_inputs else None,
                 stage_copy_retries=copy_retries,
                 stage_copy_sleep=copy_sleep,
+                stage_validate=validate_mode if stage_inputs else False,
             )
             _assert_parquet_magic(tmp_path)
         except Exception:
