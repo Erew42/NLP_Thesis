@@ -2,6 +2,7 @@ import zipfile
 from pathlib import Path
 
 import polars as pl
+import pytest
 
 from thesis_pkg.filing_text import (
     parse_filename_minimal,
@@ -10,6 +11,9 @@ from thesis_pkg.filing_text import (
     process_zip_year,
     concat_parquets_arrow,
     merge_yearly_batches,
+    process_year_parquet_extract_items,
+    compute_no_item_diagnostics,
+    aggregate_no_item_stats_csvs,
     ParsedFilingSchema,
     RawTextSchema,
 )
@@ -352,3 +356,251 @@ More text.
 """
     items = extract_filing_items(text, form_type="10-Q")
     assert [it["item"] for it in items] == ["II:1", "II:2"]
+
+
+def _build_filings_df():
+    text_with_items = "ITEM 1. Business\nAlpha\nITEM 2. Properties\nBravo"
+    text_no_items = "no relevant items here"
+    df = pl.DataFrame(
+        [
+            {
+                "doc_id": "doc1",
+                "cik": 1,
+                "cik_10": "0000000001",
+                "accession_number": "0001-01-000001",
+                "accession_nodash": "000101000001",
+                "file_date_filename": "20240101",
+                "document_type_filename": "10-K",
+                "filename": "f1.txt",
+                "full_text": text_with_items,
+            },
+            {
+                "doc_id": "doc2",
+                "cik": 1,
+                "cik_10": "0000000001",
+                "accession_number": "0001-01-000002",
+                "accession_nodash": "000101000002",
+                "file_date_filename": "20240101",
+                "document_type_filename": "10-K",
+                "filename": "f2.txt",
+                "full_text": "",
+            },
+            {
+                "doc_id": "doc3",
+                "cik": 1,
+                "cik_10": "0000000001",
+                "accession_number": "0001-01-000003",
+                "accession_nodash": "000101000003",
+                "file_date_filename": "20240101",
+                "document_type_filename": "8-K",
+                "filename": "f3.txt",
+                "full_text": text_no_items,
+            },
+            {
+                "doc_id": "doc4",
+                "cik": 1,
+                "cik_10": "0000000001",
+                "accession_number": None,
+                "accession_nodash": None,
+                "file_date_filename": "20240101",
+                "document_type_filename": "10-K",
+                "filename": "f4.txt",
+                "full_text": "",
+            },
+        ]
+    )
+    return df, text_with_items, text_no_items
+
+
+def test_process_year_parquet_extract_items_no_item_diagnostics(tmp_path: Path):
+    df, text_with_items, text_no_items = _build_filings_df()
+    year_path = tmp_path / "2024.parquet"
+    df.write_parquet(year_path)
+
+    out_dir = tmp_path / "out"
+    process_year_parquet_extract_items(
+        year_parquet_path=year_path,
+        out_dir=out_dir,
+        parquet_batch_rows=2,
+        out_batch_max_rows=10,
+        out_batch_max_text_bytes=10**6,
+        tmp_dir=tmp_path,
+        local_work_dir=tmp_path / "work",
+        non_item_diagnostic=True,
+        include_full_text=False,
+    )
+
+    no_item_path = out_dir / "2024_no_item_filings.parquet"
+    stats_path = out_dir / "2024_no_item_stats.csv"
+    assert no_item_path.exists()
+    assert stats_path.exists()
+
+    no_item_df = pl.read_parquet(no_item_path)
+    assert "full_text" not in no_item_df.columns
+    assert set(no_item_df["accession_number"].to_list()) == {
+        "0001-01-000002",
+        "0001-01-000003",
+    }
+
+    stats = pl.read_csv(stats_path)
+    row_10k = stats.filter(pl.col("document_type_filename") == "10-K").to_dicts()[0]
+    row_8k = stats.filter(pl.col("document_type_filename") == "8-K").to_dicts()[0]
+    row_total = stats.filter(pl.col("document_type_filename") == "TOTAL").to_dicts()[0]
+
+    assert row_10k["n_filings_eligible"] == 2
+    assert row_10k["n_with_items"] == 1
+    assert row_10k["n_no_items"] == 1
+    assert row_10k["share_no_item"] == pytest.approx(0.5)
+    assert row_10k["avg_text_len_with_items"] == pytest.approx(len(text_with_items))
+    assert row_10k["avg_text_len_no_items"] == pytest.approx(0.0)
+
+    assert row_8k["n_filings_eligible"] == 1
+    assert row_8k["n_with_items"] == 0
+    assert row_8k["n_no_items"] == 1
+    assert row_8k["share_no_item"] == pytest.approx(1.0)
+    assert row_8k["avg_text_len_with_items"] == pytest.approx(0.0)
+    assert row_8k["avg_text_len_no_items"] == pytest.approx(len(text_no_items))
+
+    assert row_total["n_filings_eligible"] == 3
+    assert row_total["n_with_items"] == 1
+    assert row_total["n_no_items"] == 2
+    assert row_total["share_no_item"] == pytest.approx(2 / 3)
+    assert row_total["avg_text_len_with_items"] == pytest.approx(len(text_with_items))
+    assert row_total["avg_text_len_no_items"] == pytest.approx(len(text_no_items) / 2)
+
+
+def test_compute_no_item_diagnostics_anti_join(tmp_path: Path):
+    df, text_with_items, text_no_items = _build_filings_df()
+    filings_path = tmp_path / "2024.parquet"
+    df.write_parquet(filings_path)
+
+    items_path = tmp_path / "2024_items.parquet"
+    pl.DataFrame(
+        {
+            "accession_number": ["0001-01-000001"],
+            "doc_id": ["doc1"],
+            "item": ["1"],
+        }
+    ).write_parquet(items_path)
+
+    out_no_item = tmp_path / "no_item_filings.parquet"
+    out_stats = tmp_path / "no_item_stats.csv"
+    compute_no_item_diagnostics(
+        filings_path,
+        items_path,
+        out_no_item,
+        out_stats,
+        include_full_text=False,
+    )
+
+    no_item_df = pl.read_parquet(out_no_item)
+    assert "full_text" not in no_item_df.columns
+    assert set(no_item_df["accession_number"].to_list()) == {
+        "0001-01-000002",
+        "0001-01-000003",
+    }
+
+    stats = pl.read_csv(out_stats)
+    row_10k = stats.filter(pl.col("document_type_filename") == "10-K").to_dicts()[0]
+    row_total = stats.filter(pl.col("document_type_filename") == "TOTAL").to_dicts()[0]
+
+    assert row_10k["n_filings_eligible"] == 2
+    assert row_10k["n_with_items"] == 1
+    assert row_10k["n_no_items"] == 1
+    assert row_10k["avg_text_len_with_items"] == pytest.approx(len(text_with_items))
+    assert row_10k["avg_text_len_no_items"] == pytest.approx(0.0)
+
+    assert row_total["n_filings_eligible"] == 3
+    assert row_total["n_no_items"] == 2
+    assert row_total["avg_text_len_no_items"] == pytest.approx(len(text_no_items) / 2)
+
+
+def test_aggregate_no_item_stats_csvs_weighted(tmp_path: Path):
+    stats_2020 = tmp_path / "2020_no_item_stats.csv"
+    stats_2021 = tmp_path / "2021_no_item_stats.csv"
+
+    rows_2020 = [
+        {
+            "year": "2020",
+            "document_type_filename": "10-K",
+            "n_filings_eligible": 3,
+            "n_with_items": 2,
+            "n_no_items": 1,
+            "share_no_item": 1 / 3,
+            "avg_text_len_with_items": 100.0,
+            "avg_text_len_no_items": 50.0,
+        },
+        {
+            "year": "2020",
+            "document_type_filename": "8-K",
+            "n_filings_eligible": 2,
+            "n_with_items": 0,
+            "n_no_items": 2,
+            "share_no_item": 1.0,
+            "avg_text_len_with_items": 0.0,
+            "avg_text_len_no_items": 30.0,
+        },
+        {
+            "year": "2020",
+            "document_type_filename": "TOTAL",
+            "n_filings_eligible": 5,
+            "n_with_items": 2,
+            "n_no_items": 3,
+            "share_no_item": 0.6,
+            "avg_text_len_with_items": 100.0,
+            "avg_text_len_no_items": (50.0 + 60.0) / 3,
+        },
+    ]
+    rows_2021 = [
+        {
+            "year": "2021",
+            "document_type_filename": "10-K",
+            "n_filings_eligible": 3,
+            "n_with_items": 1,
+            "n_no_items": 2,
+            "share_no_item": 2 / 3,
+            "avg_text_len_with_items": 200.0,
+            "avg_text_len_no_items": 150.0,
+        },
+        {
+            "year": "2021",
+            "document_type_filename": "TOTAL",
+            "n_filings_eligible": 3,
+            "n_with_items": 1,
+            "n_no_items": 2,
+            "share_no_item": 2 / 3,
+            "avg_text_len_with_items": 200.0,
+            "avg_text_len_no_items": 150.0,
+        },
+    ]
+
+    pl.DataFrame(rows_2020).write_csv(stats_2020)
+    pl.DataFrame(rows_2021).write_csv(stats_2021)
+
+    out_stats = tmp_path / "all_no_item_stats.csv"
+    aggregate_no_item_stats_csvs([stats_2020, stats_2021], out_stats)
+
+    df = pl.read_csv(out_stats)
+    row_10k = df.filter(pl.col("document_type_filename") == "10-K").to_dicts()[0]
+    row_8k = df.filter(pl.col("document_type_filename") == "8-K").to_dicts()[0]
+    row_total = df.filter(pl.col("document_type_filename") == "TOTAL").to_dicts()[0]
+
+    assert row_10k["year"] == "ALL"
+    assert row_10k["n_filings_eligible"] == 6
+    assert row_10k["n_with_items"] == 3
+    assert row_10k["n_no_items"] == 3
+    assert row_10k["share_no_item"] == pytest.approx(0.5)
+    assert row_10k["avg_text_len_with_items"] == pytest.approx((2 * 100 + 200) / 3)
+    assert row_10k["avg_text_len_no_items"] == pytest.approx((50 + 300) / 3)
+
+    assert row_8k["n_filings_eligible"] == 2
+    assert row_8k["n_with_items"] == 0
+    assert row_8k["n_no_items"] == 2
+    assert row_8k["share_no_item"] == pytest.approx(1.0)
+    assert row_8k["avg_text_len_no_items"] == pytest.approx(30.0)
+
+    assert row_total["n_filings_eligible"] == 8
+    assert row_total["n_with_items"] == 3
+    assert row_total["n_no_items"] == 5
+    assert row_total["share_no_item"] == pytest.approx(5 / 8)
+    assert row_total["avg_text_len_no_items"] == pytest.approx(82.0)
