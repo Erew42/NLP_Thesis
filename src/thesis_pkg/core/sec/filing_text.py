@@ -40,6 +40,11 @@ ITEM_LINESTART_PATTERN = re.compile(
     r"^\s*(?:PART\s+[IVXLCDM]+\s*[:\-]?\s*)?ITEM\s+(?P<num>\d+|[IVXLCDM]+)(?P<let>[A-Z])?\b",
     re.IGNORECASE,
 )
+NUMERIC_DOT_HEADING_PATTERN = re.compile(
+    r"^\s*(?P<num>\d{1,2})(?P<let>[A-Z])?\s*[\.\):\-]?\s+(?P<title>.+?)\s*$",
+    re.IGNORECASE,
+)
+TOC_DOT_LEADER_PATTERN = re.compile(r"\.{2,}\s*\d{1,4}\s*$")
 CONTINUED_PATTERN = re.compile(r"\bcontinued\b", re.IGNORECASE)
 
 PAGE_HYPHEN_PATTERN = re.compile(r"^\s*-\d{1,4}-\s*$")
@@ -51,6 +56,73 @@ EMPTY_ITEM_PATTERN = re.compile(
     r"^\s*(?:\(?[a-z]\)?\s*)?(?:none\.?|n/?a\.?|not applicable\.?|not required\.?|\[reserved\]|reserved)\s*$",
     re.IGNORECASE,
 )
+
+ITEM_TITLES_10K = {
+    "1": ["BUSINESS"],
+    "1A": ["RISK FACTORS"],
+    "1B": ["UNRESOLVED STAFF COMMENTS"],
+    "1C": ["CYBERSECURITY"],
+    "2": ["PROPERTIES", "PROPERTY"],
+    "3": ["LEGAL PROCEEDINGS"],
+    "4": ["MINE SAFETY DISCLOSURES"],
+    "5": [
+        "MARKET FOR REGISTRANT'S COMMON EQUITY",
+        "MARKET FOR REGISTRANT S COMMON EQUITY",
+        "MARKET FOR REGISTRANTS COMMON EQUITY",
+        "MARKET FOR REGISTRANT'S COMMON EQUITY, RELATED STOCKHOLDER MATTERS AND ISSUER PURCHASES OF EQUITY SECURITIES",
+        "MARKET FOR REGISTRANT S COMMON EQUITY, RELATED STOCKHOLDER MATTERS AND ISSUER PURCHASES OF EQUITY SECURITIES",
+    ],
+    "6": ["SELECTED FINANCIAL DATA"],
+    "7": [
+        "MANAGEMENT'S DISCUSSION AND ANALYSIS",
+        "MANAGEMENT S DISCUSSION AND ANALYSIS",
+        "MANAGEMENTS DISCUSSION AND ANALYSIS",
+        "MANAGEMENT'S DISCUSSION AND ANALYSIS OF FINANCIAL CONDITION AND RESULTS OF OPERATIONS",
+        "MANAGEMENT S DISCUSSION AND ANALYSIS OF FINANCIAL CONDITION AND RESULTS OF OPERATIONS",
+    ],
+    "7A": [
+        "QUANTITATIVE AND QUALITATIVE DISCLOSURES ABOUT MARKET RISK",
+        "QUANTITATIVE AND QUALITATIVE DISCLOSURES",
+    ],
+    "8": [
+        "FINANCIAL STATEMENTS AND SUPPLEMENTARY DATA",
+        "FINANCIAL STATEMENTS",
+        "CONSOLIDATED FINANCIAL STATEMENTS",
+        "CONSOLIDATED FINANCIAL STATEMENTS AND SUPPLEMENTARY DATA",
+        "NOTES TO CONSOLIDATED FINANCIAL STATEMENTS",
+        "NOTES TO THE CONSOLIDATED FINANCIAL STATEMENTS",
+    ],
+    "9": [
+        "CHANGES IN AND DISAGREEMENTS WITH ACCOUNTANTS",
+        "CHANGES IN AND DISAGREEMENTS WITH ACCOUNTANTS ON ACCOUNTING AND FINANCIAL DISCLOSURE",
+        "CHANGES IN AND DISAGREEMENTS WITH ACCOUNTANTS ON ACCOUNTING AND FINANCIAL DISCLOSURES",
+    ],
+    "9A": ["CONTROLS AND PROCEDURES"],
+    "9B": ["OTHER INFORMATION"],
+    "9C": ["DISCLOSURE REGARDING FOREIGN JURISDICTIONS THAT PREVENT INSPECTIONS"],
+    "10": [
+        "DIRECTORS, EXECUTIVE OFFICERS AND CORPORATE GOVERNANCE",
+        "DIRECTORS AND EXECUTIVE OFFICERS",
+    ],
+    "11": ["EXECUTIVE COMPENSATION"],
+    "12": [
+        "SECURITY OWNERSHIP OF CERTAIN BENEFICIAL OWNERS AND MANAGEMENT",
+        "SECURITY OWNERSHIP OF CERTAIN BENEFICIAL OWNERS AND MANAGEMENT AND RELATED STOCKHOLDER MATTERS",
+    ],
+    "13": [
+        "CERTAIN RELATIONSHIPS AND RELATED TRANSACTIONS",
+        "CERTAIN RELATIONSHIPS AND RELATED TRANSACTIONS AND DIRECTOR INDEPENDENCE",
+    ],
+    "14": ["PRINCIPAL ACCOUNTANT FEES AND SERVICES"],
+    "15": [
+        "EXHIBITS",
+        "EXHIBITS AND FINANCIAL STATEMENT SCHEDULES",
+        "EXHIBITS AND FINANCIAL STATEMENTS",
+        "EXHIBITS FINANCIAL STATEMENT SCHEDULES",
+        "INDEX TO EXHIBITS",
+    ],
+    "SIGNATURES": ["SIGNATURES"],
+}
 
 
 def _digits_only(s: str | None) -> str | None:
@@ -135,6 +207,128 @@ def _normalize_item_id(num_raw: str, let_raw: str | None, *, max_item: int = 20)
     if letter and not re.fullmatch(r"[A-Z]", letter):
         letter = ""
     return f"{n}{letter}" if letter else str(n)
+
+
+def _normalize_heading_text(text: str) -> str:
+    text = (text or "").strip()
+    if not text:
+        return ""
+    text = text.replace("\u2019", "'")
+    text = TOC_DOT_LEADER_PATTERN.sub("", text)
+    text = re.sub(r"\s+\d{1,4}\s*$", "", text)
+    text = text.upper()
+    text = text.replace("&", " AND ")
+    text = re.sub(r"[^A-Z0-9' ]+", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def _build_title_lookup(mapping: dict[str, list[str]]) -> dict[str, str]:
+    lookup: dict[str, str] = {}
+    for item_id, titles in mapping.items():
+        for title in titles:
+            norm = _normalize_heading_text(title)
+            if norm:
+                lookup[norm] = item_id
+    return lookup
+
+
+_ITEM_TITLE_LOOKUP_10K = _build_title_lookup(ITEM_TITLES_10K)
+
+
+def _match_title_only_heading(line: str, lookup: dict[str, str]) -> str | None:
+    if not line:
+        return None
+    if ITEM_WORD_PATTERN.search(line):
+        return None
+    norm = _normalize_heading_text(line)
+    return lookup.get(norm)
+
+
+def _match_numeric_dot_heading(
+    line: str,
+    lookup: dict[str, str],
+    *,
+    max_item: int,
+) -> str | None:
+    if not line:
+        return None
+    if ITEM_WORD_PATTERN.search(line):
+        return None
+    m = NUMERIC_DOT_HEADING_PATTERN.match(line)
+    if not m:
+        return None
+    item_id = _normalize_item_id(m.group("num"), m.group("let"), max_item=max_item)
+    if item_id is None:
+        return None
+    title_norm = _normalize_heading_text(m.group("title"))
+    if not title_norm:
+        return None
+    mapped = lookup.get(title_norm)
+    if mapped != item_id:
+        return None
+    return item_id
+
+
+def _is_toc_entry_line(line: str, lookup: dict[str, str], *, max_item: int) -> bool:
+    if not line:
+        return False
+    if not (TOC_DOT_LEADER_PATTERN.search(line) or re.search(r"\s+\d{1,4}\s*$", line)):
+        return False
+    m = ITEM_LINESTART_PATTERN.match(line)
+    if m and _normalize_item_id(m.group("num"), m.group("let"), max_item=max_item) is not None:
+        return True
+    if _match_numeric_dot_heading(line, lookup, max_item=max_item) is not None:
+        return True
+    if _match_title_only_heading(line, lookup) is not None:
+        return True
+    return False
+
+
+def _infer_toc_end_line_by_titles(
+    lines: list[str],
+    lookup: dict[str, str],
+    *,
+    max_item: int,
+    max_lines: int = 400,
+    max_scan: int = 300,
+) -> int | None:
+    n = min(len(lines), max_lines)
+    if n == 0:
+        return None
+    toc_start: int | None = None
+    for i in range(n):
+        if TOC_MARKER_PATTERN.search(lines[i]) or TOC_HEADER_LINE_PATTERN.match(lines[i]):
+            toc_start = i
+            break
+    if toc_start is None:
+        return None
+    last_entry: int | None = None
+    end = min(len(lines), toc_start + max_scan)
+    for i in range(toc_start, end):
+        if _is_toc_entry_line(lines[i], lookup, max_item=max_item):
+            last_entry = i
+    return last_entry
+
+
+def _infer_front_matter_end_pos(
+    body: str,
+    lines: list[str],
+    line_starts: list[int],
+    lookup: dict[str, str],
+    *,
+    max_item: int,
+) -> int | None:
+    toc_end_pos = _infer_toc_end_pos(body)
+    if toc_end_pos is not None:
+        return toc_end_pos
+    toc_end_line = _infer_toc_end_line_by_titles(lines, lookup, max_item=max_item)
+    if toc_end_line is None:
+        return None
+    idx = toc_end_line + 1
+    if idx < len(line_starts):
+        return line_starts[idx]
+    return None
 
 
 _WRAPPED_TABLE_OF_CONTENTS_PATTERN = re.compile(
@@ -405,6 +599,88 @@ def _remove_pagination(text: str) -> str:
     return cleaned
 
 
+def _detect_heading_style_10k(
+    lines: list[str],
+    line_starts: list[int],
+    front_matter_end_pos: int | None,
+    *,
+    max_item: int,
+) -> str:
+    """
+    Classify 10-K heading style for fallback routing.
+    A: ITEM 1/1A headings present
+    B: numeric-dot headings with mapped titles (e.g., 1A. RISK FACTORS)
+    C: title-only headings with mapped titles (e.g., RISK FACTORS)
+    """
+    seen_numeric = False
+    seen_title = False
+    for i, line in enumerate(lines):
+        if front_matter_end_pos is not None and line_starts[i] < front_matter_end_pos:
+            continue
+        if TOC_HEADER_LINE_PATTERN.match(line):
+            continue
+        m = ITEM_LINESTART_PATTERN.match(line)
+        if m and _normalize_item_id(m.group("num"), m.group("let"), max_item=max_item) is not None:
+            return "A"
+        if _match_numeric_dot_heading(line, _ITEM_TITLE_LOOKUP_10K, max_item=max_item):
+            seen_numeric = True
+            continue
+        if _match_title_only_heading(line, _ITEM_TITLE_LOOKUP_10K):
+            seen_title = True
+    if seen_numeric:
+        return "B"
+    if seen_title:
+        return "C"
+    return "UNKNOWN"
+
+
+def _extract_fallback_items_10k(
+    lines: list[str],
+    line_starts: list[int],
+    *,
+    front_matter_end_pos: int | None,
+    max_item: int,
+    allow_numeric: bool,
+    allow_titles: bool,
+) -> list["_ItemBoundary"]:
+    boundaries: list[_ItemBoundary] = []
+    current_part: str | None = None
+
+    for i, line in enumerate(lines):
+        if front_matter_end_pos is not None and line_starts[i] < front_matter_end_pos:
+            continue
+        if TOC_HEADER_LINE_PATTERN.match(line):
+            continue
+        if _is_toc_entry_line(line, _ITEM_TITLE_LOOKUP_10K, max_item=max_item):
+            continue
+
+        m_part = PART_LINESTART_PATTERN.match(line)
+        if m_part is not None:
+            current_part = m_part.group("part").upper()
+            continue
+
+        item_id: str | None = None
+        if allow_numeric:
+            item_id = _match_numeric_dot_heading(line, _ITEM_TITLE_LOOKUP_10K, max_item=max_item)
+        if item_id is None and allow_titles:
+            item_id = _match_title_only_heading(line, _ITEM_TITLE_LOOKUP_10K)
+        if item_id is None:
+            continue
+
+        start_abs = line_starts[i]
+        content_start_abs = line_starts[i] + len(line)
+        boundaries.append(
+            _ItemBoundary(
+                start=start_abs,
+                content_start=content_start_abs,
+                item_part=current_part,
+                item_id=item_id,
+            )
+        )
+
+    return boundaries
+
+
 @dataclass(frozen=True)
 class _ItemBoundary:
     start: int
@@ -467,6 +743,23 @@ def extract_filing_items(
     for line in lines:
         line_starts.append(pos)
         pos += len(line) + 1  # '\n'
+
+    front_matter_end_pos: int | None = None
+    heading_style: str | None = None
+    if form.startswith("10K") or form.startswith("10-K"):
+        front_matter_end_pos = _infer_front_matter_end_pos(
+            body,
+            lines,
+            line_starts,
+            _ITEM_TITLE_LOOKUP_10K,
+            max_item=max_item_number,
+        )
+        heading_style = _detect_heading_style_10k(
+            lines,
+            line_starts,
+            front_matter_end_pos,
+            max_item=max_item_number,
+        )
 
     # First pass: normal TOC masking + TOC cutoff. If that yields no items, do a relaxed pass
     # that disables TOC suppression (some filings include spurious TOC headers) and forces sparse
@@ -597,6 +890,18 @@ def extract_filing_items(
         if boundaries or attempt:
             break
         attempt += 1
+
+    if not boundaries and (form.startswith("10K") or form.startswith("10-K")):
+        allow_numeric = heading_style == "B"
+        allow_titles = heading_style in {"A", "B", "C", "UNKNOWN", None}
+        boundaries = _extract_fallback_items_10k(
+            lines,
+            line_starts,
+            front_matter_end_pos=front_matter_end_pos,
+            max_item=max_item_number,
+            allow_numeric=allow_numeric,
+            allow_titles=allow_titles,
+        )
 
     if not boundaries:
         return []

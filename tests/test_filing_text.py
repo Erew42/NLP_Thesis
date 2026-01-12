@@ -358,6 +358,62 @@ More text.
     assert [it["item"] for it in items] == ["II:1", "II:2"]
 
 
+def test_extract_filing_items_numeric_dot_headings_fallback_10k():
+    text = """<Header></Header>
+1. BUSINESS
+Alpha
+
+1A. RISK FACTORS
+Bravo
+
+2. PROPERTIES
+Charlie
+"""
+    items = extract_filing_items(text, form_type="10-K")
+    assert [it["item_id"] for it in items] == ["1", "1A", "2"]
+    assert "Alpha" in (items[0]["full_text"] or "")
+
+
+def test_extract_filing_items_title_only_headings_fallback_10k():
+    text = """<Header></Header>
+RISK FACTORS
+Alpha
+
+MANAGEMENT'S DISCUSSION AND ANALYSIS
+Bravo
+
+FINANCIAL STATEMENTS AND SUPPLEMENTARY DATA
+Charlie
+
+SIGNATURES
+Delta
+"""
+    items = extract_filing_items(text, form_type="10-K")
+    assert [it["item_id"] for it in items] == ["1A", "7", "8", "SIGNATURES"]
+    assert "Bravo" in (items[1]["full_text"] or "")
+
+
+def test_extract_filing_items_numeric_dot_skips_toc_entries_10k():
+    text = """<Header></Header>
+TABLE OF CONTENTS
+1. BUSINESS..................................3
+1A. RISK FACTORS............................5
+2. PROPERTIES...............................7
+
+1. BUSINESS
+Alpha
+
+1A. RISK FACTORS
+Bravo
+
+2. PROPERTIES
+Charlie
+"""
+    items = extract_filing_items(text, form_type="10-K")
+    assert [it["item_id"] for it in items] == ["1", "1A", "2"]
+    assert "Alpha" in (items[0]["full_text"] or "")
+
+
 def _build_filings_df():
     text_with_items = "ITEM 1. Business\nAlpha\nITEM 2. Properties\nBravo"
     text_no_items = "no relevant items here"
