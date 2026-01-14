@@ -1,3 +1,4 @@
+import datetime as dt
 import zipfile
 from pathlib import Path
 
@@ -63,10 +64,12 @@ def test_process_zip_year_parses_headers_and_conflicts(tmp_path: Path):
     text_ok = """ACCESSION NUMBER: 0001234-24-000003
 CENTRAL INDEX KEY: 00001234
 FILED AS OF DATE: 20240103
+CONFORMED PERIOD OF REPORT: 20231231
 """
     text_cik_conflict = """ACCESSION NUMBER: 0009999-24-000009
 CENTRAL INDEX KEY: 00009999
 FILED AS OF DATE: 20240105
+CONFORMED PERIOD OF REPORT: 20231230
 """
 
     with zipfile.ZipFile(zip_path, "w") as zf:
@@ -88,6 +91,7 @@ FILED AS OF DATE: 20240105
     assert set(df.columns) == set(ParsedFilingSchema.schema)
     assert df["filing_date"].dtype == pl.Date
     assert df["file_date_filename"].dtype == pl.Date
+    assert df["period_end"].dtype == pl.Date
 
     rows = {row["filename"]: row for row in df.to_dicts()}
 
@@ -96,6 +100,7 @@ FILED AS OF DATE: 20240105
     assert ok["accession_conflict"] is False
     assert ok["doc_id"] == "0000001234:0001234-24-000003"
     assert ok["ciks_header_secondary"] == []
+    assert ok["period_end"].isoformat() == "2023-12-31"
 
     conflict = rows["20240105_10-K_edgar_data_1234_0009999-24-000009.txt"]
     assert conflict["cik_conflict"] is True
@@ -393,6 +398,169 @@ Delta
     assert "Bravo" in (items[1]["full_text"] or "")
 
 
+def test_extract_filing_items_regime_blocks_pre_2005_title_fallback():
+    text = """<Header></Header>
+BUSINESS
+Alpha
+
+RISK FACTORS
+Bravo
+
+UNRESOLVED STAFF COMMENTS
+Charlie
+"""
+    items = extract_filing_items(text, form_type="10-K", filing_date="20040101")
+    assert [it["item_id"] for it in items] == ["1"]
+
+
+def test_extract_filing_items_regime_allows_modern_title_fallback():
+    text = """<Header></Header>
+RISK FACTORS
+Alpha
+
+UNRESOLVED STAFF COMMENTS
+Bravo
+
+CYBERSECURITY
+Charlie
+"""
+    items = extract_filing_items(
+        text,
+        form_type="10-K",
+        filing_date="20240201",
+        period_end="20231231",
+    )
+    assert [it["item_id"] for it in items] == ["1A", "1B", "1C"]
+
+
+def test_extract_filing_items_item4_reserved_regime():
+    text = """<Header></Header>
+ITEM 4. Reserved.
+Alpha
+"""
+    items = extract_filing_items(text, form_type="10-K", filing_date="20110630")
+    assert items[0]["canonical_item"] == "I:4_RESERVED"
+    assert items[0]["item_status"] == "reserved"
+    assert items[0]["exists_by_regime"] is True
+
+
+def test_extract_filing_items_item4_mine_safety_regime():
+    text = """<Header></Header>
+ITEM 4. Mine Safety Disclosures.
+Alpha
+"""
+    items = extract_filing_items(text, form_type="10-K", filing_date="20130201")
+    assert items[0]["canonical_item"] == "I:4_MINE_SAFETY"
+    assert items[0]["exists_by_regime"] is True
+
+
+def test_extract_filing_items_item1c_period_end_gate():
+    text = """<Header></Header>
+ITEM 1C. Cybersecurity.
+Alpha
+"""
+    items = extract_filing_items(
+        text,
+        form_type="10-K",
+        filing_date="20240120",
+        period_end="20221231",
+    )
+    assert items[0]["item_id"] == "1C"
+    assert items[0]["exists_by_regime"] is False
+
+
+def test_extract_filing_items_item14_legacy_exhibits_pre_2002():
+    text = """<Header></Header>
+PART IV
+ITEM 14. EXHIBITS, FINANCIAL STATEMENT SCHEDULES, AND REPORTS ON FORM 8-K.
+Alpha
+"""
+    items = extract_filing_items(text, form_type="10-K", filing_date="20010115")
+    assert items[0]["item_part"] == "IV"
+    assert items[0]["canonical_item"] == "IV:14_EXHIBITS_SCHEDULES_REPORTS"
+    assert items[0]["exists_by_regime"] is True
+
+
+def test_extract_filing_items_item14_fees_modern():
+    text = """<Header></Header>
+PART III
+ITEM 14. Principal Accountant Fees and Services.
+Alpha
+"""
+    items = extract_filing_items(text, form_type="10-K", filing_date="20180201")
+    assert items[0]["item_part"] == "III"
+    assert items[0]["canonical_item"] == "III:14_PRINCIPAL_ACCOUNTANT_FEES"
+    assert items[0]["exists_by_regime"] is True
+
+
+def test_extract_filing_items_item16_fees_legacy_2003():
+    text = """<Header></Header>
+PART III
+ITEM 16. Principal Accountant Fees and Services.
+Alpha
+"""
+    items = extract_filing_items(text, form_type="10-K", filing_date="20030630")
+    assert items[0]["item_part"] == "III"
+    assert items[0]["canonical_item"] == "III:16_PRINCIPAL_ACCOUNTANT_FEES_LEGACY"
+    assert items[0]["exists_by_regime"] is True
+
+
+def test_extract_filing_items_glued_heading_titles_use_base_number():
+    text = """<Header></Header>
+ITEM 1Business
+Alpha
+
+ITEM 2Properties
+Bravo
+
+ITEM 9Changes in and Disagreements with Accountants.
+Charlie
+"""
+    items = extract_filing_items(text, form_type="10-K")
+    assert [it["item_id"] for it in items] == ["1", "2", "9"]
+
+
+def test_extract_filing_items_glued_heading_prefix_match():
+    text = """<Header></Header>
+ITEM 9CHANGES IN AND DISAGREEMENTS WITH ACCOUNTANTS ON ACCOUNTING AND
+FINANCIAL DISCLOSURE
+Alpha
+"""
+    items = extract_filing_items(text, form_type="10-K")
+    assert [it["item_id"] for it in items] == ["9"]
+
+
+def test_extract_filing_items_skips_item_is_sentence_starts():
+    text = """<Header></Header>
+Item is included under the caption Quarterly Data.
+ITEM 1. Business
+Alpha
+"""
+    items = extract_filing_items(text, form_type="10-K")
+    assert [it["item_id"] for it in items] == ["1"]
+
+
+def test_extract_filing_items_skips_subitem_parentheses():
+    text = """<Header></Header>
+Item 16(a), Exhibits, of the Registrant s.
+Alpha
+"""
+    items = extract_filing_items(text, form_type="10-K")
+    assert items == []
+
+
+def test_extract_filing_items_skips_toc_entry_with_page_number_next_line():
+    text = """<Header></Header>
+Item 1C.
+19
+
+ITEM 1. Business
+Alpha
+"""
+    items = extract_filing_items(text, form_type="10-K")
+    assert [it["item_id"] for it in items] == ["1"]
+
+
 def test_extract_filing_items_numeric_dot_skips_toc_entries_10k():
     text = """<Header></Header>
 TABLE OF CONTENTS
@@ -425,7 +593,7 @@ def _build_filings_df():
                 "cik_10": "0000000001",
                 "accession_number": "0001-01-000001",
                 "accession_nodash": "000101000001",
-                "file_date_filename": "20240101",
+                "file_date_filename": dt.date(2024, 1, 1),
                 "document_type_filename": "10-K",
                 "filename": "f1.txt",
                 "full_text": text_with_items,
@@ -436,7 +604,7 @@ def _build_filings_df():
                 "cik_10": "0000000001",
                 "accession_number": "0001-01-000002",
                 "accession_nodash": "000101000002",
-                "file_date_filename": "20240101",
+                "file_date_filename": dt.date(2024, 1, 1),
                 "document_type_filename": "10-K",
                 "filename": "f2.txt",
                 "full_text": "",
@@ -447,7 +615,7 @@ def _build_filings_df():
                 "cik_10": "0000000001",
                 "accession_number": "0001-01-000003",
                 "accession_nodash": "000101000003",
-                "file_date_filename": "20240101",
+                "file_date_filename": dt.date(2024, 1, 1),
                 "document_type_filename": "8-K",
                 "filename": "f3.txt",
                 "full_text": text_no_items,
@@ -458,7 +626,7 @@ def _build_filings_df():
                 "cik_10": "0000000001",
                 "accession_number": None,
                 "accession_nodash": None,
-                "file_date_filename": "20240101",
+                "file_date_filename": dt.date(2024, 1, 1),
                 "document_type_filename": "10-K",
                 "filename": "f4.txt",
                 "full_text": "",

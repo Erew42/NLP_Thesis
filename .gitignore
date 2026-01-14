@@ -14,3 +14,5 @@ build/
 agents_spec_nlp_thesis.md
 visualizations/
 visualize_*.py
+results/
+reviews/

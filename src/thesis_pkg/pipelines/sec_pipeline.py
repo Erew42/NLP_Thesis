@@ -59,6 +59,7 @@ def _flush_parsed_batch(records: list[dict], out_path: Path, compression: str) -
     df = pl.DataFrame(records, schema=ParsedFilingSchema.schema)
     df = df.with_columns(
         pl.col("filing_date").str.strptime(pl.Date, "%Y%m%d", strict=False),
+        pl.col("period_end").str.strptime(pl.Date, "%Y%m%d", strict=False),
         pl.col("file_date_filename").str.strptime(pl.Date, "%Y%m%d", strict=False),
     )
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -76,7 +77,11 @@ def _flush_item_batch(records: list[dict], out_path: Path, compression: str) -> 
     if not records:
         return
     df = pl.DataFrame(records, schema=FilingItemSchema.schema)
-    df = df.with_columns(pl.col("file_date_filename").cast(pl.Date, strict=False))
+    df = df.with_columns(
+        pl.col("file_date_filename").cast(pl.Date, strict=False),
+        pl.col("filing_date").cast(pl.Date, strict=False),
+        pl.col("period_end").cast(pl.Date, strict=False),
+    )
     out_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = out_path.with_name(out_path.name + ".tmp")
     try:
@@ -545,6 +550,7 @@ def process_zip_year(
                 final_accession = hdr["header_accession_str"] or filename_acc
                 final_accession_nodash = _digits_only(final_accession)
                 final_date = hdr["header_filing_date_str"] or meta.get("file_date_filename")
+                period_end_header = hdr.get("header_period_end_str")
 
                 rec = {
                     **meta,
@@ -553,6 +559,8 @@ def process_zip_year(
                     "full_text": txt,
                     "filing_date": final_date,
                     "filing_date_header": hdr["header_filing_date_str"],
+                    "period_end": period_end_header,
+                    "period_end_header": period_end_header,
                     "cik_header_primary": hdr["primary_header_cik"],
                     "ciks_header_secondary": hdr["secondary_ciks"],
                     "accession_header": hdr["header_accession_str"],
@@ -844,6 +852,7 @@ def process_year_parquet_extract_items(
     validate_on_copy: bool | Literal["quick", "full"] = True,
     non_item_diagnostic: bool = False,
     include_full_text: bool = False,
+    regime: bool = True,
 ) -> Path:
     """
     Expand a merged yearly filing parquet (one row per filing with `full_text`)
@@ -851,7 +860,9 @@ def process_year_parquet_extract_items(
 
     Output schema:
       - filing identifiers (doc_id, cik, accession_number, ...)
+      - filing_date, period_end (when available)
       - item_part, item_id, item
+      - canonical_item, exists_by_regime, item_status
       - full_text contains the extracted item text (pagination artifacts removed)
 
     Writes intermediate batches to a local work directory and then copies the final
@@ -905,6 +916,8 @@ def process_year_parquet_extract_items(
         "accession_number",
         "accession_nodash",
         "file_date_filename",
+        "filing_date",
+        "period_end",
         "document_type_filename",
         "filename",
         "full_text",
@@ -930,7 +943,11 @@ def process_year_parquet_extract_items(
     try:
         pf = pq.ParquetFile(local_in)
         input_schema = pf.schema_arrow
-        columns = pf.schema.names if non_item_diagnostic else default_columns
+        available = set(pf.schema.names)
+        if non_item_diagnostic:
+            columns = pf.schema.names
+        else:
+            columns = [c for c in default_columns if c in available]
         for batch in pf.iter_batches(batch_size=parquet_batch_rows, columns=columns):
             tbl = pa.Table.from_batches([batch])
             df = pl.from_arrow(tbl)
@@ -982,6 +999,9 @@ def process_year_parquet_extract_items(
                     items = extract_filing_items(
                         filing_text,
                         form_type=row.get("document_type_filename"),
+                        filing_date=row.get("filing_date"),
+                        period_end=row.get("period_end"),
+                        regime=regime,
                     )
                 except Exception as exc:
                     print(
@@ -1050,11 +1070,16 @@ def process_year_parquet_extract_items(
                         "accession_number": row.get("accession_number"),
                         "accession_nodash": row.get("accession_nodash"),
                         "file_date_filename": row.get("file_date_filename"),
+                        "filing_date": row.get("filing_date"),
+                        "period_end": row.get("period_end"),
                         "document_type_filename": row.get("document_type_filename"),
                         "filename": row.get("filename"),
                         "item_part": item.get("item_part"),
                         "item_id": item.get("item_id"),
                         "item": item.get("item"),
+                        "canonical_item": item.get("canonical_item"),
+                        "exists_by_regime": item.get("exists_by_regime"),
+                        "item_status": item.get("item_status"),
                         "full_text": txt,
                     }
                     records.append(rec)
@@ -1364,6 +1389,7 @@ def process_year_dir_extract_items(
     validate_on_copy: bool | Literal["quick", "full"] = True,
     non_item_diagnostic: bool = False,
     include_full_text: bool = False,
+    regime: bool = True,
 ) -> list[Path]:
     """
     Process a directory of per-year merged filing parquets (e.g., 2024.parquet) into
@@ -1393,6 +1419,7 @@ def process_year_dir_extract_items(
                 validate_on_copy=validate_on_copy,
                 non_item_diagnostic=non_item_diagnostic,
                 include_full_text=include_full_text,
+                regime=regime,
             )
         )
 

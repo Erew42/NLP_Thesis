@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
+from datetime import date, datetime
+from pathlib import Path
 
 import polars as pl
 
@@ -20,6 +23,7 @@ HEADER_SEARCH_LIMIT_DEFAULT = 5000
 
 CIK_HEADER_PATTERN = re.compile(r"CENTRAL INDEX KEY:\s*(\d+)")
 DATE_HEADER_PATTERN = re.compile(r"FILED AS OF DATE:\s*(\d{8})")
+PERIOD_END_HEADER_PATTERN = re.compile(r"CONFORMED PERIOD OF REPORT:\s*(\d{8})")
 ACC_HEADER_PATTERN = re.compile(r"ACCESSION NUMBER:\s*([\d-]+)")
 
 TOC_MARKER_PATTERN = re.compile(
@@ -64,7 +68,12 @@ ITEM_TITLES_10K = {
     "1C": ["CYBERSECURITY"],
     "2": ["PROPERTIES", "PROPERTY"],
     "3": ["LEGAL PROCEEDINGS"],
-    "4": ["MINE SAFETY DISCLOSURES"],
+    "4": [
+        "MINE SAFETY DISCLOSURES",
+        "SUBMISSION OF MATTERS TO A VOTE OF SECURITY HOLDERS",
+        "SUBMISSION OF MATTERS TO A VOTE OF SHAREHOLDERS",
+        "RESERVED",
+    ],
     "5": [
         "MARKET FOR REGISTRANT'S COMMON EQUITY",
         "MARKET FOR REGISTRANT S COMMON EQUITY",
@@ -72,7 +81,7 @@ ITEM_TITLES_10K = {
         "MARKET FOR REGISTRANT'S COMMON EQUITY, RELATED STOCKHOLDER MATTERS AND ISSUER PURCHASES OF EQUITY SECURITIES",
         "MARKET FOR REGISTRANT S COMMON EQUITY, RELATED STOCKHOLDER MATTERS AND ISSUER PURCHASES OF EQUITY SECURITIES",
     ],
-    "6": ["SELECTED FINANCIAL DATA"],
+    "6": ["SELECTED FINANCIAL DATA", "RESERVED"],
     "7": [
         "MANAGEMENT'S DISCUSSION AND ANALYSIS",
         "MANAGEMENT S DISCUSSION AND ANALYSIS",
@@ -121,7 +130,29 @@ ITEM_TITLES_10K = {
         "EXHIBITS FINANCIAL STATEMENT SCHEDULES",
         "INDEX TO EXHIBITS",
     ],
+    "16": ["FORM 10-K SUMMARY", "FORM 10K SUMMARY"],
     "SIGNATURES": ["SIGNATURES"],
+}
+
+ITEM_TITLES_10K_BY_CANONICAL = {
+    "I:4_VOTING_RESULTS_LEGACY": [
+        "SUBMISSION OF MATTERS TO A VOTE OF SECURITY HOLDERS",
+        "SUBMISSION OF MATTERS TO A VOTE OF SHAREHOLDERS",
+    ],
+    "I:4_RESERVED": ["RESERVED"],
+    "I:4_MINE_SAFETY": ["MINE SAFETY DISCLOSURES"],
+    "II:6_SELECTED_FINANCIAL_DATA": ["SELECTED FINANCIAL DATA"],
+    "II:6_RESERVED": ["RESERVED"],
+    "III:14_CONTROLS_AND_PROCEDURES_LEGACY": ["CONTROLS AND PROCEDURES"],
+    "III:14_PRINCIPAL_ACCOUNTANT_FEES": ["PRINCIPAL ACCOUNTANT FEES AND SERVICES"],
+    "III:16_PRINCIPAL_ACCOUNTANT_FEES_LEGACY": ["PRINCIPAL ACCOUNTANT FEES AND SERVICES"],
+    "IV:14_EXHIBITS_SCHEDULES_REPORTS": [
+        "EXHIBITS",
+        "EXHIBITS AND FINANCIAL STATEMENT SCHEDULES",
+        "EXHIBITS AND FINANCIAL STATEMENTS",
+        "EXHIBITS FINANCIAL STATEMENT SCHEDULES",
+        "INDEX TO EXHIBITS",
+    ],
 }
 
 
@@ -233,15 +264,440 @@ def _build_title_lookup(mapping: dict[str, list[str]]) -> dict[str, str]:
     return lookup
 
 
+def _parse_date(value: str | date | datetime | None) -> date | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return None
+        if re.fullmatch(r"\d{8}", s):
+            try:
+                return datetime.strptime(s, "%Y%m%d").date()
+            except Exception:
+                return None
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", s):
+            try:
+                return datetime.strptime(s, "%Y-%m-%d").date()
+            except Exception:
+                return None
+    return None
+
+
+def _load_item_regime_spec() -> dict | None:
+    path = Path(__file__).resolve().parent / "item_regime_10k.json"
+    try:
+        with path.open("r", encoding="utf-8") as fh:
+            return json.load(fh)
+    except Exception:
+        return None
+
+
 _ITEM_TITLE_LOOKUP_10K = _build_title_lookup(ITEM_TITLES_10K)
+_ITEM_TITLES_10K_NORM: dict[str, set[str]] = {}
+for _item_id, _titles in ITEM_TITLES_10K.items():
+    normed = {_normalize_heading_text(t) for t in _titles}
+    _ITEM_TITLES_10K_NORM[_item_id] = {t for t in normed if t}
+
+_ALLOWED_ITEM_LETTERS_10K: dict[int, set[str]] = {
+    1: {"A", "B", "C"},
+    7: {"A"},
+    9: {"A", "B", "C"},
+}
+_ITEM_REGIME_SPEC = _load_item_regime_spec()
+# Regime spec is optional; missing or unreadable specs fall back to permissive behavior.
+_ITEM_REGIME_ITEMS = _ITEM_REGIME_SPEC.get("items", {}) if _ITEM_REGIME_SPEC else {}
+_ITEM_REGIME_LEGACY = (
+    {entry["slot"]: entry for entry in _ITEM_REGIME_SPEC.get("legacy_slots", [])}
+    if _ITEM_REGIME_SPEC
+    else {}
+)
+_ITEM_REGIME_BY_ID: dict[str, list[tuple[str, dict]]] = {}
+if _ITEM_REGIME_SPEC:
+    combined = dict(_ITEM_REGIME_ITEMS)
+    combined.update(_ITEM_REGIME_LEGACY)
+    for key, entry in combined.items():
+        item_id = entry.get("item_id")
+        if not item_id and ":" in key:
+            item_id = key.split(":", 1)[1]
+        if not item_id:
+            continue
+        _ITEM_REGIME_BY_ID.setdefault(item_id, []).append((key, entry))
 
 
-def _match_title_only_heading(line: str, lookup: dict[str, str]) -> str | None:
+def _default_part_for_item_id(item_id: str | None) -> str | None:
+    if not item_id or not item_id[0].isdigit():
+        return None
+    m = re.match(r"^(?P<num>\d{1,2})", item_id)
+    if not m:
+        return None
+    n = int(m.group("num"))
+    if 1 <= n <= 4:
+        return "I"
+    if 5 <= n <= 9:
+        return "II"
+    if 10 <= n <= 14:
+        return "III"
+    if 15 <= n <= 16:
+        return "IV"
+    return None
+
+
+def _resolve_item_key(item_part: str | None, item_id: str | None) -> str | None:
+    if not item_id:
+        return None
+    part = item_part or _default_part_for_item_id(item_id)
+    if not part:
+        return None
+    return f"{part}:{item_id}"
+
+
+def _item_letter_allowed_10k(num: int | None, let: str | None) -> bool:
+    if not let:
+        return True
+    if num is None:
+        return False
+    allowed = _ALLOWED_ITEM_LETTERS_10K.get(num)
+    return allowed is not None and let in allowed
+
+
+def _glued_title_from_line(line: str, match: re.Match[str]) -> str:
+    rest = line[match.end() :]
+    rest = re.split(r"\bITEM\b|\bPART\b", rest, maxsplit=1, flags=re.IGNORECASE)[0]
+    return rest
+
+
+def _glued_title_matches_base(
+    base_item_id: str | None,
+    let: str,
+    line: str,
+    match: re.Match[str],
+) -> bool:
+    if not base_item_id:
+        return False
+    titles = _ITEM_TITLES_10K_NORM.get(base_item_id)
+    if not titles:
+        return False
+    rest = _glued_title_from_line(line, match)
+    candidate = f"{let}{rest}".strip()
+    if not candidate:
+        return False
+    norm = _normalize_heading_text(candidate)
+    if norm in titles:
+        return True
+    # Allow truncated wrapped headings to match the base title prefix.
+    if len(norm) >= 12:
+        return any(title.startswith(norm) for title in titles)
+    return False
+
+
+def _pageish_line(line: str) -> bool:
+    s = line.strip()
+    if not s:
+        return False
+    return bool(
+        PAGE_NUMBER_PATTERN.match(s)
+        or PAGE_HYPHEN_PATTERN.match(s)
+        or PAGE_ROMAN_PATTERN.match(s)
+        or PAGE_OF_PATTERN.match(s)
+    )
+
+
+def _looks_like_toc_heading_line(lines: list[str], idx: int, *, max_early: int = 400) -> bool:
+    if idx > max_early:
+        return False
+    line = lines[idx]
+    if not line:
+        return False
+    if TOC_DOT_LEADER_PATTERN.search(line) or re.search(r"\s+\d{1,4}\s*$", line):
+        return True
+
+    j = idx + 1
+    max_scan = min(len(lines), idx + 5)
+    while j < max_scan and lines[j].strip() == "":
+        j += 1
+    if j < len(lines) and _pageish_line(lines[j]):
+        return len(line.strip()) <= 160
+    return False
+
+
+def _evaluate_regime_validity(
+    validity: list[dict],
+    *,
+    filing_date: date | None,
+    period_end: date | None,
+) -> tuple[dict | None, bool]:
+    if not validity:
+        return None, True
+
+    missing_date = False
+    for entry in validity:
+        trigger = entry.get("trigger")
+        if trigger == "effective_date":
+            date_value = filing_date
+        elif trigger == "fiscal_year_end_ge":
+            date_value = period_end
+        else:
+            continue
+
+        if date_value is None:
+            missing_date = True
+            continue
+
+        start = _parse_date(entry.get("start"))
+        end = _parse_date(entry.get("end"))
+        if start is not None and date_value < start:
+            continue
+        if end is not None and date_value >= end:
+            continue
+        return entry, True
+
+    if missing_date:
+        return None, False
+    return None, True
+
+
+def _canonical_for_entry(entry: dict, fallback: str | None) -> str | None:
+    validity = entry.get("validity") or []
+    canonicals = {v.get("canonical") for v in validity if v.get("canonical")}
+    if len(canonicals) == 1:
+        return next(iter(canonicals))
+    return fallback
+
+
+def _status_from_entry(entry: dict, canonical: str | None) -> str:
+    if canonical and canonical.endswith("_RESERVED"):
+        return "reserved"
+    status = entry.get("status")
+    if status == "optional":
+        return "optional"
+    if status == "active":
+        return "active"
+    if status == "time_varying":
+        return "active"
+    return "unknown"
+
+
+def _find_regime_matches_by_item_id(
+    item_id: str | None,
+    *,
+    filing_date: date | None,
+    period_end: date | None,
+    exclude_key: str | None = None,
+) -> tuple[list[tuple[str, dict, dict]], bool]:
+    if not item_id:
+        return [], False
+    matches: list[tuple[str, dict, dict]] = []
+    missing_date = False
+    for key, entry in _ITEM_REGIME_BY_ID.get(item_id, []):
+        if exclude_key and key == exclude_key:
+            continue
+        match, decidable = _evaluate_regime_validity(
+            entry.get("validity", []),
+            filing_date=filing_date,
+            period_end=period_end,
+        )
+        if not decidable:
+            missing_date = True
+            continue
+        if match is not None:
+            matches.append((key, entry, match))
+    return matches, missing_date
+
+
+def _annotation_from_match(
+    entry: dict,
+    match: dict,
+    *,
+    fallback: str | None,
+) -> dict[str, str | bool | None]:
+    canonical = match.get("canonical") or fallback
+    return {
+        "canonical_item": canonical,
+        "exists_by_regime": True,
+        "item_status": _status_from_entry(entry, canonical),
+    }
+
+
+def _regime_annotation_for_item(
+    item_part: str | None,
+    item_id: str | None,
+    *,
+    filing_date: date | None,
+    period_end: date | None,
+) -> dict[str, str | bool | None]:
+    item_key = _resolve_item_key(item_part, item_id)
+    fallback = item_key or item_id
+    if not _ITEM_REGIME_SPEC or not item_key:
+        return {
+            "canonical_item": fallback,
+            "exists_by_regime": None,
+            "item_status": "unknown",
+        }
+
+    entry = _ITEM_REGIME_ITEMS.get(item_key) or _ITEM_REGIME_LEGACY.get(item_key)
+    if not entry:
+        matches, missing_date = _find_regime_matches_by_item_id(
+            item_id,
+            filing_date=filing_date,
+            period_end=period_end,
+        )
+        if matches:
+            if len(matches) == 1:
+                alt_key, alt_entry, alt_match = matches[0]
+                return _annotation_from_match(
+                    alt_entry,
+                    alt_match,
+                    fallback=alt_key,
+                )
+            return {
+                "canonical_item": fallback,
+                "exists_by_regime": None,
+                "item_status": "unknown",
+            }
+        if missing_date:
+            return {
+                "canonical_item": fallback,
+                "exists_by_regime": None,
+                "item_status": "unknown",
+            }
+        return {
+            "canonical_item": fallback,
+            "exists_by_regime": None,
+            "item_status": "unknown",
+        }
+
+    match, decidable = _evaluate_regime_validity(
+        entry.get("validity", []),
+        filing_date=filing_date,
+        period_end=period_end,
+    )
+    if not decidable:
+        return {
+            "canonical_item": _canonical_for_entry(entry, fallback),
+            "exists_by_regime": None,
+            "item_status": "unknown",
+        }
+    if match is None:
+        matches, missing_date = _find_regime_matches_by_item_id(
+            item_id,
+            filing_date=filing_date,
+            period_end=period_end,
+            exclude_key=item_key,
+        )
+        if matches:
+            if len(matches) == 1:
+                alt_key, alt_entry, alt_match = matches[0]
+                return _annotation_from_match(
+                    alt_entry,
+                    alt_match,
+                    fallback=alt_key,
+                )
+            return {
+                "canonical_item": _canonical_for_entry(entry, fallback),
+                "exists_by_regime": None,
+                "item_status": "unknown",
+            }
+        if missing_date:
+            return {
+                "canonical_item": _canonical_for_entry(entry, fallback),
+                "exists_by_regime": None,
+                "item_status": "unknown",
+            }
+        return {
+            "canonical_item": _canonical_for_entry(entry, fallback),
+            "exists_by_regime": False,
+            "item_status": "unknown",
+        }
+
+    return _annotation_from_match(entry, match, fallback=fallback)
+
+
+def _build_regime_item_titles_10k(
+    *,
+    filing_date: date | None,
+    period_end: date | None,
+    enable_regime: bool,
+) -> dict[str, list[str]]:
+    if not enable_regime or not _ITEM_REGIME_SPEC:
+        return ITEM_TITLES_10K
+
+    mapping: dict[str, list[str]] = {}
+    for item_id, titles in ITEM_TITLES_10K.items():
+        item_key = _resolve_item_key(None, item_id)
+        entry = _ITEM_REGIME_ITEMS.get(item_key) if item_key else None
+        if not entry:
+            mapping[item_id] = titles
+            continue
+
+        match, decidable = _evaluate_regime_validity(
+            entry.get("validity", []),
+            filing_date=filing_date,
+            period_end=period_end,
+        )
+        if not decidable:
+            mapping[item_id] = titles
+            continue
+        if match is None:
+            matches, missing_date = _find_regime_matches_by_item_id(
+                item_id,
+                filing_date=filing_date,
+                period_end=period_end,
+                exclude_key=item_key,
+            )
+            if matches:
+                if len(matches) == 1:
+                    _, alt_entry, alt_match = matches[0]
+                    canonical = alt_match.get("canonical")
+                    override = ITEM_TITLES_10K_BY_CANONICAL.get(canonical or "")
+                    if override:
+                        mapping[item_id] = override
+                        continue
+                mapping[item_id] = titles
+                continue
+            if missing_date:
+                mapping[item_id] = titles
+                continue
+            continue
+
+        canonical = match.get("canonical")
+        override = ITEM_TITLES_10K_BY_CANONICAL.get(canonical or "")
+        mapping[item_id] = override or titles
+
+    return mapping
+
+
+def _build_title_lookup_10k(
+    *,
+    filing_date: date | None,
+    period_end: date | None,
+    enable_regime: bool,
+) -> dict[str, str]:
+    mapping = _build_regime_item_titles_10k(
+        filing_date=filing_date,
+        period_end=period_end,
+        enable_regime=enable_regime,
+    )
+    return _build_title_lookup(mapping)
+
+
+def _match_title_only_heading(
+    line: str,
+    lookup: dict[str, str],
+    *,
+    allow_reserved: bool = False,
+) -> str | None:
     if not line:
         return None
     if ITEM_WORD_PATTERN.search(line):
         return None
     norm = _normalize_heading_text(line)
+    if not allow_reserved and norm == "RESERVED":
+        return None
     return lookup.get(norm)
 
 
@@ -603,6 +1059,7 @@ def _detect_heading_style_10k(
     lines: list[str],
     line_starts: list[int],
     front_matter_end_pos: int | None,
+    lookup: dict[str, str],
     *,
     max_item: int,
 ) -> str:
@@ -622,10 +1079,10 @@ def _detect_heading_style_10k(
         m = ITEM_LINESTART_PATTERN.match(line)
         if m and _normalize_item_id(m.group("num"), m.group("let"), max_item=max_item) is not None:
             return "A"
-        if _match_numeric_dot_heading(line, _ITEM_TITLE_LOOKUP_10K, max_item=max_item):
+        if _match_numeric_dot_heading(line, lookup, max_item=max_item):
             seen_numeric = True
             continue
-        if _match_title_only_heading(line, _ITEM_TITLE_LOOKUP_10K):
+        if _match_title_only_heading(line, lookup):
             seen_title = True
     if seen_numeric:
         return "B"
@@ -637,6 +1094,7 @@ def _detect_heading_style_10k(
 def _extract_fallback_items_10k(
     lines: list[str],
     line_starts: list[int],
+    lookup: dict[str, str],
     *,
     front_matter_end_pos: int | None,
     max_item: int,
@@ -651,7 +1109,7 @@ def _extract_fallback_items_10k(
             continue
         if TOC_HEADER_LINE_PATTERN.match(line):
             continue
-        if _is_toc_entry_line(line, _ITEM_TITLE_LOOKUP_10K, max_item=max_item):
+        if _is_toc_entry_line(line, lookup, max_item=max_item):
             continue
 
         m_part = PART_LINESTART_PATTERN.match(line)
@@ -661,9 +1119,9 @@ def _extract_fallback_items_10k(
 
         item_id: str | None = None
         if allow_numeric:
-            item_id = _match_numeric_dot_heading(line, _ITEM_TITLE_LOOKUP_10K, max_item=max_item)
+            item_id = _match_numeric_dot_heading(line, lookup, max_item=max_item)
         if item_id is None and allow_titles:
-            item_id = _match_title_only_heading(line, _ITEM_TITLE_LOOKUP_10K)
+            item_id = _match_title_only_heading(line, lookup)
         if item_id is None:
             continue
 
@@ -695,12 +1153,45 @@ def _is_empty_item_text(text: str | None) -> bool:
     return bool(EMPTY_ITEM_PATTERN.match(text.strip()))
 
 
+def _annotate_items_with_regime(
+    items: list[dict[str, str | bool | None]],
+    *,
+    form_type: str | None,
+    filing_date: date | None,
+    period_end: date | None,
+    enable_regime: bool,
+) -> None:
+    if not items:
+        return
+    form = (form_type or "").upper().strip()
+    apply_regime = enable_regime and (form.startswith("10K") or form.startswith("10-K"))
+    for item in items:
+        if apply_regime:
+            item.update(
+                _regime_annotation_for_item(
+                    item.get("item_part"),
+                    item.get("item_id"),
+                    filing_date=filing_date,
+                    period_end=period_end,
+                )
+            )
+            continue
+
+        fallback = item.get("item") or item.get("item_id")
+        item.setdefault("canonical_item", fallback)
+        item.setdefault("exists_by_regime", None)
+        item.setdefault("item_status", "unknown")
+
+
 def extract_filing_items(
     full_text: str,
     *,
     form_type: str | None = None,
+    filing_date: str | date | datetime | None = None,
+    period_end: str | date | datetime | None = None,
+    regime: bool = True,
     max_item_number: int = 20,
-) -> list[dict[str, str | None]]:
+) -> list[dict[str, str | bool | None]]:
     """
     Extract filing item sections from `full_text`.
 
@@ -709,6 +1200,9 @@ def extract_filing_items(
       - item_id: normalized item id (e.g., '1', '1A')
       - item: combined key '<part>:<id>' when part exists, else '<id>'
       - full_text: extracted text for the item (pagination artifacts removed)
+      - canonical_item: regime-stable meaning when available
+      - exists_by_regime: True/False when regime rules can be evaluated, else None
+      - item_status: active/reserved/optional/unknown
 
     The function does not emit TOC rows; TOC is only used internally to avoid false starts.
     """
@@ -716,11 +1210,21 @@ def extract_filing_items(
         return []
 
     form = (form_type or "").strip().upper()
+    is_10k = form.startswith("10K") or form.startswith("10-K")
     if form.startswith("10Q") or form.startswith("10-Q"):
         allowed_parts = {"I", "II"}
     else:
         # Default to 10-K style parts (I-IV). This also prevents accidental matches like "Part D".
         allowed_parts = {"I", "II", "III", "IV"}
+
+    filing_date_parsed = _parse_date(filing_date)
+    period_end_parsed = _parse_date(period_end)
+    title_lookup = _build_title_lookup_10k(
+        filing_date=filing_date_parsed,
+        period_end=period_end_parsed,
+        enable_regime=bool(regime) and is_10k,
+    )
+    # Regime-aware lookup only gates fallback/title-only matching; explicit ITEM headings still pass through.
 
     body = _normalize_newlines(_strip_leading_header_block(full_text))
     body = _repair_wrapped_headings(body)
@@ -746,18 +1250,19 @@ def extract_filing_items(
 
     front_matter_end_pos: int | None = None
     heading_style: str | None = None
-    if form.startswith("10K") or form.startswith("10-K"):
+    if is_10k:
         front_matter_end_pos = _infer_front_matter_end_pos(
             body,
             lines,
             line_starts,
-            _ITEM_TITLE_LOOKUP_10K,
+            title_lookup,
             max_item=max_item_number,
         )
         heading_style = _detect_heading_style_10k(
             lines,
             line_starts,
             front_matter_end_pos,
+            title_lookup,
             max_item=max_item_number,
         )
 
@@ -832,6 +1337,25 @@ def extract_filing_items(
                 )
                 if item_id is None:
                     continue
+                content_adjust = 0
+                if is_10k and m.group("let"):
+                    base_id = _normalize_item_id(
+                        m.group("num"),
+                        None,
+                        max_item=max_item_number,
+                    )
+                    base_num = int(base_id) if base_id and base_id.isdigit() else None
+                    let = m.group("let").upper()
+                    glued = m.end() < len(line) and line[m.end()].isalpha()
+                    if not _item_letter_allowed_10k(base_num, let):
+                        if glued and base_id:
+                            item_id = base_id
+                            content_adjust = -1
+                        else:
+                            continue
+                    elif glued and _glued_title_matches_base(base_id, let, line, m):
+                        item_id = base_id or item_id
+                        content_adjust = -1
 
                 # Basic TOC-line filters (only for reasonably short early lines).
                 if i < 400:
@@ -840,6 +1364,8 @@ def extract_filing_items(
                 # Only skip TOC-marker lines when they look like true TOC listings (many ITEM tokens).
                 # Some filings embed a repeated "Table of Contents" page header alongside real headings.
                 if is_toc_marker and item_word_count >= 3 and len(line) <= 8_000:
+                    continue
+                if _looks_like_toc_heading_line(lines, i):
                     continue
 
                 abs_start = line_starts[i] + m.start()
@@ -875,9 +1401,11 @@ def extract_filing_items(
                 suffix = line[m.end() : m.end() + 64]
                 if re.search(r"(?i)^\s*[\(\[]?\s*continued\b", suffix):
                     continue
+                if re.match(r"(?i)^\s*[\(\[]\s*[a-z0-9]", suffix):
+                    continue
 
                 start_abs = line_starts[i] + m.start()
-                content_start_abs = line_starts[i] + m.end()
+                content_start_abs = line_starts[i] + m.end() + content_adjust
                 boundaries.append(
                     _ItemBoundary(
                         start=start_abs,
@@ -891,12 +1419,13 @@ def extract_filing_items(
             break
         attempt += 1
 
-    if not boundaries and (form.startswith("10K") or form.startswith("10-K")):
+    if not boundaries and is_10k:
         allow_numeric = heading_style == "B"
         allow_titles = heading_style in {"A", "B", "C", "UNKNOWN", None}
         boundaries = _extract_fallback_items_10k(
             lines,
             line_starts,
+            title_lookup,
             front_matter_end_pos=front_matter_end_pos,
             max_item=max_item_number,
             allow_numeric=allow_numeric,
@@ -945,6 +1474,13 @@ def extract_filing_items(
             }
         )
 
+    _annotate_items_with_regime(
+        out_items,
+        form_type=form_type,
+        filing_date=filing_date_parsed,
+        period_end=period_end_parsed,
+        enable_regime=bool(regime),
+    )
     return out_items
 
 
@@ -1017,6 +1553,8 @@ class ParsedFilingSchema:
         "accession_nodash": pl.Utf8,
         "filing_date": pl.Utf8,  # will cast to Date on write
         "filing_date_header": pl.Utf8,
+        "period_end": pl.Utf8,  # will cast to Date on write
+        "period_end_header": pl.Utf8,
         "file_date_filename": pl.Utf8,  # will cast to Date on write
         "document_type_filename": pl.Utf8,
         "filename": pl.Utf8,
@@ -1040,18 +1578,23 @@ class FilingItemSchema:
         "accession_number": pl.Utf8,
         "accession_nodash": pl.Utf8,
         "file_date_filename": pl.Date,
+        "filing_date": pl.Date,
+        "period_end": pl.Date,
         "document_type_filename": pl.Utf8,
         "filename": pl.Utf8,
         "item_part": pl.Utf8,
         "item_id": pl.Utf8,
         "item": pl.Utf8,
+        "canonical_item": pl.Utf8,
+        "exists_by_regime": pl.Boolean,
+        "item_status": pl.Utf8,
         "full_text": pl.Utf8,
     }
 
 
 def parse_header(full_text: str, header_search_limit: int = HEADER_SEARCH_LIMIT_DEFAULT) -> dict:
     """
-    Extract header metadata (CIKs, accession, filing date) from the top of a filing.
+    Extract header metadata (CIKs, accession, filing date, period end) from the top of a filing.
     """
     header = full_text[:header_search_limit]
 
@@ -1060,6 +1603,9 @@ def parse_header(full_text: str, header_search_limit: int = HEADER_SEARCH_LIMIT_
 
     date_match = DATE_HEADER_PATTERN.search(header)
     header_filing_date_str = date_match.group(1) if date_match else None
+
+    period_match = PERIOD_END_HEADER_PATTERN.search(header)
+    header_period_end_str = period_match.group(1) if period_match else None
 
     acc_match = ACC_HEADER_PATTERN.search(header)
     header_accession_str = acc_match.group(1) if acc_match else None
@@ -1070,6 +1616,7 @@ def parse_header(full_text: str, header_search_limit: int = HEADER_SEARCH_LIMIT_
     return {
         "header_ciks_int_set": header_ciks_int_set,
         "header_filing_date_str": header_filing_date_str,
+        "header_period_end_str": header_period_end_str,
         "header_accession_str": header_accession_str,
         "primary_header_cik": primary_header_cik,
         "secondary_ciks": secondary_ciks,

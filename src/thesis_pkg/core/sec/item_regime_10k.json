@@ -1,0 +1,273 @@
+{
+  "spec_version": 1,
+  "form": "10-K",
+  "timezone": "UTC",
+  "date_conventions": {
+    "segments_start_inclusive": true,
+    "segments_end_exclusive": true,
+    "default_date_field_for_effective_rules": "filing_date",
+    "default_date_field_for_fy_rules": "period_end",
+    "notes": [
+      "This spec captures only the major item-level changes discussed (add/remove/reserve/semantic reassignment).",
+      "When dates are missing, extraction should behave permissively (do not hard-filter)."
+    ]
+  },
+  "sources": [
+    { "release": "33-7386", "topic": "Item 7A Market Risk", "year": 1997 },
+    { "release": "33-8124", "topic": "Controls and Procedures (legacy Items 14/15)", "year": 2002 },
+    { "release": "33-8183", "topic": "Principal Accountant Fees and Services (legacy Item 16)", "year": 2003 },
+    { "release": "33-8238", "topic": "Item 9A Controls and Procedures redesignation", "year": 2003 },
+    { "release": "33-8400", "topic": "Item 9B Other Information", "year": 2004 },
+    { "release": "33-8591", "topic": "Items 1A/1B", "year": 2005 },
+    { "release": "33-9089", "topic": "Removal of legacy Item 4 (vote matters) from 10-K", "year": 2009 },
+    { "release": "33-9286", "topic": "Mine Safety Disclosures (new Item 4)", "year": 2011 },
+    { "release": "34-77969", "topic": "Item 16 Form 10-K Summary", "year": 2016 },
+    { "release": "33-10890", "topic": "Remove/Reserve Item 6 Selected Financial Data", "year": 2020 },
+    { "release": "34-93701", "topic": "Item 9C HFCAA-related disclosure", "year": 2021 },
+    { "release": "33-11216", "topic": "Item 1C Cybersecurity", "year": 2023 }
+  ],
+  "triggers": {
+    "effective_date": { "type": "date", "format": "YYYY-MM-DD" },
+    "fiscal_year_end_ge": { "type": "date", "format": "YYYY-MM-DD" }
+  },
+  "items": {
+    "I:1A": {
+      "item_id": "1A",
+      "part": "I",
+      "label": "Risk Factors",
+      "status": "active",
+      "validity": [
+        {
+          "start": "2005-12-01",
+          "end": null,
+          "trigger": "effective_date",
+          "canonical": "I:1A_RISK_FACTORS"
+        }
+      ]
+    },
+    "I:1B": {
+      "item_id": "1B",
+      "part": "I",
+      "label": "Unresolved Staff Comments",
+      "status": "active",
+      "validity": [
+        {
+          "start": "2005-12-01",
+          "end": null,
+          "trigger": "effective_date",
+          "canonical": "I:1B_UNRESOLVED_STAFF_COMMENTS"
+        }
+      ]
+    },
+    "I:1C": {
+      "item_id": "1C",
+      "part": "I",
+      "label": "Cybersecurity",
+      "status": "active",
+      "validity": [
+        {
+          "start": "2023-12-15",
+          "end": null,
+          "trigger": "fiscal_year_end_ge",
+          "canonical": "I:1C_CYBERSECURITY",
+          "notes": [
+            "Compliance trigger: fiscal years ending on or after 2023-12-15."
+          ]
+        }
+      ]
+    },
+    "I:4": {
+      "item_id": "4",
+      "part": "I",
+      "label": "Item 4 (time-varying)",
+      "status": "time_varying",
+      "validity": [
+        {
+          "start": "0001-01-01",
+          "end": "2010-02-28",
+          "trigger": "effective_date",
+          "canonical": "I:4_VOTING_RESULTS_LEGACY",
+          "label_override": "Submission of Matters to a Vote of Security Holders"
+        },
+        {
+          "start": "2010-02-28",
+          "end": "2012-01-27",
+          "trigger": "effective_date",
+          "canonical": "I:4_RESERVED",
+          "label_override": "Reserved"
+        },
+        {
+          "start": "2012-01-27",
+          "end": null,
+          "trigger": "effective_date",
+          "canonical": "I:4_MINE_SAFETY",
+          "label_override": "Mine Safety Disclosures"
+        }
+      ]
+    },
+    "II:6": {
+      "item_id": "6",
+      "part": "II",
+      "label": "Item 6 (Selected Financial Data / Reserved)",
+      "status": "time_varying",
+      "validity": [
+        {
+          "start": "0001-01-01",
+          "end": "2021-02-10",
+          "trigger": "effective_date",
+          "canonical": "II:6_SELECTED_FINANCIAL_DATA",
+          "label_override": "Selected Financial Data"
+        },
+        {
+          "start": "2021-02-10",
+          "end": null,
+          "trigger": "effective_date",
+          "canonical": "II:6_RESERVED",
+          "label_override": "Reserved"
+        }
+      ]
+    },
+    "II:7A": {
+      "item_id": "7A",
+      "part": "II",
+      "label": "Quantitative and Qualitative Disclosures About Market Risk",
+      "status": "active",
+      "validity": [
+        {
+          "start": "1997-04-11",
+          "end": null,
+          "trigger": "effective_date",
+          "canonical": "II:7A_MARKET_RISK",
+          "notes": [
+            "Effective date computed as 60 days after FR publication; treat as approx if needed."
+          ]
+        }
+      ]
+    },
+    "II:9A": {
+      "item_id": "9A",
+      "part": "II",
+      "label": "Controls and Procedures",
+      "status": "active",
+      "validity": [
+        {
+          "start": "2003-08-14",
+          "end": null,
+          "trigger": "effective_date",
+          "canonical": "II:9A_CONTROLS_AND_PROCEDURES"
+        }
+      ]
+    },
+    "II:9B": {
+      "item_id": "9B",
+      "part": "II",
+      "label": "Other Information",
+      "status": "active",
+      "validity": [
+        {
+          "start": "2004-08-23",
+          "end": null,
+          "trigger": "effective_date",
+          "canonical": "II:9B_OTHER_INFORMATION"
+        }
+      ]
+    },
+    "II:9C": {
+      "item_id": "9C",
+      "part": "II",
+      "label": "Disclosure Regarding Foreign Jurisdictions that Prevent Inspections",
+      "status": "active",
+      "validity": [
+        {
+          "start": "2022-01-10",
+          "end": null,
+          "trigger": "effective_date",
+          "canonical": "II:9C_HFCAA"
+        }
+      ]
+    },
+    "III:14": {
+      "item_id": "14",
+      "part": "III",
+      "label": "Item 14 (Controls and Procedures / Principal Accountant Fees)",
+      "status": "time_varying",
+      "validity": [
+        {
+          "start": "2002-08-29",
+          "end": "2003-08-14",
+          "trigger": "effective_date",
+          "canonical": "III:14_CONTROLS_AND_PROCEDURES_LEGACY",
+          "label_override": "Controls and Procedures"
+        },
+        {
+          "start": "2003-08-14",
+          "end": null,
+          "trigger": "effective_date",
+          "canonical": "III:14_PRINCIPAL_ACCOUNTANT_FEES",
+          "label_override": "Principal Accountant Fees and Services"
+        }
+      ]
+    },
+    "III:16": {
+      "item_id": "16",
+      "part": "III",
+      "label": "Principal Accountant Fees and Services (legacy)",
+      "status": "active",
+      "validity": [
+        {
+          "start": "2003-06-05",
+          "end": "2003-08-14",
+          "trigger": "effective_date",
+          "canonical": "III:16_PRINCIPAL_ACCOUNTANT_FEES_LEGACY",
+          "notes": [
+            "Short 2003 window before redesignation to Item 14."
+          ]
+        }
+      ]
+    },
+    "IV:14": {
+      "item_id": "14",
+      "part": "IV",
+      "label": "Exhibits, Financial Statement Schedules and Reports on Form 8-K",
+      "status": "active",
+      "validity": [
+        {
+          "start": "0001-01-01",
+          "end": "2002-08-29",
+          "trigger": "effective_date",
+          "canonical": "IV:14_EXHIBITS_SCHEDULES_REPORTS",
+          "notes": [
+            "Legacy Item 14 slot before SOX-era controls and procedures updates."
+          ]
+        }
+      ]
+    },
+    "IV:16": {
+      "item_id": "16",
+      "part": "IV",
+      "label": "Form 10-K Summary",
+      "status": "optional",
+      "validity": [
+        {
+          "start": "2016-06-09",
+          "end": null,
+          "trigger": "effective_date",
+          "canonical": "IV:16_FORM_10K_SUMMARY",
+          "notes": [
+            "Optional item; include if present."
+          ]
+        }
+      ]
+    }
+  },
+  "legacy_slots": [],
+  "recommended_metadata_fields": {
+    "filing_date": { "type": "date", "format": "YYYY-MM-DD", "source": "header FILED AS OF DATE or filename" },
+    "period_end": { "type": "date", "format": "YYYY-MM-DD", "source": "header CONFORMED PERIOD OF REPORT" }
+  },
+  "recommended_output_annotations": {
+    "canonical_item": { "type": "string", "example": "I:4_MINE_SAFETY" },
+    "exists_by_regime": { "type": "boolean" },
+    "item_status": { "type": "string", "enum": ["active", "reserved", "optional", "time_varying", "unknown"] }
+  }
+}
