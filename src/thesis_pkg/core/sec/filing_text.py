@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from bisect import bisect_right
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
@@ -390,9 +391,27 @@ def _glued_title_matches_base(
     if norm in titles:
         return True
     # Allow truncated wrapped headings to match the base title prefix.
-    if len(norm) >= 12:
+    if len(norm) >= 6:
         return any(title.startswith(norm) for title in titles)
     return False
+
+
+def _starts_with_lowercase_title(line: str, match: re.Match[str]) -> bool:
+    suffix = line[match.end() :]
+    if suffix and suffix[0].islower():
+        if match.end() > 0 and line[match.end() - 1].isspace():
+            return True
+        return False
+    for ch in suffix:
+        if ch.isalpha():
+            return ch.islower()
+    return False
+
+
+def _prefix_is_bullet(prefix: str) -> bool:
+    if not prefix:
+        return False
+    return bool(re.fullmatch(r"[\s\-\*\u2022\u00b7\u2013\u2014]+", prefix))
 
 
 def _pageish_line(line: str) -> bool:
@@ -1190,6 +1209,7 @@ def extract_filing_items(
     filing_date: str | date | datetime | None = None,
     period_end: str | date | datetime | None = None,
     regime: bool = True,
+    diagnostics: bool = False,
     max_item_number: int = 20,
 ) -> list[dict[str, str | bool | None]]:
     """
@@ -1203,6 +1223,7 @@ def extract_filing_items(
       - canonical_item: regime-stable meaning when available
       - exists_by_regime: True/False when regime rules can be evaluated, else None
       - item_status: active/reserved/optional/unknown
+      - _heading_line/_heading_line_index/_heading_offset when diagnostics=True
 
     The function does not emit TOC rows; TOC is only used internally to avoid false starts.
     """
@@ -1374,7 +1395,7 @@ def extract_filing_items(
 
                 # Heuristics to avoid cross-references:
                 prefix = line[: m.start()]
-                is_line_start = prefix.strip() == ""
+                is_line_start = prefix.strip() == "" or _prefix_is_bullet(prefix)
                 part_near_item = last_part_end is not None and (m.start() - last_part_end) <= 60
 
                 # Only accept headings that look like real section starts (line-start or 'PART .. ITEM ..').
@@ -1393,6 +1414,9 @@ def extract_filing_items(
                             accept = True
 
                 if not accept:
+                    continue
+
+                if is_line_start and _starts_with_lowercase_title(line, m):
                     continue
 
                 # Ignore "(continued)" headings; they are typically page-header repeats.
@@ -1465,14 +1489,23 @@ def extract_filing_items(
         item_id = b.item_id
         item_key = f"{part}:{item_id}" if part else item_id
 
-        out_items.append(
-            {
-                "item_part": part,
-                "item_id": item_id,
-                "item": item_key,
-                "full_text": chunk,
-            }
-        )
+        record = {
+            "item_part": part,
+            "item_id": item_id,
+            "item": item_key,
+            "full_text": chunk,
+        }
+        if diagnostics:
+            idx = bisect_right(line_starts, b.start) - 1
+            if 0 <= idx < len(lines):
+                record["_heading_line"] = lines[idx]
+                record["_heading_line_index"] = idx
+                record["_heading_offset"] = b.start - line_starts[idx]
+            else:
+                record["_heading_line"] = ""
+                record["_heading_line_index"] = None
+                record["_heading_offset"] = None
+        out_items.append(record)
 
     _annotate_items_with_regime(
         out_items,

@@ -530,9 +530,39 @@ Alpha
     assert [it["item_id"] for it in items] == ["9"]
 
 
+def test_extract_filing_items_glued_heading_short_prefix():
+    text = """<Header></Header>
+ITEM 9CHANGES
+IN AND DISAGREEMENTS WITH ACCOUNTANTS ON ACCOUNTING AND FINANCIAL DISCLOSURE
+Alpha
+"""
+    items = extract_filing_items(text, form_type="10-K")
+    assert [it["item_id"] for it in items] == ["9"]
+
+
 def test_extract_filing_items_skips_item_is_sentence_starts():
     text = """<Header></Header>
 Item is included under the caption Quarterly Data.
+ITEM 1. Business
+Alpha
+"""
+    items = extract_filing_items(text, form_type="10-K")
+    assert [it["item_id"] for it in items] == ["1"]
+
+
+def test_extract_filing_items_skips_item_lowercase_sentence_starts():
+    text = """<Header></Header>
+Item 1 was completed by the contractor on time.
+ITEM 1. Business
+Alpha
+"""
+    items = extract_filing_items(text, form_type="10-K")
+    assert [it["item_id"] for it in items] == ["1"]
+
+
+def test_extract_filing_items_skips_item_on_proxy_card():
+    text = """<Header></Header>
+Item 1 on Proxy Card
 ITEM 1. Business
 Alpha
 """
