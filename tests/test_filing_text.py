@@ -469,6 +469,31 @@ Alpha
     assert items[0]["exists_by_regime"] is False
 
 
+def test_extract_filing_items_drop_impossible():
+    text = """<Header></Header>
+ITEM 1C. Cybersecurity.
+Alpha
+"""
+    items = extract_filing_items(
+        text,
+        form_type="10-K",
+        filing_date="20240120",
+        period_end="20221231",
+        drop_impossible=True,
+    )
+    assert items == []
+
+
+def test_extract_filing_items_skips_amended_forms():
+    text = """<Header></Header>
+ITEM 1. Business
+Alpha
+"""
+    assert extract_filing_items(text, form_type="10-K-A") == []
+    assert extract_filing_items(text, form_type="10-Q-A") == []
+    assert extract_filing_items(text, form_type="10-K/A") == []
+
+
 def test_extract_filing_items_item14_legacy_exhibits_pre_2002():
     text = """<Header></Header>
 PART IV

@@ -459,7 +459,8 @@ def _evaluate_regime_validity(
         if trigger == "effective_date":
             date_value = filing_date
         elif trigger == "fiscal_year_end_ge":
-            date_value = period_end
+            # Use filing_date as a proxy when period_end is missing.
+            date_value = period_end or filing_date
         else:
             continue
 
@@ -1209,6 +1210,7 @@ def extract_filing_items(
     filing_date: str | date | datetime | None = None,
     period_end: str | date | datetime | None = None,
     regime: bool = True,
+    drop_impossible: bool = False,
     diagnostics: bool = False,
     max_item_number: int = 20,
 ) -> list[dict[str, str | bool | None]]:
@@ -1224,6 +1226,7 @@ def extract_filing_items(
       - exists_by_regime: True/False when regime rules can be evaluated, else None
       - item_status: active/reserved/optional/unknown
       - _heading_line/_heading_line_index/_heading_offset when diagnostics=True
+      - when drop_impossible=True, items with exists_by_regime == False are dropped
 
     The function does not emit TOC rows; TOC is only used internally to avoid false starts.
     """
@@ -1231,6 +1234,9 @@ def extract_filing_items(
         return []
 
     form = (form_type or "").strip().upper()
+    if re.match(r"^10-?K[/-]A", form) or re.match(r"^10-?Q[/-]A", form):
+        # Skip amended filings (10-K-A/10-Q-A) to avoid duplicate extraction.
+        return []
     is_10k = form.startswith("10K") or form.startswith("10-K")
     if form.startswith("10Q") or form.startswith("10-Q"):
         allowed_parts = {"I", "II"}
@@ -1514,6 +1520,10 @@ def extract_filing_items(
         period_end=period_end_parsed,
         enable_regime=bool(regime),
     )
+    if drop_impossible:
+        out_items = [
+            item for item in out_items if item.get("exists_by_regime") is not False
+        ]
     return out_items
 
 

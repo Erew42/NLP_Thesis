@@ -9,28 +9,97 @@
     "default_date_field_for_fy_rules": "period_end",
     "notes": [
       "This spec captures only the major item-level changes discussed (add/remove/reserve/semantic reassignment).",
-      "When dates are missing, extraction should behave permissively (do not hard-filter)."
+      "When dates are missing, extraction should behave permissively (do not hard-filter).",
+      "Extended to include all standardized Form 10-K items (stable + time-varying)."
     ]
   },
   "sources": [
-    { "release": "33-7386", "topic": "Item 7A Market Risk", "year": 1997 },
-    { "release": "33-8124", "topic": "Controls and Procedures (legacy Items 14/15)", "year": 2002 },
-    { "release": "33-8183", "topic": "Principal Accountant Fees and Services (legacy Item 16)", "year": 2003 },
-    { "release": "33-8238", "topic": "Item 9A Controls and Procedures redesignation", "year": 2003 },
-    { "release": "33-8400", "topic": "Item 9B Other Information", "year": 2004 },
-    { "release": "33-8591", "topic": "Items 1A/1B", "year": 2005 },
-    { "release": "33-9089", "topic": "Removal of legacy Item 4 (vote matters) from 10-K", "year": 2009 },
-    { "release": "33-9286", "topic": "Mine Safety Disclosures (new Item 4)", "year": 2011 },
-    { "release": "34-77969", "topic": "Item 16 Form 10-K Summary", "year": 2016 },
-    { "release": "33-10890", "topic": "Remove/Reserve Item 6 Selected Financial Data", "year": 2020 },
-    { "release": "34-93701", "topic": "Item 9C HFCAA-related disclosure", "year": 2021 },
-    { "release": "33-11216", "topic": "Item 1C Cybersecurity", "year": 2023 }
+    {
+      "release": "33-7386",
+      "topic": "Item 7A Market Risk",
+      "year": 1997
+    },
+    {
+      "release": "33-8124",
+      "topic": "Controls and Procedures (legacy Items 14/15)",
+      "year": 2002
+    },
+    {
+      "release": "33-8183",
+      "topic": "Principal Accountant Fees and Services (legacy Item 16)",
+      "year": 2003
+    },
+    {
+      "release": "33-8238",
+      "topic": "Item 9A Controls and Procedures redesignation",
+      "year": 2003
+    },
+    {
+      "release": "33-8400",
+      "topic": "Item 9B Other Information",
+      "year": 2004
+    },
+    {
+      "release": "33-8591",
+      "topic": "Items 1A/1B",
+      "year": 2005
+    },
+    {
+      "release": "33-9089",
+      "topic": "Removal of legacy Item 4 (vote matters) from 10-K",
+      "year": 2009
+    },
+    {
+      "release": "33-9286",
+      "topic": "Mine Safety Disclosures (new Item 4)",
+      "year": 2011
+    },
+    {
+      "release": "34-77969",
+      "topic": "Item 16 Form 10-K Summary",
+      "year": 2016
+    },
+    {
+      "release": "33-10890",
+      "topic": "Remove/Reserve Item 6 Selected Financial Data",
+      "year": 2020
+    },
+    {
+      "release": "34-93701",
+      "topic": "Item 9C HFCAA-related disclosure",
+      "year": 2021
+    },
+    {
+      "release": "33-11216",
+      "topic": "Item 1C Cybersecurity",
+      "year": 2023
+    }
   ],
   "triggers": {
-    "effective_date": { "type": "date", "format": "YYYY-MM-DD" },
-    "fiscal_year_end_ge": { "type": "date", "format": "YYYY-MM-DD" }
+    "effective_date": {
+      "type": "date",
+      "format": "YYYY-MM-DD"
+    },
+    "fiscal_year_end_ge": {
+      "type": "date",
+      "format": "YYYY-MM-DD"
+    }
   },
   "items": {
+    "I:1": {
+      "item_id": "1",
+      "part": "I",
+      "label": "Business",
+      "status": "active",
+      "validity": [
+        {
+          "start": "1990-01-01",
+          "end": null,
+          "trigger": "effective_date",
+          "canonical": "I:1_BUSINESS"
+        }
+      ]
+    },
     "I:1A": {
       "item_id": "1A",
       "part": "I",
@@ -76,6 +145,34 @@
         }
       ]
     },
+    "I:2": {
+      "item_id": "2",
+      "part": "I",
+      "label": "Properties",
+      "status": "active",
+      "validity": [
+        {
+          "start": "1990-01-01",
+          "end": null,
+          "trigger": "effective_date",
+          "canonical": "I:2_PROPERTIES"
+        }
+      ]
+    },
+    "I:3": {
+      "item_id": "3",
+      "part": "I",
+      "label": "Legal Proceedings",
+      "status": "active",
+      "validity": [
+        {
+          "start": "1990-01-01",
+          "end": null,
+          "trigger": "effective_date",
+          "canonical": "I:3_LEGAL_PROCEEDINGS"
+        }
+      ]
+    },
     "I:4": {
       "item_id": "4",
       "part": "I",
@@ -105,6 +202,20 @@
         }
       ]
     },
+    "II:5": {
+      "item_id": "5",
+      "part": "II",
+      "label": "Market for Registrant's Common Equity, Related Stockholder Matters and Issuer Purchases of Equity Securities",
+      "status": "active",
+      "validity": [
+        {
+          "start": "1990-01-01",
+          "end": null,
+          "trigger": "effective_date",
+          "canonical": "II:5_MARKET_FOR_REGISTRANTS_COMMON_EQUITY"
+        }
+      ]
+    },
     "II:6": {
       "item_id": "6",
       "part": "II",
@@ -127,6 +238,20 @@
         }
       ]
     },
+    "II:7": {
+      "item_id": "7",
+      "part": "II",
+      "label": "Management's Discussion and Analysis of Financial Condition and Results of Operations",
+      "status": "active",
+      "validity": [
+        {
+          "start": "1990-01-01",
+          "end": null,
+          "trigger": "effective_date",
+          "canonical": "II:7_MDA"
+        }
+      ]
+    },
     "II:7A": {
       "item_id": "7A",
       "part": "II",
@@ -141,6 +266,34 @@
           "notes": [
             "Effective date computed as 60 days after FR publication; treat as approx if needed."
           ]
+        }
+      ]
+    },
+    "II:8": {
+      "item_id": "8",
+      "part": "II",
+      "label": "Financial Statements and Supplementary Data",
+      "status": "active",
+      "validity": [
+        {
+          "start": "1990-01-01",
+          "end": null,
+          "trigger": "effective_date",
+          "canonical": "II:8_FINANCIAL_STATEMENTS_AND_SUPPLEMENTARY_DATA"
+        }
+      ]
+    },
+    "II:9": {
+      "item_id": "9",
+      "part": "II",
+      "label": "Changes in and Disagreements with Accountants on Accounting and Financial Disclosure",
+      "status": "active",
+      "validity": [
+        {
+          "start": "1990-01-01",
+          "end": null,
+          "trigger": "effective_date",
+          "canonical": "II:9_CHANGES_AND_DISAGREEMENTS_WITH_ACCOUNTANTS"
         }
       ]
     },
@@ -183,6 +336,62 @@
           "end": null,
           "trigger": "effective_date",
           "canonical": "II:9C_HFCAA"
+        }
+      ]
+    },
+    "III:10": {
+      "item_id": "10",
+      "part": "III",
+      "label": "Directors, Executive Officers and Corporate Governance",
+      "status": "active",
+      "validity": [
+        {
+          "start": "1990-01-01",
+          "end": null,
+          "trigger": "effective_date",
+          "canonical": "III:10_DIRECTORS_EXECUTIVE_OFFICERS_AND_CORPORATE_GOVERNANCE"
+        }
+      ]
+    },
+    "III:11": {
+      "item_id": "11",
+      "part": "III",
+      "label": "Executive Compensation",
+      "status": "active",
+      "validity": [
+        {
+          "start": "1990-01-01",
+          "end": null,
+          "trigger": "effective_date",
+          "canonical": "III:11_EXECUTIVE_COMPENSATION"
+        }
+      ]
+    },
+    "III:12": {
+      "item_id": "12",
+      "part": "III",
+      "label": "Security Ownership of Certain Beneficial Owners and Management and Related Stockholder Matters",
+      "status": "active",
+      "validity": [
+        {
+          "start": "1990-01-01",
+          "end": null,
+          "trigger": "effective_date",
+          "canonical": "III:12_SECURITY_OWNERSHIP"
+        }
+      ]
+    },
+    "III:13": {
+      "item_id": "13",
+      "part": "III",
+      "label": "Certain Relationships and Related Transactions, and Director Independence",
+      "status": "active",
+      "validity": [
+        {
+          "start": "1990-01-01",
+          "end": null,
+          "trigger": "effective_date",
+          "canonical": "III:13_RELATED_TRANSACTIONS_AND_DIRECTOR_INDEPENDENCE"
         }
       ]
     },
@@ -242,6 +451,34 @@
         }
       ]
     },
+    "IV:15": {
+      "item_id": "15",
+      "part": "IV",
+      "label": "Exhibits and Financial Statement Schedules (and formerly Reports on Form 8-K)",
+      "status": "time_varying",
+      "validity": [
+        {
+          "start": "2002-08-29",
+          "end": "2004-08-23",
+          "trigger": "effective_date",
+          "canonical": "IV:15_EXHIBITS_SCHEDULES_AND_REPORTS_ON_FORM_8K",
+          "label_override": "Exhibits, Financial Statement Schedules and Reports on Form 8-K",
+          "notes": [
+            "Legacy content moved to Item 15 in the SOX-era form reorganization. Date is aligned to existing spec boundaries."
+          ]
+        },
+        {
+          "start": "2004-08-23",
+          "end": null,
+          "trigger": "effective_date",
+          "canonical": "IV:15_EXHIBITS_AND_FINANCIAL_STATEMENT_SCHEDULES",
+          "label_override": "Exhibits and Financial Statement Schedules",
+          "notes": [
+            "2004-08-23 boundary aligns to SEC 8-K modernization removing the 10-K requirement to list reports on Form 8-K."
+          ]
+        }
+      ]
+    },
     "IV:16": {
       "item_id": "16",
       "part": "IV",
@@ -262,12 +499,34 @@
   },
   "legacy_slots": [],
   "recommended_metadata_fields": {
-    "filing_date": { "type": "date", "format": "YYYY-MM-DD", "source": "header FILED AS OF DATE or filename" },
-    "period_end": { "type": "date", "format": "YYYY-MM-DD", "source": "header CONFORMED PERIOD OF REPORT" }
+    "filing_date": {
+      "type": "date",
+      "format": "YYYY-MM-DD",
+      "source": "header FILED AS OF DATE or filename"
+    },
+    "period_end": {
+      "type": "date",
+      "format": "YYYY-MM-DD",
+      "source": "header CONFORMED PERIOD OF REPORT"
+    }
   },
   "recommended_output_annotations": {
-    "canonical_item": { "type": "string", "example": "I:4_MINE_SAFETY" },
-    "exists_by_regime": { "type": "boolean" },
-    "item_status": { "type": "string", "enum": ["active", "reserved", "optional", "time_varying", "unknown"] }
+    "canonical_item": {
+      "type": "string",
+      "example": "I:4_MINE_SAFETY"
+    },
+    "exists_by_regime": {
+      "type": "boolean"
+    },
+    "item_status": {
+      "type": "string",
+      "enum": [
+        "active",
+        "reserved",
+        "optional",
+        "time_varying",
+        "unknown"
+      ]
+    }
   }
 }
