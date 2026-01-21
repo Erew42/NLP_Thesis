@@ -88,6 +88,23 @@ def _weak_heading_letter(item_id: str, heading_line: str) -> bool:
     return not detected.endswith(item_id[-1])
 
 
+def _expected_part_for_item(item: dict) -> str | None:
+    canonical = item.get("canonical_item")
+    if isinstance(canonical, str) and ":" in canonical:
+        part = canonical.split(":", 1)[0].upper()
+        if part in {"I", "II", "III", "IV"}:
+            return part
+    item_key = item.get("item")
+    if isinstance(item_key, str) and ":" in item_key:
+        part = item_key.split(":", 1)[0].upper()
+        if part in {"I", "II", "III", "IV"}:
+            return part
+    item_id = item.get("item_id")
+    if isinstance(item_id, str):
+        return _default_part_for_item_id(item_id)
+    return None
+
+
 def _looks_like_cross_ref(prefix: str) -> bool:
     if not prefix.strip():
         return False
@@ -261,10 +278,10 @@ def main() -> None:
                                     if item_id in {"1", "7", "9"} or _lettered_item(item_id):
                                         flags.append("split_letter_line")
 
-                        default_part = _default_part_for_item_id(item_id)
-                        if default_part and not item_part:
+                        expected_part = _expected_part_for_item(item)
+                        if expected_part and not item_part:
                             flags.append("missing_part")
-                        if item_part and default_part and item_part != default_part:
+                        if item_part and expected_part and item_part != expected_part:
                             flags.append("part_mismatch")
 
                         if TOC_DOT_LEADER_PATTERN.search(heading_line):

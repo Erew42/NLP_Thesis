@@ -720,6 +720,21 @@ Larger regression datasets (tens of thousands of rows or more), if needed, SHOUL
 
 
 
+\### 2.5 Repository Layout Notes (Current Code)
+
+
+\- Core domain logic lives under `src/thesis_pkg/core/` (for example SEC parsing in `src/thesis_pkg/core/sec/filing_text.py` and CCM transforms in `src/thesis_pkg/core/ccm/transforms.py`).
+
+\- Pipeline entry points and IO-heavy orchestration live under `src/thesis_pkg/pipelines/` (for example `src/thesis_pkg/pipelines/ccm_pipeline.py` and `src/thesis_pkg/pipelines/sec_pipeline.py`).
+
+\- Top-level modules in `src/thesis_pkg/` (for example `src/thesis_pkg/pipeline.py` and `src/thesis_pkg/filing_text.py`) primarily re-export or wrap the canonical implementations; prefer updating the canonical modules.
+
+\- `DataStatus`, `STATUS_DTYPE`, and the private helpers `\_ensure\_data\_status` / `\_flag\_if` are defined in `src/thesis_pkg/core/ccm/transforms.py`; use those definitions when extending status flags.
+
+
+---
+
+
 \## 3. Agents and Roles
 
 
