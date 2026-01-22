@@ -530,6 +530,89 @@ Alpha
     assert items[0]["exists_by_regime"] is True
 
 
+def test_extract_filing_items_strips_edgar_headers():
+    text = """<SEC-HEADER>
+ITEM 2. PROPERTIES
+</SEC-HEADER>
+<FileStats><XML_Chars>123</XML_Chars></FileStats>
+ITEM 1. BUSINESS
+Alpha
+"""
+    items = extract_filing_items(text, form_type="10-K")
+    assert [it["item_id"] for it in items] == ["1"]
+    assert "SEC-HEADER" not in (items[0]["full_text"] or "")
+
+
+def test_extract_filing_items_rejects_toc_item_lines():
+    text = """<Header></Header>
+TABLE OF CONTENTS
+ITEM 1. BUSINESS..................................3
+ITEM 2. PROPERTIES................................4
+
+ITEM 1. BUSINESS
+Alpha
+
+ITEM 2. PROPERTIES
+Bravo
+"""
+    items = extract_filing_items(text, form_type="10-K")
+    assert [it["item_id"] for it in items] == ["1", "2"]
+
+
+def test_extract_filing_items_skips_cross_ref_prefix():
+    text = """<Header></Header>
+See Part II Item 8. Financial Statements and Supplementary Data.
+ITEM 1. Business
+Alpha
+ITEM 2. Properties
+Bravo
+"""
+    items = extract_filing_items(text, form_type="10-K")
+    assert [it["item_id"] for it in items] == ["1", "2"]
+
+
+def test_extract_filing_items_infers_part_when_missing():
+    text = """<Header></Header>
+ITEM 14. Principal Accountant Fees and Services.
+Alpha
+"""
+    items = extract_filing_items(text, form_type="10-K", filing_date="20180201")
+    assert items[0]["item_part"] == "III"
+    assert items[0]["item"] == "III:14"
+
+
+def test_extract_filing_items_glued_letter_suffix():
+    text = """<Header></Header>
+ITEM 1ARISK FACTORS
+Alpha
+"""
+    items = extract_filing_items(text, form_type="10-K")
+    assert [it["item_id"] for it in items] == ["1A"]
+
+
+def test_extract_filing_items_normalizes_9a_t_suffix():
+    text = """<Header></Header>
+ITEM 9A(T). Controls and Procedures.
+Alpha
+
+ITEM 9B. Other Information.
+Bravo
+"""
+    items = extract_filing_items(text, form_type="10-K")
+    assert [it["item_id"] for it in items] == ["9A", "9B"]
+    assert (items[0]["full_text"] or "").lstrip().startswith("Controls")
+
+
+def test_extract_filing_items_repairs_split_letter_line():
+    text = """<Header></Header>
+ITEM 9
+A. Controls and Procedures.
+Alpha
+"""
+    items = extract_filing_items(text, form_type="10-K")
+    assert [it["item_id"] for it in items] == ["9A"]
+
+
 def test_extract_filing_items_glued_heading_titles_use_base_number():
     text = """<Header></Header>
 ITEM 1Business

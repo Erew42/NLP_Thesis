@@ -12,4 +12,4 @@ from thesis_pkg.core.sec.suspicious_boundary_diagnostics import main  # noqa: E4
 
 
 if __name__ == "__main__":
-    main(["scan", *sys.argv[1:]])
+    main(["regress", *sys.argv[1:]])

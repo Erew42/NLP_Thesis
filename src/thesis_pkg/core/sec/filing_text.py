@@ -27,6 +27,14 @@ DATE_HEADER_PATTERN = re.compile(r"FILED AS OF DATE:\s*(\d{8})")
 PERIOD_END_HEADER_PATTERN = re.compile(r"CONFORMED PERIOD OF REPORT:\s*(\d{8})")
 ACC_HEADER_PATTERN = re.compile(r"ACCESSION NUMBER:\s*([\d-]+)")
 
+EDGAR_BLOCK_TAG_PATTERN = re.compile(
+    r"(?is)<\s*(?P<tag>sec-header|header|filestats|file-stats|xml_chars|xml-chars)\b[^>]*>"
+    r".*?<\s*/\s*(?P=tag)\s*>"
+)
+EDGAR_TRAILING_TAG_PATTERN = re.compile(
+    r"(?is)^\s*<\s*(sec-header|header)\b[^>]*>.*",
+)
+
 TOC_MARKER_PATTERN = re.compile(
     # Be conservative: "INDEX" appears in many non-TOC contexts (e.g., "Exhibit Index"),
     # and false TOC masking can suppress real item headings.
@@ -42,7 +50,8 @@ ITEM_CANDIDATE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 ITEM_LINESTART_PATTERN = re.compile(
-    r"^\s*(?:PART\s+[IVXLCDM]+\s*[:\-]?\s*)?ITEM\s+(?P<num>\d+|[IVXLCDM]+)(?P<let>[A-Z])?\b",
+    r"^\s*(?:PART\s+[IVXLCDM]+\s*[:\-]?\s*)?ITEM\s+(?P<num>\d+|[IVXLCDM]+)"
+    r"(?P<let>[A-Z])?(?=\b|(?-i:[A-Z]))",
     re.IGNORECASE,
 )
 NUMERIC_DOT_HEADING_PATTERN = re.compile(
@@ -51,6 +60,23 @@ NUMERIC_DOT_HEADING_PATTERN = re.compile(
 )
 TOC_DOT_LEADER_PATTERN = re.compile(r"\.{2,}\s*\d{1,4}\s*$")
 CONTINUED_PATTERN = re.compile(r"\bcontinued\b", re.IGNORECASE)
+ITEM_MENTION_PATTERN = re.compile(r"\bITEM\s+(?:\d+|[IVXLCDM]+)[A-Z]?\b", re.IGNORECASE)
+PART_ONLY_PREFIX_PATTERN = re.compile(
+    r"^\s*PART\s+(?:IV|III|II|I)\s*[:\-]?\s*$",
+    re.IGNORECASE,
+)
+PART_PREFIX_TAIL_PATTERN = re.compile(
+    r"(?:^|[\s:;,.])PART\s+(?P<part>IV|III|II|I)\s*$",
+    re.IGNORECASE,
+)
+CROSS_REF_PREFIX_PATTERN = re.compile(
+    r"(?i)\bsee\b|\brefer\b|\bas discussed\b|\bas described\b|\bas set forth\b|\bas noted\b|\bpursuant to\b|\bunder\b",
+)
+COVER_PAGE_MARKER_PATTERN = re.compile(
+    r"UNITED STATES\s+SECURITIES\s+AND\s+EXCHANGE\s+COMMISSION",
+    re.IGNORECASE,
+)
+FORM_10K_PATTERN = re.compile(r"\bFORM\s+10-?K\b", re.IGNORECASE)
 
 PAGE_HYPHEN_PATTERN = re.compile(r"^\s*-\d{1,4}-\s*$")
 PAGE_NUMBER_PATTERN = re.compile(r"^\s*\d{1,4}\s*$")
@@ -61,6 +87,10 @@ EMPTY_ITEM_PATTERN = re.compile(
     r"^\s*(?:\(?[a-z]\)?\s*)?(?:none\.?|n/?a\.?|not applicable\.?|not required\.?|\[reserved\]|reserved)\s*$",
     re.IGNORECASE,
 )
+
+HEADING_CONF_LOW = 0
+HEADING_CONF_MED = 1
+HEADING_CONF_HIGH = 2
 
 ITEM_TITLES_10K = {
     "1": ["BUSINESS"],
@@ -186,10 +216,23 @@ def _strip_leading_header_block(full_text: str) -> str:
     Remove the synthetic <Header>...</Header> block when present.
     Keeps all remaining text unchanged.
     """
-    idx = full_text.find("</Header>")
-    if idx == -1:
+    m = re.search(r"</\s*(sec-header|header)\s*>", full_text, flags=re.IGNORECASE)
+    if not m:
         return full_text
-    return full_text[idx + len("</Header>") :]
+    return full_text[m.end() :]
+
+
+def _strip_edgar_metadata(full_text: str) -> str:
+    """
+    Remove EDGAR metadata blocks like <SEC-Header>, <Header>, <FileStats>, and <XML_Chars>.
+    """
+    if not full_text:
+        return full_text
+    text = EDGAR_BLOCK_TAG_PATTERN.sub("", full_text)
+    text = _strip_leading_header_block(text)
+    # Guard against truncated header tags that lack closing markers.
+    text = EDGAR_TRAILING_TAG_PATTERN.sub("", text)
+    return text
 
 
 def _roman_to_int(s: str) -> int | None:
@@ -366,6 +409,49 @@ def _item_letter_allowed_10k(num: int | None, let: str | None) -> bool:
     return allowed is not None and let in allowed
 
 
+def _normalize_item_match(
+    line: str,
+    match: re.Match[str],
+    *,
+    is_10k: bool,
+    max_item: int,
+) -> tuple[str | None, int]:
+    item_id = _normalize_item_id(
+        match.group("num"),
+        match.group("let"),
+        max_item=max_item,
+    )
+    if item_id is None:
+        return None, 0
+
+    content_adjust = 0
+    if is_10k and match.group("let"):
+        base_id = _normalize_item_id(
+            match.group("num"),
+            None,
+            max_item=max_item,
+        )
+        base_num = int(base_id) if base_id and base_id.isdigit() else None
+        let = match.group("let").upper()
+        glued = match.end() < len(line) and line[match.end()].isalpha()
+        if not _item_letter_allowed_10k(base_num, let):
+            if glued and base_id:
+                item_id = base_id
+                content_adjust = -1
+            else:
+                return None, 0
+        elif glued and _glued_title_matches_base(base_id, let, line, match):
+            item_id = base_id or item_id
+            content_adjust = -1
+
+    suffix = line[match.end() :]
+    suffix_match = re.match(r"\s*\(\s*[A-Z]\s*\)\s*", suffix, flags=re.IGNORECASE)
+    if suffix_match:
+        content_adjust += suffix_match.end()
+
+    return item_id, content_adjust
+
+
 def _glued_title_from_line(line: str, match: re.Match[str]) -> str:
     rest = line[match.end() :]
     rest = re.split(r"\bITEM\b|\bPART\b", rest, maxsplit=1, flags=re.IGNORECASE)[0]
@@ -418,15 +504,36 @@ def _part_marker_is_heading(line: str, match: re.Match[str]) -> bool:
     """
     Accept PART markers that look like true headings, not cross-references.
     """
-    if not ITEM_WORD_PATTERN.search(line):
+    prefix = line[: match.start()]
+    if prefix.strip() and not _prefix_is_bullet(prefix):
+        return False
+
+    suffix = line[match.end() :]
+    item_match = ITEM_CANDIDATE_PATTERN.search(suffix)
+    if item_match is not None:
+        between = suffix[: item_match.start()]
+        if "," in between:
+            return False
+        if re.search(r"[A-Za-z0-9]", between):
+            return False
+        return item_match.start() <= 10
+
+    trimmed = suffix.strip()
+    if not trimmed:
         return True
-    item_match = ITEM_CANDIDATE_PATTERN.search(line)
-    if item_match is None:
+    if re.search(r"[\.!?]", trimmed):
         return False
-    between = line[match.end() : item_match.start()]
-    if "," in between:
+    if len(trimmed) > 80:
         return False
-    return (item_match.start() - match.start()) <= 120
+    letters = [ch for ch in trimmed if ch.isalpha()]
+    if not letters:
+        return True
+    upper = sum(1 for ch in letters if ch.isupper())
+    if upper / len(letters) >= 0.8:
+        return True
+    if len(trimmed.split()) <= 4 and not re.search(r"\bsee\b|\brefer\b", trimmed, re.IGNORECASE):
+        return True
+    return False
 
 
 def _pageish_line(line: str) -> bool:
@@ -441,21 +548,91 @@ def _pageish_line(line: str) -> bool:
     )
 
 
-def _looks_like_toc_heading_line(lines: list[str], idx: int, *, max_early: int = 400) -> bool:
-    if idx > max_early:
+def _prefix_is_part_only(prefix: str) -> bool:
+    if not prefix:
         return False
+    return bool(PART_ONLY_PREFIX_PATTERN.match(prefix))
+
+
+def _prefix_part_tail(prefix: str) -> str | None:
+    if not prefix:
+        return None
+    m = PART_PREFIX_TAIL_PATTERN.search(prefix)
+    if not m:
+        return None
+    return m.group("part").upper()
+
+
+def _prefix_looks_like_cross_ref(prefix: str) -> bool:
+    if not prefix or not prefix.strip():
+        return False
+    tail = prefix.strip()[-80:]
+    if CROSS_REF_PREFIX_PATTERN.search(tail):
+        return True
+    return False
+
+
+def _line_has_compound_items(line: str) -> bool:
+    if not line:
+        return False
+    return len(ITEM_MENTION_PATTERN.findall(line)) >= 2
+
+
+def _heading_title_matches_item(
+    item_id: str | None,
+    line: str,
+    match: re.Match[str],
+) -> bool:
+    if not item_id:
+        return False
+    titles = _ITEM_TITLES_10K_NORM.get(item_id)
+    if not titles:
+        return False
+    rest = line[match.end() :].strip(" \t:-.")
+    rest = re.sub(r"^\(\s*[A-Z]\s*\)\s*", "", rest)
+    if not rest:
+        return False
+    norm = _normalize_heading_text(rest)
+    if not norm:
+        return False
+    if norm in titles:
+        return True
+    if len(norm) >= 6:
+        return any(title.startswith(norm) for title in titles)
+    return False
+
+
+def _looks_like_toc_heading_line(
+    lines: list[str],
+    idx: int,
+    *,
+    max_early: int = 400,
+    max_line_len: int = 240,
+) -> bool:
     line = lines[idx]
     if not line:
         return False
-    if TOC_DOT_LEADER_PATTERN.search(line) or re.search(r"\s+\d{1,4}\s*$", line):
+    line_trim = line.strip()
+    if not line_trim:
+        return False
+    # Avoid masking long, sparse-layout lines where TOC entries and real headings can coexist.
+    if len(line_trim) > 2000:
+        return False
+
+    if TOC_DOT_LEADER_PATTERN.search(line):
         return True
+    if len(line_trim) <= max_line_len and re.search(r"\s+\d{1,4}\s*$", line):
+        return True
+
+    if idx > max_early:
+        return False
 
     j = idx + 1
     max_scan = min(len(lines), idx + 5)
     while j < max_scan and lines[j].strip() == "":
         j += 1
     if j < len(lines) and _pageish_line(lines[j]):
-        return len(line.strip()) <= 160
+        return len(line_trim) <= max_line_len
     return False
 
 
@@ -542,6 +719,90 @@ def _find_regime_matches_by_item_id(
         if match is not None:
             matches.append((key, entry, match))
     return matches, missing_date
+
+
+def _infer_part_for_item_id(
+    item_id: str | None,
+    *,
+    filing_date: date | None,
+    period_end: date | None,
+    is_10k: bool,
+) -> str | None:
+    if not is_10k or not item_id:
+        return None
+    matches, missing_date = _find_regime_matches_by_item_id(
+        item_id,
+        filing_date=filing_date,
+        period_end=period_end,
+    )
+    if matches:
+        parts = {
+            (entry.get("part") or key.split(":", 1)[0]).upper()
+            for key, entry, _ in matches
+            if isinstance(entry.get("part") or key, str)
+        }
+        if len(parts) == 1:
+            return next(iter(parts))
+    if missing_date:
+        return _default_part_for_item_id(item_id)
+    return _default_part_for_item_id(item_id)
+
+
+def _item_order_key(
+    item_part: str | None,
+    item_id: str | None,
+    *,
+    filing_date: date | None,
+    period_end: date | None,
+    is_10k: bool,
+) -> tuple[int, int, int, str] | None:
+    if not item_id:
+        return None
+    part = item_part
+    if part is None and is_10k:
+        part = _infer_part_for_item_id(
+            item_id,
+            filing_date=filing_date,
+            period_end=period_end,
+            is_10k=is_10k,
+        )
+    part = part or _default_part_for_item_id(item_id)
+    part_order = {"I": 1, "II": 2, "III": 3, "IV": 4}.get(part or "", 99)
+
+    m = re.match(r"^(?P<num>\d{1,2})(?P<let>[A-Z])?$", item_id)
+    if not m:
+        return None
+    num = int(m.group("num"))
+    let = m.group("let")
+    let_val = (ord(let.upper()) - ord("A") + 1) if let else 0
+    return (part_order, num, let_val, item_id)
+
+
+def _is_plausible_successor(
+    current: "_ItemBoundary",
+    candidate: "_ItemBoundary",
+    *,
+    filing_date: date | None,
+    period_end: date | None,
+    is_10k: bool,
+) -> bool:
+    cur_key = _item_order_key(
+        current.item_part,
+        current.item_id,
+        filing_date=filing_date,
+        period_end=period_end,
+        is_10k=is_10k,
+    )
+    cand_key = _item_order_key(
+        candidate.item_part,
+        candidate.item_id,
+        filing_date=filing_date,
+        period_end=period_end,
+        is_10k=is_10k,
+    )
+    if cur_key is None or cand_key is None:
+        return True
+    return cand_key > cur_key
 
 
 def _annotation_from_match(
@@ -811,8 +1072,16 @@ def _infer_front_matter_end_pos(
     max_item: int,
 ) -> int | None:
     toc_end_pos = _infer_toc_end_pos(body)
+    cover_end_pos = _infer_cover_page_end_pos(body)
+    end_pos = None
     if toc_end_pos is not None:
-        return toc_end_pos
+        end_pos = toc_end_pos
+    if cover_end_pos is not None:
+        end_pos = max(end_pos or 0, cover_end_pos)
+
+    if end_pos is not None:
+        return end_pos
+
     toc_end_line = _infer_toc_end_line_by_titles(lines, lookup, max_item=max_item)
     if toc_end_line is None:
         return None
@@ -822,12 +1091,41 @@ def _infer_front_matter_end_pos(
     return None
 
 
+def _infer_cover_page_end_pos(body: str, *, max_chars: int = 20_000) -> int | None:
+    window = body[:max_chars]
+    if not COVER_PAGE_MARKER_PATTERN.search(window):
+        return None
+    if not FORM_10K_PATTERN.search(window):
+        return None
+
+    cover_matches = [
+        m for m in (COVER_PAGE_MARKER_PATTERN.search(window), FORM_10K_PATTERN.search(window)) if m
+    ]
+    if not cover_matches:
+        return None
+    cover_end = max(m.end() for m in cover_matches)
+
+    anchor = re.compile(
+        r"(?im)^\s*(?:table\s+of\s+contents?\b|part\s+(?:iv|iii|ii|i)\b|item\s+\d+)",
+    )
+    m = anchor.search(body, pos=cover_end)
+    if m is None:
+        return None
+    return m.start()
+
+
 _WRAPPED_TABLE_OF_CONTENTS_PATTERN = re.compile(
     r"(?im)^\s*table(?:\s*\n+\s*|\s+)of(?:\s*\n+\s*|\s+)contents?\b"
 )
 _WRAPPED_PART_PATTERN = re.compile(r"(?im)^(?P<lead>\s*part)\s*\n+\s*(?P<part>iv|iii|ii|i)\b")
 _WRAPPED_ITEM_PATTERN = re.compile(
     r"(?im)^(?P<lead>\s*item)\s*\n+\s*(?P<num>\d+|[ivxlcdm]+)\s*(?P<let>[a-z])?\s*(?P<punc>[\.:])?"
+)
+_WRAPPED_ITEM_LETTER_PATTERN = re.compile(
+    r"(?im)^(?P<lead>\s*item\s+(?P<num>\d+|[ivxlcdm]+))\s*\n+\s*(?P<let>[a-z])\s*(?P<punc>[\.\):\-])?"
+)
+_ITEM_SUFFIX_PAREN_PATTERN = re.compile(
+    r"(?im)^(?P<lead>\s*item\s+\d+[a-z])\s*\((?P<suffix>[a-z])\)\s*(?P<punc>[\.\):\-])?"
 )
 
 
@@ -860,6 +1158,21 @@ def _repair_wrapped_headings(body: str) -> str:
         return f"{lead} {num}{let}{punc}"
 
     body = _WRAPPED_ITEM_PATTERN.sub(_fix_item, body)
+
+    def _fix_split_letter(m: re.Match[str]) -> str:
+        lead = m.group("lead")
+        let = m.group("let").upper()
+        punc = m.group("punc") or ""
+        return f"{lead}{let}{punc}"
+
+    body = _WRAPPED_ITEM_LETTER_PATTERN.sub(_fix_split_letter, body)
+
+    def _fix_suffix_paren(m: re.Match[str]) -> str:
+        lead = m.group("lead")
+        punc = m.group("punc") or ""
+        return f"{lead}{punc}"
+
+    body = _ITEM_SUFFIX_PAREN_PATTERN.sub(_fix_suffix_paren, body)
     return body
 
 
@@ -967,7 +1280,8 @@ def _detect_toc_line_ranges(lines: list[str], *, max_lines: int = 400) -> list[t
                 if m and _normalize_item_id(m.group("num"), m.group("let")) is not None:
                     headingish += 1
                     continue
-                if PART_LINESTART_PATTERN.match(s) is not None:
+                m_part = PART_LINESTART_PATTERN.match(s)
+                if m_part is not None and _part_marker_is_heading(s, m_part):
                     headingish += 1
                     continue
                 if TOC_HEADER_LINE_PATTERN.match(s):
@@ -1090,6 +1404,25 @@ def _remove_pagination(text: str) -> str:
     return cleaned
 
 
+def _trim_trailing_part_marker(text: str) -> str:
+    if not text:
+        return text
+    lines = text.split("\n")
+    while lines and not lines[-1].strip():
+        lines.pop()
+    if not lines:
+        return text
+    last = lines[-1].strip()
+    m = PART_LINESTART_PATTERN.match(last)
+    if m:
+        remainder = re.sub(
+            r"(?i)^\s*PART\s+(?:IV|III|II|I)\b", "", last
+        ).strip(" \t:-")
+        if not remainder:
+            lines.pop()
+    return "\n".join(lines).rstrip()
+
+
 def _detect_heading_style_10k(
     lines: list[str],
     line_starts: list[int],
@@ -1148,7 +1481,7 @@ def _extract_fallback_items_10k(
             continue
 
         m_part = PART_LINESTART_PATTERN.match(line)
-        if m_part is not None:
+        if m_part is not None and _part_marker_is_heading(line, m_part):
             current_part = m_part.group("part").upper()
             continue
 
@@ -1168,6 +1501,8 @@ def _extract_fallback_items_10k(
                 content_start=content_start_abs,
                 item_part=current_part,
                 item_id=item_id,
+                line_index=i,
+                confidence=HEADING_CONF_HIGH,
             )
         )
 
@@ -1180,6 +1515,8 @@ class _ItemBoundary:
     content_start: int
     item_part: str | None
     item_id: str
+    line_index: int
+    confidence: int
 
 
 def _is_empty_item_text(text: str | None) -> bool:
@@ -1268,7 +1605,8 @@ def extract_filing_items(
     )
     # Regime-aware lookup only gates fallback/title-only matching; explicit ITEM headings still pass through.
 
-    body = _normalize_newlines(_strip_leading_header_block(full_text))
+    body = _normalize_newlines(full_text)
+    body = _strip_edgar_metadata(body)
     body = _repair_wrapped_headings(body)
     lines = body.split("\n")
     head = lines[: min(len(lines), 800)]
@@ -1325,6 +1663,12 @@ def extract_filing_items(
             else:
                 toc_end_pos = len(body)
 
+        skip_until_pos: int | None = None
+        if not attempt:
+            candidates = [pos for pos in (front_matter_end_pos, toc_end_pos) if pos is not None]
+            if candidates:
+                skip_until_pos = max(candidates)
+
         scan_sparse_layout = True if attempt else sparse_layout
         boundaries = []
         current_part: str | None = None
@@ -1339,6 +1683,7 @@ def extract_filing_items(
                 continue
 
             events: list[tuple[int, str, str | None, re.Match[str] | None]] = []
+            line_has_item_word = ITEM_WORD_PATTERN.search(line) is not None
 
             if scan_sparse_layout:
                 for m in PART_MARKER_PATTERN.finditer(line):
@@ -1363,45 +1708,32 @@ def extract_filing_items(
                 continue
 
             events.sort(key=lambda t: t[0])
-            last_part_end: int | None = None
+            line_part: str | None = None
+            line_part_end: int | None = None
             is_toc_marker = TOC_MARKER_PATTERN.search(line) is not None
             item_word_count = 0
             if i < 400 or is_toc_marker:
                 item_word_count = len(ITEM_WORD_PATTERN.findall(line))
+            line_toc_like = _looks_like_toc_heading_line(lines, i)
+            compound_line = _line_has_compound_items(line)
             for _, kind, part, m in events:
                 if kind == "part":
                     assert m is not None
-                    current_part = part
-                    last_part_end = m.end()
+                    line_part = part
+                    line_part_end = m.end()
+                    if not line_has_item_word:
+                        current_part = part
                     continue
 
                 assert m is not None
-                item_id = _normalize_item_id(
-                    m.group("num"),
-                    m.group("let"),
+                item_id, content_adjust = _normalize_item_match(
+                    line,
+                    m,
+                    is_10k=is_10k,
                     max_item=max_item_number,
                 )
                 if item_id is None:
                     continue
-                content_adjust = 0
-                if is_10k and m.group("let"):
-                    base_id = _normalize_item_id(
-                        m.group("num"),
-                        None,
-                        max_item=max_item_number,
-                    )
-                    base_num = int(base_id) if base_id and base_id.isdigit() else None
-                    let = m.group("let").upper()
-                    glued = m.end() < len(line) and line[m.end()].isalpha()
-                    if not _item_letter_allowed_10k(base_num, let):
-                        if glued and base_id:
-                            item_id = base_id
-                            content_adjust = -1
-                        else:
-                            continue
-                    elif glued and _glued_title_matches_base(base_id, let, line, m):
-                        item_id = base_id or item_id
-                        content_adjust = -1
 
                 # Basic TOC-line filters (only for reasonably short early lines).
                 if i < 400:
@@ -1411,21 +1743,31 @@ def extract_filing_items(
                 # Some filings embed a repeated "Table of Contents" page header alongside real headings.
                 if is_toc_marker and item_word_count >= 3 and len(line) <= 8_000:
                     continue
-                if _looks_like_toc_heading_line(lines, i):
+                if line_toc_like:
                     continue
 
                 abs_start = line_starts[i] + m.start()
-                if toc_end_pos is not None and abs_start < toc_end_pos:
+                if skip_until_pos is not None and abs_start < skip_until_pos:
                     continue
 
                 # Heuristics to avoid cross-references:
                 prefix = line[: m.start()]
-                is_line_start = prefix.strip() == "" or _prefix_is_bullet(prefix)
-                part_near_item = last_part_end is not None and (m.start() - last_part_end) <= 60
+                is_line_start = (
+                    prefix.strip() == "" or _prefix_is_bullet(prefix) or _prefix_is_part_only(prefix)
+                )
+                prefix_part = _prefix_part_tail(prefix)
+                part_near_item = (
+                    line_part_end is not None and (m.start() - line_part_end) <= 60
+                )
+                if prefix_part:
+                    part_near_item = True
+                if _prefix_looks_like_cross_ref(prefix):
+                    continue
 
                 # Only accept headings that look like real section starts (line-start or 'PART .. ITEM ..').
                 # This intentionally rejects mid-sentence cross-references like "Part II, Item 7 ...".
                 accept = is_line_start or part_near_item
+                midline = False
                 if not accept and scan_sparse_layout:
                     # For filings with very few line breaks, headings often follow sentence punctuation.
                     # Keep this strict elsewhere to avoid mid-sentence cross-reference matches.
@@ -1434,14 +1776,14 @@ def extract_filing_items(
                         k -= 1
                     prev_char = body[k] if k >= 0 else ""
                     if prev_char in ".:;!?":
-                        prev = prefix[-16:].lower()
-                        if not re.search(r"(see|in|under|from|to)\s+$", prev):
+                        if not _prefix_looks_like_cross_ref(prefix):
                             accept = True
+                            midline = True
 
                 if not accept:
                     continue
 
-                if is_line_start and _starts_with_lowercase_title(line, m):
+                if _starts_with_lowercase_title(line, m):
                     continue
 
                 # Ignore "(continued)" headings; they are typically page-header repeats.
@@ -1453,14 +1795,35 @@ def extract_filing_items(
                 if re.match(r"(?i)^\s*[\(\[]\s*[a-z0-9]", suffix):
                     continue
 
+                confidence = HEADING_CONF_HIGH if (is_line_start or part_near_item) else HEADING_CONF_MED
+                if midline:
+                    confidence = (
+                        HEADING_CONF_MED
+                        if (is_10k and _heading_title_matches_item(item_id, line, m))
+                        else HEADING_CONF_LOW
+                    )
+                if compound_line:
+                    confidence = min(confidence, HEADING_CONF_LOW)
+                if _pageish_line(line):
+                    confidence = min(confidence, HEADING_CONF_LOW)
+
+                item_part = current_part
+                part_hint = line_part or prefix_part
+                if part_near_item and part_hint:
+                    item_part = part_hint
+                    if confidence >= HEADING_CONF_HIGH or prefix_part:
+                        current_part = part_hint
+
                 start_abs = line_starts[i] + m.start()
                 content_start_abs = line_starts[i] + m.end() + content_adjust
                 boundaries.append(
                     _ItemBoundary(
                         start=start_abs,
                         content_start=content_start_abs,
-                        item_part=current_part,
+                        item_part=item_part,
                         item_id=item_id,
+                        line_index=i,
+                        confidence=confidence,
                     )
                 )
 
@@ -1486,32 +1849,80 @@ def extract_filing_items(
 
     boundaries.sort(key=lambda b: b.start)
 
-    # De-duplicate per (part, item_id) by preferring the boundary that yields the most content.
-    # This helps when TOCs or page-header repeats leak through and appear before the real section start.
-    best_by_key: dict[tuple[str | None, str], tuple[int, int, _ItemBoundary]] = {}
+    def _boundary_end(idx: int, pool: list[_ItemBoundary]) -> int:
+        end_pos = len(body)
+        for j in range(idx + 1, len(pool)):
+            cand = pool[j]
+            if cand.confidence < HEADING_CONF_HIGH:
+                continue
+            if not _is_plausible_successor(
+                pool[idx],
+                cand,
+                filing_date=filing_date_parsed,
+                period_end=period_end_parsed,
+                is_10k=is_10k,
+            ):
+                continue
+            end_pos = cand.start
+            break
+        if end_pos == len(body) and idx + 1 < len(pool):
+            end_pos = pool[idx + 1].start
+        return end_pos
+
+    boundary_ends = [_boundary_end(idx, boundaries) for idx in range(len(boundaries))]
+
+    # De-duplicate per (part, item_id) by preferring higher-confidence starts,
+    # then longer content, to avoid TOC/page-header leakage.
+    best_by_key: dict[tuple[str | None, str], tuple[int, int, int, _ItemBoundary]] = {}
     for idx, b in enumerate(boundaries):
-        end = boundaries[idx + 1].start if idx + 1 < len(boundaries) else len(body)
+        end = boundary_ends[idx]
         chunk = body[b.content_start : end]
         chunk = chunk.lstrip(" \t:-")
         chunk = _remove_pagination(chunk)
         score = len(chunk.strip())
-        key = (b.item_part, b.item_id)
+        dedup_part = b.item_part
+        if is_10k:
+            inferred_part = _infer_part_for_item_id(
+                b.item_id,
+                filing_date=filing_date_parsed,
+                period_end=period_end_parsed,
+                is_10k=is_10k,
+            )
+            if inferred_part:
+                dedup_part = inferred_part
+        key = (dedup_part, b.item_id)
         prev = best_by_key.get(key)
-        if prev is None or score > prev[0] or (score == prev[0] and b.start > prev[1]):
-            best_by_key[key] = (score, b.start, b)
+        if prev is None:
+            best_by_key[key] = (b.confidence, score, b.start, b)
+            continue
+        if b.confidence > prev[0]:
+            best_by_key[key] = (b.confidence, score, b.start, b)
+            continue
+        if b.confidence == prev[0] and (score > prev[1] or (score == prev[1] and b.start > prev[2])):
+            best_by_key[key] = (b.confidence, score, b.start, b)
 
-    boundaries = [t[2] for t in best_by_key.values()]
+    boundaries = [t[3] for t in best_by_key.values()]
     boundaries.sort(key=lambda b: b.start)
+    boundary_ends = [_boundary_end(idx, boundaries) for idx in range(len(boundaries))]
 
     out_items: list[dict[str, str | None]] = []
     for idx, b in enumerate(boundaries):
-        end = boundaries[idx + 1].start if idx + 1 < len(boundaries) else len(body)
+        end = boundary_ends[idx]
         chunk = body[b.content_start : end]
         chunk = chunk.lstrip(" \t:-")
         chunk = _remove_pagination(chunk)
+        chunk = _trim_trailing_part_marker(chunk)
 
         part = b.item_part
         item_id = b.item_id
+        inferred_part = _infer_part_for_item_id(
+            item_id,
+            filing_date=filing_date_parsed,
+            period_end=period_end_parsed,
+            is_10k=is_10k,
+        )
+        if inferred_part and (part is None or part != inferred_part):
+            part = inferred_part
         item_key = f"{part}:{item_id}" if part else item_id
 
         record = {
