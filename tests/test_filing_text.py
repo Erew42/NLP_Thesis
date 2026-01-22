@@ -604,6 +604,21 @@ Alpha
     assert items == []
 
 
+def test_extract_filing_items_ignores_part_cross_ref_lines():
+    text = """<Header></Header>
+PART I
+ITEM 1. Business
+Alpha
+
+Part III, Item 13.
+
+ITEM 2. Properties
+Bravo
+"""
+    items = extract_filing_items(text, form_type="10-K")
+    assert [it["item"] for it in items][:2] == ["I:1", "I:2"]
+
+
 def test_extract_filing_items_skips_toc_entry_with_page_number_next_line():
     text = """<Header></Header>
 Item 1C.

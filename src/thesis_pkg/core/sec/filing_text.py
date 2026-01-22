@@ -414,6 +414,21 @@ def _prefix_is_bullet(prefix: str) -> bool:
     return bool(re.fullmatch(r"[\s\-\*\u2022\u00b7\u2013\u2014]+", prefix))
 
 
+def _part_marker_is_heading(line: str, match: re.Match[str]) -> bool:
+    """
+    Accept PART markers that look like true headings, not cross-references.
+    """
+    if not ITEM_WORD_PATTERN.search(line):
+        return True
+    item_match = ITEM_CANDIDATE_PATTERN.search(line)
+    if item_match is None:
+        return False
+    between = line[match.end() : item_match.start()]
+    if "," in between:
+        return False
+    return (item_match.start() - match.start()) <= 120
+
+
 def _pageish_line(line: str) -> bool:
     s = line.strip()
     if not s:
@@ -808,7 +823,7 @@ def _infer_front_matter_end_pos(
 
 
 _WRAPPED_TABLE_OF_CONTENTS_PATTERN = re.compile(
-    r"(?im)^\s*table\s*\n+\s*of(?:\s*\n+\s*|\s+)\s*contents?\b"
+    r"(?im)^\s*table(?:\s*\n+\s*|\s+)of(?:\s*\n+\s*|\s+)contents?\b"
 )
 _WRAPPED_PART_PATTERN = re.compile(r"(?im)^(?P<lead>\s*part)\s*\n+\s*(?P<part>iv|iii|ii|i)\b")
 _WRAPPED_ITEM_PATTERN = re.compile(
@@ -1256,7 +1271,7 @@ def extract_filing_items(
     body = _normalize_newlines(_strip_leading_header_block(full_text))
     body = _repair_wrapped_headings(body)
     lines = body.split("\n")
-    head = lines[: min(len(lines), 400)]
+    head = lines[: min(len(lines), 800)]
     head_nonempty_lens = [len(l) for l in head if l]
     max_line_len = max(head_nonempty_lens, default=0)
     avg_line_len = (sum(head_nonempty_lens) / len(head_nonempty_lens)) if head_nonempty_lens else 0.0
@@ -1327,12 +1342,16 @@ def extract_filing_items(
 
             if scan_sparse_layout:
                 for m in PART_MARKER_PATTERN.finditer(line):
+                    if not _part_marker_is_heading(line, m):
+                        continue
                     part = m.group("part").upper()
                     if part in allowed_parts:
                         events.append((m.start(), "part", part, m))
             else:
                 m = PART_LINESTART_PATTERN.match(line)
                 if m is not None:
+                    if not _part_marker_is_heading(line, m):
+                        continue
                     part = m.group("part").upper()
                     if part in allowed_parts:
                         events.append((m.start(), "part", part, m))

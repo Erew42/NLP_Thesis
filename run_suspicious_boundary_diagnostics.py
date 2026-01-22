@@ -34,6 +34,7 @@ DEFAULT_PARQUET_DIR = Path(
 
 DEFAULT_OUT_PATH = Path("results/suspicious_boundaries_v3_pre.csv")
 DEFAULT_REPORT_PATH = Path("results/suspicious_boundaries_report_v3_pre.txt")
+DEFAULT_SAMPLES_DIR = Path("results/Suspicious_Filings_Demo")
 
 
 def _parse_date(value: str | date | datetime | None) -> date | None:
@@ -78,6 +79,10 @@ def _lettered_item(item_id: str) -> bool:
     return bool(re.search(r"\d+[A-Z]$", item_id))
 
 
+def _safe_slug(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_-]+", "_", value).strip("_") or "unknown"
+
+
 def _weak_heading_letter(item_id: str, heading_line: str) -> bool:
     if not _lettered_item(item_id):
         return False
@@ -113,6 +118,63 @@ def _looks_like_cross_ref(prefix: str) -> bool:
     return bool(re.search(r"[A-Za-z0-9]", prefix))
 
 
+def _format_suspicious_items_line(items: list[dict], *, max_items: int = 12) -> str:
+    parts: list[str] = []
+    for entry in items:
+        flags = entry.get("flags") or []
+        item_key = entry.get("item") or "UNKNOWN"
+        if flags:
+            parts.append(f"{item_key} ({','.join(flags)})")
+        else:
+            parts.append(item_key)
+    trimmed = parts[:max_items]
+    remainder = len(parts) - len(trimmed)
+    line = "SUSPICIOUS_ITEMS: " + "; ".join(trimmed)
+    if remainder > 0:
+        line += f"; ... +{remainder} more"
+    return line
+
+
+def _write_sample_file(
+    path: Path,
+    *,
+    filing_meta: dict[str, str],
+    flagged_items: list[dict],
+    full_text: str,
+) -> None:
+    lines: list[str] = []
+    lines.append(_format_suspicious_items_line(flagged_items))
+    lines.append("")
+    lines.append(
+        "FILING_META: "
+        f"doc_id={filing_meta.get('doc_id','')} "
+        f"cik={filing_meta.get('cik','')} "
+        f"accession={filing_meta.get('accession','')} "
+        f"form={filing_meta.get('form_type','')} "
+        f"filing_date={filing_meta.get('filing_date','')} "
+        f"period_end={filing_meta.get('period_end','')}"
+    )
+    lines.append("")
+    lines.append("EXTRACTED_ITEMS:")
+    lines.append("")
+    for entry in flagged_items:
+        item_key = entry.get("item") or "UNKNOWN"
+        flags = entry.get("flags") or []
+        lines.append(f"---- ITEM {item_key} ({','.join(flags)}) ----")
+        heading = entry.get("heading_line") or ""
+        lines.append(f"heading_line: {heading}")
+        lines.append(f"heading_index: {entry.get('heading_index')}")
+        lines.append(f"heading_offset: {entry.get('heading_offset')}")
+        lines.append("")
+        item_text = entry.get("full_text") or ""
+        lines.append(item_text.strip())
+        lines.append("")
+    lines.append("FULL_FILING_TEXT:")
+    lines.append("")
+    lines.append(full_text or "")
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Flag suspicious item boundaries in 10-K extraction output."
@@ -134,6 +196,12 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=DEFAULT_REPORT_PATH,
         help="Text report output path.",
+    )
+    parser.add_argument(
+        "--samples-dir",
+        type=Path,
+        default=DEFAULT_SAMPLES_DIR,
+        help="Directory for per-filing sample text files.",
     )
     parser.add_argument(
         "--batch-size",
@@ -170,6 +238,7 @@ def main() -> None:
 
     args.out_path.parent.mkdir(parents=True, exist_ok=True)
     args.report_path.parent.mkdir(parents=True, exist_ok=True)
+    args.samples_dir.mkdir(parents=True, exist_ok=True)
 
     out_headers = [
         "doc_id",
@@ -246,6 +315,7 @@ def main() -> None:
 
                     lines = text.splitlines()
                     total_items += len(items)
+                    flagged_items_for_doc: list[dict[str, str | int | None]] = []
 
                     for item in items:
                         heading_line = item.get("_heading_line") or ""
@@ -303,6 +373,19 @@ def main() -> None:
                             if heading_idx + 1 < len(lines):
                                 next_line = lines[heading_idx + 1].strip()
 
+                        flagged_items_for_doc.append(
+                            {
+                                "item": item.get("item") or "",
+                                "item_part": item_part or "",
+                                "item_id": item_id,
+                                "flags": flags,
+                                "heading_line": heading_line.strip(),
+                                "heading_index": heading_idx if heading_idx is not None else "",
+                                "heading_offset": heading_offset if heading_offset is not None else "",
+                                "full_text": item.get("full_text") or "",
+                            }
+                        )
+
                         writer.writerow(
                             {
                                 "doc_id": row.get("doc_id") or "",
@@ -339,6 +422,25 @@ def main() -> None:
                                         "next": next_line,
                                     }
                                 )
+
+                    if flagged_items_for_doc:
+                        doc_id = str(row.get("doc_id") or "")
+                        accession = str(row.get("accession_number") or "")
+                        safe_id = _safe_slug(doc_id or accession)
+                        sample_path = args.samples_dir / f"{safe_id}.txt"
+                        _write_sample_file(
+                            sample_path,
+                            filing_meta={
+                                "doc_id": doc_id,
+                                "cik": str(row.get("cik") or ""),
+                                "accession": accession,
+                                "form_type": str(form_type or ""),
+                                "filing_date": filing_date.isoformat() if filing_date else "",
+                                "period_end": period_end.isoformat() if period_end else "",
+                            },
+                            flagged_items=flagged_items_for_doc,
+                            full_text=text,
+                        )
 
     lines_out: list[str] = []
     lines_out.append("Suspicious boundary diagnostics (v3)")
