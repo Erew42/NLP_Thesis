@@ -34,6 +34,66 @@ INTERNAL_PART_PATTERN = re.compile(r"(?m)^[ \t]*PART[ \t]+[IVX]+\b", re.IGNORECA
 INTERNAL_ITEM_PATTERN = re.compile(r"(?m)^[ \t]*ITEM[ \t]+\d+[A-Z]?\b", re.IGNORECASE)
 INTERNAL_HEADING_IGNORE_CHARS = 200
 INTERNAL_HEADING_CONTEXT_CHARS = 150
+EMBEDDED_ITEM_PATTERN = re.compile(
+    r"(?i)^[ \t]*ITEM[ \t]+(?P<num>\d{1,2})(?P<let>[A-Z])?\b"
+)
+# Corpus scan shows occasional ITEM I-style tokens; accept roman numerals for embedded checks.
+EMBEDDED_ITEM_ROMAN_PATTERN = re.compile(r"(?i)^[ \t]*ITEM[ \t]+(?P<roman>[IVXLCDM]+)\b")
+EMBEDDED_PART_PATTERN = re.compile(
+    r"(?i)^[ \t]*PART[ \t]+(?P<roman>[IVX]+)[ \t]*[.\-\u2013\u2014:]?[ \t]*$"
+)
+EMBEDDED_CONTINUATION_PATTERN = re.compile(r"(?i)\b(?:continued|cont\.|concluded)\b")
+EMBEDDED_CROSS_REF_PATTERN = re.compile(
+    r"(?i)\b(?:see|refer to|refer back to|as discussed|as described|as set forth|as noted|"
+    r"included in|incorporated by reference|incorporated herein by reference|of this form|"
+    r"in this form|set forth in|pursuant to|under|in accordance with)\b"
+)
+EMBEDDED_RESERVED_PATTERN = re.compile(r"(?i)\[\s*reserved\s*\]")
+EMBEDDED_TOC_DOT_LEADER_PATTERN = re.compile(r"(?:\.{8,}|(?:\.\s*){8,})")
+EMBEDDED_TOC_TRAILING_PAGE_PATTERN = re.compile(r"\s+\d{1,4}\s*$")
+EMBEDDED_TOC_HEADER_PATTERN = re.compile(r"(?i)\b(?:table\s+of\s+contents?|index)\b")
+EMBEDDED_TOC_WINDOW_HEADER_PATTERN = re.compile(r"(?i)^\s*(?:table\s+of\s+contents?|index)\b")
+EMBEDDED_TOC_WINDOW_LINES = 150
+EMBEDDED_TOC_PART_ITEM_PATTERN = re.compile(
+    r"(?i)^\s*PART\s+(?P<part>[IVX]+)\s*(?:[,/\-:;]\s*|\s+)?ITEM\s+"
+    r"(?P<num>\d{1,2})(?P<let>[A-Z])?\b"
+)
+EMBEDDED_TOC_ITEM_ONLY_PATTERN = re.compile(r"(?i)^\s*ITEM\s+\d{1,2}[A-Z]?\b")
+EMBEDDED_SEPARATOR_PATTERN = re.compile(r"^[\s\-=*]{3,}$")
+EMBEDDED_SELF_HIT_MAX_CHAR = 10
+EMBEDDED_MAX_HITS = 3
+EMBEDDED_TOC_START_MISFIRE_MAX_CHAR = 3000
+EMBEDDED_IGNORE_CLASSIFICATIONS = {"same_item_continuation"}
+# Warn-only to avoid false positives from TOC rows and cross-refs inside items.
+EMBEDDED_WARN_CLASSIFICATIONS = {
+    "same_item_duplicate",
+    "toc_row",
+    "cross_ref_line",
+    "part_restart_unconfirmed",
+}
+EMBEDDED_FAIL_CLASSIFICATIONS = {"true_overlap", "part_restart", "toc_start_misfire"}
+ROMAN_ITEM_ID_MAP = {
+    "I": "1",
+    "II": "2",
+    "III": "3",
+    "IV": "4",
+    "V": "5",
+    "VI": "6",
+    "VII": "7",
+    "VIII": "8",
+    "IX": "9",
+    "X": "10",
+    "XI": "11",
+    "XII": "12",
+    "XIII": "13",
+    "XIV": "14",
+    "XV": "15",
+    "XVI": "16",
+    "XVII": "17",
+    "XVIII": "18",
+    "XIX": "19",
+    "XX": "20",
+}
 PREFIX_KIND_BLANK = "blank"
 PREFIX_KIND_PART_ONLY = "part_only"
 PREFIX_KIND_BULLET = "bullet"
@@ -73,6 +133,17 @@ class InternalHeadingLeak:
     position: int
     match_text: str
     context: str
+
+
+@dataclass(frozen=True)
+class EmbeddedHeadingHit:
+    kind: str
+    classification: str
+    item_id: str | None
+    part: str | None
+    line_idx: int
+    char_pos: int
+    snippet: str
 
 
 def _parse_date(value: str | date | datetime | None) -> date | None:
@@ -212,6 +283,443 @@ def _split_flags(flag_field: str | None) -> list[str]:
     return [flag.strip() for flag in flag_field.split(";") if flag.strip()]
 
 
+def _normalize_item_id(value: str | None) -> str | None:
+    if not value:
+        return None
+    cleaned = re.sub(r"\s+", "", value).upper()
+    return cleaned or None
+
+
+def _normalize_part(value: str | None) -> str | None:
+    if not value:
+        return None
+    part = value.strip().upper()
+    if part in {"I", "II", "III", "IV"}:
+        return part
+    return None
+
+
+def _item_id_to_int(item_id: str | None) -> int | None:
+    if not item_id:
+        return None
+    cleaned = re.sub(r"\s+", "", item_id).upper()
+    if cleaned in ROMAN_ITEM_ID_MAP:
+        return int(ROMAN_ITEM_ID_MAP[cleaned])
+    match = re.match(r"(\d+)", cleaned)
+    if match:
+        return int(match.group(1))
+    return None
+
+
+def _is_late_item(current_item_id: str | None, current_part: str | None) -> bool:
+    if current_part and current_part.upper() == "IV":
+        return True
+    item_num = _item_id_to_int(current_item_id)
+    return item_num is not None and item_num >= 10
+
+
+def _item_id_from_match(match: re.Match[str]) -> str | None:
+    num = match.groupdict().get("num")
+    let = match.groupdict().get("let")
+    roman = match.groupdict().get("roman")
+    if num:
+        return f"{num}{(let or '')}".upper()
+    if roman:
+        mapped = ROMAN_ITEM_ID_MAP.get(roman.upper())
+        if mapped:
+            return mapped
+    return None
+
+
+def _leading_ws_len(line: str) -> int:
+    return len(line) - len(line.lstrip(" \t"))
+
+
+def _line_snippet(line: str, *, max_len: int = 200) -> str:
+    snippet = line.strip()
+    if len(snippet) > max_len:
+        return snippet[: max_len - 3].rstrip() + "..."
+    return snippet
+
+
+# Heuristics below guard against TOC/index artifacts and line-start cross-references:
+# - TOC windows keep index-style PART/ITEM rows from being treated as true overlaps.
+# - Index-style detection catches comma/column TOC rows without dot leaders.
+# - Line-start cross-ref checks prevent "SEE/REFER TO" headings from passing prose tests.
+# - toc_start_misfire flags early PART I / ITEM 1-2 hits inside late items.
+
+
+def _title_like_suffix(suffix: str) -> bool:
+    if not suffix:
+        return False
+    if re.search(r"[.!?]\s*$", suffix):
+        return False
+    words = re.findall(r"[A-Za-z][A-Za-z'&-]*", suffix)
+    if len(words) < 2:
+        return False
+    if suffix.isupper():
+        return True
+    uppercase = sum(1 for word in words if word[0].isupper())
+    return uppercase / max(1, len(words)) >= 0.6
+
+
+def _toc_index_style_line(line: str) -> bool:
+    if not line or not line.strip():
+        return False
+    match = EMBEDDED_TOC_PART_ITEM_PATTERN.match(line) or EMBEDDED_TOC_ITEM_ONLY_PATTERN.match(line)
+    if not match:
+        return False
+    suffix = line[match.end() :].strip()
+    if not suffix:
+        return False
+    if EMBEDDED_TOC_DOT_LEADER_PATTERN.search(line) or EMBEDDED_TOC_TRAILING_PAGE_PATTERN.search(line):
+        return True
+    if re.search(r"(?i)\bPART\s+[IVX]+\s*,\s*ITEM\b", line):
+        return True
+    if re.search(r"(?i)\bITEM\s+\d{1,2}[A-Z]?\s*,", line):
+        return True
+    if re.search(r"\s{2,}", line[match.end() :]):
+        return True
+    return _title_like_suffix(suffix)
+
+
+def _toc_candidate_line(line: str) -> bool:
+    if not line or not line.strip():
+        return False
+    if TOC_DOT_LEADER_PATTERN.search(line) or EMBEDDED_TOC_DOT_LEADER_PATTERN.search(line):
+        return True
+    if EMBEDDED_TOC_TRAILING_PAGE_PATTERN.search(line):
+        return bool(re.search(r"\s{2,}\d{1,4}\s*$", line))
+    return False
+
+
+def _toc_header_nearby(lines: list[str], idx: int, *, window: int = 5) -> bool:
+    start = max(0, idx - window)
+    end = min(len(lines), idx + window + 1)
+    for j in range(start, end):
+        if EMBEDDED_TOC_HEADER_PATTERN.search(lines[j]):
+            return True
+    return False
+
+
+def _toc_clustered(lines: list[str], idx: int) -> bool:
+    start = max(0, idx - 3)
+    end = min(len(lines), idx + 4)
+    candidate_count = 0
+    for j in range(start, end):
+        if _toc_entry_like(lines[j]):
+            candidate_count += 1
+            if candidate_count >= 2:
+                return True
+    return False
+
+
+def _toc_entry_like(line: str) -> bool:
+    return _toc_candidate_line(line) or _toc_index_style_line(line)
+
+
+def _toc_like_line(
+    lines: list[str],
+    idx: int,
+    cache: dict[tuple[int, bool], bool],
+    toc_window_flags: list[bool] | None = None,
+) -> bool:
+    cache_key = (idx, toc_window_flags is not None)
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+    line = lines[idx]
+    if not line or not line.strip():
+        cache[cache_key] = False
+        return False
+    if _toc_entry_like(line):
+        cache[cache_key] = True
+        return True
+    if toc_window_flags and toc_window_flags[idx]:
+        if _line_starts_item(line) or EMBEDDED_PART_PATTERN.match(line) or EMBEDDED_TOC_PART_ITEM_PATTERN.match(line):
+            cache[cache_key] = True
+            return True
+    if EMBEDDED_TOC_TRAILING_PAGE_PATTERN.search(line) and (
+        _toc_header_nearby(lines, idx) or _toc_clustered(lines, idx)
+    ):
+        cache[cache_key] = True
+        return True
+    cache[cache_key] = False
+    return False
+
+
+def _cross_ref_like(suffix: str, *, next_line: str | None = None) -> bool:
+    if suffix:
+        probe = suffix.strip()
+        if probe:
+            probe = probe[:120]
+            if EMBEDDED_CROSS_REF_PATTERN.search(probe) or EMBEDDED_TOC_HEADER_PATTERN.search(probe):
+                return True
+    if next_line:
+        next_trim = next_line.strip()
+        if next_trim and (
+            EMBEDDED_CROSS_REF_PATTERN.search(next_trim)
+            or EMBEDDED_TOC_HEADER_PATTERN.search(next_trim)
+        ):
+            return True
+    return False
+
+
+def _toc_window_flags(lines: list[str], *, window: int = EMBEDDED_TOC_WINDOW_LINES) -> list[bool]:
+    flags = [False] * len(lines)
+    remaining = 0
+    for idx, line in enumerate(lines):
+        if EMBEDDED_TOC_WINDOW_HEADER_PATTERN.search(line):
+            remaining = window
+        if remaining > 0:
+            flags[idx] = True
+            remaining -= 1
+    return flags
+
+
+def _prose_like_line(line: str, *, toc_like: bool) -> bool:
+    if toc_like:
+        return False
+    stripped = line.strip()
+    if not stripped:
+        return False
+    if EMBEDDED_SEPARATOR_PATTERN.match(stripped):
+        return False
+    letters = re.findall(r"[A-Za-z]", stripped)
+    alpha_count = len(letters)
+    if alpha_count == 0:
+        return False
+    has_lower = any(ch.islower() for ch in letters)
+    if not has_lower and alpha_count < 30:
+        return False
+    if alpha_count >= 20 and has_lower:
+        return True
+    return bool(re.search(r"[.!?]\s*$", stripped))
+
+
+def _confirm_prose_after(
+    lines: list[str],
+    start_idx: int,
+    toc_cache: dict[tuple[int, bool], bool],
+    toc_window_flags: list[bool] | None = None,
+) -> bool:
+    non_empty = 0
+    for j in range(start_idx + 1, len(lines)):
+        if not lines[j].strip():
+            continue
+        non_empty += 1
+        if non_empty > 10:
+            break
+        if non_empty >= 3 and _prose_like_line(
+            lines[j], toc_like=_toc_like_line(lines, j, toc_cache, toc_window_flags)
+        ):
+            return True
+    return False
+
+
+def _line_starts_item(line: str) -> bool:
+    return bool(
+        EMBEDDED_ITEM_PATTERN.match(line)
+        or EMBEDDED_ITEM_ROMAN_PATTERN.match(line)
+        or EMBEDDED_TOC_PART_ITEM_PATTERN.match(line)
+    )
+
+
+def _confirm_part_restart(lines: list[str], start_idx: int) -> bool:
+    non_empty = 0
+    for j in range(start_idx + 1, len(lines)):
+        if not lines[j].strip():
+            continue
+        non_empty += 1
+        if non_empty > 8:
+            break
+        if _line_starts_item(lines[j]):
+            return True
+    return False
+
+
+def _summarize_embedded_hits(
+    hits: list[EmbeddedHeadingHit],
+) -> tuple[
+    bool,
+    bool,
+    EmbeddedHeadingHit | None,
+    EmbeddedHeadingHit | None,
+    EmbeddedHeadingHit | None,
+    Counter[str],
+]:
+    warn = False
+    fail = False
+    first_hit: EmbeddedHeadingHit | None = hits[0] if hits else None
+    first_flagged: EmbeddedHeadingHit | None = None
+    first_fail: EmbeddedHeadingHit | None = None
+    counts: Counter[str] = Counter()
+    for hit in hits:
+        if hit.classification in EMBEDDED_WARN_CLASSIFICATIONS:
+            warn = True
+        if hit.classification in EMBEDDED_FAIL_CLASSIFICATIONS:
+            fail = True
+        if hit.classification in EMBEDDED_WARN_CLASSIFICATIONS | EMBEDDED_FAIL_CLASSIFICATIONS:
+            counts[hit.classification] += 1
+            if first_flagged is None:
+                first_flagged = hit
+        if hit.classification in EMBEDDED_FAIL_CLASSIFICATIONS and first_fail is None:
+            first_fail = hit
+    return warn, fail, first_hit, first_flagged, first_fail, counts
+
+
+def _find_embedded_heading_hits(
+    full_text: str,
+    *,
+    current_item_id: str,
+    current_part: str | None,
+    max_hits: int = EMBEDDED_MAX_HITS,
+) -> list[EmbeddedHeadingHit]:
+    if not full_text:
+        return []
+    lines = full_text.splitlines(keepends=True)
+    lines_noeol = [line.rstrip("\r\n") for line in lines]
+    current_item = _normalize_item_id(current_item_id)
+    current_part_norm = _normalize_part(current_part)
+    toc_window_flags = _toc_window_flags(lines_noeol)
+    is_late_item = _is_late_item(current_item, current_part_norm)
+    hits: list[EmbeddedHeadingHit] = []
+    non_ignored_hits = 0
+    toc_cache: dict[tuple[int, bool], bool] = {}
+
+    offset = 0
+    for idx, (line, line_noeol) in enumerate(zip(lines, lines_noeol)):
+        if not line_noeol.strip():
+            offset += len(line)
+            continue
+
+        part_item_match = EMBEDDED_TOC_PART_ITEM_PATTERN.match(line_noeol)
+        item_match = EMBEDDED_ITEM_PATTERN.match(line_noeol)
+        roman_match = None
+        part_match = None
+        if not part_item_match and not item_match:
+            roman_match = EMBEDDED_ITEM_ROMAN_PATTERN.match(line_noeol)
+            if not roman_match:
+                part_match = EMBEDDED_PART_PATTERN.match(line_noeol)
+
+        if not part_item_match and not item_match and not roman_match and not part_match:
+            offset += len(line)
+            continue
+
+        # Char offsets are computed against raw full_text (splitlines keepends), no normalization.
+        char_pos = offset + _leading_ws_len(line_noeol)
+        snippet = _line_snippet(line_noeol)
+
+        if part_item_match or item_match or roman_match:
+            match = part_item_match or item_match or roman_match
+            embedded_item_id = _item_id_from_match(match)
+            if not embedded_item_id:
+                offset += len(line)
+                continue
+            embedded_item_id = embedded_item_id.upper()
+            embedded_part = None
+            if part_item_match:
+                embedded_part = part_item_match.group("part").upper()
+            if (
+                current_item
+                and embedded_item_id == current_item
+                and char_pos <= EMBEDDED_SELF_HIT_MAX_CHAR
+            ):
+                offset += len(line)
+                continue
+
+            if current_item and embedded_item_id == current_item:
+                if EMBEDDED_CONTINUATION_PATTERN.search(line_noeol):
+                    classification = "same_item_continuation"
+                else:
+                    classification = "same_item_duplicate"
+            else:
+                toc_like = _toc_like_line(lines_noeol, idx, toc_cache)
+                toc_window_hit = toc_window_flags[idx]
+                suffix = line_noeol[match.end() :].strip(" \t:-.")
+                _, next_line = _non_empty_line(lines_noeol, idx + 1, max_scan=3)
+                strong_prose = _confirm_prose_after(lines_noeol, idx, toc_cache, toc_window_flags)
+                cross_ref = (not toc_like) and _cross_ref_like(suffix, next_line=next_line)
+
+                if toc_window_hit and not strong_prose:
+                    classification = "toc_row"
+                elif toc_like:
+                    classification = "toc_row"
+                elif cross_ref:
+                    classification = "cross_ref_line"
+                elif EMBEDDED_RESERVED_PATTERN.search(line_noeol):
+                    classification = "true_overlap"
+                elif strong_prose:
+                    classification = "true_overlap"
+                else:
+                    classification = "toc_row" if _toc_entry_like(line_noeol) else "cross_ref_line"
+
+            if (
+                not hits
+                and is_late_item
+                and char_pos <= EMBEDDED_TOC_START_MISFIRE_MAX_CHAR
+                and (
+                    (embedded_part or "").upper() == "I"
+                    or (_item_id_to_int(embedded_item_id) in {1, 2})
+                )
+            ):
+                classification = "toc_start_misfire"
+
+            hit = EmbeddedHeadingHit(
+                kind="item",
+                classification=classification,
+                item_id=embedded_item_id,
+                part=embedded_part,
+                line_idx=idx,
+                char_pos=char_pos,
+                snippet=snippet,
+            )
+        else:
+            embedded_part = part_match.group("roman").upper()
+            toc_like = _toc_like_line(lines_noeol, idx, toc_cache)
+            toc_window_hit = toc_window_flags[idx]
+            strong_prose = _confirm_prose_after(lines_noeol, idx, toc_cache, toc_window_flags)
+            if toc_window_hit and not strong_prose:
+                classification = "toc_row"
+            elif toc_like:
+                classification = "toc_row"
+            elif _confirm_part_restart(lines_noeol, idx):
+                if current_part_norm and embedded_part != current_part_norm:
+                    classification = "part_restart"
+                else:
+                    classification = "part_restart_unconfirmed"
+            else:
+                classification = "toc_row" if _toc_entry_like(line_noeol) else "part_restart_unconfirmed"
+
+            if (
+                not hits
+                and is_late_item
+                and char_pos <= EMBEDDED_TOC_START_MISFIRE_MAX_CHAR
+                and embedded_part == "I"
+            ):
+                classification = "toc_start_misfire"
+
+            hit = EmbeddedHeadingHit(
+                kind="part",
+                classification=classification,
+                item_id=None,
+                part=embedded_part,
+                line_idx=idx,
+                char_pos=char_pos,
+                snippet=snippet,
+            )
+
+        hits.append(hit)
+        if hit.classification not in EMBEDDED_IGNORE_CLASSIFICATIONS:
+            non_ignored_hits += 1
+            if non_ignored_hits >= max_hits:
+                break
+
+        offset += len(line)
+
+    return hits
+
+
 def _normalize_body_lines(text: str) -> list[str]:
     body = _repair_wrapped_headings(_strip_edgar_metadata(_normalize_newlines(text)))
     return body.splitlines()
@@ -298,6 +806,29 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
         "prev_line",
         "next_line",
         "flags",
+        "embedded_heading_warn",
+        "embedded_heading_fail",
+        "first_hit_kind",
+        "first_hit_classification",
+        "first_hit_item_id",
+        "first_hit_part",
+        "first_hit_line_idx",
+        "first_hit_char_pos",
+        "first_hit_snippet",
+        "first_fail_kind",
+        "first_fail_classification",
+        "first_fail_item_id",
+        "first_fail_part",
+        "first_fail_line_idx",
+        "first_fail_char_pos",
+        "first_fail_snippet",
+        "first_embedded_kind",
+        "first_embedded_classification",
+        "first_embedded_item_id",
+        "first_embedded_part",
+        "first_embedded_line_idx",
+        "first_embedded_char_pos",
+        "first_embedded_snippet",
         "heading_line_raw",
         "internal_heading_leak",
         "leak_pos",
@@ -318,6 +849,10 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
     internal_leak_by_form: Counter[str] = Counter()
     internal_leak_by_item: Counter[str] = Counter()
     internal_leak_examples: list[dict[str, str | int]] = []
+    embedded_warn_total = 0
+    embedded_fail_total = 0
+    embedded_classification_counts: Counter[str] = Counter()
+    embedded_fail_examples: list[dict[str, str | int]] = []
 
     want_cols = [
         "doc_id",
@@ -389,6 +924,9 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
                         heading_offset = item.get("_heading_offset")
                         item_id = str(item.get("item_id") or "")
                         item_part = item.get("item_part")
+                        current_part_norm = _normalize_part(item_part) or _normalize_part(
+                            _expected_part_for_item(item)
+                        )
                         (
                             prefix_text,
                             prefix_kind,
@@ -405,6 +943,39 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
                         leak_context = ""
                         leak_next_item_id = ""
                         leak_next_heading = ""
+                        embedded_hits = _find_embedded_heading_hits(
+                            item.get("full_text") or "",
+                            current_item_id=item_id,
+                            current_part=current_part_norm,
+                        )
+                        (
+                            embedded_warn,
+                            embedded_fail,
+                            embedded_first_hit,
+                            embedded_first_flagged,
+                            embedded_first_fail,
+                            embedded_counts,
+                        ) = _summarize_embedded_hits(embedded_hits)
+                        if embedded_warn:
+                            embedded_warn_total += 1
+                        if embedded_fail:
+                            embedded_fail_total += 1
+                        embedded_classification_counts.update(embedded_counts)
+                        for hit in embedded_hits:
+                            if hit.classification in EMBEDDED_FAIL_CLASSIFICATIONS:
+                                embedded_fail_examples.append(
+                                    {
+                                        "doc_id": doc_id,
+                                        "accession": accession,
+                                        "form_type": form_label,
+                                        "item_id": item_id,
+                                        "item_part": str(item_part or ""),
+                                        "classification": hit.classification,
+                                        "kind": hit.kind,
+                                        "char_pos": hit.char_pos,
+                                        "snippet": hit.snippet,
+                                    }
+                                )
 
                         flags: list[str] = []
                         if heading_idx is None or heading_idx < 0:
@@ -471,6 +1042,11 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
                                 }
                             )
 
+                        if embedded_warn:
+                            flags.append("embedded_heading_warn")
+                        if embedded_fail:
+                            flags.append("embedded_heading_fail")
+
                         if not flags:
                             continue
 
@@ -529,6 +1105,55 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
                                 "prev_line": prev_line,
                                 "next_line": next_line,
                                 "flags": ";".join(flags),
+                                "embedded_heading_warn": embedded_warn,
+                                "embedded_heading_fail": embedded_fail,
+                                "first_hit_kind": embedded_first_hit.kind if embedded_first_hit else "",
+                                "first_hit_classification": (
+                                    embedded_first_hit.classification if embedded_first_hit else ""
+                                ),
+                                "first_hit_item_id": embedded_first_hit.item_id if embedded_first_hit else "",
+                                "first_hit_part": embedded_first_hit.part if embedded_first_hit else "",
+                                "first_hit_line_idx": (
+                                    embedded_first_hit.line_idx if embedded_first_hit else ""
+                                ),
+                                "first_hit_char_pos": (
+                                    embedded_first_hit.char_pos if embedded_first_hit else ""
+                                ),
+                                "first_hit_snippet": embedded_first_hit.snippet if embedded_first_hit else "",
+                                "first_fail_kind": embedded_first_fail.kind if embedded_first_fail else "",
+                                "first_fail_classification": (
+                                    embedded_first_fail.classification if embedded_first_fail else ""
+                                ),
+                                "first_fail_item_id": embedded_first_fail.item_id if embedded_first_fail else "",
+                                "first_fail_part": embedded_first_fail.part if embedded_first_fail else "",
+                                "first_fail_line_idx": (
+                                    embedded_first_fail.line_idx if embedded_first_fail else ""
+                                ),
+                                "first_fail_char_pos": (
+                                    embedded_first_fail.char_pos if embedded_first_fail else ""
+                                ),
+                                "first_fail_snippet": embedded_first_fail.snippet if embedded_first_fail else "",
+                                "first_embedded_kind": (
+                                    embedded_first_flagged.kind if embedded_first_flagged else ""
+                                ),
+                                "first_embedded_classification": (
+                                    embedded_first_flagged.classification if embedded_first_flagged else ""
+                                ),
+                                "first_embedded_item_id": (
+                                    embedded_first_flagged.item_id if embedded_first_flagged else ""
+                                ),
+                                "first_embedded_part": (
+                                    embedded_first_flagged.part if embedded_first_flagged else ""
+                                ),
+                                "first_embedded_line_idx": (
+                                    embedded_first_flagged.line_idx if embedded_first_flagged else ""
+                                ),
+                                "first_embedded_char_pos": (
+                                    embedded_first_flagged.char_pos if embedded_first_flagged else ""
+                                ),
+                                "first_embedded_snippet": (
+                                    embedded_first_flagged.snippet if embedded_first_flagged else ""
+                                ),
                                 "heading_line_raw": heading_line_raw.strip(),
                                 "internal_heading_leak": "1" if leak_info is not None else "",
                                 "leak_pos": leak_pos,
@@ -587,6 +1212,37 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
     lines_out.append("Flags (counts):")
     for flag, count in flags_count.most_common():
         lines_out.append(f"  {flag}: {count}")
+    lines_out.append("")
+    lines_out.append("Embedded heading summary:")
+    lines_out.append(f"  embedded_heading_warn: {embedded_warn_total}")
+    lines_out.append(f"  embedded_heading_fail: {embedded_fail_total}")
+    if embedded_classification_counts:
+        lines_out.append("  By classification (hits):")
+        for classification, count in embedded_classification_counts.most_common():
+            lines_out.append(f"    {classification}: {count}")
+    else:
+        lines_out.append("  By classification (hits): (none)")
+    lines_out.append("")
+    lines_out.append("Top embedded heading fails (earliest char_pos):")
+    top_embedded_fails = sorted(
+        embedded_fail_examples,
+        key=lambda entry: entry.get("char_pos", 0),
+    )[: config.max_examples]
+    if top_embedded_fails:
+        for entry in top_embedded_fails:
+            part = entry.get("item_part") or ""
+            item_id = entry.get("item_id") or ""
+            item_key = f"{part}:{item_id}".strip(":") if part or item_id else "UNKNOWN"
+            snippet = str(entry.get("snippet") or "").replace("\"", "'")
+            lines_out.append(
+                "  "
+                f"doc_id={entry.get('doc_id','')} accession={entry.get('accession','')} "
+                f"form={entry.get('form_type','')} item={item_key} "
+                f"kind={entry.get('kind','')} class={entry.get('classification','')} "
+                f"char_pos={entry.get('char_pos','')} snippet=\"{snippet}\""
+            )
+    else:
+        lines_out.append("  (no embedded heading fails detected)")
     lines_out.append("")
     lines_out.append("Examples by flag:")
     if examples_by_flag:
@@ -721,6 +1377,10 @@ def run_boundary_regression(config: RegressionConfig) -> dict[str, int]:
     total_flagged = 0
     total_part_only_prefix = 0
     seen_doc_ids: set[str] = set()
+    embedded_warn_total = 0
+    embedded_fail_total = 0
+    embedded_classification_counts: Counter[str] = Counter()
+    embedded_fail_examples: list[dict[str, str | int]] = []
 
     want_cols = [
         "doc_id",
@@ -787,6 +1447,9 @@ def run_boundary_regression(config: RegressionConfig) -> dict[str, int]:
                     heading_offset = item.get("_heading_offset")
                     item_id = str(item.get("item_id") or "")
                     item_part = item.get("item_part")
+                    current_part_norm = _normalize_part(item_part) or _normalize_part(
+                        _expected_part_for_item(item)
+                    )
                     (
                         prefix_text,
                         prefix_kind,
@@ -798,6 +1461,37 @@ def run_boundary_regression(config: RegressionConfig) -> dict[str, int]:
                         total_part_only_prefix += 1
 
                     leak_info = _find_internal_heading_leak(item.get("full_text") or "")
+                    embedded_hits = _find_embedded_heading_hits(
+                        item.get("full_text") or "",
+                        current_item_id=item_id,
+                        current_part=current_part_norm,
+                    )
+                    (
+                        embedded_warn,
+                        embedded_fail,
+                        _embedded_first_hit,
+                        _embedded_first_flagged,
+                        _embedded_first_fail,
+                        embedded_counts,
+                    ) = _summarize_embedded_hits(embedded_hits)
+                    if embedded_warn:
+                        embedded_warn_total += 1
+                    if embedded_fail:
+                        embedded_fail_total += 1
+                    embedded_classification_counts.update(embedded_counts)
+                    for hit in embedded_hits:
+                        if hit.classification in EMBEDDED_FAIL_CLASSIFICATIONS:
+                            embedded_fail_examples.append(
+                                {
+                                    "doc_id": doc_id,
+                                    "item_id": item_id,
+                                    "item_part": str(item_part or ""),
+                                    "classification": hit.classification,
+                                    "kind": hit.kind,
+                                    "char_pos": hit.char_pos,
+                                    "snippet": hit.snippet,
+                                }
+                            )
 
                     flags: list[str] = []
                     if heading_idx is None or heading_idx < 0:
@@ -834,6 +1528,11 @@ def run_boundary_regression(config: RegressionConfig) -> dict[str, int]:
 
                     if leak_info is not None:
                         flags.append("internal_heading_leak")
+
+                    if embedded_warn:
+                        flags.append("embedded_heading_warn")
+                    if embedded_fail:
+                        flags.append("embedded_heading_fail")
 
                     if not flags:
                         continue
@@ -873,6 +1572,33 @@ def run_boundary_regression(config: RegressionConfig) -> dict[str, int]:
         lines_out.append(
             f"  {flag}: {before_counts.get(flag, 0)} -> {after_counts.get(flag, 0)}"
         )
+    lines_out.append("")
+    lines_out.append("Embedded heading summary (after scan):")
+    lines_out.append(f"  embedded_heading_warn: {embedded_warn_total}")
+    lines_out.append(f"  embedded_heading_fail: {embedded_fail_total}")
+    if embedded_classification_counts:
+        lines_out.append("  By classification (hits):")
+        for classification, count in embedded_classification_counts.most_common():
+            lines_out.append(f"    {classification}: {count}")
+    else:
+        lines_out.append("  By classification (hits): (none)")
+    top_embedded_fails = sorted(
+        embedded_fail_examples,
+        key=lambda entry: entry.get("char_pos", 0),
+    )[: config.sample_per_flag]
+    if top_embedded_fails:
+        lines_out.append("  Earliest embedded heading fails:")
+        for entry in top_embedded_fails:
+            part = entry.get("item_part") or ""
+            item_id = entry.get("item_id") or ""
+            item_key = f"{part}:{item_id}".strip(":") if part or item_id else "UNKNOWN"
+            snippet = str(entry.get("snippet") or "").replace("\"", "'")
+            lines_out.append(
+                "    "
+                f"doc_id={entry.get('doc_id','')} item={item_key} "
+                f"kind={entry.get('kind','')} class={entry.get('classification','')} "
+                f"char_pos={entry.get('char_pos','')} snippet=\"{snippet}\""
+            )
     lines_out.append("")
     lines_out.append("Remaining examples by flag:")
     if examples_by_flag:

@@ -16,3 +16,17 @@ visualizations/
 visualize_*.py
 results/
 reviews/
+
+# Repo-root files (ignore all except README.md)
+/AGENTS.md
+/agents_spec_nlp_thesis.md
+/create_smaller sample.py
+/pyproject.toml
+/review_suspicious_samples.py
+/run_filing_text.py
+/run_impossible_by_regime_diagnostics.py
+/run_item_regime_benchmark.py
+/run_item_regime_comparison_v3.py
+/run_suspicious_boundary_diagnostics.py
+/run_suspicious_boundary_regression_v5.py
+/suspicious_root_causes_examples.txt
