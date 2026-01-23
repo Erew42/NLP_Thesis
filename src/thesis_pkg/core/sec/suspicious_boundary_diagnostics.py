@@ -19,6 +19,9 @@ from thesis_pkg.core.sec.filing_text import (
     _default_part_for_item_id,
     _looks_like_toc_heading_line,
     _normalize_newlines,
+    _prefix_is_bullet,
+    _prefix_is_part_only,
+    _prefix_looks_like_cross_ref,
     _repair_wrapped_headings,
     _strip_edgar_metadata,
     extract_filing_items,
@@ -27,6 +30,14 @@ from thesis_pkg.core.sec.filing_text import (
 
 
 ITEM_MENTION_PATTERN = re.compile(r"\bITEM\s+(?:\d+|[IVXLCDM]+)[A-Z]?\b", re.IGNORECASE)
+INTERNAL_PART_PATTERN = re.compile(r"(?m)^[ \t]*PART[ \t]+[IVX]+\b", re.IGNORECASE)
+INTERNAL_ITEM_PATTERN = re.compile(r"(?m)^[ \t]*ITEM[ \t]+\d+[A-Z]?\b", re.IGNORECASE)
+INTERNAL_HEADING_IGNORE_CHARS = 200
+INTERNAL_HEADING_CONTEXT_CHARS = 150
+PREFIX_KIND_BLANK = "blank"
+PREFIX_KIND_PART_ONLY = "part_only"
+PREFIX_KIND_BULLET = "bullet"
+PREFIX_KIND_TEXTUAL = "textual"
 
 DEFAULT_PARQUET_DIR = Path(
     r"C:\Users\erik9\Documents\SEC_Data\Data\Sample_Filings\parquet_batches"
@@ -55,6 +66,13 @@ class RegressionConfig:
     parquet_dir: Path = DEFAULT_PARQUET_DIR
     sample_per_flag: int = 3
     max_files: int = 0
+
+
+@dataclass(frozen=True)
+class InternalHeadingLeak:
+    position: int
+    match_text: str
+    context: str
 
 
 def _parse_date(value: str | date | datetime | None) -> date | None:
@@ -126,12 +144,60 @@ def _expected_part_for_item(item: dict) -> str | None:
     return None
 
 
-def _looks_like_cross_ref(prefix: str) -> bool:
-    if not prefix.strip():
-        return False
-    if re.search(r"(?i)\bsee\b|\brefer\b|\bas discussed\b|\bunder\b", prefix):
+def _prefix_text(heading_line: str, heading_offset: int | None) -> str:
+    if heading_offset is None or heading_offset <= 0:
+        return ""
+    return heading_line[:heading_offset]
+
+
+def _prefix_kind(prefix: str) -> str:
+    if not prefix or not prefix.strip():
+        return PREFIX_KIND_BLANK
+    if _prefix_is_part_only(prefix):
+        return PREFIX_KIND_PART_ONLY
+    if _prefix_is_bullet(prefix):
+        return PREFIX_KIND_BULLET
+    return PREFIX_KIND_TEXTUAL
+
+
+def _prefix_has_textual_content(prefix: str) -> bool:
+    if re.search(r"[A-Za-z]", prefix):
         return True
-    return bool(re.search(r"[A-Za-z0-9]", prefix))
+    trimmed = prefix.rstrip()
+    if not trimmed:
+        return False
+    if trimmed[-1] in ".:;!?":
+        before = trimmed[:-1]
+        if re.search(r"[A-Za-z]", before):
+            return True
+        if re.search(r"\u2026|\.{2,}", before):
+            return True
+    return False
+
+
+def _is_midline_heading_prefix(prefix: str, heading_offset: int | None) -> bool:
+    if heading_offset is None or heading_offset <= 0:
+        return False
+    if _prefix_kind(prefix) != PREFIX_KIND_TEXTUAL:
+        return False
+    return _prefix_has_textual_content(prefix)
+
+
+def _prefix_metadata(
+    heading_line: str, heading_offset: int | None
+) -> tuple[str, str, bool, bool, bool]:
+    prefix_text = _prefix_text(heading_line, heading_offset)
+    prefix_kind = _prefix_kind(prefix_text)
+    is_part_only_prefix = prefix_kind == PREFIX_KIND_PART_ONLY
+    is_crossref_prefix = _prefix_looks_like_cross_ref(prefix_text)
+    is_midline_heading = _is_midline_heading_prefix(prefix_text, heading_offset)
+    return (
+        prefix_text,
+        prefix_kind,
+        is_part_only_prefix,
+        is_crossref_prefix,
+        is_midline_heading,
+    )
 
 
 def _compound_item_heading(heading_line: str) -> bool:
@@ -149,6 +215,41 @@ def _split_flags(flag_field: str | None) -> list[str]:
 def _normalize_body_lines(text: str) -> list[str]:
     body = _repair_wrapped_headings(_strip_edgar_metadata(_normalize_newlines(text)))
     return body.splitlines()
+
+
+def _find_internal_heading_leak(
+    text: str,
+    *,
+    ignore_chars: int = INTERNAL_HEADING_IGNORE_CHARS,
+    context_chars: int = INTERNAL_HEADING_CONTEXT_CHARS,
+) -> InternalHeadingLeak | None:
+    if not text:
+        return None
+    normalized = _normalize_newlines(text)
+    if len(normalized) <= ignore_chars:
+        return None
+
+    candidates: list[re.Match[str]] = []
+    for pattern in (INTERNAL_PART_PATTERN, INTERNAL_ITEM_PATTERN):
+        for match in pattern.finditer(normalized):
+            if match.start() < ignore_chars:
+                continue
+            candidates.append(match)
+            break
+
+    if not candidates:
+        return None
+
+    earliest = min(candidates, key=lambda m: m.start())
+    pos = earliest.start()
+    start = max(0, pos - context_chars)
+    end = min(len(normalized), pos + context_chars)
+    context = normalized[start:end].replace("\n", "\\n")
+    return InternalHeadingLeak(
+        position=pos,
+        match_text=earliest.group(0).strip(),
+        context=context,
+    )
 
 
 def load_root_causes_text(path: Path = DEFAULT_ROOT_CAUSES_PATH) -> str:
@@ -190,16 +291,33 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
         "heading_line",
         "heading_index",
         "heading_offset",
+        "prefix_text",
+        "prefix_kind",
+        "is_part_only_prefix",
+        "is_crossref_prefix",
         "prev_line",
         "next_line",
         "flags",
+        "heading_line_raw",
+        "internal_heading_leak",
+        "leak_pos",
+        "leak_match",
+        "leak_context",
+        "leak_next_item_id",
+        "leak_next_heading",
     ]
 
     total_filings = 0
     total_items = 0
     total_flagged = 0
+    total_part_only_prefix = 0
     flags_count = Counter()
     examples_by_flag: dict[str, list[dict[str, str]]] = defaultdict(list)
+    prefix_examples: dict[str, list[str]] = defaultdict(list)
+    internal_leak_total = 0
+    internal_leak_by_form: Counter[str] = Counter()
+    internal_leak_by_item: Counter[str] = Counter()
+    internal_leak_examples: list[dict[str, str | int]] = []
 
     want_cols = [
         "doc_id",
@@ -252,12 +370,41 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
                     total_items += len(items)
                     flagged_items_for_doc: list[dict[str, str | int | None]] = []
 
-                    for item in items:
-                        heading_line = item.get("_heading_line") or ""
+                    doc_id = str(row.get("doc_id") or "")
+                    accession = str(row.get("accession_number") or "")
+                    form_label = str(form_type or "")
+
+                    for item_idx, item in enumerate(items):
+                        heading_line_raw = item.get("_heading_line_raw")
+                        if heading_line_raw is None:
+                            heading_line_raw = item.get("_heading_line") or ""
+                        heading_line_raw = str(heading_line_raw or "")
+
+                        heading_line_clean = item.get("_heading_line")
+                        if heading_line_clean is None or heading_line_clean == "":
+                            heading_line_clean = item.get("_heading_line_clean") or heading_line_raw
+                        heading_line_clean = str(heading_line_clean or "")
+
                         heading_idx = item.get("_heading_line_index")
                         heading_offset = item.get("_heading_offset")
                         item_id = str(item.get("item_id") or "")
                         item_part = item.get("item_part")
+                        (
+                            prefix_text,
+                            prefix_kind,
+                            is_part_only_prefix,
+                            is_crossref_prefix,
+                            is_midline_heading,
+                        ) = _prefix_metadata(heading_line_raw, heading_offset)
+                        if is_part_only_prefix and heading_offset and heading_offset > 0:
+                            total_part_only_prefix += 1
+
+                        leak_info = _find_internal_heading_leak(item.get("full_text") or "")
+                        leak_pos: int | str = ""
+                        leak_match = ""
+                        leak_context = ""
+                        leak_next_item_id = ""
+                        leak_next_heading = ""
 
                         flags: list[str] = []
                         if heading_idx is None or heading_idx < 0:
@@ -265,17 +412,15 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
                         else:
                             if _looks_like_toc_heading_line(lines, heading_idx):
                                 flags.append("toc_like_heading")
-                            if heading_offset and _looks_like_cross_ref(
-                                heading_line[: heading_offset]
-                            ):
+                            if heading_offset and is_crossref_prefix:
                                 flags.append("cross_ref_prefix")
-                            if _compound_item_heading(heading_line):
+                            if _compound_item_heading(heading_line_clean):
                                 flags.append("compound_item_heading")
 
-                        if heading_offset and heading_offset > 0:
+                        if is_midline_heading:
                             flags.append("midline_heading")
 
-                        if _weak_heading_letter(item_id, heading_line):
+                        if _weak_heading_letter(item_id, heading_line_raw):
                             flags.append("weak_letter_heading")
 
                         if heading_idx is not None and heading_idx >= 0:
@@ -291,8 +436,40 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
                         if item_part and expected_part and item_part != expected_part:
                             flags.append("part_mismatch")
 
-                        if TOC_DOT_LEADER_PATTERN.search(heading_line):
+                        if TOC_DOT_LEADER_PATTERN.search(heading_line_raw):
                             flags.append("dot_leader_heading")
+
+                        if leak_info is not None:
+                            flags.append("internal_heading_leak")
+                            internal_leak_total += 1
+                            internal_leak_by_form[form_label] += 1
+                            internal_leak_by_item[item_id] += 1
+                            leak_pos = leak_info.position
+                            leak_match = leak_info.match_text
+                            leak_context = leak_info.context
+                            if item_idx + 1 < len(items):
+                                next_item = items[item_idx + 1]
+                                leak_next_item_id = str(next_item.get("item_id") or "")
+                                leak_next_heading = str(
+                                    next_item.get("_heading_line")
+                                    or next_item.get("_heading_line_clean")
+                                    or next_item.get("_heading_line_raw")
+                                    or ""
+                                )
+                            internal_leak_examples.append(
+                                {
+                                    "doc_id": doc_id,
+                                    "accession": accession,
+                                    "form_type": form_label,
+                                    "item_id": item_id,
+                                    "item_part": str(item_part or ""),
+                                    "leak_pos": leak_info.position,
+                                    "leak_match": leak_info.match_text,
+                                    "leak_context": leak_info.context,
+                                    "next_item_id": leak_next_item_id,
+                                    "next_heading": leak_next_heading,
+                                }
+                            )
 
                         if not flags:
                             continue
@@ -316,18 +493,24 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
                                 "item_part": item_part or "",
                                 "item_id": item_id,
                                 "flags": flags,
-                                "heading_line": heading_line.strip(),
+                                "heading_line": heading_line_clean.strip(),
+                                "heading_line_raw": heading_line_raw.strip(),
                                 "heading_index": heading_idx if heading_idx is not None else "",
                                 "heading_offset": heading_offset if heading_offset is not None else "",
                                 "full_text": item.get("full_text") or "",
+                                "leak_pos": leak_pos,
+                                "leak_match": leak_match,
+                                "leak_context": leak_context,
+                                "leak_next_item_id": leak_next_item_id,
+                                "leak_next_heading": leak_next_heading,
                             }
                         )
 
                         writer.writerow(
                             {
-                                "doc_id": row.get("doc_id") or "",
+                                "doc_id": doc_id,
                                 "cik": row.get("cik") or "",
-                                "accession": row.get("accession_number") or "",
+                                "accession": accession,
                                 "filing_date": filing_date.isoformat() if filing_date else "",
                                 "period_end": period_end.isoformat() if period_end else "",
                                 "item_part": item_part or "",
@@ -336,12 +519,23 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
                                 "canonical_item": item.get("canonical_item") or "",
                                 "exists_by_regime": item.get("exists_by_regime"),
                                 "item_status": item.get("item_status") or "",
-                                "heading_line": heading_line.strip(),
+                                "heading_line": heading_line_clean.strip(),
                                 "heading_index": heading_idx if heading_idx is not None else "",
                                 "heading_offset": heading_offset if heading_offset is not None else "",
+                                "prefix_text": prefix_text,
+                                "prefix_kind": prefix_kind,
+                                "is_part_only_prefix": is_part_only_prefix,
+                                "is_crossref_prefix": is_crossref_prefix,
                                 "prev_line": prev_line,
                                 "next_line": next_line,
                                 "flags": ";".join(flags),
+                                "heading_line_raw": heading_line_raw.strip(),
+                                "internal_heading_leak": "1" if leak_info is not None else "",
+                                "leak_pos": leak_pos,
+                                "leak_match": leak_match,
+                                "leak_context": leak_context,
+                                "leak_next_item_id": leak_next_item_id,
+                                "leak_next_heading": leak_next_heading,
                             }
                         )
 
@@ -354,11 +548,14 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
                                         "accession": str(row.get("accession_number") or ""),
                                         "item_id": item_id,
                                         "item_part": str(item_part or ""),
-                                        "heading": heading_line.strip(),
+                                        "heading": heading_line_clean.strip(),
                                         "prev": prev_line,
                                         "next": next_line,
                                     }
                                 )
+                            if flag in {"midline_heading", "cross_ref_prefix"}:
+                                if len(prefix_examples[flag]) < 2:
+                                    prefix_examples[flag].append(prefix_text.strip())
 
                     if flagged_items_for_doc:
                         doc_id = str(row.get("doc_id") or "")
@@ -385,6 +582,7 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
     lines_out.append(f"Total filings processed: {total_filings}")
     lines_out.append(f"Total items extracted: {total_items}")
     lines_out.append(f"Total flagged items: {total_flagged}")
+    lines_out.append(f"Part-only prefixes (informational): {total_part_only_prefix}")
     lines_out.append("")
     lines_out.append("Flags (counts):")
     for flag, count in flags_count.most_common():
@@ -407,6 +605,60 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
                     lines_out.append(f"      next=\"{ex['next']}\"")
     else:
         lines_out.append("  (no flagged examples captured)")
+    lines_out.append("")
+    lines_out.append("Representative prefixes:")
+    for flag in ("midline_heading", "cross_ref_prefix"):
+        reps = prefix_examples.get(flag, [])
+        if reps:
+            lines_out.append(f"  {flag}:")
+            for rep in reps:
+                lines_out.append(f"    prefix=\"{rep}\"")
+        else:
+            lines_out.append(f"  {flag}: (none captured)")
+
+    lines_out.append("")
+    lines_out.append("Internal heading leak audit:")
+    lines_out.append(f"Total internal heading leaks: {internal_leak_total}")
+    if internal_leak_by_form:
+        lines_out.append("By form:")
+        for form, count in internal_leak_by_form.most_common():
+            form_label = form or "UNKNOWN"
+            lines_out.append(f"  {form_label}: {count}")
+    else:
+        lines_out.append("By form: (none detected)")
+    if internal_leak_by_item:
+        lines_out.append("By item_id:")
+        for item_id, count in internal_leak_by_item.most_common():
+            lines_out.append(f"  {item_id}: {count}")
+    else:
+        lines_out.append("By item_id: (none detected)")
+
+    lines_out.append("Worst cases (earliest leak position):")
+    worst_cases = sorted(
+        internal_leak_examples,
+        key=lambda entry: entry.get("leak_pos", 0),
+    )[: config.max_examples]
+    if worst_cases:
+        for entry in worst_cases:
+            part = entry.get("item_part") or ""
+            item_id = entry.get("item_id") or ""
+            item_key = f"{part}:{item_id}".strip(":") if part or item_id else "UNKNOWN"
+            lines_out.append(
+                "  "
+                f"doc_id={entry.get('doc_id','')} accession={entry.get('accession','')} "
+                f"form={entry.get('form_type','')} item={item_key} "
+                f"leak_pos={entry.get('leak_pos','')} match=\"{entry.get('leak_match','')}\""
+            )
+            if entry.get("next_item_id") or entry.get("next_heading"):
+                lines_out.append(
+                    "    "
+                    f"next_item_id={entry.get('next_item_id','')} "
+                    f"next_heading=\"{entry.get('next_heading','')}\""
+                )
+            if entry.get("leak_context"):
+                lines_out.append(f"    context=\"{entry.get('leak_context','')}\"")
+    else:
+        lines_out.append("  (no internal heading leaks detected)")
 
     report = "\n".join(lines_out)
     print(report)
@@ -417,6 +669,7 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
         "total_filings": total_filings,
         "total_items": total_items,
         "total_flagged": total_flagged,
+        "total_internal_heading_leaks": internal_leak_total,
     }
 
 
@@ -462,9 +715,11 @@ def run_boundary_regression(config: RegressionConfig) -> dict[str, int]:
 
     after_counts: Counter[str] = Counter()
     examples_by_flag: dict[str, list[dict[str, str]]] = defaultdict(list)
+    prefix_examples: dict[str, list[str]] = defaultdict(list)
     total_filings = 0
     total_items = 0
     total_flagged = 0
+    total_part_only_prefix = 0
     seen_doc_ids: set[str] = set()
 
     want_cols = [
@@ -518,11 +773,31 @@ def run_boundary_regression(config: RegressionConfig) -> dict[str, int]:
                 total_items += len(items)
 
                 for item in items:
-                    heading_line = item.get("_heading_line") or ""
+                    heading_line_raw = item.get("_heading_line_raw")
+                    if heading_line_raw is None:
+                        heading_line_raw = item.get("_heading_line") or ""
+                    heading_line_raw = str(heading_line_raw or "")
+
+                    heading_line_clean = item.get("_heading_line")
+                    if heading_line_clean is None or heading_line_clean == "":
+                        heading_line_clean = item.get("_heading_line_clean") or heading_line_raw
+                    heading_line_clean = str(heading_line_clean or "")
+
                     heading_idx = item.get("_heading_line_index")
                     heading_offset = item.get("_heading_offset")
                     item_id = str(item.get("item_id") or "")
                     item_part = item.get("item_part")
+                    (
+                        prefix_text,
+                        prefix_kind,
+                        is_part_only_prefix,
+                        is_crossref_prefix,
+                        is_midline_heading,
+                    ) = _prefix_metadata(heading_line_raw, heading_offset)
+                    if is_part_only_prefix and heading_offset and heading_offset > 0:
+                        total_part_only_prefix += 1
+
+                    leak_info = _find_internal_heading_leak(item.get("full_text") or "")
 
                     flags: list[str] = []
                     if heading_idx is None or heading_idx < 0:
@@ -530,17 +805,15 @@ def run_boundary_regression(config: RegressionConfig) -> dict[str, int]:
                     else:
                         if _looks_like_toc_heading_line(lines, heading_idx):
                             flags.append("toc_like_heading")
-                        if heading_offset and _looks_like_cross_ref(
-                            heading_line[: heading_offset]
-                        ):
+                        if heading_offset and is_crossref_prefix:
                             flags.append("cross_ref_prefix")
-                        if _compound_item_heading(heading_line):
+                        if _compound_item_heading(heading_line_clean):
                             flags.append("compound_item_heading")
 
-                    if heading_offset and heading_offset > 0:
+                    if is_midline_heading:
                         flags.append("midline_heading")
 
-                    if _weak_heading_letter(item_id, heading_line):
+                    if _weak_heading_letter(item_id, heading_line_raw):
                         flags.append("weak_letter_heading")
 
                     if heading_idx is not None and heading_idx >= 0:
@@ -556,8 +829,11 @@ def run_boundary_regression(config: RegressionConfig) -> dict[str, int]:
                     if item_part and expected_part and item_part != expected_part:
                         flags.append("part_mismatch")
 
-                    if TOC_DOT_LEADER_PATTERN.search(heading_line):
+                    if TOC_DOT_LEADER_PATTERN.search(heading_line_raw):
                         flags.append("dot_leader_heading")
+
+                    if leak_info is not None:
+                        flags.append("internal_heading_leak")
 
                     if not flags:
                         continue
@@ -571,9 +847,12 @@ def run_boundary_regression(config: RegressionConfig) -> dict[str, int]:
                                 {
                                     "doc_id": doc_id,
                                     "item": str(item.get("item") or ""),
-                                    "heading": heading_line.strip(),
+                                    "heading": heading_line_clean.strip(),
                                 }
                             )
+                        if flag in {"midline_heading", "cross_ref_prefix"}:
+                            if len(prefix_examples[flag]) < 2:
+                                prefix_examples[flag].append(prefix_text.strip())
 
     missing_doc_ids = doc_ids - seen_doc_ids
 
@@ -584,6 +863,7 @@ def run_boundary_regression(config: RegressionConfig) -> dict[str, int]:
     lines_out.append(f"Total filings processed: {total_filings}")
     lines_out.append(f"Total items extracted: {total_items}")
     lines_out.append(f"Total flagged items: {total_flagged}")
+    lines_out.append(f"Part-only prefixes (informational): {total_part_only_prefix}")
     if missing_doc_ids:
         lines_out.append(f"Doc IDs missing in parquet: {len(missing_doc_ids)}")
     lines_out.append("")
@@ -604,6 +884,16 @@ def run_boundary_regression(config: RegressionConfig) -> dict[str, int]:
                 )
     else:
         lines_out.append("  (no remaining flagged examples captured)")
+    lines_out.append("")
+    lines_out.append("Representative prefixes:")
+    for flag in ("midline_heading", "cross_ref_prefix"):
+        reps = prefix_examples.get(flag, [])
+        if reps:
+            lines_out.append(f"  {flag}:")
+            for rep in reps:
+                lines_out.append(f"    prefix=\"{rep}\"")
+        else:
+            lines_out.append(f"  {flag}: (none captured)")
 
     print("\n".join(lines_out))
 
@@ -663,8 +953,24 @@ def _write_sample_file(
         lines.append(f"---- ITEM {item_key} ({','.join(flags)}) ----")
         heading = entry.get("heading_line") or ""
         lines.append(f"heading_line: {heading}")
+        heading_raw = entry.get("heading_line_raw") or ""
+        if heading_raw:
+            lines.append(f"heading_line_raw: {heading_raw}")
         lines.append(f"heading_index: {entry.get('heading_index')}")
         lines.append(f"heading_offset: {entry.get('heading_offset')}")
+        if entry.get("leak_match"):
+            lines.append(
+                "internal_heading_leak: "
+                f"pos={entry.get('leak_pos')} match=\"{entry.get('leak_match')}\""
+            )
+            if entry.get("leak_next_item_id") or entry.get("leak_next_heading"):
+                lines.append(
+                    "leak_next_item: "
+                    f"id={entry.get('leak_next_item_id')} "
+                    f"heading=\"{entry.get('leak_next_heading')}\""
+                )
+            if entry.get("leak_context"):
+                lines.append(f"leak_context: {entry.get('leak_context')}")
         lines.append("")
         item_text = entry.get("full_text") or ""
         lines.append(item_text.strip())

@@ -70,7 +70,11 @@ PART_PREFIX_TAIL_PATTERN = re.compile(
     re.IGNORECASE,
 )
 CROSS_REF_PREFIX_PATTERN = re.compile(
-    r"(?i)\bsee\b|\brefer\b|\bas discussed\b|\bas described\b|\bas set forth\b|\bas noted\b|\bpursuant to\b|\bunder\b",
+    r"(?i)\bsee\b|\brefer\b|\bas discussed\b|\bas described\b|\bas set forth\b|\bas noted\b"
+    r"|\bpursuant to\b|\bunder\b|\bin accordance with\b",
+)
+CROSS_REF_PART_PATTERN = re.compile(
+    r"(?i)\bin\s+part\s+(?:IV|III|II|I)\b",
 )
 COVER_PAGE_MARKER_PATTERN = re.compile(
     r"UNITED STATES\s+SECURITIES\s+AND\s+EXCHANGE\s+COMMISSION",
@@ -85,6 +89,19 @@ PAGE_OF_PATTERN = re.compile(r"^\s*page\s+\d+\s*(?:of\s+\d+)?\s*$", re.IGNORECAS
 
 EMPTY_ITEM_PATTERN = re.compile(
     r"^\s*(?:\(?[a-z]\)?\s*)?(?:none\.?|n/?a\.?|not applicable\.?|not required\.?|\[reserved\]|reserved)\s*$",
+    re.IGNORECASE,
+)
+PROSE_SENTENCE_BREAK_PATTERN = re.compile(r"[.!?]\s+[A-Za-z]")
+CROSS_REF_SUFFIX_START_PATTERN = re.compile(
+    r"(?i)^(?:see|refer|as discussed|as described|as set forth|as noted|pursuant to|under|"
+    r"in accordance with|in part\s+(?:IV|III|II|I))\b",
+)
+PART_REF_PATTERN = re.compile(r"(?i)\bpart\s+(?:IV|III|II|I)\b")
+HEADING_TAIL_STRONG_PATTERN = re.compile(
+    r"(?i)\b(?:is incorporated(?: herein)? by reference|herein by reference|set forth)\b"
+)
+HEADING_TAIL_SOFT_PATTERN = re.compile(
+    r"\b(?:THE|SEE|REFER|PAGES|INCLUDED|BEGIN)\b",
     re.IGNORECASE,
 )
 
@@ -567,7 +584,7 @@ def _prefix_looks_like_cross_ref(prefix: str) -> bool:
     if not prefix or not prefix.strip():
         return False
     tail = prefix.strip()[-80:]
-    if CROSS_REF_PREFIX_PATTERN.search(tail):
+    if CROSS_REF_PREFIX_PATTERN.search(tail) or CROSS_REF_PART_PATTERN.search(tail):
         return True
     return False
 
@@ -600,6 +617,142 @@ def _heading_title_matches_item(
     if len(norm) >= 6:
         return any(title.startswith(norm) for title in titles)
     return False
+
+
+def _heading_suffix_looks_like_prose(suffix: str) -> bool:
+    if not suffix:
+        return False
+    head = suffix.strip().lstrip(" \t:-")
+    if not head:
+        return False
+    head = head[:160]
+    if CROSS_REF_SUFFIX_START_PATTERN.search(head):
+        return True
+    if ITEM_WORD_PATTERN.search(head):
+        return True
+    if PART_REF_PATTERN.search(head):
+        return True
+    if PROSE_SENTENCE_BREAK_PATTERN.search(head):
+        return True
+    words = re.findall(r"[A-Za-z]+", head)
+    if len(words) >= 10:
+        lower_initial = sum(1 for word in words if word and word[0].islower())
+        if lower_initial / len(words) >= 0.6:
+            return True
+    if head.count(",") >= 2 and len(words) >= 8:
+        return True
+    return False
+
+
+def _heading_title_candidates(
+    item_id: str | None,
+    canonical_item: str | None,
+    *,
+    title_map: dict[str, list[str]],
+    is_10k: bool,
+) -> list[str]:
+    if not item_id and not canonical_item:
+        return []
+    candidates: list[str] = []
+    if is_10k and canonical_item:
+        candidates.extend(ITEM_TITLES_10K_BY_CANONICAL.get(canonical_item, []))
+    if is_10k and item_id:
+        candidates.extend(title_map.get(item_id, []))
+        candidates.extend(ITEM_TITLES_10K.get(item_id, []))
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for title in candidates:
+        if title not in seen:
+            ordered.append(title)
+            seen.add(title)
+    return ordered
+
+
+def _find_heading_title_span(line: str, title: str) -> tuple[int, int] | None:
+    norm = _normalize_heading_text(title)
+    if not norm:
+        return None
+    tokens = norm.split()
+    if not tokens:
+        return None
+    parts: list[str] = []
+    for token in tokens:
+        if token == "AND":
+            parts.append(r"(?:AND|&)")
+            continue
+        token_re = re.escape(token).replace("'", "['\u2019]")
+        parts.append(token_re)
+    pattern = r"[^A-Za-z0-9]+".join(parts)
+    match = re.search(pattern, line, flags=re.IGNORECASE)
+    if not match:
+        return None
+    return match.start(), match.end()
+
+
+def _truncate_heading_to_title(segment: str, titles: list[str]) -> str | None:
+    if not segment or not titles:
+        return None
+    for title in sorted(titles, key=len, reverse=True):
+        span = _find_heading_title_span(segment, title)
+        if span is None:
+            continue
+        return segment[: span[1]].rstrip()
+    return None
+
+
+def _truncate_heading_tail_fallback(segment: str) -> str:
+    if not segment:
+        return segment
+    trimmed = segment.rstrip()
+    words = re.findall(r"[A-Za-z]+", trimmed)
+    short_title = len(trimmed) <= 80 and len(words) <= 12
+
+    strong = HEADING_TAIL_STRONG_PATTERN.search(trimmed)
+    if strong:
+        return trimmed[: strong.start()].rstrip(" \t:-.")
+
+    if not short_title:
+        for match in HEADING_TAIL_SOFT_PATTERN.finditer(trimmed):
+            token = match.group(0)
+            if not any(ch.isupper() for ch in token):
+                continue
+            prefix = trimmed[: match.start()].rstrip()
+            if len(prefix) < 25 or len(re.findall(r"[A-Za-z]+", prefix)) < 3:
+                continue
+            return prefix.rstrip(" \t:-.")
+
+    return trimmed
+
+
+def _clean_heading_line(
+    raw_line: str,
+    heading_offset: int | None,
+    *,
+    item_id: str | None,
+    canonical_item: str | None,
+    title_map: dict[str, list[str]],
+    is_10k: bool,
+) -> str:
+    if not raw_line:
+        return ""
+    start = heading_offset if isinstance(heading_offset, int) and heading_offset >= 0 else 0
+    if start > len(raw_line):
+        start = 0
+    segment = raw_line[start:].lstrip()
+    if not segment:
+        return ""
+
+    titles = _heading_title_candidates(
+        item_id,
+        canonical_item,
+        title_map=title_map,
+        is_10k=is_10k,
+    )
+    truncated = _truncate_heading_to_title(segment, titles)
+    if truncated is not None:
+        return truncated.strip()
+
+    return _truncate_heading_tail_fallback(segment).strip()
 
 
 def _looks_like_toc_heading_line(
@@ -1122,7 +1275,8 @@ _WRAPPED_ITEM_PATTERN = re.compile(
     r"(?im)^(?P<lead>\s*item)\s*\n+\s*(?P<num>\d+|[ivxlcdm]+)\s*(?P<let>[a-z])?\s*(?P<punc>[\.:])?"
 )
 _WRAPPED_ITEM_LETTER_PATTERN = re.compile(
-    r"(?im)^(?P<lead>\s*item\s+(?P<num>\d+|[ivxlcdm]+))\s*\n+\s*(?P<let>[a-z])\s*(?P<punc>[\.\):\-])?"
+    r"(?im)^(?P<lead>\s*item\s+(?P<num>\d+|[ivxlcdm]+))\s*(?P<num_punc>[\.\):\-])?"
+    r"\s*\n+\s*(?P<let>[a-z])\s*(?P<punc>[\.\):\-])?"
 )
 _ITEM_SUFFIX_PAREN_PATTERN = re.compile(
     r"(?im)^(?P<lead>\s*item\s+\d+[a-z])\s*\((?P<suffix>[a-z])\)\s*(?P<punc>[\.\):\-])?"
@@ -1162,7 +1316,7 @@ def _repair_wrapped_headings(body: str) -> str:
     def _fix_split_letter(m: re.Match[str]) -> str:
         lead = m.group("lead")
         let = m.group("let").upper()
-        punc = m.group("punc") or ""
+        punc = m.group("punc") or m.group("num_punc") or ""
         return f"{lead}{let}{punc}"
 
     body = _WRAPPED_ITEM_LETTER_PATTERN.sub(_fix_split_letter, body)
@@ -1555,6 +1709,33 @@ def _annotate_items_with_regime(
         item.setdefault("item_status", "unknown")
 
 
+def _apply_heading_hygiene(
+    items: list[dict[str, str | bool | None]],
+    *,
+    title_map: dict[str, list[str]],
+    is_10k: bool,
+) -> None:
+    """
+    Clean heading metadata without altering any boundary indices or content offsets.
+    """
+    for item in items:
+        raw_line = item.get("_heading_line_raw")
+        if raw_line is None:
+            continue
+        heading_offset = item.get("_heading_offset")
+        heading_offset_val = heading_offset if isinstance(heading_offset, int) else None
+        item["_heading_line"] = _clean_heading_line(
+            str(raw_line),
+            heading_offset_val,
+            item_id=item.get("item_id") if isinstance(item.get("item_id"), str) else None,
+            canonical_item=(
+                item.get("canonical_item") if isinstance(item.get("canonical_item"), str) else None
+            ),
+            title_map=title_map,
+            is_10k=is_10k,
+        )
+
+
 def extract_filing_items(
     full_text: str,
     *,
@@ -1577,7 +1758,7 @@ def extract_filing_items(
       - canonical_item: regime-stable meaning when available
       - exists_by_regime: True/False when regime rules can be evaluated, else None
       - item_status: active/reserved/optional/unknown
-      - _heading_line/_heading_line_index/_heading_offset when diagnostics=True
+      - _heading_line (clean) / _heading_line_raw / _heading_line_index / _heading_offset when diagnostics=True
       - when drop_impossible=True, items with exists_by_regime == False are dropped
 
     The function does not emit TOC rows; TOC is only used internally to avoid false starts.
@@ -1598,11 +1779,15 @@ def extract_filing_items(
 
     filing_date_parsed = _parse_date(filing_date)
     period_end_parsed = _parse_date(period_end)
-    title_lookup = _build_title_lookup_10k(
-        filing_date=filing_date_parsed,
-        period_end=period_end_parsed,
-        enable_regime=bool(regime) and is_10k,
-    )
+    title_map: dict[str, list[str]] = {}
+    title_lookup: dict[str, str] = {}
+    if is_10k:
+        title_map = _build_regime_item_titles_10k(
+            filing_date=filing_date_parsed,
+            period_end=period_end_parsed,
+            enable_regime=bool(regime),
+        )
+        title_lookup = _build_title_lookup(title_map)
     # Regime-aware lookup only gates fallback/title-only matching; explicit ITEM headings still pass through.
 
     body = _normalize_newlines(full_text)
@@ -1795,13 +1980,13 @@ def extract_filing_items(
                 if re.match(r"(?i)^\s*[\(\[]\s*[a-z0-9]", suffix):
                     continue
 
+                title_match = is_10k and _heading_title_matches_item(item_id, line, m)
                 confidence = HEADING_CONF_HIGH if (is_line_start or part_near_item) else HEADING_CONF_MED
                 if midline:
-                    confidence = (
-                        HEADING_CONF_MED
-                        if (is_10k and _heading_title_matches_item(item_id, line, m))
-                        else HEADING_CONF_LOW
-                    )
+                    confidence = HEADING_CONF_MED if title_match else HEADING_CONF_LOW
+                elif is_10k and (is_line_start or part_near_item):
+                    if not title_match and _heading_suffix_looks_like_prose(line[m.end() :]):
+                        confidence = min(confidence, HEADING_CONF_MED)
                 if compound_line:
                     confidence = min(confidence, HEADING_CONF_LOW)
                 if _pageish_line(line):
@@ -1865,8 +2050,6 @@ def extract_filing_items(
                 continue
             end_pos = cand.start
             break
-        if end_pos == len(body) and idx + 1 < len(pool):
-            end_pos = pool[idx + 1].start
         return end_pos
 
     boundary_ends = [_boundary_end(idx, boundaries) for idx in range(len(boundaries))]
@@ -1934,10 +2117,13 @@ def extract_filing_items(
         if diagnostics:
             idx = bisect_right(line_starts, b.start) - 1
             if 0 <= idx < len(lines):
-                record["_heading_line"] = lines[idx]
+                raw_line = lines[idx]
+                record["_heading_line_raw"] = raw_line
+                record["_heading_line"] = raw_line
                 record["_heading_line_index"] = idx
                 record["_heading_offset"] = b.start - line_starts[idx]
             else:
+                record["_heading_line_raw"] = ""
                 record["_heading_line"] = ""
                 record["_heading_line_index"] = None
                 record["_heading_offset"] = None
@@ -1950,6 +2136,9 @@ def extract_filing_items(
         period_end=period_end_parsed,
         enable_regime=bool(regime),
     )
+    if diagnostics:
+        # Heading hygiene only updates metadata fields; item boundaries are unchanged.
+        _apply_heading_hygiene(out_items, title_map=title_map, is_10k=is_10k)
     if drop_impossible:
         out_items = [
             item for item in out_items if item.get("exists_by_regime") is not False

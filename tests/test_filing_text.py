@@ -571,6 +571,71 @@ Bravo
     assert [it["item_id"] for it in items] == ["1", "2"]
 
 
+def test_extract_filing_items_mid_sentence_cross_ref_does_not_cut():
+    text = """<Header></Header>
+PART I
+ITEM 1. Business
+Alpha
+We discuss results; see Part II, Item 7 for more detail.
+More Alpha.
+
+PART II
+ITEM 7. Management's Discussion and Analysis
+Bravo
+"""
+    items = extract_filing_items(text, form_type="10-K")
+    assert [it["item"] for it in items] == ["I:1", "II:7"]
+    item1_text = next(it for it in items if it["item_id"] == "1")["full_text"] or ""
+    assert "see Part II, Item 7" in item1_text
+    assert "Bravo" not in item1_text
+
+
+def test_extract_filing_items_cross_ref_heading_line_does_not_truncate():
+    text = """<Header></Header>
+ITEM 1. Business
+Alpha
+ITEM 7. See Part II, Item 7 for more detail.
+Tail text.
+"""
+    items = extract_filing_items(text, form_type="10-K")
+    item1_text = next(it for it in items if it["item_id"] == "1")["full_text"] or ""
+    assert "Tail text." in item1_text
+
+
+def test_heading_hygiene_truncates_after_title_on_prose():
+    text = """<Header></Header>
+ITEM 8. Financial Statements and Supplementary Data. The consolidated financial statements are included here.
+Alpha
+"""
+    items = extract_filing_items(text, form_type="10-K", diagnostics=True)
+    heading_clean = items[0].get("_heading_line") or ""
+    heading_raw = items[0].get("_heading_line_raw") or ""
+    assert "The consolidated financial statements" in heading_raw
+    assert "The consolidated financial statements" not in heading_clean
+    assert heading_clean.strip().startswith("ITEM 8.")
+
+
+def test_heading_hygiene_truncates_incorporated_reference_tail():
+    text = """<Header></Header>
+ITEM 7A. Quantitative and Qualitative Disclosures About Market Risk is incorporated herein by reference.
+Alpha
+"""
+    items = extract_filing_items(text, form_type="10-K", diagnostics=True)
+    heading_clean = items[0].get("_heading_line") or ""
+    assert "incorporated herein by reference" not in heading_clean.lower()
+    assert "Quantitative and Qualitative Disclosures" in heading_clean
+
+
+def test_heading_hygiene_keeps_title_only_line():
+    text = """<Header></Header>
+ITEM 3. Legal Proceedings
+Alpha
+"""
+    items = extract_filing_items(text, form_type="10-K", diagnostics=True)
+    heading_clean = items[0].get("_heading_line") or ""
+    assert heading_clean.strip() == "ITEM 3. Legal Proceedings"
+
+
 def test_extract_filing_items_infers_part_when_missing():
     text = """<Header></Header>
 ITEM 14. Principal Accountant Fees and Services.
@@ -611,6 +676,17 @@ Alpha
 """
     items = extract_filing_items(text, form_type="10-K")
     assert [it["item_id"] for it in items] == ["9A"]
+
+
+def test_extract_filing_items_repairs_punctuated_split_letter_line():
+    text = """<Header></Header>
+ITEM 1.
+A.
+Risk Factors
+Alpha
+"""
+    items = extract_filing_items(text, form_type="10-K")
+    assert [it["item_id"] for it in items] == ["1A"]
 
 
 def test_extract_filing_items_glued_heading_titles_use_base_number():
