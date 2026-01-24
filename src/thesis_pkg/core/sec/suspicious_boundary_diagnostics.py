@@ -62,7 +62,10 @@ EMBEDDED_TOC_ITEM_ONLY_PATTERN = re.compile(r"(?i)^\s*ITEM\s+\d{1,2}[A-Z]?\b")
 EMBEDDED_SEPARATOR_PATTERN = re.compile(r"^[\s\-=*]{3,}$")
 EMBEDDED_SELF_HIT_MAX_CHAR = 10
 EMBEDDED_MAX_HITS = 3
+EMBEDDED_TOC_START_EARLY_MAX_CHAR = 500
 EMBEDDED_TOC_START_MISFIRE_MAX_CHAR = 3000
+EMBEDDED_TOC_CLUSTER_LOOKAHEAD = 8
+EMBEDDED_NEARBY_ITEM_WINDOW = 3
 EMBEDDED_IGNORE_CLASSIFICATIONS = {"same_item_continuation"}
 # Warn-only to avoid false positives from TOC rows and cross-refs inside items.
 EMBEDDED_WARN_CLASSIFICATIONS = {
@@ -70,8 +73,16 @@ EMBEDDED_WARN_CLASSIFICATIONS = {
     "toc_row",
     "cross_ref_line",
     "part_restart_unconfirmed",
+    "glued_title_marker",
+    "toc_start_misfire_early",
+    "overlap_unconfirmed",
 }
-EMBEDDED_FAIL_CLASSIFICATIONS = {"true_overlap", "part_restart", "toc_start_misfire"}
+EMBEDDED_FAIL_CLASSIFICATIONS = {
+    "true_overlap",
+    "true_overlap_next_item",
+    "part_restart",
+    "toc_start_misfire",
+}
 ROMAN_ITEM_ID_MAP = {
     "I": "1",
     "II": "2",
@@ -143,6 +154,7 @@ class EmbeddedHeadingHit:
     part: str | None
     line_idx: int
     char_pos: int
+    full_text_len: int
     snippet: str
 
 
@@ -331,6 +343,17 @@ def _item_id_from_match(match: re.Match[str]) -> str | None:
     return None
 
 
+def _glued_title_marker_item_id(match: re.Match[str], line: str) -> str | None:
+    num = match.groupdict().get("num")
+    let = match.groupdict().get("let")
+    if not num or not let:
+        return None
+    suffix = line[match.end() :]
+    if re.match(r"\.[a-z]", suffix):
+        return num
+    return None
+
+
 def _leading_ws_len(line: str) -> int:
     return len(line) - len(line.lstrip(" \t"))
 
@@ -342,11 +365,13 @@ def _line_snippet(line: str, *, max_len: int = 200) -> str:
     return snippet
 
 
-# Heuristics below guard against TOC/index artifacts and line-start cross-references:
+# Heuristics below guard against TOC/index artifacts, glued title markers, and line-start cross-references:
 # - TOC windows keep index-style PART/ITEM rows from being treated as true overlaps.
 # - Index-style detection catches comma/column TOC rows without dot leaders.
 # - Line-start cross-ref checks prevent "SEE/REFER TO" headings from passing prose tests.
 # - toc_start_misfire flags early PART I / ITEM 1-2 hits inside late items.
+# - toc_start_misfire_early flags very-early TOC-like hits inside early items.
+# - glued_title_marker catches "ITEM 4M.ine" artifacts before overlap decisions.
 
 
 def _title_like_suffix(suffix: str) -> bool:
@@ -497,6 +522,23 @@ def _prose_like_line(line: str, *, toc_like: bool) -> bool:
     return bool(re.search(r"[.!?]\s*$", stripped))
 
 
+def _sentence_like_line(line: str) -> bool:
+    stripped = line.strip()
+    if not stripped:
+        return False
+    if not re.search(r"[.;]\s*$", stripped):
+        return False
+    words = re.findall(r"[A-Za-z][A-Za-z'&-]*", stripped)
+    if len(words) < 8:
+        return False
+    if not any(ch.islower() for ch in stripped if ch.isalpha()):
+        return False
+    titlecase = sum(
+        1 for word in words if len(word) > 1 and word[0].isupper() and word[1:].islower()
+    )
+    return (titlecase / len(words)) <= 0.6
+
+
 def _confirm_prose_after(
     lines: list[str],
     start_idx: int,
@@ -505,14 +547,16 @@ def _confirm_prose_after(
 ) -> bool:
     non_empty = 0
     for j in range(start_idx + 1, len(lines)):
-        if not lines[j].strip():
+        line = lines[j]
+        if not line.strip():
             continue
         non_empty += 1
         if non_empty > 10:
             break
-        if non_empty >= 3 and _prose_like_line(
-            lines[j], toc_like=_toc_like_line(lines, j, toc_cache, toc_window_flags)
-        ):
+        toc_like = _toc_like_line(lines, j, toc_cache, toc_window_flags)
+        if _line_starts_item(line) or EMBEDDED_PART_PATTERN.match(line) or toc_like:
+            continue
+        if _sentence_like_line(line):
             return True
     return False
 
@@ -523,6 +567,25 @@ def _line_starts_item(line: str) -> bool:
         or EMBEDDED_ITEM_ROMAN_PATTERN.match(line)
         or EMBEDDED_TOC_PART_ITEM_PATTERN.match(line)
     )
+
+
+def _toc_cluster_after(
+    lines: list[str], idx: int, *, max_non_empty: int = EMBEDDED_TOC_CLUSTER_LOOKAHEAD
+) -> bool:
+    non_empty = 0
+    heading_hits = 0
+    for j in range(idx + 1, len(lines)):
+        line = lines[j]
+        if not line.strip():
+            continue
+        non_empty += 1
+        if _line_starts_item(line) or EMBEDDED_PART_PATTERN.match(line):
+            heading_hits += 1
+            if heading_hits >= 2:
+                return True
+        if non_empty >= max_non_empty:
+            break
+    return False
 
 
 def _confirm_part_restart(lines: list[str], start_idx: int) -> bool:
@@ -573,14 +636,18 @@ def _find_embedded_heading_hits(
     *,
     current_item_id: str,
     current_part: str | None,
+    next_item_id: str | None = None,
+    nearby_item_ids: set[str] | None = None,
     max_hits: int = EMBEDDED_MAX_HITS,
 ) -> list[EmbeddedHeadingHit]:
     if not full_text:
         return []
+    full_text_len = len(full_text)
     lines = full_text.splitlines(keepends=True)
     lines_noeol = [line.rstrip("\r\n") for line in lines]
     current_item = _normalize_item_id(current_item_id)
     current_part_norm = _normalize_part(current_part)
+    next_item_norm = _normalize_item_id(next_item_id)
     toc_window_flags = _toc_window_flags(lines_noeol)
     is_late_item = _is_late_item(current_item, current_part_norm)
     hits: list[EmbeddedHeadingHit] = []
@@ -609,6 +676,7 @@ def _find_embedded_heading_hits(
         # Char offsets are computed against raw full_text (splitlines keepends), no normalization.
         char_pos = offset + _leading_ws_len(line_noeol)
         snippet = _line_snippet(line_noeol)
+        toc_cluster_detected = _toc_cluster_after(lines_noeol, idx)
 
         if part_item_match or item_match or roman_match:
             match = part_item_match or item_match or roman_match
@@ -616,19 +684,31 @@ def _find_embedded_heading_hits(
             if not embedded_item_id:
                 offset += len(line)
                 continue
+            glued_title_item_id = _glued_title_marker_item_id(match, line_noeol)
+            glued_title_marker = False
+            if glued_title_item_id:
+                embedded_item_id = glued_title_item_id
+                glued_title_marker = True
             embedded_item_id = embedded_item_id.upper()
+            embedded_item_norm = _normalize_item_id(embedded_item_id)
+            successor_match = bool(
+                next_item_norm and embedded_item_norm and embedded_item_norm == next_item_norm
+            )
+            nearby_match = bool(
+                embedded_item_norm and nearby_item_ids and embedded_item_norm in nearby_item_ids
+            )
             embedded_part = None
             if part_item_match:
                 embedded_part = part_item_match.group("part").upper()
             if (
                 current_item
-                and embedded_item_id == current_item
+                and embedded_item_norm == current_item
                 and char_pos <= EMBEDDED_SELF_HIT_MAX_CHAR
             ):
                 offset += len(line)
                 continue
 
-            if current_item and embedded_item_id == current_item:
+            if current_item and embedded_item_norm == current_item:
                 if EMBEDDED_CONTINUATION_PATTERN.search(line_noeol):
                     classification = "same_item_continuation"
                 else:
@@ -640,6 +720,10 @@ def _find_embedded_heading_hits(
                 _, next_line = _non_empty_line(lines_noeol, idx + 1, max_scan=3)
                 strong_prose = _confirm_prose_after(lines_noeol, idx, toc_cache, toc_window_flags)
                 cross_ref = (not toc_like) and _cross_ref_like(suffix, next_line=next_line)
+                strong_overlap_evidence = bool(
+                    EMBEDDED_RESERVED_PATTERN.search(line_noeol)
+                    or (strong_prose and _title_like_suffix(suffix))
+                )
 
                 if toc_window_hit and not strong_prose:
                     classification = "toc_row"
@@ -656,6 +740,20 @@ def _find_embedded_heading_hits(
 
             if (
                 not hits
+                and char_pos <= EMBEDDED_TOC_START_EARLY_MAX_CHAR
+                and (
+                    toc_window_flags[idx]
+                    or EMBEDDED_TOC_DOT_LEADER_PATTERN.search(line_noeol)
+                    or EMBEDDED_TOC_TRAILING_PAGE_PATTERN.search(line_noeol)
+                    or toc_cluster_detected
+                )
+            ):
+                classification = "toc_start_misfire_early"
+            elif char_pos <= EMBEDDED_TOC_START_EARLY_MAX_CHAR and toc_cluster_detected:
+                classification = "toc_row"
+
+            if (
+                not hits
                 and is_late_item
                 and char_pos <= EMBEDDED_TOC_START_MISFIRE_MAX_CHAR
                 and (
@@ -665,6 +763,26 @@ def _find_embedded_heading_hits(
             ):
                 classification = "toc_start_misfire"
 
+            if glued_title_marker:
+                if classification in {"toc_start_misfire", "toc_start_misfire_early"}:
+                    pass
+                elif successor_match or EMBEDDED_RESERVED_PATTERN.search(line_noeol):
+                    pass
+                else:
+                    classification = "glued_title_marker"
+
+            if classification == "true_overlap":
+                if not nearby_match and not strong_overlap_evidence:
+                    classification = "overlap_unconfirmed"
+
+            if (
+                successor_match
+                and classification in {"true_overlap", "overlap_unconfirmed"}
+                and char_pos > EMBEDDED_TOC_START_EARLY_MAX_CHAR
+                and not toc_cluster_detected
+            ):
+                classification = "true_overlap_next_item"
+
             hit = EmbeddedHeadingHit(
                 kind="item",
                 classification=classification,
@@ -672,6 +790,7 @@ def _find_embedded_heading_hits(
                 part=embedded_part,
                 line_idx=idx,
                 char_pos=char_pos,
+                full_text_len=full_text_len,
                 snippet=snippet,
             )
         else:
@@ -698,6 +817,14 @@ def _find_embedded_heading_hits(
                 and embedded_part == "I"
             ):
                 classification = "toc_start_misfire"
+            if (
+                not hits
+                and char_pos <= EMBEDDED_TOC_START_EARLY_MAX_CHAR
+                and toc_cluster_detected
+            ):
+                classification = "toc_start_misfire_early"
+            elif char_pos <= EMBEDDED_TOC_START_EARLY_MAX_CHAR and toc_cluster_detected:
+                classification = "toc_row"
 
             hit = EmbeddedHeadingHit(
                 kind="part",
@@ -706,6 +833,7 @@ def _find_embedded_heading_hits(
                 part=embedded_part,
                 line_idx=idx,
                 char_pos=char_pos,
+                full_text_len=full_text_len,
                 snippet=snippet,
             )
 
@@ -758,6 +886,62 @@ def _find_internal_heading_leak(
         match_text=earliest.group(0).strip(),
         context=context,
     )
+
+
+def _char_pos_pct(char_pos: int, full_text_len: int) -> float:
+    if full_text_len <= 0:
+        return 0.0
+    pct = char_pos / full_text_len
+    if pct < 0.0:
+        return 0.0
+    if pct > 1.0:
+        return 1.0
+    return pct
+
+
+def _char_pos_bucket(char_pos_pct: float) -> str:
+    if char_pos_pct <= 0.05:
+        return "0-0.05"
+    if char_pos_pct <= 0.2:
+        return "0.05-0.2"
+    if char_pos_pct <= 0.8:
+        return "0.2-0.8"
+    return "0.8-1.0"
+
+
+def _format_embedded_fail_entry(
+    entry: dict[str, str | int],
+    *,
+    include_accession: bool,
+    include_form: bool,
+    prefix: str,
+) -> str:
+    part = entry.get("item_part") or ""
+    item_id = entry.get("item_id") or ""
+    item_key = f"{part}:{item_id}".strip(":") if part or item_id else "UNKNOWN"
+    snippet = str(entry.get("snippet") or "").replace("\"", "'")
+    char_pos = int(entry.get("char_pos") or 0)
+    full_len = int(entry.get("full_text_len") or 0)
+    pos_pct = float(entry.get("char_pos_pct") or _char_pos_pct(char_pos, full_len))
+    to_end = int(entry.get("to_end") or max(full_len - char_pos, 0))
+    fields = [f"doc_id={entry.get('doc_id','')}"]
+    if include_accession:
+        fields.append(f"accession={entry.get('accession','')}")
+    if include_form:
+        fields.append(f"form={entry.get('form_type','')}")
+    fields.extend(
+        [
+            f"item={item_key}",
+            f"kind={entry.get('kind','')}",
+            f"class={entry.get('classification','')}",
+            f"char_pos={char_pos}",
+            f"full_len={full_len}",
+            f"pos_pct={pos_pct:.3f}",
+            f"to_end={to_end}",
+            f"snippet=\"{snippet}\"",
+        ]
+    )
+    return f"{prefix}{' '.join(fields)}"
 
 
 def load_root_causes_text(path: Path = DEFAULT_ROOT_CAUSES_PATH) -> str:
@@ -853,6 +1037,8 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
     embedded_fail_total = 0
     embedded_classification_counts: Counter[str] = Counter()
     embedded_fail_examples: list[dict[str, str | int]] = []
+    embedded_fail_pos_buckets: Counter[str] = Counter()
+    embedded_fail_pos_buckets: Counter[str] = Counter()
 
     want_cols = [
         "doc_id",
@@ -903,6 +1089,9 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
 
                     lines = _normalize_body_lines(text)
                     total_items += len(items)
+                    item_id_sequence = [
+                        _normalize_item_id(str(entry.get("item_id") or "")) for entry in items
+                    ]
                     flagged_items_for_doc: list[dict[str, str | int | None]] = []
 
                     doc_id = str(row.get("doc_id") or "")
@@ -910,6 +1099,15 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
                     form_label = str(form_type or "")
 
                     for item_idx, item in enumerate(items):
+                        next_item_id = (
+                            item_id_sequence[item_idx + 1]
+                            if item_idx + 1 < len(item_id_sequence)
+                            else None
+                        )
+                        nearby_slice = item_id_sequence[
+                            item_idx + 1 : item_idx + 1 + EMBEDDED_NEARBY_ITEM_WINDOW
+                        ]
+                        nearby_item_ids = {item_id for item_id in nearby_slice if item_id}
                         heading_line_raw = item.get("_heading_line_raw")
                         if heading_line_raw is None:
                             heading_line_raw = item.get("_heading_line") or ""
@@ -947,6 +1145,8 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
                             item.get("full_text") or "",
                             current_item_id=item_id,
                             current_part=current_part_norm,
+                            next_item_id=next_item_id,
+                            nearby_item_ids=nearby_item_ids,
                         )
                         (
                             embedded_warn,
@@ -963,6 +1163,8 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
                         embedded_classification_counts.update(embedded_counts)
                         for hit in embedded_hits:
                             if hit.classification in EMBEDDED_FAIL_CLASSIFICATIONS:
+                                pos_pct = _char_pos_pct(hit.char_pos, hit.full_text_len)
+                                embedded_fail_pos_buckets[_char_pos_bucket(pos_pct)] += 1
                                 embedded_fail_examples.append(
                                     {
                                         "doc_id": doc_id,
@@ -973,6 +1175,9 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
                                         "classification": hit.classification,
                                         "kind": hit.kind,
                                         "char_pos": hit.char_pos,
+                                        "full_text_len": hit.full_text_len,
+                                        "char_pos_pct": pos_pct,
+                                        "to_end": max(hit.full_text_len - hit.char_pos, 0),
                                         "snippet": hit.snippet,
                                     }
                                 )
@@ -1223,23 +1428,52 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
     else:
         lines_out.append("  By classification (hits): (none)")
     lines_out.append("")
-    lines_out.append("Top embedded heading fails (earliest char_pos):")
-    top_embedded_fails = sorted(
+    lines_out.append("Embedded fail position buckets (char_pos_pct):")
+    for bucket in ("0-0.05", "0.05-0.2", "0.2-0.8", "0.8-1.0"):
+        lines_out.append(f"  {bucket}: {embedded_fail_pos_buckets.get(bucket, 0)}")
+    lines_out.append("")
+    lines_out.append("Earliest embedded heading fails:")
+    earliest_embedded_fails = sorted(
         embedded_fail_examples,
         key=lambda entry: entry.get("char_pos", 0),
     )[: config.max_examples]
-    if top_embedded_fails:
-        for entry in top_embedded_fails:
-            part = entry.get("item_part") or ""
-            item_id = entry.get("item_id") or ""
-            item_key = f"{part}:{item_id}".strip(":") if part or item_id else "UNKNOWN"
-            snippet = str(entry.get("snippet") or "").replace("\"", "'")
+    if earliest_embedded_fails:
+        for entry in earliest_embedded_fails:
             lines_out.append(
-                "  "
-                f"doc_id={entry.get('doc_id','')} accession={entry.get('accession','')} "
-                f"form={entry.get('form_type','')} item={item_key} "
-                f"kind={entry.get('kind','')} class={entry.get('classification','')} "
-                f"char_pos={entry.get('char_pos','')} snippet=\"{snippet}\""
+                _format_embedded_fail_entry(
+                    entry, include_accession=True, include_form=True, prefix="  "
+                )
+            )
+    else:
+        lines_out.append("  (no embedded heading fails detected)")
+    lines_out.append("")
+    lines_out.append("Latest embedded heading fails:")
+    latest_embedded_fails = sorted(
+        embedded_fail_examples,
+        key=lambda entry: entry.get("char_pos", 0),
+        reverse=True,
+    )[: config.max_examples]
+    if latest_embedded_fails:
+        for entry in latest_embedded_fails:
+            lines_out.append(
+                _format_embedded_fail_entry(
+                    entry, include_accession=True, include_form=True, prefix="  "
+                )
+            )
+    else:
+        lines_out.append("  (no embedded heading fails detected)")
+    lines_out.append("")
+    lines_out.append("Closest-to-end embedded heading fails:")
+    closest_to_end_fails = sorted(
+        embedded_fail_examples,
+        key=lambda entry: entry.get("to_end", 0),
+    )[: config.max_examples]
+    if closest_to_end_fails:
+        for entry in closest_to_end_fails:
+            lines_out.append(
+                _format_embedded_fail_entry(
+                    entry, include_accession=True, include_form=True, prefix="  "
+                )
             )
     else:
         lines_out.append("  (no embedded heading fails detected)")
@@ -1431,8 +1665,20 @@ def run_boundary_regression(config: RegressionConfig) -> dict[str, int]:
 
                 lines = _normalize_body_lines(text)
                 total_items += len(items)
+                item_id_sequence = [
+                    _normalize_item_id(str(entry.get("item_id") or "")) for entry in items
+                ]
 
-                for item in items:
+                for item_idx, item in enumerate(items):
+                    next_item_id = (
+                        item_id_sequence[item_idx + 1]
+                        if item_idx + 1 < len(item_id_sequence)
+                        else None
+                    )
+                    nearby_slice = item_id_sequence[
+                        item_idx + 1 : item_idx + 1 + EMBEDDED_NEARBY_ITEM_WINDOW
+                    ]
+                    nearby_item_ids = {item_id for item_id in nearby_slice if item_id}
                     heading_line_raw = item.get("_heading_line_raw")
                     if heading_line_raw is None:
                         heading_line_raw = item.get("_heading_line") or ""
@@ -1465,6 +1711,8 @@ def run_boundary_regression(config: RegressionConfig) -> dict[str, int]:
                         item.get("full_text") or "",
                         current_item_id=item_id,
                         current_part=current_part_norm,
+                        next_item_id=next_item_id,
+                        nearby_item_ids=nearby_item_ids,
                     )
                     (
                         embedded_warn,
@@ -1481,6 +1729,8 @@ def run_boundary_regression(config: RegressionConfig) -> dict[str, int]:
                     embedded_classification_counts.update(embedded_counts)
                     for hit in embedded_hits:
                         if hit.classification in EMBEDDED_FAIL_CLASSIFICATIONS:
+                            pos_pct = _char_pos_pct(hit.char_pos, hit.full_text_len)
+                            embedded_fail_pos_buckets[_char_pos_bucket(pos_pct)] += 1
                             embedded_fail_examples.append(
                                 {
                                     "doc_id": doc_id,
@@ -1489,6 +1739,9 @@ def run_boundary_regression(config: RegressionConfig) -> dict[str, int]:
                                     "classification": hit.classification,
                                     "kind": hit.kind,
                                     "char_pos": hit.char_pos,
+                                    "full_text_len": hit.full_text_len,
+                                    "char_pos_pct": pos_pct,
+                                    "to_end": max(hit.full_text_len - hit.char_pos, 0),
                                     "snippet": hit.snippet,
                                 }
                             )
@@ -1582,23 +1835,52 @@ def run_boundary_regression(config: RegressionConfig) -> dict[str, int]:
             lines_out.append(f"    {classification}: {count}")
     else:
         lines_out.append("  By classification (hits): (none)")
-    top_embedded_fails = sorted(
+    lines_out.append("  Embedded fail position buckets (char_pos_pct):")
+    for bucket in ("0-0.05", "0.05-0.2", "0.2-0.8", "0.8-1.0"):
+        lines_out.append(f"    {bucket}: {embedded_fail_pos_buckets.get(bucket, 0)}")
+    earliest_embedded_fails = sorted(
         embedded_fail_examples,
         key=lambda entry: entry.get("char_pos", 0),
     )[: config.sample_per_flag]
-    if top_embedded_fails:
+    if earliest_embedded_fails:
         lines_out.append("  Earliest embedded heading fails:")
-        for entry in top_embedded_fails:
-            part = entry.get("item_part") or ""
-            item_id = entry.get("item_id") or ""
-            item_key = f"{part}:{item_id}".strip(":") if part or item_id else "UNKNOWN"
-            snippet = str(entry.get("snippet") or "").replace("\"", "'")
+        for entry in earliest_embedded_fails:
             lines_out.append(
-                "    "
-                f"doc_id={entry.get('doc_id','')} item={item_key} "
-                f"kind={entry.get('kind','')} class={entry.get('classification','')} "
-                f"char_pos={entry.get('char_pos','')} snippet=\"{snippet}\""
+                _format_embedded_fail_entry(
+                    entry, include_accession=False, include_form=False, prefix="    "
+                )
             )
+    else:
+        lines_out.append("  Earliest embedded heading fails: (none)")
+    latest_embedded_fails = sorted(
+        embedded_fail_examples,
+        key=lambda entry: entry.get("char_pos", 0),
+        reverse=True,
+    )[: config.sample_per_flag]
+    if latest_embedded_fails:
+        lines_out.append("  Latest embedded heading fails:")
+        for entry in latest_embedded_fails:
+            lines_out.append(
+                _format_embedded_fail_entry(
+                    entry, include_accession=False, include_form=False, prefix="    "
+                )
+            )
+    else:
+        lines_out.append("  Latest embedded heading fails: (none)")
+    closest_to_end_fails = sorted(
+        embedded_fail_examples,
+        key=lambda entry: entry.get("to_end", 0),
+    )[: config.sample_per_flag]
+    if closest_to_end_fails:
+        lines_out.append("  Closest-to-end embedded heading fails:")
+        for entry in closest_to_end_fails:
+            lines_out.append(
+                _format_embedded_fail_entry(
+                    entry, include_accession=False, include_form=False, prefix="    "
+                )
+            )
+    else:
+        lines_out.append("  Closest-to-end embedded heading fails: (none)")
     lines_out.append("")
     lines_out.append("Remaining examples by flag:")
     if examples_by_flag:

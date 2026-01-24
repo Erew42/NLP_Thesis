@@ -101,8 +101,117 @@ def test_embedded_heading_toc_start_misfire() -> None:
     text = _load_fixture("toc_start_misfire_sample.txt")
     hits = _find_embedded_heading_hits(text, current_item_id="15", current_part="IV")
     classifications = [hit.classification for hit in hits]
-    assert "toc_start_misfire" in classifications
+    assert "toc_start_misfire_early" in classifications
+    embedded_warn, embedded_fail, _first_hit, _first_flagged, _first_fail, _counts = (
+        _summarize_embedded_hits(hits)
+    )
+    assert embedded_warn
+    assert not embedded_fail
+
+
+def test_embedded_heading_glued_title_marker_warns() -> None:
+    text = "\n".join(
+        [
+            "ITEM 3. LEGAL PROCEEDINGS",
+            "ITEM 4M.ine Safety Disclosures",
+            "Short body line.",
+        ]
+    )
+    hits = _find_embedded_heading_hits(text, current_item_id="3", current_part="II")
+    glued_hits = [hit for hit in hits if hit.classification == "glued_title_marker"]
+    assert glued_hits
+    assert all(hit.item_id == "4" for hit in glued_hits)
+    embedded_warn, embedded_fail, _first_hit, _first_flagged, _first_fail, _counts = (
+        _summarize_embedded_hits(hits)
+    )
+    assert embedded_warn
+    assert not embedded_fail
+
+
+def test_embedded_heading_toc_cluster_no_dot_leaders_is_not_overlap() -> None:
+    text = _load_fixture("toc_cluster_no_dot_leaders.txt")
+    hits = _find_embedded_heading_hits(text, current_item_id="7", current_part="II")
+    classifications = [hit.classification for hit in hits]
+    assert "true_overlap" not in classifications
+    assert "true_overlap_next_item" not in classifications
+    assert any(
+        cls in {"toc_start_misfire_early", "toc_row"} for cls in classifications
+    )
+
+
+def test_embedded_heading_early_toc_start_misfire_warns() -> None:
+    text = "\n".join(
+        [
+            "ITEM 1. BUSINESS",
+            "ITEM 2. PROPERTIES...................... 12",
+            "Introductory text begins here.",
+        ]
+    )
+    hits = _find_embedded_heading_hits(text, current_item_id="1", current_part="I")
+    classifications = [hit.classification for hit in hits]
+    assert "toc_start_misfire_early" in classifications
+    embedded_warn, embedded_fail, _first_hit, _first_flagged, _first_fail, _counts = (
+        _summarize_embedded_hits(hits)
+    )
+    assert embedded_warn
+    assert not embedded_fail
+
+
+def test_embedded_heading_successor_consistent_overlap_fails() -> None:
+    filler = [
+        "This is filler narrative to move the next item heading deeper into the text."
+        for _ in range(10)
+    ]
+    text = "\n".join(
+        [
+            "ITEM 3. LEGAL PROCEEDINGS",
+            "Some introductory text.",
+            *filler,
+            "ITEM 4. Mine safety disclosures and related matters",
+            "This section includes several detailed sentences about mine safety disclosures.",
+            "Additional narrative follows to keep the prose check satisfied.",
+            "More explanation appears later in the section as part of the narrative.",
+        ]
+    )
+    hits = _find_embedded_heading_hits(
+        text,
+        current_item_id="3",
+        current_part="II",
+        next_item_id="4",
+        nearby_item_ids={"4"},
+    )
+    classifications = [hit.classification for hit in hits]
+    assert "true_overlap_next_item" in classifications
     _embedded_warn, embedded_fail, _first_hit, _first_flagged, _first_fail, _counts = (
         _summarize_embedded_hits(hits)
     )
     assert embedded_fail
+
+
+def test_embedded_heading_toc_cluster_successor_not_promoted() -> None:
+    filler = [
+        "This filler line pads the content so the successor heading appears later in the text."
+        for _ in range(8)
+    ]
+    text = "\n".join(
+        [
+            "ITEM 1. BUSINESS",
+            *filler,
+            "ITEM 2.",
+            "PROPERTIES",
+            "ITEM 3.",
+            "LEGAL PROCEEDINGS",
+            "ITEM 4.",
+            "MINE SAFETY DISCLOSURES",
+            "This line contains enough words to count as a sentence for the prose check.",
+        ]
+    )
+    hits = _find_embedded_heading_hits(
+        text,
+        current_item_id="1",
+        current_part="I",
+        next_item_id="2",
+        nearby_item_ids={"2"},
+    )
+    classifications = [hit.classification for hit in hits]
+    assert "true_overlap_next_item" not in classifications
