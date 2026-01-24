@@ -19,8 +19,8 @@ from thesis_pkg.core.sec.suspicious_boundary_diagnostics import (  # noqa: E402
 DEFAULT_PARQUET_DIR = Path(
     r"C:\Users\erik9\Documents\SEC_Data\Data\Sample_Filings\parquet_batches"
 )
-DEFAULT_OUT_PATH = Path("results/suspicious_boundaries_v5.csv")
-DEFAULT_REPORT_PATH = Path("results/suspicious_boundaries_report_v5.txt")
+DEFAULT_OUT_PATH = Path("results/suspicious_boundaries_v6.csv")
+DEFAULT_REPORT_PATH = Path("results/suspicious_boundaries_report_v6.txt")
 DEFAULT_SAMPLES_DIR = Path("results/Suspicious_Filings_Demo")
 
 
