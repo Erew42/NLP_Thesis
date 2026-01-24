@@ -5,6 +5,8 @@ from pathlib import Path
 import pytest
 
 from thesis_pkg.core.sec.suspicious_boundary_diagnostics import (
+    _build_diagnostics_report,
+    _build_flagged_row,
     _find_embedded_heading_hits,
     _summarize_embedded_hits,
 )
@@ -215,3 +217,150 @@ def test_embedded_heading_toc_cluster_successor_not_promoted() -> None:
     )
     classifications = [hit.classification for hit in hits]
     assert "true_overlap_next_item" not in classifications
+
+
+def test_flagged_row_includes_embedded_fields() -> None:
+    text = "\n".join(
+        [
+            "ITEM 6. [RESERVED]",
+            "This line begins the section with prose-like text.",
+            "More details are provided in subsequent sentences.",
+        ]
+    )
+    hits = _find_embedded_heading_hits(text, current_item_id="5", current_part="II")
+    embedded_warn, embedded_fail, first_hit, first_flagged, first_fail, _counts = (
+        _summarize_embedded_hits(hits)
+    )
+    assert embedded_fail
+    row = _build_flagged_row(
+        doc_id="0000000000:000000000000000000",
+        cik="0000000000",
+        accession="000000000000000000",
+        form_type="10-K",
+        filing_date=None,
+        period_end=None,
+        item={
+            "item": "II:5",
+            "canonical_item": "II:5",
+            "exists_by_regime": True,
+            "item_status": "ok",
+        },
+        item_id="5",
+        item_part="II",
+        heading_line_clean="ITEM 5. OTHER INFORMATION",
+        heading_line_raw="ITEM 5. OTHER INFORMATION",
+        heading_idx=0,
+        heading_offset=0,
+        prefix_text="",
+        prefix_kind="textual",
+        is_part_only_prefix=False,
+        is_crossref_prefix=False,
+        prev_line="",
+        next_line="",
+        flags=["embedded_heading_fail"],
+        embedded_hits=hits,
+        embedded_warn=embedded_warn,
+        embedded_fail=embedded_fail,
+        embedded_first_hit=first_hit,
+        embedded_first_flagged=first_flagged,
+        embedded_first_fail=first_fail,
+        leak_info=None,
+        leak_pos="",
+        leak_match="",
+        leak_context="",
+        leak_next_item_id="",
+        leak_next_heading="",
+        item_full_text=text,
+    )
+    provenance = {
+        "prov_python": "py",
+        "prov_module": "module",
+        "prov_cwd": "cwd",
+        "prov_sys_path_hash": "abc12345",
+        "prov_enable_embedded_verifier": "True",
+    }
+    row_dict = row.to_dict(provenance)
+    assert row_dict["embedded_heading_fail"]
+    for key in (
+        "embedded_heading_warn",
+        "embedded_heading_fail",
+        "first_embedded_kind",
+        "first_embedded_class",
+        "first_embedded_item_id",
+        "first_embedded_part",
+        "first_embedded_char_pos",
+        "first_embedded_line_idx",
+        "first_embedded_snippet",
+    ):
+        assert key in row_dict
+
+
+def test_report_includes_embedded_summary_and_not_v3() -> None:
+    text = "\n".join(
+        [
+            "ITEM 6. [RESERVED]",
+            "This line begins the section with prose-like text.",
+            "More details are provided in subsequent sentences.",
+        ]
+    )
+    hits = _find_embedded_heading_hits(text, current_item_id="5", current_part="II")
+    embedded_warn, embedded_fail, first_hit, first_flagged, first_fail, _counts = (
+        _summarize_embedded_hits(hits)
+    )
+    row = _build_flagged_row(
+        doc_id="0000000000:000000000000000000",
+        cik="0000000000",
+        accession="000000000000000000",
+        form_type="10-K",
+        filing_date=None,
+        period_end=None,
+        item={
+            "item": "II:5",
+            "canonical_item": "II:5",
+            "exists_by_regime": True,
+            "item_status": "ok",
+        },
+        item_id="5",
+        item_part="II",
+        heading_line_clean="ITEM 5. OTHER INFORMATION",
+        heading_line_raw="ITEM 5. OTHER INFORMATION",
+        heading_idx=0,
+        heading_offset=0,
+        prefix_text="",
+        prefix_kind="textual",
+        is_part_only_prefix=False,
+        is_crossref_prefix=False,
+        prev_line="",
+        next_line="",
+        flags=["embedded_heading_fail"],
+        embedded_hits=hits,
+        embedded_warn=embedded_warn,
+        embedded_fail=embedded_fail,
+        embedded_first_hit=first_hit,
+        embedded_first_flagged=first_flagged,
+        embedded_first_fail=first_fail,
+        leak_info=None,
+        leak_pos="",
+        leak_match="",
+        leak_context="",
+        leak_next_item_id="",
+        leak_next_heading="",
+        item_full_text=text,
+    )
+    report = _build_diagnostics_report(
+        rows=[row],
+        total_filings=1,
+        total_items=1,
+        total_part_only_prefix=0,
+        parquet_dir=Path("example_dir"),
+        max_examples=5,
+        provenance={
+            "prov_python": "py",
+            "prov_module": "module",
+            "prov_cwd": "cwd",
+            "prov_sys_path_hash": "abc12345",
+            "prov_enable_embedded_verifier": "True",
+        },
+    )
+    assert "Embedded heading summary:" in report
+    assert "(v3)" not in report

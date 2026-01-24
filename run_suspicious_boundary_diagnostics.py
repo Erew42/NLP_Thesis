@@ -19,8 +19,8 @@ from thesis_pkg.core.sec.suspicious_boundary_diagnostics import (  # noqa: E402
 DEFAULT_PARQUET_DIR = Path(
     r"C:\Users\erik9\Documents\SEC_Data\Data\Sample_Filings\parquet_batches"
 )
-DEFAULT_OUT_PATH = Path("results/suspicious_boundaries_v6.csv")
-DEFAULT_REPORT_PATH = Path("results/suspicious_boundaries_report_v6.txt")
+DEFAULT_OUT_PATH = Path("results/suspicious_boundaries_v7.csv")
+DEFAULT_REPORT_PATH = Path("results/suspicious_boundaries_report_v7.txt")
 DEFAULT_SAMPLES_DIR = Path("results/Suspicious_Filings_Demo")
 
 
@@ -70,6 +70,11 @@ def parse_args() -> argparse.Namespace:
         default=25,
         help="Max examples to include in the report.",
     )
+    parser.add_argument(
+        "--disable-embedded-verifier",
+        action="store_true",
+        help="Disable embedded heading verifier during scan.",
+    )
     return parser.parse_args()
 
 
@@ -83,6 +88,7 @@ def main() -> None:
         batch_size=args.batch_size,
         max_files=args.max_files,
         max_examples=args.max_examples,
+        enable_embedded_verifier=not args.disable_embedded_verifier,
     )
     run_boundary_diagnostics(config)
 
