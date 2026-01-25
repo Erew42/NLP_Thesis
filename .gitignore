@@ -16,12 +16,12 @@ visualizations/
 visualize_*.py
 results/
 reviews/
+diff_files/
 
 # Repo-root files (ignore all except README.md)
 /AGENTS.md
 /agents_spec_nlp_thesis.md
 /create_smaller sample.py
-/pyproject.toml
 /review_suspicious_samples.py
 /run_filing_text.py
 /run_impossible_by_regime_diagnostics.py

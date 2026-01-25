@@ -9,6 +9,8 @@ from pathlib import Path
 
 import polars as pl
 
+from thesis_pkg.core.sec import embedded_headings
+
 
 FILENAME_PATTERN = re.compile(
     r"(\d{8})_"          # 1: Date (YYYYMMDD)
@@ -68,7 +70,7 @@ NUMERIC_DOT_HEADING_PATTERN = re.compile(
     re.IGNORECASE,
 )
 DOT_LEADER_PATTERN = re.compile(r"(?:\.{4,}|(?:\.\s*){4,})")
-TOC_DOT_LEADER_PATTERN = re.compile(r"(?:\.{4,}|(?:\.\s*){4,})\s*\d{1,4}\s*$")
+TOC_DOT_LEADER_PATTERN = embedded_headings.TOC_DOT_LEADER_PATTERN
 CONTINUED_PATTERN = re.compile(r"\bcontinued\b", re.IGNORECASE)
 ITEM_MENTION_PATTERN = re.compile(r"\bITEM\s+(?:\d+|[IVXLCDM]+)[A-Z]?\b", re.IGNORECASE)
 PART_ONLY_PREFIX_PATTERN = re.compile(
@@ -188,7 +190,6 @@ ITEM_TITLES_10K = {
         "EXHIBITS FINANCIAL STATEMENT SCHEDULES",
         "INDEX TO EXHIBITS",
     ],
-    "16": ["FORM 10-K SUMMARY", "FORM 10K SUMMARY"],
     "SIGNATURES": ["SIGNATURES"],
 }
 
@@ -804,6 +805,30 @@ def _looks_like_toc_heading_line(
         j += 1
     if j < len(lines) and _pageish_line(lines[j]):
         return len(line_trim) <= max_line_len
+    return False
+
+
+def _has_content_after(
+    lines: list[str],
+    start_idx: int,
+    *,
+    toc_cache: dict[tuple[int, bool], bool],
+    toc_window_flags: list[bool] | None,
+    max_non_empty: int = 4,
+) -> bool:
+    non_empty = 0
+    for j in range(start_idx + 1, len(lines)):
+        line = lines[j]
+        if not line.strip():
+            continue
+        non_empty += 1
+        if non_empty > max_non_empty:
+            break
+        toc_like = embedded_headings._toc_like_line(lines, j, toc_cache, toc_window_flags)
+        if embedded_headings._line_starts_item(line) or embedded_headings.EMBEDDED_PART_PATTERN.match(line) or toc_like:
+            return False
+        if re.search(r"[A-Za-z]", line):
+            return True
     return False
 
 
@@ -1722,17 +1747,21 @@ def _late_item_restart_after(
         non_empty += 1
         if non_empty > max_non_empty:
             break
-        part_match = PART_LINESTART_PATTERN.match(line)
-        if part_match and part_match.group("part").upper() == "I":
-            remainder = line[part_match.end() :]
-            if not remainder.strip():
-                return True
-            item_id, _ = _line_start_item_match(line, max_item=max_item)
+        part_match = embedded_headings.EMBEDDED_PART_PATTERN.match(line)
+        if part_match and part_match.group("roman").upper() == "I":
+            return True
+        part_item_match = embedded_headings.EMBEDDED_TOC_PART_ITEM_PATTERN.match(line)
+        if part_item_match:
+            item_id = embedded_headings._item_id_from_match(part_item_match)
             if item_id == "1":
                 return True
-        item_id, _ = _line_start_item_match(line, max_item=max_item)
-        if item_id == "1":
-            return True
+        item_match = embedded_headings.EMBEDDED_ITEM_PATTERN.match(line) or (
+            embedded_headings.EMBEDDED_ITEM_ROMAN_PATTERN.match(line)
+        )
+        if item_match:
+            item_id = embedded_headings._item_id_from_match(item_match)
+            if item_id == "1":
+                return True
     return False
 
 
@@ -2244,6 +2273,8 @@ def extract_filing_items(
         or (len(lines) <= 200 and max_line_len >= 2_000)
         or (len(lines) <= 300 and avg_line_len >= 1_000 and max_line_len >= 4_000)
     )
+    toc_window_flags = embedded_headings._toc_window_flags(lines)
+    toc_cache: dict[tuple[int, bool], bool] = {}
 
     # Precompute line start offsets (for slicing via absolute positions)
     line_starts: list[int] = []
@@ -2345,6 +2376,19 @@ def extract_filing_items(
                 line_toc_like = True
             if is_toc_marker and item_word_count >= 1 and len(line) <= 8_000:
                 line_toc_like = True
+            content_after = False
+            if line_in_toc_range or toc_window_flags[i]:
+                content_after = _has_content_after(
+                    lines, i, toc_cache=toc_cache, toc_window_flags=toc_window_flags
+                )
+            toc_window_like = False
+            if not line_toc_like:
+                if embedded_headings._toc_candidate_line(line):
+                    line_toc_like = True
+                elif toc_window_flags[i] and not content_after:
+                    if not (scan_sparse_layout and len(line) > 2_000):
+                        line_toc_like = True
+                        toc_window_like = True
             compound_line = _line_has_compound_items(line)
             for _, kind, part, m in events:
                 if kind == "part":
@@ -2366,6 +2410,8 @@ def extract_filing_items(
                     max_item=max_item_number,
                 )
                 if item_id is None:
+                    continue
+                if item_id == "16":
                     continue
 
                 abs_start = line_starts[i] + m.start()
@@ -2436,6 +2482,14 @@ def extract_filing_items(
 
                 start_abs = line_starts[i] + m.start()
                 content_start_abs = line_starts[i] + m.end() + content_adjust
+                candidate_toc_like = line_toc_like
+                if (
+                    candidate_toc_like
+                    and toc_window_like
+                    and scan_sparse_layout
+                    and m.start() > embedded_headings.EMBEDDED_TOC_START_EARLY_MAX_CHAR
+                ):
+                    candidate_toc_like = False
                 boundaries.append(
                     _ItemBoundary(
                         start=start_abs,
@@ -2444,8 +2498,8 @@ def extract_filing_items(
                         item_id=item_id,
                         line_index=i,
                         confidence=confidence,
-                        in_toc_range=line_in_toc_range,
-                        toc_like_line=line_toc_like,
+                        in_toc_range=line_in_toc_range and not content_after,
+                        toc_like_line=candidate_toc_like,
                     )
                 )
 
@@ -2511,22 +2565,42 @@ def extract_filing_items(
         chunk = _trim_trailing_part_marker(chunk)
         truncated_successor = False
         truncated_part = False
-        if repair_boundaries:
-            next_item_id = boundaries[idx + 1].item_id if idx + 1 < len(boundaries) else None
-            chunk, truncated_successor, truncated_part = _apply_high_confidence_truncation(
-                chunk,
-                next_item_id=next_item_id,
-                max_item=max_item_number,
-            )
-
-        part = b.item_part
         item_id = b.item_id
+        part = b.item_part
         inferred_part = _infer_part_for_item_id(
             item_id,
             filing_date=filing_date_parsed,
             period_end=period_end_parsed,
             is_10k=is_10k,
         )
+        part_for_detection = inferred_part or part
+        raw_chunk: str | None = None
+        if repair_boundaries:
+            next_item_id = boundaries[idx + 1].item_id if idx + 1 < len(boundaries) else None
+            next_part = boundaries[idx + 1].item_part if idx + 1 < len(boundaries) else None
+            if next_item_id and is_10k and not next_part:
+                next_part = _infer_part_for_item_id(
+                    next_item_id,
+                    filing_date=filing_date_parsed,
+                    period_end=period_end_parsed,
+                    is_10k=is_10k,
+                )
+            chunk, truncated_successor, truncated_part = _apply_high_confidence_truncation(
+                chunk,
+                next_item_id=next_item_id,
+                max_item=max_item_number,
+            )
+            leak_hit = embedded_headings.find_strong_leak(
+                chunk,
+                current_item_id=item_id,
+                current_part=part_for_detection,
+                next_item_id=next_item_id,
+                next_part=next_part,
+            )
+            if leak_hit and 0 <= leak_hit.char_pos < len(chunk):
+                raw_chunk = chunk
+                chunk = chunk[: leak_hit.char_pos].rstrip()
+
         if inferred_part and (part is None or part != inferred_part):
             part = inferred_part
         item_key = f"{part}:{item_id}" if part else item_id
@@ -2537,6 +2611,8 @@ def extract_filing_items(
             "item": item_key,
             "full_text": chunk,
         }
+        if raw_chunk is not None:
+            record["_raw_text"] = raw_chunk
         if diagnostics:
             dedup_part = b.item_part
             if is_10k:

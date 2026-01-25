@@ -525,9 +525,7 @@ ITEM 16. Principal Accountant Fees and Services.
 Alpha
 """
     items = extract_filing_items(text, form_type="10-K", filing_date="20030630")
-    assert items[0]["item_part"] == "III"
-    assert items[0]["canonical_item"] == "III:16_PRINCIPAL_ACCOUNTANT_FEES_LEGACY"
-    assert items[0]["exists_by_regime"] is True
+    assert items == []
 
 
 def test_extract_filing_items_strips_edgar_headers():
@@ -595,11 +593,33 @@ ITEM 16. FORM 10-K SUMMARY
 Actual summary content.
 """
     items = extract_filing_items(text, form_type="10-K", diagnostics=True)
-    item_16 = next(it for it in items if it["item_id"] == "16")
-    first_line = (item_16["full_text"] or "").lstrip().splitlines()[0]
-    assert "ACTUAL SUMMARY CONTENT" in (item_16["full_text"] or "").upper()
-    assert "PART I" not in first_line.upper()
-    assert "ITEM 1" not in first_line.upper()
+    assert "16" not in {it["item_id"] for it in items}
+    item_1 = next(it for it in items if it["item_id"] == "1")
+    item_1_text = item_1["full_text"] or ""
+    assert "REAL BUSINESS CONTENT" in item_1_text.upper()
+    assert "FORM 10-K SUMMARY" not in item_1_text.upper()
+
+
+def test_extract_filing_items_forward_looking_toc_blocked():
+    text = """<Header></Header>
+FORWARD-LOOKING STATEMENTS
+TABLE OF CONTENTS
+ITEM 1. BUSINESS
+ITEM 1A. RISK FACTORS
+ITEM 7. MANAGEMENT'S DISCUSSION AND ANALYSIS
+
+PART I
+ITEM 1. BUSINESS
+Real business content.
+
+ITEM 1A. RISK FACTORS
+Risk content.
+"""
+    items = extract_filing_items(text, form_type="10-K", diagnostics=True)
+    assert [it["item_id"] for it in items] == ["1", "1A"]
+    item_1_text = next(it for it in items if it["item_id"] == "1")["full_text"] or ""
+    assert "REAL BUSINESS CONTENT" in item_1_text.upper()
+    assert "FORWARD-LOOKING STATEMENTS" not in item_1_text.upper()
 
 
 def test_extract_filing_items_skips_cross_ref_prefix():
