@@ -42,6 +42,15 @@ TOC_MARKER_PATTERN = re.compile(
     re.IGNORECASE,
 )
 TOC_HEADER_LINE_PATTERN = re.compile(r"^\s*table\s+of\s+contents?\s*$", re.IGNORECASE)
+TOC_INDEX_MARKER_PATTERN = re.compile(
+    r"\btable\s+of\s+contents?\b|\btable\s+of\s+content\b|\bindex\b|\b(?:form\s+)?10-?k\s+summary\b",
+    re.IGNORECASE,
+)
+SUMMARY_MARKER_PATTERN = re.compile(r"\b(?:form\s+)?10-?k\s+summary\b", re.IGNORECASE)
+SUMMARY_HEADER_LINE_PATTERN = re.compile(
+    r"^\s*(?:form\s+)?10-?k\s+summary\s*$", re.IGNORECASE
+)
+INDEX_HEADER_LINE_PATTERN = re.compile(r"^\s*index(?:\b|$)", re.IGNORECASE)
 ITEM_WORD_PATTERN = re.compile(r"\bITEM\b", re.IGNORECASE)
 PART_MARKER_PATTERN = re.compile(r"\bPART\s+(?P<part>IV|III|II|I)\b(?!\s*,)", re.IGNORECASE)
 PART_LINESTART_PATTERN = re.compile(r"^\s*PART\s+(?P<part>IV|III|II|I)\b", re.IGNORECASE)
@@ -58,7 +67,8 @@ NUMERIC_DOT_HEADING_PATTERN = re.compile(
     r"^\s*(?P<num>\d{1,2})(?P<let>[A-Z])?\s*[\.\):\-]?\s+(?P<title>.+?)\s*$",
     re.IGNORECASE,
 )
-TOC_DOT_LEADER_PATTERN = re.compile(r"\.{2,}\s*\d{1,4}\s*$")
+DOT_LEADER_PATTERN = re.compile(r"(?:\.{4,}|(?:\.\s*){4,})")
+TOC_DOT_LEADER_PATTERN = re.compile(r"(?:\.{4,}|(?:\.\s*){4,})\s*\d{1,4}\s*$")
 CONTINUED_PATTERN = re.compile(r"\bcontinued\b", re.IGNORECASE)
 ITEM_MENTION_PATTERN = re.compile(r"\bITEM\s+(?:\d+|[IVXLCDM]+)[A-Z]?\b", re.IGNORECASE)
 PART_ONLY_PREFIX_PATTERN = re.compile(
@@ -306,7 +316,7 @@ def _normalize_heading_text(text: str) -> str:
     if not text:
         return ""
     text = text.replace("\u2019", "'")
-    text = TOC_DOT_LEADER_PATTERN.sub("", text)
+    text = DOT_LEADER_PATTERN.sub(" ", text)
     text = re.sub(r"\s+\d{1,4}\s*$", "", text)
     text = text.upper()
     text = text.replace("&", " AND ")
@@ -772,10 +782,18 @@ def _looks_like_toc_heading_line(
     if len(line_trim) > 2000:
         return False
 
-    if TOC_DOT_LEADER_PATTERN.search(line):
+    if DOT_LEADER_PATTERN.search(line):
         return True
+
     if len(line_trim) <= max_line_len and re.search(r"\s+\d{1,4}\s*$", line):
-        return True
+        if idx <= max_early:
+            return True
+        start = max(0, idx - 3)
+        end = min(len(lines), idx + 4)
+        for j in range(start, end):
+            if TOC_INDEX_MARKER_PATTERN.search(lines[j]):
+                return True
+        return False
 
     if idx > max_early:
         return False
@@ -1178,7 +1196,7 @@ def _match_numeric_dot_heading(
 def _is_toc_entry_line(line: str, lookup: dict[str, str], *, max_item: int) -> bool:
     if not line:
         return False
-    if not (TOC_DOT_LEADER_PATTERN.search(line) or re.search(r"\s+\d{1,4}\s*$", line)):
+    if not (DOT_LEADER_PATTERN.search(line) or re.search(r"\s+\d{1,4}\s*$", line)):
         return False
     m = ITEM_LINESTART_PATTERN.match(line)
     if m and _normalize_item_id(m.group("num"), m.group("let"), max_item=max_item) is not None:
@@ -1276,7 +1294,7 @@ _WRAPPED_ITEM_PATTERN = re.compile(
 )
 _WRAPPED_ITEM_LETTER_PATTERN = re.compile(
     r"(?im)^(?P<lead>\s*item\s+(?P<num>\d+|[ivxlcdm]+))\s*(?P<num_punc>[\.\):\-])?"
-    r"\s*\n+\s*(?P<let>[a-z])\s*(?P<punc>[\.\):\-])?"
+    r"\s*\n+\s*(?P<let>[a-z])\s*(?P<punc>[\.\):\-])?(?=\s|$)"
 )
 _ITEM_SUFFIX_PAREN_PATTERN = re.compile(
     r"(?im)^(?P<lead>\s*item\s+\d+[a-z])\s*\((?P<suffix>[a-z])\)\s*(?P<punc>[\.\):\-])?"
@@ -1330,54 +1348,18 @@ def _repair_wrapped_headings(body: str) -> str:
     return body
 
 
-def _detect_toc_line_ranges(lines: list[str], *, max_lines: int = 400) -> list[tuple[int, int]]:
+def _detect_toc_line_ranges(
+    lines: list[str], *, max_lines: int | None = None
+) -> list[tuple[int, int]]:
     """
-    Best-effort detection of a Table of Contents block near the top of a filing.
+    Best-effort detection of Table of Contents / Summary blocks.
     Returns inclusive (start_line, end_line) ranges.
     """
-    n = min(len(lines), max_lines)
+    n = len(lines) if max_lines is None else min(len(lines), max_lines)
     if n == 0:
         return []
 
     ranges: list[tuple[int, int]] = []
-
-    # 1) Inline TOC lines (many ITEM tokens on the same line) and lines explicitly marked as TOC/Index.
-    inline_lines: list[int] = []
-    for i in range(n):
-        line = lines[i]
-        line_len = len(line)
-        item_words = len(ITEM_WORD_PATTERN.findall(line))
-        # Avoid flagging extremely long lines (some filings have most content on one line);
-        # for those, we rely on the character-based TOC cutoff instead.
-        if item_words >= 3 and line_len <= 5_000:
-            inline_lines.append(i)
-            continue
-        if TOC_MARKER_PATTERN.search(line) and item_words >= 1 and line_len <= 8_000:
-            inline_lines.append(i)
-
-    for i in inline_lines:
-        ranges.append((i, i))
-
-    # 2) Multi-line TOC clusters: many line-start ITEM headings close together near the top.
-    heading_lines: list[int] = []
-    for i in range(n):
-        m = ITEM_LINESTART_PATTERN.match(lines[i])
-        if not m:
-            continue
-        if _normalize_item_id(m.group("num"), m.group("let")) is None:
-            continue
-        heading_lines.append(i)
-
-    clusters: list[list[int]] = []
-    if heading_lines:
-        cur = [heading_lines[0]]
-        for idx in heading_lines[1:]:
-            if idx - cur[-1] <= 6:
-                cur.append(idx)
-            else:
-                clusters.append(cur)
-                cur = [idx]
-        clusters.append(cur)
 
     def _pageish(line: str) -> bool:
         return bool(
@@ -1387,12 +1369,76 @@ def _detect_toc_line_ranges(lines: list[str], *, max_lines: int = 400) -> list[t
             or PAGE_OF_PATTERN.match(line)
         )
 
-    toc_markers = {i for i in range(n) if TOC_MARKER_PATTERN.search(lines[i])}
+    def _prose_like(line: str) -> bool:
+        stripped = line.strip()
+        if not stripped:
+            return False
+        if re.fullmatch(r"[\s\-=*]{3,}", stripped):
+            return False
+        letters = re.findall(r"[A-Za-z]", stripped)
+        if not letters:
+            return False
+        has_lower = any(ch.islower() for ch in letters)
+        if not has_lower and len(letters) < 30:
+            return False
+        if len(letters) >= 20 and has_lower:
+            return True
+        return bool(re.search(r"[.!?]\s*$", stripped))
+
+    def _gap_text_line(line: str) -> bool:
+        stripped = line.strip()
+        if not stripped:
+            return False
+        if _pageish(stripped):
+            return False
+        if TOC_INDEX_MARKER_PATTERN.search(stripped):
+            return False
+        letters = [ch for ch in stripped if ch.isalpha()]
+        if not letters:
+            return False
+        return any(ch.islower() for ch in letters)
+
+    # 1) Inline TOC lines (many ITEM tokens on the same line) and explicit marker lines.
+    inline_lines: list[int] = []
+    toc_markers: set[int] = set()
+    heading_lines: list[int] = []
+    for i in range(n):
+        line = lines[i]
+        line_len = len(line)
+        stripped = line.strip()
+        if not stripped:
+            continue
+        item_words = len(ITEM_WORD_PATTERN.findall(line))
+        has_marker = TOC_INDEX_MARKER_PATTERN.search(line) is not None
+        has_summary_marker = SUMMARY_MARKER_PATTERN.search(line) is not None
+        if has_marker:
+            toc_markers.add(i)
+        if item_words >= 3 and line_len <= 5_000:
+            inline_lines.append(i)
+            continue
+        if has_marker and item_words >= 1 and line_len <= 8_000:
+            if not has_summary_marker or DOT_LEADER_PATTERN.search(line) or re.search(
+                r"\s+\d{1,4}\s*$", line
+            ):
+                inline_lines.append(i)
+
+        m_item = ITEM_LINESTART_PATTERN.match(line)
+        if m_item and _normalize_item_id(m_item.group("num"), m_item.group("let")) is not None:
+            heading_lines.append(i)
+            continue
+        m_part = PART_LINESTART_PATTERN.match(line)
+        if m_part is not None and _part_marker_is_heading(line, m_part):
+            heading_lines.append(i)
+            continue
+        if DOT_LEADER_PATTERN.search(line) and NUMERIC_DOT_HEADING_PATTERN.match(line):
+            heading_lines.append(i)
+
+    for i in inline_lines:
+        ranges.append((i, i))
 
     # Handle split markers like:
     #   TABLE
     #   OF CONTENTS
-    # and similar 2-line patterns.
     for i in range(n - 1):
         a = lines[i].strip().lower()
         b = lines[i + 1].strip().lower()
@@ -1402,57 +1448,94 @@ def _detect_toc_line_ranges(lines: list[str], *, max_lines: int = 400) -> list[t
         if a == "table of" and b.startswith("contents"):
             toc_markers.add(i)
             toc_markers.add(i + 1)
+        if a == "form 10-k" and b.startswith("summary"):
+            toc_markers.add(i)
+            toc_markers.add(i + 1)
+
+    # 2) Multi-line TOC clusters: dense heading blocks with sparse prose.
+    clusters: list[list[int]] = []
+    if heading_lines:
+        cur = [heading_lines[0]]
+        for idx in heading_lines[1:]:
+            if idx - cur[-1] <= 6:
+                has_prose_gap = False
+                for j in range(cur[-1] + 1, idx):
+                    if _prose_like(lines[j]) or _gap_text_line(lines[j]):
+                        has_prose_gap = True
+                        break
+                if has_prose_gap:
+                    clusters.append(cur)
+                    cur = [idx]
+                else:
+                    cur.append(idx)
+            else:
+                clusters.append(cur)
+                cur = [idx]
+        clusters.append(cur)
 
     chosen: list[tuple[int, int]] = []
     for cl in clusters:
-        if len(cl) < 4:
-            continue
-        if cl[0] > 300:  # TOC is typically early
-            continue
-
-        followed = 0
-        for li in cl:
-            # TOC entries often include a page number (or dot leaders + page) on the same line.
-            s = lines[li].strip()
-            if re.search(r"\.{3,}\s*\d{1,3}\s*$", s) or re.search(r"\s\d{1,3}\s*$", s):
-                followed += 1
-                continue
-            for j in (li + 1, li + 2, li + 3):
-                if j < n and _pageish(lines[j]):
-                    followed += 1
-                    break
-
         has_marker_near = any((cl[0] - 10) <= mi <= (cl[-1] + 10) for mi in toc_markers)
+        min_headings = 3 if has_marker_near else 4
+        if len(cl) < min_headings:
+            continue
 
-        # Consider the whole block: a true TOC block is mostly headings and pagination markers,
-        # while real content contains narrative lines that break this density.
         nonempty_block = [lines[i].strip() for i in range(cl[0], cl[-1] + 1) if lines[i].strip()]
-        if nonempty_block:
-            headingish = 0
-            for s in nonempty_block:
-                m = ITEM_LINESTART_PATTERN.match(s)
-                if m and _normalize_item_id(m.group("num"), m.group("let")) is not None:
-                    headingish += 1
-                    continue
-                m_part = PART_LINESTART_PATTERN.match(s)
-                if m_part is not None and _part_marker_is_heading(s, m_part):
-                    headingish += 1
-                    continue
-                if TOC_HEADER_LINE_PATTERN.match(s):
-                    headingish += 1
-                    continue
-                if _pageish(s):
-                    headingish += 1
-                    continue
-            headingish_ratio = headingish / len(nonempty_block)
-        else:
-            headingish_ratio = 0.0
+        if not nonempty_block:
+            continue
 
-        # Require either an explicit marker nearby or strong page-number evidence, plus a high
-        # density of headings in the block. This avoids masking real item starts when a TOC header
-        # repeats as a page header inside the filing.
-        if headingish_ratio >= 0.75 and (has_marker_near or followed >= 2):
-            chosen.append((cl[0], cl[-1]))
+        headingish = 0
+        prose_like = 0
+        dot_hits = 0
+        page_hits = 0
+        last_toc_like_idx: int | None = None
+        for i in range(cl[0], cl[-1] + 1):
+            line = lines[i].strip()
+            if not line:
+                continue
+            if DOT_LEADER_PATTERN.search(line) or re.search(r"\s+\d{1,4}\s*$", line) or _pageish(line):
+                last_toc_like_idx = i
+        for s in nonempty_block:
+            if DOT_LEADER_PATTERN.search(s):
+                dot_hits += 1
+            if re.search(r"\s+\d{1,4}\s*$", s) or _pageish(s):
+                page_hits += 1
+            m = ITEM_LINESTART_PATTERN.match(s)
+            if m and _normalize_item_id(m.group("num"), m.group("let")) is not None:
+                headingish += 1
+                continue
+            m_part = PART_LINESTART_PATTERN.match(s)
+            if m_part is not None and _part_marker_is_heading(s, m_part):
+                headingish += 1
+                continue
+            if TOC_HEADER_LINE_PATTERN.match(s) or SUMMARY_HEADER_LINE_PATTERN.match(s):
+                headingish += 1
+                continue
+            if INDEX_HEADER_LINE_PATTERN.match(s):
+                headingish += 1
+                continue
+            if _pageish(s):
+                headingish += 1
+                continue
+            if _prose_like(s):
+                prose_like += 1
+
+        headingish_ratio = headingish / len(nonempty_block)
+        prose_ratio = prose_like / len(nonempty_block)
+        if headingish_ratio < 0.75 or prose_ratio > 0.2:
+            continue
+
+        late_cluster = cl[0] > 300
+        strong_page = dot_hits >= 2 or page_hits >= 2
+        if late_cluster:
+            if not (has_marker_near or dot_hits >= 3 or page_hits >= 3):
+                continue
+        elif not (has_marker_near or strong_page):
+            continue
+        end_idx = cl[-1]
+        if (dot_hits >= 2 or page_hits >= 2) and last_toc_like_idx is not None:
+            end_idx = min(end_idx, last_toc_like_idx)
+        chosen.append((cl[0], end_idx))
 
     ranges.extend(chosen)
 
@@ -1577,6 +1660,358 @@ def _trim_trailing_part_marker(text: str) -> str:
     return "\n".join(lines).rstrip()
 
 
+def _item_id_to_int_simple(item_id: str | None) -> int | None:
+    if not item_id:
+        return None
+    m = re.match(r"^(\d+)", item_id)
+    if not m:
+        return None
+    return int(m.group(1))
+
+
+def _leading_ws_len(line: str) -> int:
+    return len(line) - len(line.lstrip(" \t"))
+
+
+def _line_start_item_match(
+    line: str,
+    *,
+    max_item: int,
+) -> tuple[str | None, int | None]:
+    if not line:
+        return None, None
+    m = ITEM_LINESTART_PATTERN.match(line)
+    if m:
+        item_id = _normalize_item_id(m.group("num"), m.group("let"), max_item=max_item)
+        if item_id:
+            return item_id, m.end()
+
+    part_match = PART_LINESTART_PATTERN.match(line)
+    if part_match:
+        rest = line[part_match.end() :]
+        rest_stripped = rest.lstrip(" \t:/-")
+        offset = len(rest) - len(rest_stripped)
+        m_item = ITEM_CANDIDATE_PATTERN.match(rest_stripped)
+        if m_item:
+            item_id = _normalize_item_id(m_item.group("num"), m_item.group("let"), max_item=max_item)
+            if item_id:
+                return item_id, part_match.end() + offset + m_item.end()
+
+    return None, None
+
+
+def _is_late_item_start(item_id: str | None, item_part: str | None) -> bool:
+    if item_part and item_part.upper() in {"III", "IV"}:
+        return True
+    num = _item_id_to_int_simple(item_id)
+    return num is not None and num >= 10
+
+
+def _late_item_restart_after(
+    lines: list[str],
+    start_idx: int,
+    *,
+    max_non_empty: int = 20,
+    max_item: int,
+) -> bool:
+    non_empty = 0
+    for j in range(start_idx + 1, len(lines)):
+        line = lines[j]
+        if not line.strip():
+            continue
+        non_empty += 1
+        if non_empty > max_non_empty:
+            break
+        part_match = PART_LINESTART_PATTERN.match(line)
+        if part_match and part_match.group("part").upper() == "I":
+            remainder = line[part_match.end() :]
+            if not remainder.strip():
+                return True
+            item_id, _ = _line_start_item_match(line, max_item=max_item)
+            if item_id == "1":
+                return True
+        item_id, _ = _line_start_item_match(line, max_item=max_item)
+        if item_id == "1":
+            return True
+    return False
+
+
+def _title_like_line(line: str) -> bool:
+    stripped = line.strip()
+    if not stripped:
+        return False
+    if re.search(r"[.!?]\s*$", stripped):
+        return False
+    words = re.findall(r"[A-Za-z][A-Za-z'&-]*", stripped)
+    if len(words) < 2 or len(words) > 14:
+        return False
+    if stripped.isupper():
+        return True
+    titlecase = sum(1 for word in words if word[0].isupper())
+    return titlecase / len(words) >= 0.7
+
+
+def _part_boundary_header_like(
+    lines: list[str],
+    idx: int,
+    *,
+    max_item: int,
+    lookahead: int = 6,
+) -> bool:
+    if not PART_ONLY_PREFIX_PATTERN.match(lines[idx]):
+        return False
+    if idx > 0:
+        prev = lines[idx - 1].strip()
+        if prev and not re.fullmatch(r"[\s\-=*]{3,}", prev):
+            return False
+    non_empty = 0
+    for j in range(idx + 1, len(lines)):
+        if not lines[j].strip():
+            continue
+        non_empty += 1
+        if non_empty > lookahead:
+            break
+        item_id, _ = _line_start_item_match(lines[j], max_item=max_item)
+        if item_id:
+            return True
+        if _title_like_line(lines[j]):
+            return True
+    return False
+
+
+def _apply_high_confidence_truncation(
+    text: str,
+    *,
+    next_item_id: str | None,
+    max_item: int,
+) -> tuple[str, bool, bool]:
+    if not text:
+        return text, False, False
+
+    lines = text.splitlines(keepends=True)
+    lines_noeol = [line.rstrip("\r\n") for line in lines]
+
+    if next_item_id:
+        offset = 0
+        for idx, line_noeol in enumerate(lines_noeol):
+            if not line_noeol.strip():
+                offset += len(lines[idx])
+                continue
+            item_id, match_end = _line_start_item_match(line_noeol, max_item=max_item)
+            if item_id and item_id == next_item_id:
+                suffix = ""
+                if match_end is not None:
+                    suffix = line_noeol[match_end:]
+                suffix = suffix.lstrip(" \t:-.")
+                if not CROSS_REF_SUFFIX_START_PATTERN.match(suffix):
+                    cut = offset + _leading_ws_len(line_noeol)
+                    return text[:cut].rstrip(), True, False
+            offset += len(lines[idx])
+
+    offset = 0
+    for idx, line_noeol in enumerate(lines_noeol):
+        if PART_ONLY_PREFIX_PATTERN.match(line_noeol):
+            if _part_boundary_header_like(lines_noeol, idx, max_item=max_item):
+                cut = offset + _leading_ws_len(line_noeol)
+                return text[:cut].rstrip(), False, True
+        offset += len(lines[idx])
+
+    return text, False, False
+
+
+def _select_best_boundaries(
+    candidates: list["_ItemBoundary"],
+    *,
+    lines: list[str],
+    body: str,
+    skip_until_pos: int | None,
+    filing_date: date | None,
+    period_end: date | None,
+    is_10k: bool,
+    max_item: int,
+) -> tuple[list["_ItemBoundary"], dict[tuple[str | None, str], dict[str, int | bool]]]:
+    if not candidates:
+        return [], {}
+
+    candidates = sorted(candidates, key=lambda b: b.start)
+
+    def _candidate_end(idx: int, pool: list["_ItemBoundary"]) -> int:
+        end_pos = len(body)
+        for j in range(idx + 1, len(pool)):
+            cand = pool[j]
+            if cand.confidence < HEADING_CONF_HIGH:
+                continue
+            if not _is_plausible_successor(
+                pool[idx],
+                cand,
+                filing_date=filing_date,
+                period_end=period_end,
+                is_10k=is_10k,
+            ):
+                continue
+            end_pos = cand.start
+            break
+        return end_pos
+
+    candidate_ends = [_candidate_end(idx, candidates) for idx in range(len(candidates))]
+    candidate_approx_len = [
+        max(candidate_ends[idx] - b.content_start, 0) for idx, b in enumerate(candidates)
+    ]
+
+    by_key: dict[tuple[str | None, str], list[tuple[int, "_ItemBoundary"]]] = {}
+    for idx, b in enumerate(candidates):
+        part = b.item_part
+        if is_10k:
+            inferred = _infer_part_for_item_id(
+                b.item_id,
+                filing_date=filing_date,
+                period_end=period_end,
+                is_10k=is_10k,
+            )
+            if inferred:
+                part = inferred
+        key = (part, b.item_id)
+        by_key.setdefault(key, []).append((idx, b))
+
+    orderable: list[tuple[tuple[int, int, int, str], tuple[str | None, str]]] = []
+    unordered: list[tuple[str | None, str]] = []
+    for key in by_key:
+        part, item_id = key
+        if part is None and not is_10k:
+            order_key = None
+        else:
+            order_key = _item_order_key(
+                part,
+                item_id,
+                filing_date=filing_date,
+                period_end=period_end,
+                is_10k=is_10k,
+            )
+        if order_key is None:
+            unordered.append(key)
+        else:
+            orderable.append((order_key, key))
+
+    orderable.sort(key=lambda t: t[0])
+    unordered.sort(key=lambda k: str(k[1]))
+    ordered_keys = [k for _, k in orderable] + unordered
+
+    prev_map: dict[tuple[str | None, str], tuple[str | None, str]] = {}
+    next_map: dict[tuple[str | None, str], tuple[str | None, str]] = {}
+    for idx, key in enumerate(ordered_keys):
+        if idx > 0:
+            prev_map[key] = ordered_keys[idx - 1]
+        if idx + 1 < len(ordered_keys):
+            next_map[key] = ordered_keys[idx + 1]
+
+    min_start_by_key = {key: min(b.start for _, b in entries) for key, entries in by_key.items()}
+    max_start_by_key = {key: max(b.start for _, b in entries) for key, entries in by_key.items()}
+
+    def _fallback_select(entries: list[tuple[int, "_ItemBoundary"]]) -> "_ItemBoundary":
+        best: "_ItemBoundary" | None = None
+        best_score: tuple[int, int, int] | None = None
+        for idx, b in entries:
+            end = candidate_ends[idx]
+            chunk = body[b.content_start : end]
+            chunk = chunk.lstrip(" \t:-")
+            chunk = _remove_pagination(chunk)
+            score = len(chunk.strip())
+            score_key = (b.confidence, score, b.start)
+            if best_score is None or score_key > best_score:
+                best = b
+                best_score = score_key
+        assert best is not None
+        return best
+
+    selected: list["_ItemBoundary"] = []
+    meta: dict[tuple[str | None, str], dict[str, int | bool]] = {}
+    for key, entries in by_key.items():
+        total = len(entries)
+        toc_rejected = 0
+        ok_entries: list[tuple[int, "_ItemBoundary", str | None, str | None]] = []
+        for idx, b in entries:
+            part_for_checks = b.item_part
+            inferred_part = None
+            if is_10k:
+                inferred_part = _infer_part_for_item_id(
+                    b.item_id,
+                    filing_date=filing_date,
+                    period_end=period_end,
+                    is_10k=is_10k,
+                )
+                if inferred_part:
+                    part_for_checks = inferred_part
+
+            late_restart = False
+            if _is_late_item_start(b.item_id, part_for_checks):
+                late_restart = _late_item_restart_after(
+                    lines,
+                    b.line_index,
+                    max_non_empty=20,
+                    max_item=max_item,
+                )
+
+            if b.in_toc_range or late_restart or b.toc_like_line:
+                toc_rejected += 1
+                continue
+            ok_entries.append((idx, b, part_for_checks, inferred_part))
+
+        chosen: "_ItemBoundary"
+        verified = True
+        if ok_entries:
+            prev_key = prev_map.get(key)
+            next_key = next_map.get(key)
+            prev_start = min_start_by_key.get(prev_key)
+            next_start = max_start_by_key.get(next_key)
+
+            def _score(entry: tuple[int, "_ItemBoundary", str | None, str | None]) -> tuple[int, int, int, int, int, int]:
+                idx, b, part_for_checks, inferred_part = entry
+                ordering_bonus = 0
+                if prev_start is not None and b.start > prev_start:
+                    ordering_bonus += 1
+                if next_start is not None and b.start < next_start:
+                    ordering_bonus += 1
+                if ordering_bonus == 2:
+                    ordering_bonus += 1
+
+                part_bonus = 0
+                if is_10k and inferred_part and b.item_part:
+                    part_bonus = 1 if b.item_part == inferred_part else -1
+
+                score = {HEADING_CONF_HIGH: 4, HEADING_CONF_MED: 2, HEADING_CONF_LOW: 0}.get(
+                    b.confidence, 0
+                )
+                score += ordering_bonus
+                score += part_bonus
+                if skip_until_pos is not None and b.start < skip_until_pos:
+                    score -= 2
+                if b.toc_like_line:
+                    score -= 3
+
+                approx_len = candidate_approx_len[idx]
+                return (score, b.confidence, ordering_bonus, part_bonus, approx_len, b.start)
+
+            chosen = max(ok_entries, key=_score)[1]
+        else:
+            only_toc = all(
+                b.in_toc_range or b.toc_like_line for _, b in entries
+            )
+            if only_toc:
+                continue
+            chosen = _fallback_select(entries)
+            verified = False
+
+        selected.append(chosen)
+        meta[key] = {
+            "start_candidates_total": total,
+            "start_candidates_toc_rejected": toc_rejected,
+            "start_selection_verified": verified,
+        }
+
+    selected.sort(key=lambda b: b.start)
+    return selected, meta
+
+
 def _detect_heading_style_10k(
     lines: list[str],
     line_starts: list[int],
@@ -1671,6 +2106,8 @@ class _ItemBoundary:
     item_id: str
     line_index: int
     confidence: int
+    in_toc_range: bool = False
+    toc_like_line: bool = False
 
 
 def _is_empty_item_text(text: str | None) -> bool:
@@ -1745,6 +2182,7 @@ def extract_filing_items(
     regime: bool = True,
     drop_impossible: bool = False,
     diagnostics: bool = False,
+    repair_boundaries: bool = True,
     max_item_number: int = 20,
 ) -> list[dict[str, str | bool | None]]:
     """
@@ -1760,6 +2198,7 @@ def extract_filing_items(
       - item_status: active/reserved/optional/unknown
       - _heading_line (clean) / _heading_line_raw / _heading_line_index / _heading_offset when diagnostics=True
       - when drop_impossible=True, items with exists_by_regime == False are dropped
+      - when repair_boundaries=True, high-confidence end-boundary truncation is applied
 
     The function does not emit TOC rows; TOC is only used internally to avoid false starts.
     """
@@ -1857,11 +2296,13 @@ def extract_filing_items(
         scan_sparse_layout = True if attempt else sparse_layout
         boundaries = []
         current_part: str | None = None
+        toc_part: str | None = None
 
         # Build candidates by scanning lines in order while tracking PART markers within each line.
         for i, line in enumerate(lines):
-            if i in toc_mask:
-                continue
+            line_in_toc_range = i in toc_mask
+            if not line_in_toc_range:
+                toc_part = None
 
             # Skip obvious page-header TOC repeats inside items (keep content otherwise).
             if TOC_HEADER_LINE_PATTERN.match(line):
@@ -1897,16 +2338,23 @@ def extract_filing_items(
             line_part_end: int | None = None
             is_toc_marker = TOC_MARKER_PATTERN.search(line) is not None
             item_word_count = 0
-            if i < 400 or is_toc_marker:
+            if i < 800 or is_toc_marker or line_in_toc_range:
                 item_word_count = len(ITEM_WORD_PATTERN.findall(line))
             line_toc_like = _looks_like_toc_heading_line(lines, i)
+            if item_word_count >= 3 and len(line) <= 5_000 and (i < 800 or is_toc_marker or line_in_toc_range):
+                line_toc_like = True
+            if is_toc_marker and item_word_count >= 1 and len(line) <= 8_000:
+                line_toc_like = True
             compound_line = _line_has_compound_items(line)
             for _, kind, part, m in events:
                 if kind == "part":
                     assert m is not None
                     line_part = part
                     line_part_end = m.end()
-                    if not line_has_item_word:
+                    if line_in_toc_range:
+                        if not line_has_item_word:
+                            toc_part = part
+                    elif not line_has_item_word:
                         current_part = part
                     continue
 
@@ -1920,20 +2368,7 @@ def extract_filing_items(
                 if item_id is None:
                     continue
 
-                # Basic TOC-line filters (only for reasonably short early lines).
-                if i < 400:
-                    if item_word_count >= 3 and len(line) <= 5_000:
-                        continue
-                # Only skip TOC-marker lines when they look like true TOC listings (many ITEM tokens).
-                # Some filings embed a repeated "Table of Contents" page header alongside real headings.
-                if is_toc_marker and item_word_count >= 3 and len(line) <= 8_000:
-                    continue
-                if line_toc_like:
-                    continue
-
                 abs_start = line_starts[i] + m.start()
-                if skip_until_pos is not None and abs_start < skip_until_pos:
-                    continue
 
                 # Heuristics to avoid cross-references:
                 prefix = line[: m.start()]
@@ -1992,7 +2427,7 @@ def extract_filing_items(
                 if _pageish_line(line):
                     confidence = min(confidence, HEADING_CONF_LOW)
 
-                item_part = current_part
+                item_part = toc_part if line_in_toc_range else current_part
                 part_hint = line_part or prefix_part
                 if part_near_item and part_hint:
                     item_part = part_hint
@@ -2009,6 +2444,8 @@ def extract_filing_items(
                         item_id=item_id,
                         line_index=i,
                         confidence=confidence,
+                        in_toc_range=line_in_toc_range,
+                        toc_like_line=line_toc_like,
                     )
                 )
 
@@ -2032,7 +2469,18 @@ def extract_filing_items(
     if not boundaries:
         return []
 
-    boundaries.sort(key=lambda b: b.start)
+    boundaries, selection_meta = _select_best_boundaries(
+        boundaries,
+        lines=lines,
+        body=body,
+        skip_until_pos=skip_until_pos,
+        filing_date=filing_date_parsed,
+        period_end=period_end_parsed,
+        is_10k=is_10k,
+        max_item=max_item_number,
+    )
+    if not boundaries:
+        return []
 
     def _boundary_end(idx: int, pool: list[_ItemBoundary]) -> int:
         end_pos = len(body)
@@ -2054,40 +2502,6 @@ def extract_filing_items(
 
     boundary_ends = [_boundary_end(idx, boundaries) for idx in range(len(boundaries))]
 
-    # De-duplicate per (part, item_id) by preferring higher-confidence starts,
-    # then longer content, to avoid TOC/page-header leakage.
-    best_by_key: dict[tuple[str | None, str], tuple[int, int, int, _ItemBoundary]] = {}
-    for idx, b in enumerate(boundaries):
-        end = boundary_ends[idx]
-        chunk = body[b.content_start : end]
-        chunk = chunk.lstrip(" \t:-")
-        chunk = _remove_pagination(chunk)
-        score = len(chunk.strip())
-        dedup_part = b.item_part
-        if is_10k:
-            inferred_part = _infer_part_for_item_id(
-                b.item_id,
-                filing_date=filing_date_parsed,
-                period_end=period_end_parsed,
-                is_10k=is_10k,
-            )
-            if inferred_part:
-                dedup_part = inferred_part
-        key = (dedup_part, b.item_id)
-        prev = best_by_key.get(key)
-        if prev is None:
-            best_by_key[key] = (b.confidence, score, b.start, b)
-            continue
-        if b.confidence > prev[0]:
-            best_by_key[key] = (b.confidence, score, b.start, b)
-            continue
-        if b.confidence == prev[0] and (score > prev[1] or (score == prev[1] and b.start > prev[2])):
-            best_by_key[key] = (b.confidence, score, b.start, b)
-
-    boundaries = [t[3] for t in best_by_key.values()]
-    boundaries.sort(key=lambda b: b.start)
-    boundary_ends = [_boundary_end(idx, boundaries) for idx in range(len(boundaries))]
-
     out_items: list[dict[str, str | None]] = []
     for idx, b in enumerate(boundaries):
         end = boundary_ends[idx]
@@ -2095,6 +2509,15 @@ def extract_filing_items(
         chunk = chunk.lstrip(" \t:-")
         chunk = _remove_pagination(chunk)
         chunk = _trim_trailing_part_marker(chunk)
+        truncated_successor = False
+        truncated_part = False
+        if repair_boundaries:
+            next_item_id = boundaries[idx + 1].item_id if idx + 1 < len(boundaries) else None
+            chunk, truncated_successor, truncated_part = _apply_high_confidence_truncation(
+                chunk,
+                next_item_id=next_item_id,
+                max_item=max_item_number,
+            )
 
         part = b.item_part
         item_id = b.item_id
@@ -2115,6 +2538,29 @@ def extract_filing_items(
             "full_text": chunk,
         }
         if diagnostics:
+            dedup_part = b.item_part
+            if is_10k:
+                inferred = _infer_part_for_item_id(
+                    b.item_id,
+                    filing_date=filing_date_parsed,
+                    period_end=period_end_parsed,
+                    is_10k=is_10k,
+                )
+                if inferred:
+                    dedup_part = inferred
+            meta_key = (dedup_part, b.item_id)
+            selection_meta_entry = selection_meta.get(meta_key, {})
+            record["_start_candidates_total"] = selection_meta_entry.get(
+                "start_candidates_total"
+            )
+            record["_start_candidates_toc_rejected"] = selection_meta_entry.get(
+                "start_candidates_toc_rejected"
+            )
+            record["_start_selection_verified"] = selection_meta_entry.get(
+                "start_selection_verified"
+            )
+            record["_truncated_successor_heading"] = truncated_successor
+            record["_truncated_part_boundary"] = truncated_part
             idx = bisect_right(line_starts, b.start) - 1
             if 0 <= idx < len(lines):
                 raw_line = lines[idx]

@@ -1271,6 +1271,11 @@ def _build_diagnostics_report(
     total_filings: int,
     total_items: int,
     total_part_only_prefix: int,
+    start_candidates_total: int,
+    start_candidates_toc_rejected_total: int,
+    start_selection_unverified_total: int,
+    truncated_successor_total: int,
+    truncated_part_total: int,
     parquet_dir: Path,
     max_examples: int,
     provenance: dict[str, str],
@@ -1373,6 +1378,13 @@ def _build_diagnostics_report(
     lines_out.append(f"Total items extracted: {total_items}")
     lines_out.append(f"Total flagged items: {len(rows)}")
     lines_out.append(f"Part-only prefixes (informational): {total_part_only_prefix}")
+    lines_out.append(f"Start candidates (total): {start_candidates_total}")
+    lines_out.append(
+        f"Start candidates rejected by TOC/SUMMARY: {start_candidates_toc_rejected_total}"
+    )
+    lines_out.append(f"Start selections unverified: {start_selection_unverified_total}")
+    lines_out.append(f"Truncated by successor heading: {truncated_successor_total}")
+    lines_out.append(f"Truncated by PART boundary: {truncated_part_total}")
     lines_out.append("")
     lines_out.append("Flags (counts):")
     for flag, count in flags_count.most_common():
@@ -1383,6 +1395,14 @@ def _build_diagnostics_report(
     lines_out.append("Embedded heading summary:")
     lines_out.append(f"  embedded_heading_warn: {embedded_warn_total}")
     lines_out.append(f"  embedded_heading_fail: {embedded_fail_total}")
+    lines_out.append(
+        "  toc_start_misfire hits: "
+        f"{embedded_classification_counts.get('toc_start_misfire', 0)}"
+    )
+    lines_out.append(
+        "  toc_start_misfire_early hits: "
+        f"{embedded_classification_counts.get('toc_start_misfire_early', 0)}"
+    )
     if embedded_classification_counts:
         lines_out.append("  By classification (hits):")
         for classification, count in embedded_classification_counts.most_common():
@@ -1536,6 +1556,11 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
     total_filings = 0
     total_items = 0
     total_part_only_prefix = 0
+    start_candidates_total = 0
+    start_candidates_toc_rejected_total = 0
+    start_selection_unverified_total = 0
+    truncated_successor_total = 0
+    truncated_part_total = 0
     # Keep a single row representation to avoid CSV/report/sample schema drift.
     flagged_rows: list[DiagnosticsRow] = []
 
@@ -1659,6 +1684,16 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
                             embedded_first_fail,
                             _embedded_counts,
                         ) = _summarize_embedded_hits(embedded_hits)
+                        start_candidates_total += int(item.get("_start_candidates_total") or 0)
+                        start_candidates_toc_rejected_total += int(
+                            item.get("_start_candidates_toc_rejected") or 0
+                        )
+                        if item.get("_start_selection_verified") is False:
+                            start_selection_unverified_total += 1
+                        if item.get("_truncated_successor_heading"):
+                            truncated_successor_total += 1
+                        if item.get("_truncated_part_boundary"):
+                            truncated_part_total += 1
 
                         flags: list[str] = []
                         if heading_idx is None or heading_idx < 0:
@@ -1790,6 +1825,11 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
         total_filings=total_filings,
         total_items=total_items,
         total_part_only_prefix=total_part_only_prefix,
+        start_candidates_total=start_candidates_total,
+        start_candidates_toc_rejected_total=start_candidates_toc_rejected_total,
+        start_selection_unverified_total=start_selection_unverified_total,
+        truncated_successor_total=truncated_successor_total,
+        truncated_part_total=truncated_part_total,
         parquet_dir=parquet_dir,
         max_examples=config.max_examples,
         provenance=provenance,
@@ -1841,6 +1881,11 @@ def run_boundary_regression(config: RegressionConfig) -> dict[str, int]:
     for flag_field in baseline.get_column("flags").to_list():
         for flag in _split_flags(flag_field):
             before_counts[flag] += 1
+    before_first_embedded_counts: Counter[str] = Counter()
+    if "first_embedded_classification" in baseline.columns:
+        for value in baseline.get_column("first_embedded_classification").to_list():
+            if value:
+                before_first_embedded_counts[str(value)] += 1
 
     files = sorted(parquet_dir.glob("*_batch_*.parquet"))
     if config.max_files and config.max_files > 0:
@@ -1855,10 +1900,16 @@ def run_boundary_regression(config: RegressionConfig) -> dict[str, int]:
     total_items = 0
     total_flagged = 0
     total_part_only_prefix = 0
+    start_candidates_total = 0
+    start_candidates_toc_rejected_total = 0
+    start_selection_unverified_total = 0
+    truncated_successor_total = 0
+    truncated_part_total = 0
     seen_doc_ids: set[str] = set()
     embedded_warn_total = 0
     embedded_fail_total = 0
     embedded_classification_counts: Counter[str] = Counter()
+    after_first_embedded_counts: Counter[str] = Counter()
     embedded_fail_examples: list[dict[str, str | int]] = []
 
     want_cols = [
@@ -1967,6 +2018,18 @@ def run_boundary_regression(config: RegressionConfig) -> dict[str, int]:
                         _embedded_first_fail,
                         embedded_counts,
                     ) = _summarize_embedded_hits(embedded_hits)
+                    if _embedded_first_flagged:
+                        after_first_embedded_counts[_embedded_first_flagged.classification] += 1
+                    start_candidates_total += int(item.get("_start_candidates_total") or 0)
+                    start_candidates_toc_rejected_total += int(
+                        item.get("_start_candidates_toc_rejected") or 0
+                    )
+                    if item.get("_start_selection_verified") is False:
+                        start_selection_unverified_total += 1
+                    if item.get("_truncated_successor_heading"):
+                        truncated_successor_total += 1
+                    if item.get("_truncated_part_boundary"):
+                        truncated_part_total += 1
                     if embedded_warn:
                         embedded_warn_total += 1
                     if embedded_fail:
@@ -2061,6 +2124,13 @@ def run_boundary_regression(config: RegressionConfig) -> dict[str, int]:
     lines_out.append(f"Total items extracted: {total_items}")
     lines_out.append(f"Total flagged items: {total_flagged}")
     lines_out.append(f"Part-only prefixes (informational): {total_part_only_prefix}")
+    lines_out.append(f"Start candidates (total): {start_candidates_total}")
+    lines_out.append(
+        f"Start candidates rejected by TOC/SUMMARY: {start_candidates_toc_rejected_total}"
+    )
+    lines_out.append(f"Start selections unverified: {start_selection_unverified_total}")
+    lines_out.append(f"Truncated by successor heading: {truncated_successor_total}")
+    lines_out.append(f"Truncated by PART boundary: {truncated_part_total}")
     if missing_doc_ids:
         lines_out.append(f"Doc IDs missing in parquet: {len(missing_doc_ids)}")
     lines_out.append("")
@@ -2071,9 +2141,29 @@ def run_boundary_regression(config: RegressionConfig) -> dict[str, int]:
             f"  {flag}: {before_counts.get(flag, 0)} -> {after_counts.get(flag, 0)}"
         )
     lines_out.append("")
+    lines_out.append("toc_start_misfire (first_embedded_classification, before -> after):")
+    lines_out.append(
+        "  toc_start_misfire: "
+        f"{before_first_embedded_counts.get('toc_start_misfire', 0)} -> "
+        f"{after_first_embedded_counts.get('toc_start_misfire', 0)}"
+    )
+    lines_out.append(
+        "  toc_start_misfire_early: "
+        f"{before_first_embedded_counts.get('toc_start_misfire_early', 0)} -> "
+        f"{after_first_embedded_counts.get('toc_start_misfire_early', 0)}"
+    )
+    lines_out.append("")
     lines_out.append("Embedded heading summary (after scan):")
     lines_out.append(f"  embedded_heading_warn: {embedded_warn_total}")
     lines_out.append(f"  embedded_heading_fail: {embedded_fail_total}")
+    lines_out.append(
+        "  toc_start_misfire hits: "
+        f"{embedded_classification_counts.get('toc_start_misfire', 0)}"
+    )
+    lines_out.append(
+        "  toc_start_misfire_early hits: "
+        f"{embedded_classification_counts.get('toc_start_misfire_early', 0)}"
+    )
     if embedded_classification_counts:
         lines_out.append("  By classification (hits):")
         for classification, count in embedded_classification_counts.most_common():

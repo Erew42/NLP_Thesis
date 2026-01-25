@@ -559,6 +559,49 @@ Bravo
     assert [it["item_id"] for it in items] == ["1", "2"]
 
 
+def test_extract_filing_items_late_item_rejects_toc_restart():
+    text = """<Header></Header>
+TABLE OF CONTENTS
+ITEM 13. CERTAIN RELATIONSHIPS AND RELATED TRANSACTIONS
+PART I
+ITEM 1. BUSINESS
+Alpha
+
+PART III
+ITEM 13. CERTAIN RELATIONSHIPS AND RELATED TRANSACTIONS
+Real item 13 content.
+"""
+    items = extract_filing_items(text, form_type="10-K", diagnostics=True)
+    item_13 = next(it for it in items if it["item_id"] == "13")
+    first_line = (item_13["full_text"] or "").lstrip().splitlines()[0]
+    assert "REAL ITEM 13 CONTENT" in (item_13["full_text"] or "").upper()
+    assert "PART I" not in first_line.upper()
+    assert "ITEM 1" not in first_line.upper()
+
+
+def test_extract_filing_items_summary_block_skips_toc_start():
+    text = """<Header></Header>
+FORM 10-K SUMMARY
+ITEM 1. BUSINESS
+ITEM 1A. RISK FACTORS
+ITEM 7. MANAGEMENT'S DISCUSSION AND ANALYSIS
+ITEM 16. FORM 10-K SUMMARY
+PART I
+ITEM 1. BUSINESS
+Real business content.
+
+PART IV
+ITEM 16. FORM 10-K SUMMARY
+Actual summary content.
+"""
+    items = extract_filing_items(text, form_type="10-K", diagnostics=True)
+    item_16 = next(it for it in items if it["item_id"] == "16")
+    first_line = (item_16["full_text"] or "").lstrip().splitlines()[0]
+    assert "ACTUAL SUMMARY CONTENT" in (item_16["full_text"] or "").upper()
+    assert "PART I" not in first_line.upper()
+    assert "ITEM 1" not in first_line.upper()
+
+
 def test_extract_filing_items_skips_cross_ref_prefix():
     text = """<Header></Header>
 See Part II Item 8. Financial Statements and Supplementary Data.
