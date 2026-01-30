@@ -53,6 +53,9 @@ SUMMARY_HEADER_LINE_PATTERN = re.compile(
     r"^\s*(?:form\s+)?10-?k\s+summary\s*$", re.IGNORECASE
 )
 INDEX_HEADER_LINE_PATTERN = re.compile(r"^\s*index(?:\b|$)", re.IGNORECASE)
+START_TOC_SUMMARY_MARKER_PATTERN = re.compile(
+    r"(?i)\b(?:table\s+of\s+contents?|index|summary|form\s+10-?k\s+summary|10-?k\s+summary)\b"
+)
 ITEM_WORD_PATTERN = re.compile(r"\bITEM\b", re.IGNORECASE)
 PART_MARKER_PATTERN = re.compile(r"\bPART\s+(?P<part>IV|III|II|I)\b(?!\s*,)", re.IGNORECASE)
 PART_LINESTART_PATTERN = re.compile(r"^\s*PART\s+(?P<part>IV|III|II|I)\b", re.IGNORECASE)
@@ -103,6 +106,7 @@ EMPTY_ITEM_PATTERN = re.compile(
     r"^\s*(?:\(?[a-z]\)?\s*)?(?:none\.?|n/?a\.?|not applicable\.?|not required\.?|\[reserved\]|reserved)\s*$",
     re.IGNORECASE,
 )
+START_TRAILING_PAGE_NUMBER_PATTERN = re.compile(r"\s+\d+\s*$")
 PROSE_SENTENCE_BREAK_PATTERN = re.compile(r"[.!?]\s+[A-Za-z]")
 CROSS_REF_SUFFIX_START_PATTERN = re.compile(
     r"(?i)^(?:see|refer|as discussed|as described|as set forth|as noted|pursuant to|under|"
@@ -120,6 +124,14 @@ HEADING_TAIL_SOFT_PATTERN = re.compile(
 HEADING_CONF_LOW = 0
 HEADING_CONF_MED = 1
 HEADING_CONF_HIGH = 2
+START_CANDIDATE_MAX = 8
+START_SCORE_LOOKAHEAD_LINES = 20
+START_SCORE_TOC_MARKER_WINDOW = 40
+START_LOOKAHEAD_GUARD_NONEMPTY = 20
+START_LOOKAHEAD_GUARD_MAX_CHARS = 500
+START_SCORE_STRUCTURAL_HIGH_RATIO = 0.35
+START_SCORE_STRUCTURAL_LOW_RATIO = 0.15
+START_SCORE_TRAILING_PAGE_MIN = 3
 
 ITEM_TITLES_10K = {
     "1": ["BUSINESS"],
@@ -204,7 +216,6 @@ ITEM_TITLES_10K_BY_CANONICAL = {
     "II:6_RESERVED": ["RESERVED"],
     "III:14_CONTROLS_AND_PROCEDURES_LEGACY": ["CONTROLS AND PROCEDURES"],
     "III:14_PRINCIPAL_ACCOUNTANT_FEES": ["PRINCIPAL ACCOUNTANT FEES AND SERVICES"],
-    "III:16_PRINCIPAL_ACCOUNTANT_FEES_LEGACY": ["PRINCIPAL ACCOUNTANT FEES AND SERVICES"],
     "IV:14_EXHIBITS_SCHEDULES_REPORTS": [
         "EXHIBITS",
         "EXHIBITS AND FINANCIAL STATEMENT SCHEDULES",
@@ -1685,6 +1696,24 @@ def _trim_trailing_part_marker(text: str) -> str:
     return "\n".join(lines).rstrip()
 
 
+def _reserved_stub_end(text: str) -> int | None:
+    if not text:
+        return None
+    offset = 0
+    for line in text.splitlines(keepends=True):
+        offset += len(line)
+        stripped = line.strip()
+        if not stripped:
+            continue
+        probe = stripped.lstrip(" \t:-.")
+        if not probe:
+            continue
+        if EMPTY_ITEM_PATTERN.match(probe) and "reserved" in probe.lower():
+            return offset
+        return None
+    return None
+
+
 def _item_id_to_int_simple(item_id: str | None) -> int | None:
     if not item_id:
         return None
@@ -1812,6 +1841,7 @@ def _apply_high_confidence_truncation(
     text: str,
     *,
     next_item_id: str | None,
+    current_part: str | None,
     max_item: int,
 ) -> tuple[str, bool, bool]:
     if not text:
@@ -1819,6 +1849,20 @@ def _apply_high_confidence_truncation(
 
     lines = text.splitlines(keepends=True)
     lines_noeol = [line.rstrip("\r\n") for line in lines]
+    non_empty = 0
+    offset = 0
+    for idx, line_noeol in enumerate(lines_noeol):
+        line = lines[idx]
+        if not line_noeol.strip():
+            offset += len(line)
+            continue
+        non_empty += 1
+        if embedded_headings.is_empty_section_line(line_noeol):
+            cut = offset + len(line)
+            return text[:cut].rstrip(), False, False
+        offset += len(line)
+        if non_empty >= 3:
+            break
 
     if next_item_id:
         offset = 0
@@ -1837,13 +1881,34 @@ def _apply_high_confidence_truncation(
                     return text[:cut].rstrip(), True, False
             offset += len(lines[idx])
 
-    offset = 0
-    for idx, line_noeol in enumerate(lines_noeol):
-        if PART_ONLY_PREFIX_PATTERN.match(line_noeol):
-            if _part_boundary_header_like(lines_noeol, idx, max_item=max_item):
-                cut = offset + _leading_ws_len(line_noeol)
-                return text[:cut].rstrip(), False, True
-        offset += len(lines[idx])
+    part_order = {"I": 1, "II": 2, "III": 3, "IV": 4}
+    current_part_norm = (current_part or "").upper()
+    current_part_order = part_order.get(current_part_norm, 0)
+    if current_part_order:
+        toc_window_flags = embedded_headings._toc_window_flags(lines_noeol)
+        offset = 0
+        for idx, line_noeol in enumerate(lines_noeol):
+            if not line_noeol.strip():
+                offset += len(lines[idx])
+                continue
+            part_match = embedded_headings.STRICT_PART_PATTERN.match(line_noeol)
+            if not part_match:
+                offset += len(lines[idx])
+                continue
+            if toc_window_flags[idx]:
+                offset += len(lines[idx])
+                continue
+            next_part = part_match.group("part").upper()
+            next_part_order = part_order.get(next_part, 0)
+            if next_part_order <= current_part_order:
+                offset += len(lines[idx])
+                continue
+            if not embedded_headings._confirm_strict_part_heading(lines_noeol, idx):
+                offset += len(lines[idx])
+                continue
+            cut = offset + _leading_ws_len(line_noeol)
+            return text[:cut].rstrip(), False, True
+        # end for
 
     return text, False, False
 
@@ -1858,34 +1923,25 @@ def _select_best_boundaries(
     period_end: date | None,
     is_10k: bool,
     max_item: int,
+    gij_context: dict[str, bool | list[tuple[int, int]] | set[str] | str] | None = None,
 ) -> tuple[list["_ItemBoundary"], dict[tuple[str | None, str], dict[str, int | bool]]]:
     if not candidates:
         return [], {}
 
     candidates = sorted(candidates, key=lambda b: b.start)
+    line_starts: list[int] = []
+    pos = 0
+    for line in lines:
+        line_starts.append(pos)
+        pos += len(line) + 1  # '\n'
 
-    def _candidate_end(idx: int, pool: list["_ItemBoundary"]) -> int:
-        end_pos = len(body)
-        for j in range(idx + 1, len(pool)):
-            cand = pool[j]
-            if cand.confidence < HEADING_CONF_HIGH:
-                continue
-            if not _is_plausible_successor(
-                pool[idx],
-                cand,
-                filing_date=filing_date,
-                period_end=period_end,
-                is_10k=is_10k,
-            ):
-                continue
-            end_pos = cand.start
-            break
-        return end_pos
+    toc_window_flags = embedded_headings._toc_window_flags(lines)
+    toc_cache: dict[tuple[int, bool], bool] = {}
+    gij_omit_ranges = gij_context.get("gij_omit_ranges", []) if gij_context else []
+    gij_substitute_ranges = gij_context.get("gij_substitute_ranges", []) if gij_context else []
 
-    candidate_ends = [_candidate_end(idx, candidates) for idx in range(len(candidates))]
-    candidate_approx_len = [
-        max(candidate_ends[idx] - b.content_start, 0) for idx, b in enumerate(candidates)
-    ]
+    def _line_in_ranges(idx: int, ranges: list[tuple[int, int]]) -> bool:
+        return any(start <= idx < end for start, end in ranges)
 
     by_key: dict[tuple[str | None, str], list[tuple[int, "_ItemBoundary"]]] = {}
     for idx, b in enumerate(candidates):
@@ -1925,42 +1981,156 @@ def _select_best_boundaries(
     unordered.sort(key=lambda k: str(k[1]))
     ordered_keys = [k for _, k in orderable] + unordered
 
-    prev_map: dict[tuple[str | None, str], tuple[str | None, str]] = {}
     next_map: dict[tuple[str | None, str], tuple[str | None, str]] = {}
     for idx, key in enumerate(ordered_keys):
-        if idx > 0:
-            prev_map[key] = ordered_keys[idx - 1]
         if idx + 1 < len(ordered_keys):
             next_map[key] = ordered_keys[idx + 1]
 
-    min_start_by_key = {key: min(b.start for _, b in entries) for key, entries in by_key.items()}
-    max_start_by_key = {key: max(b.start for _, b in entries) for key, entries in by_key.items()}
+    def _guard_window_text(boundary: _ItemBoundary) -> str:
+        if boundary.line_index < 0 or boundary.line_index >= len(lines):
+            return ""
+        start_offset = boundary.content_start - line_starts[boundary.line_index]
+        if start_offset < 0:
+            start_offset = 0
+        line = lines[boundary.line_index]
+        if start_offset > len(line):
+            start_offset = len(line)
+        window_lines = [line[start_offset:]]
+        non_empty = 1 if window_lines[0].strip() else 0
+        char_count = len(window_lines[0])
+        if (
+            char_count >= START_LOOKAHEAD_GUARD_MAX_CHARS
+            or non_empty >= START_LOOKAHEAD_GUARD_NONEMPTY
+        ):
+            return "\n".join(window_lines)
+        for j in range(boundary.line_index + 1, len(lines)):
+            next_line = lines[j]
+            window_lines.append(next_line)
+            char_count += len(next_line)
+            if next_line.strip():
+                non_empty += 1
+            if (
+                char_count >= START_LOOKAHEAD_GUARD_MAX_CHARS
+                or non_empty >= START_LOOKAHEAD_GUARD_NONEMPTY
+            ):
+                break
+        return "\n".join(window_lines)
 
-    def _fallback_select(entries: list[tuple[int, "_ItemBoundary"]]) -> "_ItemBoundary":
-        best: "_ItemBoundary" | None = None
-        best_score: tuple[int, int, int] | None = None
-        for idx, b in entries:
-            end = candidate_ends[idx]
-            chunk = body[b.content_start : end]
-            chunk = chunk.lstrip(" \t:-")
-            chunk = _remove_pagination(chunk)
-            score = len(chunk.strip())
-            score_key = (b.confidence, score, b.start)
-            if best_score is None or score_key > best_score:
-                best = b
-                best_score = score_key
-        assert best is not None
-        return best
+    def _guard_has_empty_stub(guard_lines: list[str]) -> bool:
+        non_empty = 0
+        for line in guard_lines:
+            if not line.strip():
+                continue
+            non_empty += 1
+            if embedded_headings.is_empty_section_line(line):
+                return True
+            if non_empty >= 3:
+                break
+        return False
+
+    def _toc_marker_near(idx: int) -> bool:
+        start = max(0, idx - START_SCORE_TOC_MARKER_WINDOW)
+        end = min(len(lines), idx + START_SCORE_TOC_MARKER_WINDOW + 1)
+        for j in range(start, end):
+            if START_TOC_SUMMARY_MARKER_PATTERN.search(lines[j]):
+                return True
+        return False
+
+    def _score_candidate(boundary: _ItemBoundary) -> int:
+        score = 0
+        line = lines[boundary.line_index] if 0 <= boundary.line_index < len(lines) else ""
+        line_idx = boundary.line_index
+        if embedded_headings.is_item_run_line(line):
+            score -= 30
+        if _line_in_ranges(line_idx, gij_omit_ranges):
+            score -= 30
+        if _line_in_ranges(line_idx, gij_substitute_ranges):
+            score -= 20
+        if TOC_DOT_LEADER_PATTERN.search(line):
+            score -= 10
+        if START_TRAILING_PAGE_NUMBER_PATTERN.search(line):
+            score -= 8
+        if _toc_marker_near(boundary.line_index):
+            score -= 8
+        if embedded_headings._toc_cluster_after(lines, boundary.line_index):
+            score -= 6
+
+        window_end = min(len(lines), boundary.line_index + 1 + START_SCORE_LOOKAHEAD_LINES)
+        non_empty = 0
+        prose_hits = 0
+        structural_hits = 0
+        trailing_page_hits = 0
+        for j in range(boundary.line_index + 1, window_end):
+            line_j = lines[j]
+            if not line_j.strip():
+                continue
+            non_empty += 1
+            if START_TRAILING_PAGE_NUMBER_PATTERN.search(line_j):
+                trailing_page_hits += 1
+            toc_like = embedded_headings._toc_like_line(lines, j, toc_cache, toc_window_flags)
+            if embedded_headings._prose_like_line(line_j, toc_like=toc_like):
+                prose_hits += 1
+            if embedded_headings._line_starts_item(line_j) or embedded_headings.EMBEDDED_PART_PATTERN.match(
+                line_j
+            ):
+                structural_hits += 1
+
+        if trailing_page_hits >= START_SCORE_TRAILING_PAGE_MIN:
+            score -= 6
+        if non_empty:
+            prose_ratio = prose_hits / non_empty
+            structural_ratio = structural_hits / non_empty
+            if prose_ratio > 0.30:
+                score += 6
+            if structural_ratio <= START_SCORE_STRUCTURAL_LOW_RATIO:
+                score += 4
+            elif structural_ratio >= START_SCORE_STRUCTURAL_HIGH_RATIO:
+                score -= 4
+        return score
+
+    def _guard_has_prose_before_hit(guard_lines: list[str], hit_line_idx: int) -> bool:
+        if hit_line_idx <= 0:
+            return False
+        guard_toc_flags = embedded_headings._toc_window_flags(guard_lines)
+        guard_cache: dict[tuple[int, bool], bool] = {}
+        for j in range(min(hit_line_idx, len(guard_lines))):
+            line = guard_lines[j]
+            if not line.strip():
+                continue
+            toc_like = embedded_headings._toc_like_line(guard_lines, j, guard_cache, guard_toc_flags)
+            if embedded_headings._prose_like_line(line, toc_like=toc_like):
+                return True
+        return False
+
+    def _restart_marker_index(guard_lines: list[str]) -> int | None:
+        for idx, line in enumerate(guard_lines):
+            if not line.strip():
+                continue
+            part_match = embedded_headings.STRICT_PART_PATTERN.match(line)
+            if part_match and part_match.group("part").upper() == "I":
+                return idx
+            item_match = (
+                embedded_headings.EMBEDDED_ITEM_PATTERN.match(line)
+                or embedded_headings.EMBEDDED_ITEM_ROMAN_PATTERN.match(line)
+                or embedded_headings.EMBEDDED_TOC_PART_ITEM_PATTERN.match(line)
+            )
+            if item_match:
+                item_id = embedded_headings._item_id_from_match(item_match)
+                if item_id == "1":
+                    return idx
+        return None
 
     selected: list["_ItemBoundary"] = []
     meta: dict[tuple[str | None, str], dict[str, int | bool]] = {}
     for key, entries in by_key.items():
+        entries = sorted(entries, key=lambda t: t[1].start)
+        if len(entries) > START_CANDIDATE_MAX:
+            entries = entries[:START_CANDIDATE_MAX]
         total = len(entries)
         toc_rejected = 0
-        ok_entries: list[tuple[int, "_ItemBoundary", str | None, str | None]] = []
-        for idx, b in entries:
+        scored_entries: list[tuple[_ItemBoundary, int, bool]] = []
+        for _, b in entries:
             part_for_checks = b.item_part
-            inferred_part = None
             if is_10k:
                 inferred_part = _infer_part_for_item_id(
                     b.item_id,
@@ -1971,64 +2141,56 @@ def _select_best_boundaries(
                 if inferred_part:
                     part_for_checks = inferred_part
 
-            late_restart = False
-            if _is_late_item_start(b.item_id, part_for_checks):
-                late_restart = _late_item_restart_after(
-                    lines,
-                    b.line_index,
-                    max_non_empty=20,
-                    max_item=max_item,
+            guard_text = _guard_window_text(b)
+            guard_lines = guard_text.splitlines() if guard_text else []
+            reserved_stub = _reserved_stub_end(guard_text) is not None
+            empty_stub = _guard_has_empty_stub(guard_lines)
+            guard_reject = False
+            if guard_text and not reserved_stub and not empty_stub:
+                restart_hit = embedded_headings.find_strong_leak(
+                    guard_text,
+                    current_item_id=b.item_id,
+                    current_part=part_for_checks,
+                    next_item_id="1",
+                    next_part="I",
                 )
-
-            if b.in_toc_range or late_restart or b.toc_like_line:
+                if restart_hit is not None:
+                    guard_reject = True
+                else:
+                    restart_idx = _restart_marker_index(guard_lines)
+                    if restart_idx is not None and not _guard_has_prose_before_hit(
+                        guard_lines, restart_idx
+                    ):
+                        guard_reject = True
+                if not guard_reject:
+                    next_key = next_map.get(key)
+                    if next_key:
+                        next_part, next_item_id = next_key
+                        successor_hit = embedded_headings.find_strong_leak(
+                            guard_text,
+                            current_item_id=b.item_id,
+                            current_part=part_for_checks,
+                            next_item_id=next_item_id,
+                            next_part=next_part,
+                        )
+                        if successor_hit is not None and not _guard_has_prose_before_hit(
+                            guard_lines, successor_hit.line_idx
+                        ):
+                            guard_reject = True
+            if guard_reject:
                 toc_rejected += 1
-                continue
-            ok_entries.append((idx, b, part_for_checks, inferred_part))
 
-        chosen: "_ItemBoundary"
-        verified = True
+            score = _score_candidate(b)
+            scored_entries.append((b, score, guard_reject))
+
+        if not scored_entries:
+            continue
+        ok_entries = [entry for entry in scored_entries if not entry[2]]
         if ok_entries:
-            prev_key = prev_map.get(key)
-            next_key = next_map.get(key)
-            prev_start = min_start_by_key.get(prev_key)
-            next_start = max_start_by_key.get(next_key)
-
-            def _score(entry: tuple[int, "_ItemBoundary", str | None, str | None]) -> tuple[int, int, int, int, int, int]:
-                idx, b, part_for_checks, inferred_part = entry
-                ordering_bonus = 0
-                if prev_start is not None and b.start > prev_start:
-                    ordering_bonus += 1
-                if next_start is not None and b.start < next_start:
-                    ordering_bonus += 1
-                if ordering_bonus == 2:
-                    ordering_bonus += 1
-
-                part_bonus = 0
-                if is_10k and inferred_part and b.item_part:
-                    part_bonus = 1 if b.item_part == inferred_part else -1
-
-                score = {HEADING_CONF_HIGH: 4, HEADING_CONF_MED: 2, HEADING_CONF_LOW: 0}.get(
-                    b.confidence, 0
-                )
-                score += ordering_bonus
-                score += part_bonus
-                if skip_until_pos is not None and b.start < skip_until_pos:
-                    score -= 2
-                if b.toc_like_line:
-                    score -= 3
-
-                approx_len = candidate_approx_len[idx]
-                return (score, b.confidence, ordering_bonus, part_bonus, approx_len, b.start)
-
-            chosen = max(ok_entries, key=_score)[1]
+            chosen = max(ok_entries, key=lambda entry: (entry[1], entry[0].start))[0]
+            verified = True
         else:
-            only_toc = all(
-                b.in_toc_range or b.toc_like_line for _, b in entries
-            )
-            if only_toc:
-                continue
-            chosen = _fallback_select(entries)
-            verified = False
+            continue
 
         selected.append(chosen)
         meta[key] = {
@@ -2109,6 +2271,8 @@ def _extract_fallback_items_10k(
         if item_id is None and allow_titles:
             item_id = _match_title_only_heading(line, lookup)
         if item_id is None:
+            continue
+        if item_id == "16":
             continue
 
         start_abs = line_starts[i]
@@ -2262,6 +2426,7 @@ def extract_filing_items(
     body = _strip_edgar_metadata(body)
     body = _repair_wrapped_headings(body)
     lines = body.split("\n")
+    gij_context = embedded_headings.detect_gij_context(lines)
     head = lines[: min(len(lines), 800)]
     head_nonempty_lens = [len(l) for l in head if l]
     max_line_len = max(head_nonempty_lens, default=0)
@@ -2459,7 +2624,10 @@ def extract_filing_items(
                 if re.search(r"(?i)^\s*[\(\[]?\s*continued\b", suffix):
                     continue
                 if re.match(r"(?i)^\s*[\(\[]\s*[a-z0-9]", suffix):
-                    continue
+                    probe = suffix.strip().lstrip(" \t:-.([")
+                    probe = probe.rstrip("])")
+                    if not (EMPTY_ITEM_PATTERN.match(probe) and "reserved" in probe.lower()):
+                        continue
 
                 title_match = is_10k and _heading_title_matches_item(item_id, line, m)
                 confidence = HEADING_CONF_HIGH if (is_line_start or part_near_item) else HEADING_CONF_MED
@@ -2532,6 +2700,7 @@ def extract_filing_items(
         period_end=period_end_parsed,
         is_10k=is_10k,
         max_item=max_item_number,
+        gij_context=gij_context,
     )
     if not boundaries:
         return []
@@ -2575,6 +2744,7 @@ def extract_filing_items(
         )
         part_for_detection = inferred_part or part
         raw_chunk: str | None = None
+        raw_chunk_candidate = chunk
         if repair_boundaries:
             next_item_id = boundaries[idx + 1].item_id if idx + 1 < len(boundaries) else None
             next_part = boundaries[idx + 1].item_part if idx + 1 < len(boundaries) else None
@@ -2588,8 +2758,11 @@ def extract_filing_items(
             chunk, truncated_successor, truncated_part = _apply_high_confidence_truncation(
                 chunk,
                 next_item_id=next_item_id,
+                current_part=part_for_detection,
                 max_item=max_item_number,
             )
+            if (truncated_successor or truncated_part) and raw_chunk is None:
+                raw_chunk = raw_chunk_candidate
             leak_hit = embedded_headings.find_strong_leak(
                 chunk,
                 current_item_id=item_id,
@@ -2598,8 +2771,15 @@ def extract_filing_items(
                 next_part=next_part,
             )
             if leak_hit and 0 <= leak_hit.char_pos < len(chunk):
-                raw_chunk = chunk
+                if raw_chunk is None:
+                    raw_chunk = raw_chunk_candidate
                 chunk = chunk[: leak_hit.char_pos].rstrip()
+
+        reserved_end = _reserved_stub_end(chunk)
+        if reserved_end is not None:
+            if raw_chunk is None:
+                raw_chunk = raw_chunk_candidate
+            chunk = chunk[:reserved_end].rstrip()
 
         if inferred_part and (part is None or part != inferred_part):
             part = inferred_part
@@ -2611,6 +2791,11 @@ def extract_filing_items(
             "item": item_key,
             "full_text": chunk,
         }
+        if gij_context.get("gij_asset_backed"):
+            record["_filing_exclusion_reason"] = str(gij_context.get("gij_reason") or "")
+            omitted_items = gij_context.get("gij_omitted_items")
+            if isinstance(omitted_items, set) and omitted_items:
+                record["_gij_omitted_items"] = sorted(omitted_items)
         if raw_chunk is not None:
             record["_raw_text"] = raw_chunk
         if diagnostics:

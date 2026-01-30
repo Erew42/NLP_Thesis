@@ -14,6 +14,9 @@ EMBEDDED_ITEM_ROMAN_PATTERN = re.compile(r"(?i)^[ \t]*ITEM[ \t]+(?P<roman>[IVXLC
 EMBEDDED_PART_PATTERN = re.compile(
     r"(?i)^[ \t]*PART[ \t]+(?P<roman>[IVX]+)[ \t]*[.\-\u2013\u2014:]?[ \t]*$"
 )
+STRICT_PART_PATTERN = re.compile(
+    r"(?im)^\s*PART\s+(?P<part>I|II|III|IV)\s*[:.\-\u2013\u2014]?\s*$"
+)
 EMBEDDED_CONTINUATION_PATTERN = re.compile(r"(?i)\b(?:continued|cont\.|concluded)\b")
 EMBEDDED_CROSS_REF_PATTERN = re.compile(
     r"(?i)\b(?:see|refer to|refer back to|as discussed|as described|as set forth|as noted|"
@@ -21,6 +24,19 @@ EMBEDDED_CROSS_REF_PATTERN = re.compile(
     r"in this form|set forth in|pursuant to|under|in accordance with)\b"
 )
 EMBEDDED_RESERVED_PATTERN = re.compile(r"(?i)\[\s*reserved\s*\]")
+GIJ_OMIT_BLOCK_START_RE = re.compile(
+    r"(?i)\bthe\s+following\s+items\s+have\s+been\s+omitted\s+in\s+accordance\s+with\s+"
+    r"general\s+instruction\s+j\s+to\s+form\s+10-?k\b"
+)
+GIJ_SUBSTITUTE_BLOCK_RE = re.compile(
+    r"(?i)\bsubstitute\s+information\s+provided\s+in\s+accordance\s+with\s+"
+    r"general\s+instruction\s+j\s+to\s+form\s+10-?k\b"
+)
+GIJ_GENERAL_RE = re.compile(r"(?i)\bgeneral\s+instruction\s+j\s+to\s+form\s+10-?k\b")
+STANDARD_ITEM_TOKEN_RE = re.compile(r"(?i)\bItem\s+(?P<id>\d{1,2}[A-Z]?)\b")
+EMPTY_SECTION_LINE_RE = re.compile(
+    r"(?i)^\s*[\(\[]?\s*(?:reserved|omitted|not applicable|nothing to report|none)\s*[\)\]]?\.?\s*$"
+)
 EMBEDDED_TOC_DOT_LEADER_PATTERN = re.compile(r"(?:\.{8,}|(?:\.\s*){8,})")
 EMBEDDED_TOC_TRAILING_PAGE_PATTERN = re.compile(r"\s+\d{1,4}\s*$")
 EMBEDDED_TOC_HEADER_PATTERN = re.compile(
@@ -42,6 +58,8 @@ EMBEDDED_TOC_START_EARLY_MAX_CHAR = 500
 EMBEDDED_TOC_START_MISFIRE_MAX_CHAR = 3000
 EMBEDDED_TOC_CLUSTER_LOOKAHEAD = 8
 EMBEDDED_NEARBY_ITEM_WINDOW = 3
+PART_RESTART_LOOKAHEAD_NONEMPTY = 12
+PART_RESTART_LOOKAHEAD_MAX_CHARS = 1500
 EMBEDDED_IGNORE_CLASSIFICATIONS = {"same_item_continuation"}
 # Warn-only to avoid false positives from TOC rows and cross-refs inside items.
 EMBEDDED_WARN_CLASSIFICATIONS = {
@@ -135,6 +153,118 @@ def _item_id_to_int(item_id: str | None) -> int | None:
     if match:
         return int(match.group(1))
     return None
+
+
+def _standard_item_id_from_token(token: str | None) -> str | None:
+    if not token:
+        return None
+    cleaned = re.sub(r"\s+", "", token).upper()
+    item_num = _item_id_to_int(cleaned)
+    if item_num is None or item_num < 1 or item_num > 16:
+        return None
+    return cleaned
+
+
+def count_standard_item_tokens(line: str) -> int:
+    if not line:
+        return 0
+    count = 0
+    for match in STANDARD_ITEM_TOKEN_RE.finditer(line):
+        item_id = _standard_item_id_from_token(match.group("id"))
+        if item_id:
+            count += 1
+    return count
+
+
+def is_item_run_line(line: str) -> bool:
+    if not line or not line.strip():
+        return False
+    matches = [
+        match
+        for match in STANDARD_ITEM_TOKEN_RE.finditer(line)
+        if _standard_item_id_from_token(match.group("id"))
+    ]
+    if len(matches) < 2:
+        return False
+    if len(matches) >= 3:
+        return True
+    if TOC_DOT_LEADER_PATTERN.search(line) or EMBEDDED_TOC_TRAILING_PAGE_PATTERN.search(line):
+        return True
+    between = line[matches[0].end() : matches[1].start()]
+    between_stripped = between.strip()
+    if not between_stripped:
+        return True
+    if re.fullmatch(r"(?i)(?:and|&|/)", between_stripped):
+        return False
+    if re.search(r"[A-Za-z]", between_stripped):
+        return False
+    return True
+
+
+def is_empty_section_line(line: str) -> bool:
+    if not line:
+        return False
+    return bool(EMPTY_SECTION_LINE_RE.match(line))
+
+
+def detect_gij_context(
+    lines: list[str],
+) -> dict[str, bool | list[tuple[int, int]] | set[str] | str]:
+    gij_asset_backed = False
+    gij_omit_ranges: list[tuple[int, int]] = []
+    gij_substitute_ranges: list[tuple[int, int]] = []
+    gij_omitted_items: set[str] = set()
+
+    if not lines:
+        return {
+            "gij_asset_backed": False,
+            "gij_omit_ranges": [],
+            "gij_substitute_ranges": [],
+            "gij_omitted_items": set(),
+            "gij_reason": "",
+        }
+
+    def _line_in_ranges(idx: int, ranges: list[tuple[int, int]]) -> bool:
+        return any(start <= idx < end for start, end in ranges)
+
+    def _scan_block_end(start_idx: int, *, stop_on_substitute: bool) -> int:
+        end_idx = min(len(lines), start_idx + 200)
+        for j in range(start_idx, end_idx):
+            if stop_on_substitute and GIJ_SUBSTITUTE_BLOCK_RE.search(lines[j]):
+                return j
+            if STRICT_PART_PATTERN.match(lines[j]):
+                return j
+        return end_idx
+
+    for idx, line in enumerate(lines):
+        if GIJ_GENERAL_RE.search(line):
+            gij_asset_backed = True
+
+        if GIJ_SUBSTITUTE_BLOCK_RE.search(line):
+            gij_asset_backed = True
+            if not _line_in_ranges(idx, gij_substitute_ranges):
+                end_idx = _scan_block_end(idx + 1, stop_on_substitute=False)
+                gij_substitute_ranges.append((idx, end_idx))
+
+        if GIJ_OMIT_BLOCK_START_RE.search(line):
+            gij_asset_backed = True
+            if _line_in_ranges(idx, gij_omit_ranges):
+                continue
+            end_idx = _scan_block_end(idx + 1, stop_on_substitute=True)
+            gij_omit_ranges.append((idx, end_idx))
+            for j in range(idx, end_idx):
+                for match in STANDARD_ITEM_TOKEN_RE.finditer(lines[j]):
+                    item_id = _standard_item_id_from_token(match.group("id"))
+                    if item_id:
+                        gij_omitted_items.add(item_id)
+
+    return {
+        "gij_asset_backed": gij_asset_backed,
+        "gij_omit_ranges": gij_omit_ranges,
+        "gij_substitute_ranges": gij_substitute_ranges,
+        "gij_omitted_items": gij_omitted_items,
+        "gij_reason": "General Instruction J" if gij_asset_backed else "",
+    }
 
 
 def _is_late_item(current_item_id: str | None, current_part: str | None) -> bool:
@@ -402,15 +532,57 @@ def _toc_cluster_after(
     return False
 
 
-def _confirm_part_restart(lines: list[str], start_idx: int) -> bool:
+def _confirm_part_restart(
+    lines: list[str],
+    start_idx: int,
+    *,
+    max_non_empty: int = PART_RESTART_LOOKAHEAD_NONEMPTY,
+    max_chars: int = PART_RESTART_LOOKAHEAD_MAX_CHARS,
+) -> bool:
     non_empty = 0
+    char_count = 0
     for j in range(start_idx + 1, len(lines)):
-        if not lines[j].strip():
+        line = lines[j]
+        char_count += len(line)
+        if char_count > max_chars:
+            break
+        if not line.strip():
             continue
         non_empty += 1
-        if non_empty > 8:
+        if non_empty > max_non_empty:
             break
-        if _line_starts_item(lines[j]):
+        if _line_starts_item(line):
+            return True
+    return False
+
+
+def _confirm_strict_part_heading(
+    lines: list[str],
+    start_idx: int,
+    *,
+    max_non_empty: int = PART_RESTART_LOOKAHEAD_NONEMPTY,
+    max_chars: int = PART_RESTART_LOOKAHEAD_MAX_CHARS,
+) -> bool:
+    non_empty = 0
+    char_count = 0
+    for j in range(start_idx + 1, len(lines)):
+        line = lines[j]
+        char_count += len(line)
+        if char_count > max_chars:
+            break
+        if not line.strip():
+            continue
+        non_empty += 1
+        if non_empty > max_non_empty:
+            break
+        if _line_starts_item(line):
+            return True
+        if STRICT_PART_PATTERN.match(line) and _confirm_part_restart(
+            lines,
+            j,
+            max_non_empty=max_non_empty,
+            max_chars=max_chars,
+        ):
             return True
     return False
 

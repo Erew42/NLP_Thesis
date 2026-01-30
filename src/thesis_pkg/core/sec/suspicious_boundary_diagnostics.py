@@ -120,6 +120,8 @@ DIAGNOSTICS_ROW_FIELDS = [
     "canonical_item",
     "exists_by_regime",
     "item_status",
+    "filing_exclusion_reason",
+    "gij_omitted_items",
     "heading_line",
     "heading_index",
     "heading_offset",
@@ -207,6 +209,8 @@ class DiagnosticsRow:
     canonical_item: str
     exists_by_regime: str | bool | None
     item_status: str
+    filing_exclusion_reason: str
+    gij_omitted_items: str
     heading_line: str
     heading_index: int | None
     heading_offset: int | None
@@ -270,6 +274,8 @@ class DiagnosticsRow:
             "canonical_item": self.canonical_item,
             "exists_by_regime": self.exists_by_regime,
             "item_status": self.item_status,
+            "filing_exclusion_reason": self.filing_exclusion_reason,
+            "gij_omitted_items": self.gij_omitted_items,
             "heading_line": self.heading_line,
             "heading_index": _csv_value(self.heading_index),
             "heading_offset": _csv_value(self.heading_offset),
@@ -597,6 +603,12 @@ def _build_flagged_row(
     leak_next_heading: str,
     item_full_text: str,
 ) -> DiagnosticsRow:
+    filing_exclusion_reason = str(item.get("_filing_exclusion_reason") or "")
+    gij_omitted_items = item.get("_gij_omitted_items")
+    if isinstance(gij_omitted_items, (list, tuple, set)):
+        gij_omitted_items_str = ",".join(str(entry) for entry in gij_omitted_items)
+    else:
+        gij_omitted_items_str = str(gij_omitted_items or "")
     return DiagnosticsRow(
         doc_id=doc_id,
         cik=cik,
@@ -610,6 +622,8 @@ def _build_flagged_row(
         canonical_item=item.get("canonical_item") or "",
         exists_by_regime=item.get("exists_by_regime"),
         item_status=item.get("item_status") or "",
+        filing_exclusion_reason=filing_exclusion_reason,
+        gij_omitted_items=gij_omitted_items_str,
         heading_line=heading_line_clean.strip(),
         heading_index=heading_idx,
         heading_offset=heading_offset,
@@ -1708,6 +1722,10 @@ def _write_sample_file(
         lines.append(f"prefix_text: {entry.prefix_text}")
         lines.append(f"is_part_only_prefix: {entry.is_part_only_prefix}")
         lines.append(f"is_crossref_prefix: {entry.is_crossref_prefix}")
+        if entry.filing_exclusion_reason:
+            lines.append(f"filing_exclusion_reason: {entry.filing_exclusion_reason}")
+        if entry.gij_omitted_items:
+            lines.append(f"gij_omitted_items: {entry.gij_omitted_items}")
         if entry.leak_match:
             lines.append(
                 "internal_heading_leak: "

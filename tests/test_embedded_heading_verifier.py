@@ -352,6 +352,11 @@ def test_report_includes_embedded_summary_and_not_v3() -> None:
         total_filings=1,
         total_items=1,
         total_part_only_prefix=0,
+        start_candidates_total=0,
+        start_candidates_toc_rejected_total=0,
+        start_selection_unverified_total=0,
+        truncated_successor_total=0,
+        truncated_part_total=0,
         parquet_dir=Path("example_dir"),
         max_examples=5,
         provenance={
