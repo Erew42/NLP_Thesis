@@ -4,6 +4,7 @@ from thesis_pkg.core.sec.filing_text import _prefix_looks_like_cross_ref
 from thesis_pkg.core.sec.suspicious_boundary_diagnostics import (
     _find_internal_heading_leak,
     _is_midline_heading_prefix,
+    _is_10k,
     _prefix_kind,
 )
 
@@ -37,3 +38,11 @@ def test_internal_heading_leak_ignores_prose_cross_ref() -> None:
     text = ("A" * 210) + "\nWe refer to Item 7 for details.\nMore text."
     leak = _find_internal_heading_leak(text)
     assert leak is None
+
+
+def test_is_10k_excludes_amendments() -> None:
+    assert _is_10k("10-K")
+    assert _is_10k("10KSB")
+    assert not _is_10k("10-K/A")
+    assert not _is_10k("10-K405/A")
+    assert not _is_10k("10KSB-A")

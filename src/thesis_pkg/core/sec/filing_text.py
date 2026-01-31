@@ -2390,6 +2390,7 @@ def extract_filing_items(
       - exists_by_regime: True/False when regime rules can be evaluated, else None
       - item_status: active/reserved/optional/unknown
       - _heading_line (clean) / _heading_line_raw / _heading_line_index / _heading_offset when diagnostics=True
+      - _heading_start/_heading_end/_content_start/_content_end offsets in extractor body when diagnostics=True
       - when drop_impossible=True, items with exists_by_regime == False are dropped
       - when repair_boundaries=True, high-confidence end-boundary truncation is applied
 
@@ -2728,8 +2729,12 @@ def extract_filing_items(
     out_items: list[dict[str, str | None]] = []
     for idx, b in enumerate(boundaries):
         end = boundary_ends[idx]
-        chunk = body[b.content_start : end]
-        chunk = chunk.lstrip(" \t:-")
+        raw_chunk = body[b.content_start:end]
+        lstripped_chunk = raw_chunk.lstrip(" \t:-")
+        leading_trim = len(raw_chunk) - len(lstripped_chunk)
+        content_start = b.content_start + leading_trim
+        content_end = end
+        chunk = lstripped_chunk
         chunk = _remove_pagination(chunk)
         chunk = _trim_trailing_part_marker(chunk)
         truncated_successor = False
@@ -2829,11 +2834,19 @@ def extract_filing_items(
                 record["_heading_line"] = raw_line
                 record["_heading_line_index"] = idx
                 record["_heading_offset"] = b.start - line_starts[idx]
+                record["_heading_start"] = b.start
+                record["_heading_end"] = b.content_start
+                record["_content_start"] = content_start
+                record["_content_end"] = content_end
             else:
                 record["_heading_line_raw"] = ""
                 record["_heading_line"] = ""
                 record["_heading_line_index"] = None
                 record["_heading_offset"] = None
+                record["_heading_start"] = None
+                record["_heading_end"] = None
+                record["_content_start"] = None
+                record["_content_end"] = None
         out_items.append(record)
 
     _annotate_items_with_regime(

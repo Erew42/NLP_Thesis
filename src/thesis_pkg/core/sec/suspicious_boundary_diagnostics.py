@@ -3,9 +3,12 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
+import html
+import random
 import re
 import sys
 from collections import Counter, defaultdict
+from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
@@ -99,6 +102,15 @@ DEFAULT_REPORT_PATH = Path("results/suspicious_boundaries_report_v3_pre.txt")
 DEFAULT_SAMPLES_DIR = Path("results/Suspicious_Filings_Demo")
 DEFAULT_CSV_PATH = Path("results/suspicious_boundaries_v5.csv")
 DEFAULT_ROOT_CAUSES_PATH = Path("results/suspicious_root_causes_examples.txt")
+DEFAULT_MANIFEST_ITEMS_PATH = Path("results/extraction_manifest_items.csv")
+DEFAULT_MANIFEST_FILINGS_PATH = Path("results/extraction_manifest_filings.csv")
+DEFAULT_SAMPLE_FILINGS_PATH = Path("results/review_sample_pass_filings.csv")
+DEFAULT_SAMPLE_ITEMS_PATH = Path("results/review_sample_pass_items.csv")
+DEFAULT_CORE_ITEMS = ("1", "1A", "7", "7A", "8")
+OFFSET_BASIS_EXTRACTOR_BODY = "extractor_body"
+DEFAULT_HTML_OUT_DIR = Path("results/html_audit")
+DEFAULT_HTML_SCOPE = "sample"
+DEFAULT_HTML_SAMPLE_SIZE = 100
 
 PROVENANCE_FIELDS = [
     "prov_python",
@@ -167,6 +179,69 @@ DIAGNOSTICS_ROW_FIELDS = [
 
 CSV_FIELDS = PROVENANCE_FIELDS + DIAGNOSTICS_ROW_FIELDS
 
+# Manifest outputs include all extracted items/filings for manual audit.
+MANIFEST_ITEM_FIELDS = [
+    "doc_id",
+    "accession",
+    "cik",
+    "filing_date",
+    "period_end",
+    "form",
+    "item_part",
+    "item_id",
+    "item",
+    "canonical_item",
+    "item_status",
+    "heading_start",
+    "heading_end",
+    "content_start",
+    "content_end",
+    "length_chars",
+    "heading_line_raw",
+    "heading_line_clean",
+    "doc_head_200",
+    "doc_tail_200",
+    "embedded_heading_warn",
+    "embedded_heading_fail",
+    "first_embedded_kind",
+    "first_embedded_classification",
+    "first_embedded_item_id",
+    "first_embedded_part",
+    "first_embedded_line_idx",
+    "first_embedded_char_pos",
+    "first_embedded_snippet",
+    "first_fail_kind",
+    "first_fail_classification",
+    "first_fail_item_id",
+    "first_fail_part",
+    "first_fail_line_idx",
+    "first_fail_char_pos",
+    "first_fail_snippet",
+    "filing_exclusion_reason",
+    "gij_omitted_items",
+    "offset_basis",
+]
+
+MANIFEST_FILING_FIELDS = [
+    "doc_id",
+    "accession",
+    "cik",
+    "filing_date",
+    "period_end",
+    "form",
+    "n_items_extracted",
+    "items_extracted",
+    "missing_core_items",
+    "any_warn",
+    "any_fail",
+    "filing_exclusion_reason",
+    "start_candidates_total",
+    "start_candidates_toc_rejected",
+    "start_selection_unverified",
+    "truncated_successor_total",
+    "truncated_part_total",
+]
+
 
 @dataclass(frozen=True)
 class DiagnosticsConfig:
@@ -178,6 +253,17 @@ class DiagnosticsConfig:
     max_files: int = 0
     max_examples: int = 25
     enable_embedded_verifier: bool = True
+    emit_manifest: bool = False
+    manifest_items_path: Path = DEFAULT_MANIFEST_ITEMS_PATH
+    manifest_filings_path: Path = DEFAULT_MANIFEST_FILINGS_PATH
+    sample_pass: int = 0
+    sample_seed: int = 42
+    sample_filings_path: Path = DEFAULT_SAMPLE_FILINGS_PATH
+    sample_items_path: Path = DEFAULT_SAMPLE_ITEMS_PATH
+    core_items: tuple[str, ...] = DEFAULT_CORE_ITEMS
+    emit_html: bool = False
+    html_out: Path = DEFAULT_HTML_OUT_DIR
+    html_scope: str = DEFAULT_HTML_SCOPE
 
 
 @dataclass(frozen=True)
@@ -347,7 +433,16 @@ def _parse_date(value: str | date | datetime | None) -> date | None:
 
 def _is_10k(form_type: str | None) -> bool:
     form = (form_type or "").upper().strip()
-    return form.startswith("10-K") or form.startswith("10K")
+    if not (form.startswith("10-K") or form.startswith("10K")):
+        return False
+    # Exclude amendments like 10-K/A, 10KSB-A, 10-K405/A, etc.
+    if "/A" in form:
+        return False
+    if form.endswith("-A") or form.endswith("/A"):
+        return False
+    if re.search(r"[-/]\s*A$", form):
+        return False
+    return True
 
 def _lettered_item(item_id: str) -> bool:
     return bool(re.search(r"\d+[A-Z]$", item_id))
@@ -446,9 +541,92 @@ def _split_flags(flag_field: str | None) -> list[str]:
     if not flag_field:
         return []
     return [flag.strip() for flag in flag_field.split(";") if flag.strip()]
+
+
+def _normalize_body(text: str) -> str:
+    return _repair_wrapped_headings(_strip_edgar_metadata(_normalize_newlines(text)))
+
+
 def _normalize_body_lines(text: str) -> list[str]:
-    body = _repair_wrapped_headings(_strip_edgar_metadata(_normalize_newlines(text)))
-    return body.splitlines()
+    return _normalize_body(text).splitlines()
+
+
+def _parse_core_items_arg(value: str | None) -> tuple[str, ...]:
+    if not value:
+        return DEFAULT_CORE_ITEMS
+    parts = re.split(r"[,\s]+", value.strip())
+    cleaned = tuple(sorted({p.strip().upper() for p in parts if p.strip()}))
+    return cleaned or DEFAULT_CORE_ITEMS
+
+
+def _quartile_edges(values: list[int]) -> tuple[int, int, int]:
+    if not values:
+        return (0, 0, 0)
+    ordered = sorted(values)
+    n = len(ordered)
+    q1 = ordered[int(0.25 * (n - 1))]
+    q2 = ordered[int(0.50 * (n - 1))]
+    q3 = ordered[int(0.75 * (n - 1))]
+    return (q1, q2, q3)
+
+
+def _quartile_bucket(value: int, edges: tuple[int, int, int]) -> str:
+    q1, q2, q3 = edges
+    if value <= q1:
+        return "Q1"
+    if value <= q2:
+        return "Q2"
+    if value <= q3:
+        return "Q3"
+    return "Q4"
+
+
+def _stratified_sample(
+    strata: dict[tuple[str, bool], list[dict[str, object]]],
+    *,
+    sample_size: int,
+    seed: int,
+) -> list[dict[str, object]]:
+    rng = random.Random(seed)
+    total = sum(len(rows) for rows in strata.values())
+    if total == 0 or sample_size <= 0:
+        return []
+    if sample_size > total:
+        sample_size = total
+
+    targets: dict[tuple[str, bool], int] = {}
+    fractional: list[tuple[float, tuple[str, bool]]] = []
+    for key, rows in strata.items():
+        raw = (sample_size * len(rows)) / total
+        base = int(raw)
+        targets[key] = min(base, len(rows))
+        fractional.append((raw - base, key))
+
+    remaining = sample_size - sum(targets.values())
+    fractional.sort(reverse=True, key=lambda t: t[0])
+    for _, key in fractional:
+        if remaining <= 0:
+            break
+        if targets[key] < len(strata[key]):
+            targets[key] += 1
+            remaining -= 1
+
+    while remaining > 0:
+        available = [key for key in strata if targets[key] < len(strata[key])]
+        if not available:
+            break
+        key = rng.choice(available)
+        targets[key] += 1
+        remaining -= 1
+
+    sampled: list[dict[str, object]] = []
+    for key in sorted(strata.keys()):
+        rows = strata[key]
+        k = targets.get(key, 0)
+        if k <= 0:
+            continue
+        sampled.extend(rng.sample(rows, k))
+    return sampled
 
 
 def _find_internal_heading_leak(
@@ -680,6 +858,12 @@ def _build_flagged_row(
         embedded_hits=tuple(embedded_hits),
         item_full_text=item_full_text,
     )
+
+
+def _csv_value(value: int | str | None) -> int | str:
+    if value is None:
+        return ""
+    return value
 
 
 def _build_diagnostics_report(
@@ -967,8 +1151,20 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
     config.report_path.parent.mkdir(parents=True, exist_ok=True)
     config.samples_dir.mkdir(parents=True, exist_ok=True)
 
+    emit_manifest = config.emit_manifest or config.sample_pass > 0 or config.emit_html
+    if emit_manifest:
+        config.manifest_items_path.parent.mkdir(parents=True, exist_ok=True)
+        config.manifest_filings_path.parent.mkdir(parents=True, exist_ok=True)
+    if config.sample_pass and config.sample_pass > 0:
+        config.sample_filings_path.parent.mkdir(parents=True, exist_ok=True)
+        config.sample_items_path.parent.mkdir(parents=True, exist_ok=True)
+
     provenance = _build_provenance(config)
     out_headers = CSV_FIELDS
+
+    core_items = {item.strip().upper() for item in config.core_items if item}
+    if not core_items:
+        core_items = set(DEFAULT_CORE_ITEMS)
 
     total_filings = 0
     total_items = 0
@@ -980,6 +1176,7 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
     truncated_part_total = 0
     # Keep a single row representation to avoid CSV/report/sample schema drift.
     flagged_rows: list[DiagnosticsRow] = []
+    filing_rows_for_sampling: list[dict[str, object]] = []
 
     want_cols = [
         "doc_id",
@@ -990,9 +1187,30 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
         "full_text",
     ]
 
-    with config.out_path.open("w", newline="", encoding="utf-8") as csvfile:
-        writer = csv.DictWriter(csvfile, fieldnames=out_headers)
+    with ExitStack() as stack:
+        flagged_csv = stack.enter_context(
+            config.out_path.open("w", newline="", encoding="utf-8")
+        )
+        writer = csv.DictWriter(flagged_csv, fieldnames=out_headers)
         writer.writeheader()
+
+        manifest_items_writer: csv.DictWriter | None = None
+        manifest_filings_writer: csv.DictWriter | None = None
+        if emit_manifest:
+            manifest_items_file = stack.enter_context(
+                config.manifest_items_path.open("w", newline="", encoding="utf-8")
+            )
+            manifest_items_writer = csv.DictWriter(
+                manifest_items_file, fieldnames=MANIFEST_ITEM_FIELDS
+            )
+            manifest_items_writer.writeheader()
+            manifest_filings_file = stack.enter_context(
+                config.manifest_filings_path.open("w", newline="", encoding="utf-8")
+            )
+            manifest_filings_writer = csv.DictWriter(
+                manifest_filings_file, fieldnames=MANIFEST_FILING_FIELDS
+            )
+            manifest_filings_writer.writeheader()
 
         for file_path in files:
             pf = pq.ParquetFile(file_path)
@@ -1017,6 +1235,13 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
                     )
                     period_end = _parse_date(hdr.get("header_period_end_str"))
 
+                    doc_id = str(row.get("doc_id") or "")
+                    accession = str(row.get("accession_number") or "")
+                    cik = str(row.get("cik") or "")
+                    form_label = str(form_type or "")
+                    filing_date_str = filing_date.isoformat() if filing_date else ""
+                    period_end_str = period_end.isoformat() if period_end else ""
+
                     items = extract_filing_items(
                         text,
                         form_type=form_type,
@@ -1026,18 +1251,56 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
                         diagnostics=True,
                     )
                     if not items:
+                        if emit_manifest and manifest_filings_writer:
+                            missing_core_items = ",".join(sorted(core_items))
+                            filing_row = {
+                                "doc_id": doc_id,
+                                "accession": accession,
+                                "cik": cik,
+                                "filing_date": filing_date_str,
+                                "period_end": period_end_str,
+                                "form": form_label,
+                                "n_items_extracted": 0,
+                                "items_extracted": "",
+                                "missing_core_items": missing_core_items,
+                                "any_warn": False,
+                                "any_fail": False,
+                                "filing_exclusion_reason": "",
+                                "start_candidates_total": 0,
+                                "start_candidates_toc_rejected": 0,
+                                "start_selection_unverified": 0,
+                                "truncated_successor_total": 0,
+                                "truncated_part_total": 0,
+                            }
+                            manifest_filings_writer.writerow(filing_row)
+                            if config.sample_pass and config.sample_pass > 0:
+                                filing_rows_for_sampling.append(
+                                    {
+                                        "row": filing_row,
+                                        "missing_core": bool(missing_core_items),
+                                        "any_fail": False,
+                                        "filing_exclusion_reason": "",
+                                    }
+                                )
                         continue
 
-                    lines = _normalize_body_lines(text)
+                    body = _normalize_body(text)
+                    lines = body.splitlines()
                     total_items += len(items)
                     item_id_sequence = [
                         _normalize_item_id(str(entry.get("item_id") or "")) for entry in items
                     ]
                     flagged_items_for_doc: list[DiagnosticsRow] = []
-
-                    doc_id = str(row.get("doc_id") or "")
-                    accession = str(row.get("accession_number") or "")
-                    form_label = str(form_type or "")
+                    item_ids_ordered: list[str] = []
+                    item_ids_set: set[str] = set()
+                    filing_exclusion_reason = ""
+                    filing_any_warn = False
+                    filing_any_fail = False
+                    start_candidates_total_filing = 0
+                    start_candidates_toc_rejected_filing = 0
+                    start_selection_unverified_filing = 0
+                    truncated_successor_total_filing = 0
+                    truncated_part_total_filing = 0
 
                     for item_idx, item in enumerate(items):
                         next_item_id = (
@@ -1062,6 +1325,7 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
                         heading_idx = item.get("_heading_line_index")
                         heading_offset = item.get("_heading_offset")
                         item_id = str(item.get("item_id") or "")
+                        item_id_norm = item_id.strip().upper()
                         item_part = item.get("item_part")
                         current_part_norm = _normalize_part(item_part) or _normalize_part(
                             _expected_part_for_item(item)
@@ -1111,6 +1375,19 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
                             truncated_successor_total += 1
                         if item.get("_truncated_part_boundary"):
                             truncated_part_total += 1
+
+                        start_candidates_total_filing += int(
+                            item.get("_start_candidates_total") or 0
+                        )
+                        start_candidates_toc_rejected_filing += int(
+                            item.get("_start_candidates_toc_rejected") or 0
+                        )
+                        if item.get("_start_selection_verified") is False:
+                            start_selection_unverified_filing += 1
+                        if item.get("_truncated_successor_heading"):
+                            truncated_successor_total_filing += 1
+                        if item.get("_truncated_part_boundary"):
+                            truncated_part_total_filing += 1
 
                         flags: list[str] = []
                         if heading_idx is None or heading_idx < 0:
@@ -1165,10 +1442,152 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
                         if embedded_fail:
                             flags.append("embedded_heading_fail")
 
-                        if not flags:
-                            continue
-
                         flags = sorted(set(flags))
+                        first_fail_classification = (
+                            embedded_first_fail.classification if embedded_first_fail else ""
+                        )
+                        item_fail = embedded_fail or bool(first_fail_classification)
+                        item_warn = bool(flags) and not item_fail
+                        filing_any_fail = filing_any_fail or item_fail
+                        filing_any_warn = filing_any_warn or item_warn
+
+                        if item_id_norm:
+                            item_ids_ordered.append(item_id_norm)
+                            item_ids_set.add(item_id_norm)
+
+                        item_filing_exclusion_reason = str(
+                            item.get("_filing_exclusion_reason") or ""
+                        )
+                        if not filing_exclusion_reason and item_filing_exclusion_reason:
+                            filing_exclusion_reason = item_filing_exclusion_reason
+
+                        if emit_manifest and manifest_items_writer:
+                            heading_start = item.get("_heading_start")
+                            heading_end = item.get("_heading_end")
+                            content_start = item.get("_content_start")
+                            content_end = item.get("_content_end")
+                            length_chars = ""
+                            doc_head_200 = ""
+                            doc_tail_200 = ""
+                            if isinstance(content_start, int) and isinstance(content_end, int):
+                                length_chars = max(content_end - content_start, 0)
+                                body_len = len(body)
+                                start = max(0, min(content_start, body_len))
+                                end = max(0, min(content_end, body_len))
+                                if end < start:
+                                    end = start
+                                # Snippets are slices from extractor body offsets.
+                                doc_head_200 = body[start : min(start + 200, body_len)]
+                                tail_start = max(end - 200, start)
+                                doc_tail_200 = body[tail_start:end]
+
+                            gij_omitted_items = item.get("_gij_omitted_items")
+                            if isinstance(gij_omitted_items, (list, tuple, set)):
+                                gij_omitted_items_str = ",".join(
+                                    str(entry) for entry in gij_omitted_items
+                                )
+                            else:
+                                gij_omitted_items_str = str(gij_omitted_items or "")
+
+                            item_status = str(item.get("item_status") or "")
+                            if item_id_norm == "16":
+                                item_status = "excluded"
+
+                            manifest_items_writer.writerow(
+                                {
+                                    "doc_id": doc_id,
+                                    "accession": accession,
+                                    "cik": cik,
+                                    "filing_date": filing_date_str,
+                                    "period_end": period_end_str,
+                                    "form": form_label,
+                                    "item_part": str(item_part or ""),
+                                    "item_id": item_id,
+                                    "item": str(item.get("item") or ""),
+                                    "canonical_item": str(item.get("canonical_item") or ""),
+                                    "item_status": item_status,
+                                    "heading_start": _csv_value(heading_start),
+                                    "heading_end": _csv_value(heading_end),
+                                    "content_start": _csv_value(content_start),
+                                    "content_end": _csv_value(content_end),
+                                    "length_chars": _csv_value(length_chars),
+                                    "heading_line_raw": heading_line_raw,
+                                    "heading_line_clean": heading_line_clean,
+                                    "doc_head_200": doc_head_200,
+                                    "doc_tail_200": doc_tail_200,
+                                    "embedded_heading_warn": embedded_warn,
+                                    "embedded_heading_fail": embedded_fail,
+                                    "first_embedded_kind": (
+                                        embedded_first_flagged.kind
+                                        if embedded_first_flagged
+                                        else ""
+                                    ),
+                                    "first_embedded_classification": (
+                                        embedded_first_flagged.classification
+                                        if embedded_first_flagged
+                                        else ""
+                                    ),
+                                    "first_embedded_item_id": (
+                                        embedded_first_flagged.item_id
+                                        if embedded_first_flagged
+                                        else ""
+                                    ),
+                                    "first_embedded_part": (
+                                        embedded_first_flagged.part
+                                        if embedded_first_flagged
+                                        else ""
+                                    ),
+                                    "first_embedded_line_idx": _csv_value(
+                                        embedded_first_flagged.line_idx
+                                        if embedded_first_flagged
+                                        else None
+                                    ),
+                                    "first_embedded_char_pos": _csv_value(
+                                        embedded_first_flagged.char_pos
+                                        if embedded_first_flagged
+                                        else None
+                                    ),
+                                    "first_embedded_snippet": (
+                                        embedded_first_flagged.snippet
+                                        if embedded_first_flagged
+                                        else ""
+                                    ),
+                                    "first_fail_kind": (
+                                        embedded_first_fail.kind if embedded_first_fail else ""
+                                    ),
+                                    "first_fail_classification": first_fail_classification,
+                                    "first_fail_item_id": (
+                                        embedded_first_fail.item_id
+                                        if embedded_first_fail
+                                        else ""
+                                    ),
+                                    "first_fail_part": (
+                                        embedded_first_fail.part if embedded_first_fail else ""
+                                    ),
+                                    "first_fail_line_idx": _csv_value(
+                                        embedded_first_fail.line_idx
+                                        if embedded_first_fail
+                                        else None
+                                    ),
+                                    "first_fail_char_pos": _csv_value(
+                                        embedded_first_fail.char_pos
+                                        if embedded_first_fail
+                                        else None
+                                    ),
+                                    "first_fail_snippet": (
+                                        embedded_first_fail.snippet
+                                        if embedded_first_fail
+                                        else ""
+                                    ),
+                                    "filing_exclusion_reason": item_filing_exclusion_reason,
+                                    "gij_omitted_items": gij_omitted_items_str,
+                                    "offset_basis": OFFSET_BASIS_EXTRACTOR_BODY,
+                                }
+                            )
+
+                        is_flagged = bool(flags)
+                        if not is_flagged:
+                            continue
 
                         prev_line = ""
                         next_line = ""
@@ -1218,20 +1637,52 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
                         flagged_items_for_doc.append(row_entry)
                         writer.writerow(row_entry.to_dict(provenance))
 
+                    if emit_manifest and manifest_filings_writer:
+                        missing_core = sorted(core_items - item_ids_set)
+                        missing_core_items_str = ",".join(missing_core)
+                        filing_row = {
+                            "doc_id": doc_id,
+                            "accession": accession,
+                            "cik": cik,
+                            "filing_date": filing_date_str,
+                            "period_end": period_end_str,
+                            "form": form_label,
+                            "n_items_extracted": len(items),
+                            "items_extracted": ",".join(item_ids_ordered),
+                            "missing_core_items": missing_core_items_str,
+                            "any_warn": filing_any_warn,
+                            "any_fail": filing_any_fail,
+                            "filing_exclusion_reason": filing_exclusion_reason,
+                            "start_candidates_total": start_candidates_total_filing,
+                            "start_candidates_toc_rejected": start_candidates_toc_rejected_filing,
+                            "start_selection_unverified": start_selection_unverified_filing,
+                            "truncated_successor_total": truncated_successor_total_filing,
+                            "truncated_part_total": truncated_part_total_filing,
+                        }
+                        manifest_filings_writer.writerow(filing_row)
+                        if config.sample_pass and config.sample_pass > 0:
+                            # Sampling strata use quartiles x missing-core flag.
+                            filing_rows_for_sampling.append(
+                                {
+                                    "row": filing_row,
+                                    "missing_core": bool(missing_core),
+                                    "any_fail": filing_any_fail,
+                                    "filing_exclusion_reason": filing_exclusion_reason,
+                                }
+                            )
+
                     if flagged_items_for_doc:
-                        doc_id = str(row.get("doc_id") or "")
-                        accession = str(row.get("accession_number") or "")
                         safe_id = _safe_slug(doc_id or accession)
                         sample_path = config.samples_dir / f"{safe_id}.txt"
                         _write_sample_file(
                             sample_path,
                             filing_meta={
                                 "doc_id": doc_id,
-                                "cik": str(row.get("cik") or ""),
+                                "cik": cik,
                                 "accession": accession,
-                                "form_type": str(form_type or ""),
-                                "filing_date": filing_date.isoformat() if filing_date else "",
-                                "period_end": period_end.isoformat() if period_end else "",
+                                "form_type": form_label,
+                                "filing_date": filing_date_str,
+                                "period_end": period_end_str,
                             },
                             flagged_items=flagged_items_for_doc,
                             full_text=text,
@@ -1254,6 +1705,114 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
     print(report)
     config.report_path.write_text(report, encoding="utf-8")
     print(f"\nReport written to {config.report_path}")
+
+    if config.sample_pass and config.sample_pass > 0:
+        pass_rows = [
+            entry
+            for entry in filing_rows_for_sampling
+            if not entry["any_fail"] and not entry["filing_exclusion_reason"]
+        ]
+        edges = _quartile_edges(
+            [int(entry["row"]["n_items_extracted"]) for entry in pass_rows]
+        )
+        strata: dict[tuple[str, bool], list[dict[str, object]]] = defaultdict(list)
+        for entry in pass_rows:
+            row = entry["row"]
+            bucket = _quartile_bucket(int(row["n_items_extracted"]), edges)
+            strata[(bucket, entry["missing_core"])].append(row)
+
+        sampled_rows = _stratified_sample(
+            strata, sample_size=config.sample_pass, seed=config.sample_seed
+        )
+        sample_doc_ids = {row.get("doc_id", "") for row in sampled_rows}
+
+        with config.sample_filings_path.open(
+            "w", newline="", encoding="utf-8"
+        ) as sample_filings:
+            sample_writer = csv.DictWriter(sample_filings, fieldnames=MANIFEST_FILING_FIELDS)
+            sample_writer.writeheader()
+            for row in sampled_rows:
+                sample_writer.writerow(row)
+
+        if emit_manifest:
+            csv.field_size_limit(10**7)
+            with config.manifest_items_path.open(
+                "r", newline="", encoding="utf-8"
+            ) as manifest_items:
+                reader = csv.DictReader(manifest_items)
+                with config.sample_items_path.open(
+                    "w", newline="", encoding="utf-8"
+                ) as sample_items:
+                    item_fields = reader.fieldnames or MANIFEST_ITEM_FIELDS
+                    item_writer = csv.DictWriter(sample_items, fieldnames=item_fields)
+                    item_writer.writeheader()
+                    for row in reader:
+                        if row.get("doc_id") in sample_doc_ids:
+                            item_writer.writerow(row)
+
+    if config.emit_html:
+        if config.html_scope not in {"sample", "all"}:
+            raise SystemExit(f"html-scope must be 'sample' or 'all' (got {config.html_scope})")
+        if not emit_manifest:
+            raise SystemExit("--emit-html requires --emit-manifest")
+
+        csv.field_size_limit(10**7)
+        manifest_rows = _read_csv_rows(config.manifest_filings_path)
+        pass_rows = [row for row in manifest_rows if _is_pass_filing(row)]
+
+        scope_label = config.html_scope
+        index_rows: list[dict[str, object]] = []
+        items_by_filing: dict[str, list[dict[str, object]]] = defaultdict(list)
+
+        if config.html_scope == "all":
+            index_rows = pass_rows
+            scope_label = f"all ({len(index_rows)})"
+        else:
+            if config.sample_pass and config.sample_pass > 0 and config.sample_filings_path.exists():
+                index_rows = _read_csv_rows(config.sample_filings_path)
+            else:
+                index_rows = _sample_pass_rows(
+                    pass_rows,
+                    sample_size=DEFAULT_HTML_SAMPLE_SIZE,
+                    seed=config.sample_seed,
+                )
+            scope_label = f"sample ({len(index_rows)})"
+
+        selected_doc_ids = {str(row.get("doc_id") or "") for row in index_rows}
+        items_source = config.manifest_items_path
+        if (
+            config.html_scope == "sample"
+            and config.sample_pass
+            and config.sample_pass > 0
+            and config.sample_items_path.exists()
+        ):
+            items_source = config.sample_items_path
+
+        if selected_doc_ids:
+            with items_source.open("r", newline="", encoding="utf-8") as manifest_items:
+                reader = csv.DictReader(manifest_items)
+                for row in reader:
+                    doc_id = str(row.get("doc_id") or "")
+                    if doc_id in selected_doc_ids:
+                        items_by_filing[doc_id].append(row)
+
+        metadata = {
+            "pass_definition": "any_fail == False and filing_exclusion_reason is empty",
+            "total_filings": total_filings,
+            "total_items": total_items,
+            "total_pass_filings": len(pass_rows),
+            "sample_size": len(index_rows),
+            "generated_at": datetime.now().isoformat(timespec="seconds"),
+            "offset_basis": OFFSET_BASIS_EXTRACTOR_BODY,
+        }
+        write_html_audit(
+            index_rows=index_rows,
+            items_by_filing=items_by_filing,
+            out_dir=config.html_out,
+            scope_label=scope_label,
+            metadata=metadata,
+        )
+        print(f"HTML audit written to {config.html_out / 'index.html'}")
 
     return {
         "total_filings": total_filings,
@@ -1668,6 +2227,425 @@ def _safe_slug(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9_-]+", "_", value).strip("_") or "unknown"
 
 
+def _html_escape(value: object) -> str:
+    if value is None:
+        return ""
+    return html.escape(str(value))
+
+
+def _parse_bool(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "t"}
+
+
+def _parse_int(value: object, *, default: int = 0) -> int:
+    try:
+        return int(str(value).strip())
+    except Exception:
+        return default
+
+
+def _part_rank(value: str) -> int:
+    return {"I": 1, "II": 2, "III": 3, "IV": 4}.get(value.strip().upper(), 99)
+
+
+def _item_id_sort_key(value: str) -> tuple[int, str]:
+    cleaned = value.strip().upper()
+    match = re.match(r"^(\d+)([A-Z]?)$", cleaned)
+    if match:
+        return (int(match.group(1)), match.group(2))
+    return (999, cleaned)
+
+
+def _filing_filename(doc_id: str, accession: str) -> str:
+    return f"{_safe_slug(doc_id)}_{_safe_slug(accession)}.html"
+
+
+def write_html_audit(
+    index_rows: list[dict[str, object]],
+    items_by_filing: dict[str, list[dict[str, object]]],
+    out_dir: Path,
+    scope_label: str,
+    metadata: dict[str, object],
+) -> None:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    filings_dir = out_dir / "filings"
+    filings_dir.mkdir(parents=True, exist_ok=True)
+
+    style = """
+    :root {
+      --bg: #f6f7f9;
+      --card: #ffffff;
+      --text: #1f2a33;
+      --muted: #5e6b76;
+      --border: #d9e0e6;
+      --accent: #2f6fad;
+      --warn: #b06a00;
+      --fail: #9b2226;
+      --ok: #2d6a4f;
+      --mono: "Consolas", "SFMono-Regular", Menlo, Monaco, "Liberation Mono", monospace;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 24px;
+      background: var(--bg);
+      color: var(--text);
+      font-family: "Segoe UI", Tahoma, Arial, sans-serif;
+    }
+    h1, h2, h3 { margin: 0 0 12px 0; }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 16px;
+      margin-bottom: 16px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    }
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 12px;
+      margin-top: 8px;
+    }
+    .summary-item {
+      padding: 10px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #fbfcfd;
+      font-size: 13px;
+    }
+    .summary-item .label { color: var(--muted); display: block; font-size: 11px; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+    }
+    th, td {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+      text-align: left;
+      font-size: 13px;
+    }
+    th { background: #f0f3f6; color: var(--muted); font-size: 12px; }
+    tr:hover td { background: #f9fbfc; }
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+      font-weight: 600;
+    }
+    .badge.ok { background: #d8f3dc; color: var(--ok); }
+    .badge.warn { background: #ffead1; color: var(--warn); }
+    .badge.fail { background: #f8d7da; color: var(--fail); }
+    .mono { font-family: var(--mono); }
+    .kv {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 8px 0 0;
+      font-size: 13px;
+    }
+    .kv th, .kv td {
+      border-bottom: 1px solid var(--border);
+      padding: 6px 8px;
+    }
+    .kv th { width: 190px; color: var(--muted); font-weight: 600; }
+    details {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 12px;
+      margin-bottom: 12px;
+    }
+    summary {
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 14px;
+    }
+    pre {
+      background: #0f172a;
+      color: #e2e8f0;
+      padding: 10px;
+      border-radius: 8px;
+      overflow-x: auto;
+      font-family: var(--mono);
+      font-size: 12px;
+      white-space: pre-wrap;
+    }
+    .section-title { margin-top: 18px; font-size: 15px; color: var(--muted); }
+    .toolbar { display: flex; gap: 12px; align-items: center; margin-bottom: 16px; }
+    .muted { color: var(--muted); font-size: 12px; }
+    """.strip()
+
+    def _badge(value: object, *, fail: bool = False) -> str:
+        if _parse_bool(value):
+            return f"<span class=\"badge {'fail' if fail else 'warn'}\">yes</span>"
+        return "<span class=\"badge ok\">no</span>"
+
+    def _render_kv(rows: list[tuple[str, object]]) -> str:
+        lines = ["<table class=\"kv\">"]
+        for key, val in rows:
+            lines.append(
+                f"<tr><th>{_html_escape(key)}</th><td>{_html_escape(val)}</td></tr>"
+            )
+        lines.append("</table>")
+        return "\n".join(lines)
+
+    def _item_sort_key(row: dict[str, object]) -> tuple[int, int, str, int]:
+        part = _part_rank(str(row.get("item_part") or ""))
+        item_num, item_letter = _item_id_sort_key(str(row.get("item_id") or ""))
+        content_start = _parse_int(row.get("content_start"), default=0)
+        return (part, item_num, item_letter, content_start)
+
+    index_lines = [
+        "<!doctype html>",
+        "<html lang=\"en\">",
+        "<head>",
+        "  <meta charset=\"utf-8\">",
+        "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">",
+        "  <title>10-K Extraction Manual Review</title>",
+        f"  <style>{style}</style>",
+        "</head>",
+        "<body>",
+        "  <div class=\"card\">",
+        "    <h1>10-K Extraction Manual Review</h1>",
+        "    <div class=\"summary-grid\">",
+    ]
+
+    summary_fields = [
+        ("Pass definition", metadata.get("pass_definition", "")),
+        ("Total filings", metadata.get("total_filings", "")),
+        ("Total items", metadata.get("total_items", "")),
+        ("Pass filings", metadata.get("total_pass_filings", "")),
+        ("Scope", scope_label),
+        ("Sample size", metadata.get("sample_size", "")),
+        ("Generated at", metadata.get("generated_at", "")),
+        ("Offset basis", metadata.get("offset_basis", "")),
+    ]
+    for label, value in summary_fields:
+        index_lines.append(
+            "      <div class=\"summary-item\">"
+            f"<span class=\"label\">{_html_escape(label)}</span>"
+            f"{_html_escape(value)}</div>"
+        )
+    index_lines.extend(
+        [
+            "    </div>",
+            "  </div>",
+            "  <table>",
+            "    <thead>",
+            "      <tr>",
+            "        <th>doc_id</th>",
+            "        <th>accession</th>",
+            "        <th>form</th>",
+            "        <th>filing_date</th>",
+            "        <th>n_items_extracted</th>",
+            "        <th>any_warn</th>",
+            "        <th>missing_core_items</th>",
+            "        <th>filing_exclusion_reason</th>",
+            "      </tr>",
+            "    </thead>",
+            "    <tbody>",
+        ]
+    )
+
+    for row in index_rows:
+        doc_id = str(row.get("doc_id") or "")
+        accession = str(row.get("accession") or "")
+        filename = _filing_filename(doc_id, accession)
+        index_lines.append("      <tr>")
+        index_lines.append(
+            f"        <td><a href=\"filings/{filename}\">{_html_escape(doc_id)}</a></td>"
+        )
+        index_lines.append(f"        <td>{_html_escape(accession)}</td>")
+        index_lines.append(f"        <td>{_html_escape(row.get('form',''))}</td>")
+        index_lines.append(f"        <td>{_html_escape(row.get('filing_date',''))}</td>")
+        index_lines.append(
+            f"        <td>{_html_escape(row.get('n_items_extracted',''))}</td>"
+        )
+        index_lines.append(f"        <td>{_badge(row.get('any_warn'))}</td>")
+        index_lines.append(
+            f"        <td>{_html_escape(row.get('missing_core_items',''))}</td>"
+        )
+        index_lines.append(
+            f"        <td>{_html_escape(row.get('filing_exclusion_reason',''))}</td>"
+        )
+        index_lines.append("      </tr>")
+
+    index_lines.extend(["    </tbody>", "  </table>", "</body>", "</html>"])
+    (out_dir / "index.html").write_text("\n".join(index_lines), encoding="utf-8")
+
+    for row in index_rows:
+        doc_id = str(row.get("doc_id") or "")
+        accession = str(row.get("accession") or "")
+        filing_items = items_by_filing.get(doc_id, [])
+        filing_items = sorted(filing_items, key=_item_sort_key)
+        filename = _filing_filename(doc_id, accession)
+        file_lines = [
+            "<!doctype html>",
+            "<html lang=\"en\">",
+            "<head>",
+            "  <meta charset=\"utf-8\">",
+            "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">",
+            f"  <title>{_html_escape(doc_id)} manual review</title>",
+            f"  <style>{style}</style>",
+            "</head>",
+            "<body>",
+            "  <div class=\"toolbar\">",
+            "    <a href=\"../index.html\">Back to index</a>",
+            f"    <span class=\"muted\">{_html_escape(doc_id)}</span>",
+            "  </div>",
+            "  <div class=\"card\">",
+            f"    <h2>{_html_escape(doc_id)}</h2>",
+            f"    <div class=\"muted\">Accession: {_html_escape(accession)}</div>",
+            "    <div class=\"summary-grid\">",
+        ]
+        header_fields = [
+            ("Form", row.get("form", "")),
+            ("Filing date", row.get("filing_date", "")),
+            ("Period end", row.get("period_end", "")),
+            ("CIK", row.get("cik", "")),
+            ("Items extracted", row.get("items_extracted", "")),
+            ("Missing core items", row.get("missing_core_items", "")),
+            ("Any warn", "yes" if _parse_bool(row.get("any_warn")) else "no"),
+            ("Any fail", "yes" if _parse_bool(row.get("any_fail")) else "no"),
+            ("Filing exclusion reason", row.get("filing_exclusion_reason", "")),
+            ("Item count", row.get("n_items_extracted", "")),
+        ]
+        for label, value in header_fields:
+            file_lines.append(
+                "      <div class=\"summary-item\">"
+                f"<span class=\"label\">{_html_escape(label)}</span>"
+                f"{_html_escape(value)}</div>"
+            )
+        file_lines.extend(["    </div>", "  </div>"])
+
+        if not filing_items:
+            file_lines.append("<div class=\"card\">No items found for this filing.</div>")
+        else:
+            file_lines.append(
+                f"<div class=\"section-title\">Items ({len(filing_items)})</div>"
+            )
+            for item in filing_items:
+                item_part = str(item.get("item_part") or "").strip()
+                item_id = str(item.get("item_id") or "").strip()
+                item_label = " ".join([part for part in [item_part, item_id] if part])
+                item_status = str(item.get("item_status") or "")
+                length_chars = str(item.get("length_chars") or "")
+                item_title = str(item.get("item") or "")
+                summary = f"{item_label} - {item_title}".strip(" -")
+                if item_status:
+                    summary += f" ({item_status})"
+                if length_chars:
+                    summary += f" - {length_chars} chars"
+
+                file_lines.append("<details>")
+                file_lines.append(f"  <summary>{_html_escape(summary)}</summary>")
+
+                file_lines.append(
+                    _render_kv(
+                        [
+                            ("item_part", item_part),
+                            ("item_id", item_id),
+                            ("item", item_title),
+                            ("item_status", item_status),
+                            ("length_chars", length_chars),
+                            ("heading_start", item.get("heading_start", "")),
+                            ("heading_end", item.get("heading_end", "")),
+                            ("content_start", item.get("content_start", "")),
+                            ("content_end", item.get("content_end", "")),
+                            ("heading_line_clean", item.get("heading_line_clean", "")),
+                            ("heading_line_raw", item.get("heading_line_raw", "")),
+                        ]
+                    )
+                )
+
+                embedded_fields = [
+                    ("embedded_heading_warn", item.get("embedded_heading_warn", "")),
+                    ("embedded_heading_fail", item.get("embedded_heading_fail", "")),
+                    ("first_embedded_kind", item.get("first_embedded_kind", "")),
+                    (
+                        "first_embedded_classification",
+                        item.get("first_embedded_classification", ""),
+                    ),
+                    ("first_embedded_item_id", item.get("first_embedded_item_id", "")),
+                    ("first_embedded_part", item.get("first_embedded_part", "")),
+                    ("first_embedded_line_idx", item.get("first_embedded_line_idx", "")),
+                    ("first_embedded_char_pos", item.get("first_embedded_char_pos", "")),
+                    ("first_embedded_snippet", item.get("first_embedded_snippet", "")),
+                    ("first_fail_kind", item.get("first_fail_kind", "")),
+                    ("first_fail_classification", item.get("first_fail_classification", "")),
+                    ("first_fail_item_id", item.get("first_fail_item_id", "")),
+                    ("first_fail_part", item.get("first_fail_part", "")),
+                    ("first_fail_line_idx", item.get("first_fail_line_idx", "")),
+                    ("first_fail_char_pos", item.get("first_fail_char_pos", "")),
+                    ("first_fail_snippet", item.get("first_fail_snippet", "")),
+                ]
+                if any(str(value).strip() for _, value in embedded_fields):
+                    file_lines.append(
+                        "<div class=\"section-title\">Embedded flags</div>"
+                    )
+                    file_lines.append(_render_kv(embedded_fields))
+
+                doc_head = str(item.get("doc_head_200") or "")
+                doc_tail = str(item.get("doc_tail_200") or "")
+                file_lines.append(
+                    "<div class=\"section-title\">doc_head_200</div>"
+                )
+                file_lines.append(f"<pre>{_html_escape(doc_head)}</pre>")
+                file_lines.append(
+                    "<div class=\"section-title\">doc_tail_200</div>"
+                )
+                file_lines.append(f"<pre>{_html_escape(doc_tail)}</pre>")
+                file_lines.append("</details>")
+
+        file_lines.extend(["</body>", "</html>"])
+        (filings_dir / filename).write_text("\n".join(file_lines), encoding="utf-8")
+
+
+def _read_csv_rows(path: Path) -> list[dict[str, object]]:
+    with path.open("r", newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        return [row for row in reader]
+
+
+def _is_pass_filing(row: dict[str, object]) -> bool:
+    any_fail = _parse_bool(row.get("any_fail"))
+    exclusion = str(row.get("filing_exclusion_reason") or "").strip()
+    return not any_fail and not exclusion
+
+
+def _sample_pass_rows(
+    pass_rows: list[dict[str, object]],
+    *,
+    sample_size: int,
+    seed: int,
+) -> list[dict[str, object]]:
+    if not pass_rows or sample_size <= 0:
+        return []
+    edges = _quartile_edges(
+        [_parse_int(row.get("n_items_extracted"), default=0) for row in pass_rows]
+    )
+    strata: dict[tuple[str, bool], list[dict[str, object]]] = defaultdict(list)
+    for row in pass_rows:
+        bucket = _quartile_bucket(
+            _parse_int(row.get("n_items_extracted"), default=0), edges
+        )
+        missing_core = bool(str(row.get("missing_core_items") or "").strip())
+        strata[(bucket, missing_core)].append(row)
+    return _stratified_sample(strata, sample_size=sample_size, seed=seed)
+
+
 def _format_suspicious_items_line(items: list[DiagnosticsRow], *, max_items: int = 12) -> str:
     parts: list[str] = []
     for entry in items:
@@ -1842,6 +2820,47 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Disable embedded heading verifier during scan.",
     )
+    scan.add_argument(
+        "--emit-manifest",
+        action="store_true",
+        help="Emit extraction manifest CSVs for items and filings.",
+    )
+    scan.add_argument(
+        "--sample-pass",
+        type=int,
+        default=0,
+        help="Sample N pass filings (requires manifests).",
+    )
+    scan.add_argument(
+        "--emit-html",
+        action="store_true",
+        help="Emit offline HTML audit pages (requires manifests).",
+    )
+    scan.add_argument(
+        "--html-out",
+        type=Path,
+        default=DEFAULT_HTML_OUT_DIR,
+        help="Output directory for HTML audit pages.",
+    )
+    scan.add_argument(
+        "--html-scope",
+        type=str,
+        default=DEFAULT_HTML_SCOPE,
+        choices=("sample", "all"),
+        help="HTML scope: sample or all pass filings.",
+    )
+    scan.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed for pass-filing sampling.",
+    )
+    scan.add_argument(
+        "--core-items",
+        type=str,
+        default=",".join(DEFAULT_CORE_ITEMS),
+        help="Comma-separated core item IDs for missing_core_items.",
+    )
 
     regress = subparsers.add_parser(
         "regress", help="Re-run diagnostics for suspicious_boundaries_v5.csv."
@@ -1888,6 +2907,13 @@ def main(argv: list[str] | None = None) -> None:
             max_files=args.max_files,
             max_examples=args.max_examples,
             enable_embedded_verifier=not args.disable_embedded_verifier,
+            emit_manifest=args.emit_manifest,
+            sample_pass=args.sample_pass,
+            sample_seed=args.seed,
+            core_items=_parse_core_items_arg(args.core_items),
+            emit_html=args.emit_html,
+            html_out=args.html_out,
+            html_scope=args.html_scope,
         )
         run_boundary_diagnostics(config)
         return
