@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import html
+import random
 import re
+from collections import defaultdict
 from pathlib import Path
 
 from .extraction import _strip_edgar_metadata
@@ -11,6 +13,17 @@ from .utilities import _normalize_newlines
 
 def normalize_extractor_body(text: str) -> str:
     return _repair_wrapped_headings(_strip_edgar_metadata(_normalize_newlines(text)))
+
+
+STATUS_PASS = "pass"
+STATUS_WARNING = "warning"
+STATUS_FAIL = "fail"
+
+DEFAULT_SAMPLE_WEIGHTS: dict[str, float] = {
+    STATUS_PASS: 0.5,
+    STATUS_WARNING: 0.3,
+    STATUS_FAIL: 0.2,
+}
 
 
 def _safe_slug(value: str) -> str:
@@ -52,6 +65,217 @@ def _item_id_sort_key(value: str) -> tuple[int, str]:
 
 def _filing_filename(doc_id: str, accession: str) -> str:
     return f"{_safe_slug(doc_id)}_{_safe_slug(accession)}.html"
+
+
+def normalize_sample_weights(weights: dict[str, float] | None) -> dict[str, float]:
+    merged = dict(DEFAULT_SAMPLE_WEIGHTS)
+    if weights:
+        for key, value in weights.items():
+            if value is None:
+                continue
+            normalized_key = str(key).strip().lower()
+            if normalized_key in merged:
+                merged[normalized_key] = float(value)
+    return {key: max(0.0, value) for key, value in merged.items()}
+
+
+def classify_filing_status(row: dict[str, object]) -> str:
+    any_fail = _parse_bool(row.get("any_fail"))
+    exclusion = str(row.get("filing_exclusion_reason") or "").strip()
+    if any_fail or exclusion:
+        return STATUS_FAIL
+    if _parse_bool(row.get("any_warn")):
+        return STATUS_WARNING
+    return STATUS_PASS
+
+
+def _status_label(status: str) -> str:
+    return {
+        STATUS_PASS: "PASS",
+        STATUS_WARNING: "WARNING",
+        STATUS_FAIL: "FAIL",
+    }.get(status, status.upper())
+
+
+def _status_badge(status: str) -> str:
+    badge_class = "ok"
+    if status == STATUS_WARNING:
+        badge_class = "warn"
+    elif status == STATUS_FAIL:
+        badge_class = "fail"
+    return f"<span class=\"badge {badge_class}\">{_status_label(status)}</span>"
+
+
+def _quartile_edges(values: list[int]) -> tuple[int, int, int]:
+    if not values:
+        return (0, 0, 0)
+    ordered = sorted(values)
+    n = len(ordered)
+    q1 = ordered[int(0.25 * (n - 1))]
+    q2 = ordered[int(0.50 * (n - 1))]
+    q3 = ordered[int(0.75 * (n - 1))]
+    return (q1, q2, q3)
+
+
+def _quartile_bucket(value: int, edges: tuple[int, int, int]) -> str:
+    q1, q2, q3 = edges
+    if value <= q1:
+        return "Q1"
+    if value <= q2:
+        return "Q2"
+    if value <= q3:
+        return "Q3"
+    return "Q4"
+
+
+def _stratified_sample(
+    strata: dict[tuple[str, bool], list[dict[str, object]]],
+    *,
+    sample_size: int,
+    seed: int,
+) -> list[dict[str, object]]:
+    rng = random.Random(seed)
+    total = sum(len(rows) for rows in strata.values())
+    if total == 0 or sample_size <= 0:
+        return []
+    if sample_size > total:
+        sample_size = total
+
+    targets: dict[tuple[str, bool], int] = {}
+    fractional: list[tuple[float, tuple[str, bool]]] = []
+    for key, rows in strata.items():
+        raw = (sample_size * len(rows)) / total
+        base = int(raw)
+        targets[key] = min(base, len(rows))
+        fractional.append((raw - base, key))
+
+    remaining = sample_size - sum(targets.values())
+    fractional.sort(reverse=True, key=lambda t: t[0])
+    for _, key in fractional:
+        if remaining <= 0:
+            break
+        if targets[key] < len(strata[key]):
+            targets[key] += 1
+            remaining -= 1
+
+    while remaining > 0:
+        available = [key for key in strata if targets[key] < len(strata[key])]
+        if not available:
+            break
+        key = rng.choice(available)
+        targets[key] += 1
+        remaining -= 1
+
+    sampled: list[dict[str, object]] = []
+    for key in sorted(strata.keys()):
+        rows = strata[key]
+        k = targets.get(key, 0)
+        if k <= 0:
+            continue
+        sampled.extend(rng.sample(rows, k))
+    return sampled
+
+
+def _sample_stratified_rows(
+    rows: list[dict[str, object]],
+    *,
+    sample_size: int,
+    seed: int,
+) -> list[dict[str, object]]:
+    if not rows or sample_size <= 0:
+        return []
+    edges = _quartile_edges(
+        [_parse_int(row.get("n_items_extracted"), default=0) for row in rows]
+    )
+    strata: dict[tuple[str, bool], list[dict[str, object]]] = defaultdict(list)
+    for row in rows:
+        bucket = _quartile_bucket(
+            _parse_int(row.get("n_items_extracted"), default=0), edges
+        )
+        missing_core = bool(str(row.get("missing_core_items") or "").strip())
+        strata[(bucket, missing_core)].append(row)
+    return _stratified_sample(strata, sample_size=sample_size, seed=seed)
+
+
+def sample_filings_by_status(
+    rows: list[dict[str, object]],
+    *,
+    sample_size: int,
+    seed: int,
+    weights: dict[str, float] | None = None,
+) -> list[dict[str, object]]:
+    if not rows or sample_size <= 0:
+        return []
+
+    status_rows = {
+        STATUS_PASS: [],
+        STATUS_WARNING: [],
+        STATUS_FAIL: [],
+    }
+    for row in rows:
+        status_rows[classify_filing_status(row)].append(row)
+
+    total_available = sum(len(rows) for rows in status_rows.values())
+    if total_available <= 0:
+        return []
+    if sample_size > total_available:
+        sample_size = total_available
+
+    normalized_weights = normalize_sample_weights(weights)
+    weight_sum = sum(
+        normalized_weights[status]
+        for status, rows_for_status in status_rows.items()
+        if rows_for_status
+    )
+    if weight_sum <= 0:
+        weight_sum = sum(1 for rows_for_status in status_rows.values() if rows_for_status)
+
+    targets: dict[str, int] = {}
+    fractional: list[tuple[float, str]] = []
+    for status, rows_for_status in status_rows.items():
+        if not rows_for_status:
+            targets[status] = 0
+            continue
+        raw = sample_size * (normalized_weights[status] / weight_sum)
+        base = int(raw)
+        targets[status] = min(base, len(rows_for_status))
+        fractional.append((raw - base, status))
+
+    remaining = sample_size - sum(targets.values())
+    fractional.sort(reverse=True, key=lambda entry: entry[0])
+    for _, status in fractional:
+        if remaining <= 0:
+            break
+        if targets[status] < len(status_rows[status]):
+            targets[status] += 1
+            remaining -= 1
+
+    rng = random.Random(seed)
+    while remaining > 0:
+        available = [
+            status
+            for status, rows_for_status in status_rows.items()
+            if targets[status] < len(rows_for_status)
+        ]
+        if not available:
+            break
+        status = rng.choice(available)
+        targets[status] += 1
+        remaining -= 1
+
+    sampled: list[dict[str, object]] = []
+    for idx, status in enumerate((STATUS_PASS, STATUS_WARNING, STATUS_FAIL)):
+        target = targets.get(status, 0)
+        if target <= 0:
+            continue
+        sampled.extend(
+            _sample_stratified_rows(
+                status_rows[status],
+                sample_size=target,
+                seed=seed + (idx + 1) * 101,
+            )
+        )
+    return sampled
 
 
 def write_html_audit(
@@ -217,8 +441,11 @@ def write_html_audit(
         ("Total filings", metadata.get("total_filings", "")),
         ("Total items", metadata.get("total_items", "")),
         ("Pass filings", metadata.get("total_pass_filings", "")),
+        ("Warning filings", metadata.get("total_warning_filings", "")),
+        ("Fail filings", metadata.get("total_fail_filings", "")),
         ("Scope", scope_label),
         ("Sample size", metadata.get("sample_size", "")),
+        ("Sample weights", metadata.get("sample_weights", "")),
         ("Generated at", metadata.get("generated_at", "")),
         ("Offset basis", metadata.get("offset_basis", "")),
     ]
@@ -240,6 +467,7 @@ def write_html_audit(
             "        <th>form</th>",
             "        <th>filing_date</th>",
             "        <th>n_items_extracted</th>",
+            "        <th>status</th>",
             "        <th>any_warn</th>",
             "        <th>missing_core_items</th>",
             "        <th>filing_exclusion_reason</th>",
@@ -253,6 +481,7 @@ def write_html_audit(
         doc_id = str(row.get("doc_id") or "")
         accession = str(row.get("accession") or "")
         filename = _filing_filename(doc_id, accession)
+        status = classify_filing_status(row)
         index_lines.append("      <tr>")
         index_lines.append(
             f"        <td><a href=\"filings/{filename}\">{_html_escape(doc_id)}</a></td>"
@@ -263,6 +492,7 @@ def write_html_audit(
         index_lines.append(
             f"        <td>{_html_escape(row.get('n_items_extracted',''))}</td>"
         )
+        index_lines.append(f"        <td>{_status_badge(status)}</td>")
         index_lines.append(f"        <td>{_badge(row.get('any_warn'))}</td>")
         index_lines.append(
             f"        <td>{_html_escape(row.get('missing_core_items',''))}</td>"
@@ -281,6 +511,7 @@ def write_html_audit(
         filing_items = items_by_filing.get(doc_id, [])
         filing_items = sorted(filing_items, key=_item_sort_key)
         filename = _filing_filename(doc_id, accession)
+        status = classify_filing_status(row)
         file_lines = [
             "<!doctype html>",
             "<html lang=\"en\">",
@@ -301,6 +532,7 @@ def write_html_audit(
             "    <div class=\"summary-grid\">",
         ]
         header_fields = [
+            ("Status", _status_label(status)),
             ("Form", row.get("form", "")),
             ("Filing date", row.get("filing_date", "")),
             ("Period end", row.get("period_end", "")),
@@ -403,4 +635,14 @@ def write_html_audit(
         (filings_dir / filename).write_text("\n".join(file_lines), encoding="utf-8")
 
 
-__all__ = ["normalize_extractor_body", "write_html_audit"]
+__all__ = [
+    "DEFAULT_SAMPLE_WEIGHTS",
+    "STATUS_FAIL",
+    "STATUS_PASS",
+    "STATUS_WARNING",
+    "classify_filing_status",
+    "normalize_extractor_body",
+    "normalize_sample_weights",
+    "sample_filings_by_status",
+    "write_html_audit",
+]

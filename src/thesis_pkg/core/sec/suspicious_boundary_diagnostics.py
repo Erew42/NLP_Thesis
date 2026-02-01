@@ -89,7 +89,13 @@ from .html_audit import (
     _parse_bool,
     _parse_int,
     _safe_slug,
+    STATUS_FAIL,
+    STATUS_PASS,
+    STATUS_WARNING,
+    classify_filing_status,
     normalize_extractor_body,
+    normalize_sample_weights,
+    sample_filings_by_status,
     write_html_audit,
 )
 
@@ -274,6 +280,7 @@ class DiagnosticsConfig:
     emit_html: bool = False
     html_out: Path = DEFAULT_HTML_OUT_DIR
     html_scope: str = DEFAULT_HTML_SCOPE
+    html_sample_weights: dict[str, float] | None = None
 
 
 @dataclass(frozen=True)
@@ -1764,35 +1771,39 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
 
         csv.field_size_limit(10**7)
         manifest_rows = _read_csv_rows(config.manifest_filings_path)
-        pass_rows = [row for row in manifest_rows if _is_pass_filing(row)]
+        pass_rows: list[dict[str, object]] = []
+        warning_rows: list[dict[str, object]] = []
+        fail_rows: list[dict[str, object]] = []
+        not_failed_rows: list[dict[str, object]] = []
+        for row in manifest_rows:
+            status = classify_filing_status(row)
+            if status == STATUS_FAIL:
+                fail_rows.append(row)
+                continue
+            not_failed_rows.append(row)
+            if status == STATUS_WARNING:
+                warning_rows.append(row)
+            else:
+                pass_rows.append(row)
 
         scope_label = config.html_scope
         index_rows: list[dict[str, object]] = []
         items_by_filing: dict[str, list[dict[str, object]]] = defaultdict(list)
 
         if config.html_scope == "all":
-            index_rows = pass_rows
-            scope_label = f"all ({len(index_rows)})"
+            index_rows = not_failed_rows
+            scope_label = f"all (not failed: {len(index_rows)})"
         else:
-            if config.sample_pass and config.sample_pass > 0 and config.sample_filings_path.exists():
-                index_rows = _read_csv_rows(config.sample_filings_path)
-            else:
-                index_rows = _sample_pass_rows(
-                    pass_rows,
-                    sample_size=DEFAULT_HTML_SAMPLE_SIZE,
-                    seed=config.sample_seed,
-                )
+            index_rows = sample_filings_by_status(
+                manifest_rows,
+                sample_size=DEFAULT_HTML_SAMPLE_SIZE,
+                seed=config.sample_seed,
+                weights=config.html_sample_weights,
+            )
             scope_label = f"sample ({len(index_rows)})"
 
         selected_doc_ids = {str(row.get("doc_id") or "") for row in index_rows}
         items_source = config.manifest_items_path
-        if (
-            config.html_scope == "sample"
-            and config.sample_pass
-            and config.sample_pass > 0
-            and config.sample_items_path.exists()
-        ):
-            items_source = config.sample_items_path
 
         if selected_doc_ids:
             with items_source.open("r", newline="", encoding="utf-8") as manifest_items:
@@ -1802,12 +1813,21 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
                     if doc_id in selected_doc_ids:
                         items_by_filing[doc_id].append(row)
 
+        weights = normalize_sample_weights(config.html_sample_weights)
+        weights_label = (
+            f"{STATUS_PASS}={weights.get(STATUS_PASS, 0):.2f}, "
+            f"{STATUS_WARNING}={weights.get(STATUS_WARNING, 0):.2f}, "
+            f"{STATUS_FAIL}={weights.get(STATUS_FAIL, 0):.2f}"
+        )
         metadata = {
             "pass_definition": "any_fail == False and filing_exclusion_reason is empty",
             "total_filings": total_filings,
             "total_items": total_items,
             "total_pass_filings": len(pass_rows),
+            "total_warning_filings": len(warning_rows),
+            "total_fail_filings": len(fail_rows),
             "sample_size": len(index_rows),
+            "sample_weights": weights_label,
             "generated_at": datetime.now().isoformat(timespec="seconds"),
             "offset_basis": OFFSET_BASIS_EXTRACTOR_BODY,
         }
@@ -2445,7 +2465,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--sample-pass",
         type=int,
         default=0,
-        help="Sample N pass filings (requires manifests).",
+        help="Sample N pass filings for CSV review outputs (requires manifests).",
     )
     scan.add_argument(
         "--emit-html",
@@ -2463,13 +2483,13 @@ def _build_parser() -> argparse.ArgumentParser:
         type=str,
         default=DEFAULT_HTML_SCOPE,
         choices=("sample", "all"),
-        help="HTML scope: sample or all pass filings.",
+        help="HTML scope: mixed-status sample or all not-failed filings.",
     )
     scan.add_argument(
         "--seed",
         type=int,
         default=42,
-        help="Random seed for pass-filing sampling.",
+        help="Random seed for sampling (CSV samples + HTML mixed-status sample).",
     )
     scan.add_argument(
         "--core-items",
