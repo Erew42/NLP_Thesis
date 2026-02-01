@@ -2,56 +2,32 @@ from __future__ import annotations
 
 import re
 from collections import Counter
-from dataclasses import dataclass
 
+from .extraction_utils import EmbeddedHeadingHit
+from .patterns import (
+    TOC_DOT_LEADER_PATTERN,
+    EMBEDDED_ITEM_PATTERN,
+    EMBEDDED_ITEM_ROMAN_PATTERN,
+    EMBEDDED_PART_PATTERN,
+    STRICT_PART_PATTERN,
+    EMBEDDED_CONTINUATION_PATTERN,
+    EMBEDDED_CROSS_REF_PATTERN,
+    EMBEDDED_RESERVED_PATTERN,
+    GIJ_OMIT_BLOCK_START_RE,
+    GIJ_SUBSTITUTE_BLOCK_RE,
+    GIJ_GENERAL_RE,
+    STANDARD_ITEM_TOKEN_RE,
+    EMPTY_SECTION_LINE_RE,
+    EMBEDDED_TOC_DOT_LEADER_PATTERN,
+    EMBEDDED_TOC_TRAILING_PAGE_PATTERN,
+    EMBEDDED_TOC_HEADER_PATTERN,
+    EMBEDDED_TOC_WINDOW_HEADER_PATTERN,
+    EMBEDDED_TOC_PART_ITEM_PATTERN,
+    EMBEDDED_TOC_ITEM_ONLY_PATTERN,
+    EMBEDDED_SEPARATOR_PATTERN,
+)
 
-TOC_DOT_LEADER_PATTERN = re.compile(r"(?:\.{4,}|(?:\.\s*){4,})\s*\d{1,4}\s*$")
-EMBEDDED_ITEM_PATTERN = re.compile(
-    r"(?i)^[ \t]*ITEM[ \t]+(?P<num>\d{1,2})(?P<let>[A-Z])?\b"
-)
-# Corpus scan shows occasional ITEM I-style tokens; accept roman numerals for embedded checks.
-EMBEDDED_ITEM_ROMAN_PATTERN = re.compile(r"(?i)^[ \t]*ITEM[ \t]+(?P<roman>[IVXLCDM]+)\b")
-EMBEDDED_PART_PATTERN = re.compile(
-    r"(?i)^[ \t]*PART[ \t]+(?P<roman>[IVX]+)[ \t]*[.\-\u2013\u2014:]?[ \t]*$"
-)
-STRICT_PART_PATTERN = re.compile(
-    r"(?im)^\s*PART\s+(?P<part>I|II|III|IV)\s*[:.\-\u2013\u2014]?\s*$"
-)
-EMBEDDED_CONTINUATION_PATTERN = re.compile(r"(?i)\b(?:continued|cont\.|concluded)\b")
-EMBEDDED_CROSS_REF_PATTERN = re.compile(
-    r"(?i)\b(?:see|refer to|refer back to|as discussed|as described|as set forth|as noted|"
-    r"included in|incorporated by reference|incorporated herein by reference|of this form|"
-    r"in this form|set forth in|pursuant to|under|in accordance with)\b"
-)
-EMBEDDED_RESERVED_PATTERN = re.compile(r"(?i)\[\s*reserved\s*\]")
-GIJ_OMIT_BLOCK_START_RE = re.compile(
-    r"(?i)\bthe\s+following\s+items\s+have\s+been\s+omitted\s+in\s+accordance\s+with\s+"
-    r"general\s+instruction\s+j\s+to\s+form\s+10-?k\b"
-)
-GIJ_SUBSTITUTE_BLOCK_RE = re.compile(
-    r"(?i)\bsubstitute\s+information\s+provided\s+in\s+accordance\s+with\s+"
-    r"general\s+instruction\s+j\s+to\s+form\s+10-?k\b"
-)
-GIJ_GENERAL_RE = re.compile(r"(?i)\bgeneral\s+instruction\s+j\s+to\s+form\s+10-?k\b")
-STANDARD_ITEM_TOKEN_RE = re.compile(r"(?i)\bItem\s+(?P<id>\d{1,2}[A-Z]?)\b")
-EMPTY_SECTION_LINE_RE = re.compile(
-    r"(?i)^\s*[\(\[]?\s*(?:reserved|omitted|not applicable|nothing to report|none)\s*[\)\]]?\.?\s*$"
-)
-EMBEDDED_TOC_DOT_LEADER_PATTERN = re.compile(r"(?:\.{8,}|(?:\.\s*){8,})")
-EMBEDDED_TOC_TRAILING_PAGE_PATTERN = re.compile(r"\s+\d{1,4}\s*$")
-EMBEDDED_TOC_HEADER_PATTERN = re.compile(
-    r"(?i)\b(?:table\s+of\s+contents?|index|(?:form\s+)?10-?k\s+summary)\b"
-)
-EMBEDDED_TOC_WINDOW_HEADER_PATTERN = re.compile(
-    r"(?i)^\s*(?:table\s+of\s+contents?|index|(?:form\s+)?10-?k\s+summary)\b"
-)
 EMBEDDED_TOC_WINDOW_LINES = 150
-EMBEDDED_TOC_PART_ITEM_PATTERN = re.compile(
-    r"(?i)^\s*PART\s+(?P<part>[IVX]+)\s*(?:[,/\-:;]\s*|\s+)?ITEM\s+"
-    r"(?P<num>\d{1,2})(?P<let>[A-Z])?\b"
-)
-EMBEDDED_TOC_ITEM_ONLY_PATTERN = re.compile(r"(?i)^\s*ITEM\s+\d{1,2}[A-Z]?\b")
-EMBEDDED_SEPARATOR_PATTERN = re.compile(r"^[\s\-=*]{3,}$")
 EMBEDDED_SELF_HIT_MAX_CHAR = 10
 EMBEDDED_MAX_HITS = 3
 EMBEDDED_TOC_START_EARLY_MAX_CHAR = 500
@@ -104,18 +80,6 @@ ROMAN_ITEM_ID_MAP = {
     "XIX": "19",
     "XX": "20",
 }
-
-
-@dataclass(frozen=True)
-class EmbeddedHeadingHit:
-    kind: str
-    classification: str
-    item_id: str | None
-    part: str | None
-    line_idx: int
-    char_pos: int
-    full_text_len: int
-    snippet: str
 
 
 def _non_empty_line(lines: list[str], start: int, *, max_scan: int = 4) -> tuple[int | None, str | None]:

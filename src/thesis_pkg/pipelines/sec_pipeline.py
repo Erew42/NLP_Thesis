@@ -20,12 +20,12 @@ from thesis_pkg.core.sec.filing_text import (
     ParsedFilingSchema,
     RawTextSchema,
     _digits_only,
-    _is_empty_item_text,
     _make_doc_id,
     extract_filing_items,
     parse_filename_minimal,
     parse_header,
 )
+from thesis_pkg.core.sec.heuristics import _is_empty_item_text
 from thesis_pkg.io.parquet import (
     _assert_parquet_magic,
     _copy_with_verify,

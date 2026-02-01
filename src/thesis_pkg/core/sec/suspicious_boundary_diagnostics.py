@@ -17,45 +17,51 @@ import polars as pl
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from thesis_pkg.core.sec.filing_text import (
-    ITEM_LINESTART_PATTERN,
-    _default_part_for_item_id,
-    _looks_like_toc_heading_line,
-    _normalize_newlines,
-    _prefix_is_bullet,
-    _prefix_is_part_only,
-    _prefix_looks_like_cross_ref,
-    _repair_wrapped_headings,
+from .extraction import (
     _strip_edgar_metadata,
     extract_filing_items,
     parse_header,
 )
-from thesis_pkg.core.sec.embedded_headings import (
-    TOC_DOT_LEADER_PATTERN,
+from .extraction_utils import EmbeddedHeadingHit
+from .heuristics import (
+    _looks_like_toc_heading_line,
+    _prefix_is_part_only,
+    _prefix_looks_like_cross_ref,
+    _repair_wrapped_headings,
+)
+from .patterns import (
     EMBEDDED_CONTINUATION_PATTERN,
     EMBEDDED_CROSS_REF_PATTERN,
-    EMBEDDED_FAIL_CLASSIFICATIONS,
-    EMBEDDED_IGNORE_CLASSIFICATIONS,
     EMBEDDED_ITEM_PATTERN,
     EMBEDDED_ITEM_ROMAN_PATTERN,
-    EMBEDDED_MAX_HITS,
-    EMBEDDED_NEARBY_ITEM_WINDOW,
     EMBEDDED_PART_PATTERN,
     EMBEDDED_RESERVED_PATTERN,
-    EMBEDDED_SELF_HIT_MAX_CHAR,
     EMBEDDED_SEPARATOR_PATTERN,
-    EMBEDDED_TOC_CLUSTER_LOOKAHEAD,
     EMBEDDED_TOC_DOT_LEADER_PATTERN,
     EMBEDDED_TOC_HEADER_PATTERN,
     EMBEDDED_TOC_ITEM_ONLY_PATTERN,
     EMBEDDED_TOC_PART_ITEM_PATTERN,
-    EMBEDDED_TOC_START_EARLY_MAX_CHAR,
-    EMBEDDED_TOC_START_MISFIRE_MAX_CHAR,
     EMBEDDED_TOC_TRAILING_PAGE_PATTERN,
     EMBEDDED_TOC_WINDOW_HEADER_PATTERN,
+    ITEM_LINESTART_PATTERN,
+    TOC_DOT_LEADER_PATTERN,
+)
+from .utilities import (
+    _default_part_for_item_id,
+    _normalize_newlines,
+    _prefix_is_bullet,
+)
+from .embedded_headings import (
+    EMBEDDED_FAIL_CLASSIFICATIONS,
+    EMBEDDED_IGNORE_CLASSIFICATIONS,
+    EMBEDDED_MAX_HITS,
+    EMBEDDED_NEARBY_ITEM_WINDOW,
+    EMBEDDED_SELF_HIT_MAX_CHAR,
+    EMBEDDED_TOC_CLUSTER_LOOKAHEAD,
+    EMBEDDED_TOC_START_EARLY_MAX_CHAR,
+    EMBEDDED_TOC_START_MISFIRE_MAX_CHAR,
     EMBEDDED_TOC_WINDOW_LINES,
     EMBEDDED_WARN_CLASSIFICATIONS,
-    EmbeddedHeadingHit,
     _confirm_part_restart,
     _confirm_prose_after,
     _cross_ref_like,

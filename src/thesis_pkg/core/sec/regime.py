@@ -1,0 +1,141 @@
+from __future__ import annotations
+
+import json
+from functools import lru_cache
+from importlib import resources
+from pathlib import Path
+
+
+ITEM_TITLES_10K = {
+    "1": ["BUSINESS"],
+    "1A": ["RISK FACTORS"],
+    "1B": ["UNRESOLVED STAFF COMMENTS"],
+    "1C": ["CYBERSECURITY"],
+    "2": ["PROPERTIES", "PROPERTY"],
+    "3": ["LEGAL PROCEEDINGS"],
+    "4": [
+        "MINE SAFETY DISCLOSURES",
+        "SUBMISSION OF MATTERS TO A VOTE OF SECURITY HOLDERS",
+        "SUBMISSION OF MATTERS TO A VOTE OF SHAREHOLDERS",
+        "RESERVED",
+    ],
+    "5": [
+        "MARKET FOR REGISTRANT'S COMMON EQUITY",
+        "MARKET FOR REGISTRANT S COMMON EQUITY",
+        "MARKET FOR REGISTRANTS COMMON EQUITY",
+        "MARKET FOR REGISTRANT'S COMMON EQUITY, RELATED STOCKHOLDER MATTERS AND ISSUER PURCHASES OF EQUITY SECURITIES",
+        "MARKET FOR REGISTRANT S COMMON EQUITY, RELATED STOCKHOLDER MATTERS AND ISSUER PURCHASES OF EQUITY SECURITIES",
+    ],
+    "6": ["SELECTED FINANCIAL DATA", "RESERVED"],
+    "7": [
+        "MANAGEMENT'S DISCUSSION AND ANALYSIS",
+        "MANAGEMENT S DISCUSSION AND ANALYSIS",
+        "MANAGEMENTS DISCUSSION AND ANALYSIS",
+        "MANAGEMENT'S DISCUSSION AND ANALYSIS OF FINANCIAL CONDITION AND RESULTS OF OPERATIONS",
+        "MANAGEMENT S DISCUSSION AND ANALYSIS OF FINANCIAL CONDITION AND RESULTS OF OPERATIONS",
+    ],
+    "7A": [
+        "QUANTITATIVE AND QUALITATIVE DISCLOSURES ABOUT MARKET RISK",
+        "QUANTITATIVE AND QUALITATIVE DISCLOSURES",
+    ],
+    "8": [
+        "FINANCIAL STATEMENTS AND SUPPLEMENTARY DATA",
+        "FINANCIAL STATEMENTS",
+        "CONSOLIDATED FINANCIAL STATEMENTS",
+        "CONSOLIDATED FINANCIAL STATEMENTS AND SUPPLEMENTARY DATA",
+        "NOTES TO CONSOLIDATED FINANCIAL STATEMENTS",
+        "NOTES TO THE CONSOLIDATED FINANCIAL STATEMENTS",
+    ],
+    "9": [
+        "CHANGES IN AND DISAGREEMENTS WITH ACCOUNTANTS",
+        "CHANGES IN AND DISAGREEMENTS WITH ACCOUNTANTS ON ACCOUNTING AND FINANCIAL DISCLOSURE",
+        "CHANGES IN AND DISAGREEMENTS WITH ACCOUNTANTS ON ACCOUNTING AND FINANCIAL DISCLOSURES",
+    ],
+    "9A": ["CONTROLS AND PROCEDURES"],
+    "9B": ["OTHER INFORMATION"],
+    "9C": ["DISCLOSURE REGARDING FOREIGN JURISDICTIONS THAT PREVENT INSPECTIONS"],
+    "10": [
+        "DIRECTORS, EXECUTIVE OFFICERS AND CORPORATE GOVERNANCE",
+        "DIRECTORS AND EXECUTIVE OFFICERS",
+    ],
+    "11": ["EXECUTIVE COMPENSATION"],
+    "12": [
+        "SECURITY OWNERSHIP OF CERTAIN BENEFICIAL OWNERS AND MANAGEMENT",
+        "SECURITY OWNERSHIP OF CERTAIN BENEFICIAL OWNERS AND MANAGEMENT AND RELATED STOCKHOLDER MATTERS",
+    ],
+    "13": [
+        "CERTAIN RELATIONSHIPS AND RELATED TRANSACTIONS",
+        "CERTAIN RELATIONSHIPS AND RELATED TRANSACTIONS AND DIRECTOR INDEPENDENCE",
+    ],
+    "14": ["PRINCIPAL ACCOUNTANT FEES AND SERVICES"],
+    "15": [
+        "EXHIBITS",
+        "EXHIBITS AND FINANCIAL STATEMENT SCHEDULES",
+        "EXHIBITS AND FINANCIAL STATEMENTS",
+        "EXHIBITS FINANCIAL STATEMENT SCHEDULES",
+        "INDEX TO EXHIBITS",
+    ],
+    "SIGNATURES": ["SIGNATURES"],
+}
+
+ITEM_TITLES_10K_BY_CANONICAL = {
+    "I:4_VOTING_RESULTS_LEGACY": [
+        "SUBMISSION OF MATTERS TO A VOTE OF SECURITY HOLDERS",
+        "SUBMISSION OF MATTERS TO A VOTE OF SHAREHOLDERS",
+    ],
+    "I:4_RESERVED": ["RESERVED"],
+    "I:4_MINE_SAFETY": ["MINE SAFETY DISCLOSURES"],
+    "II:6_SELECTED_FINANCIAL_DATA": ["SELECTED FINANCIAL DATA"],
+    "II:6_RESERVED": ["RESERVED"],
+    "III:14_CONTROLS_AND_PROCEDURES_LEGACY": ["CONTROLS AND PROCEDURES"],
+    "III:14_PRINCIPAL_ACCOUNTANT_FEES": ["PRINCIPAL ACCOUNTANT FEES AND SERVICES"],
+    "IV:14_EXHIBITS_SCHEDULES_REPORTS": [
+        "EXHIBITS",
+        "EXHIBITS AND FINANCIAL STATEMENT SCHEDULES",
+        "EXHIBITS AND FINANCIAL STATEMENTS",
+        "EXHIBITS FINANCIAL STATEMENT SCHEDULES",
+        "INDEX TO EXHIBITS",
+    ],
+}
+
+
+@lru_cache(maxsize=1)
+def _load_item_regime_spec() -> dict | None:
+    try:
+        try:
+            data_path = resources.files(__package__).joinpath("item_regime_10k.json")
+            with data_path.open("r", encoding="utf-8") as fh:
+                return json.load(fh)
+        except Exception:
+            path = Path(__file__).resolve().parent / "item_regime_10k.json"
+            with path.open("r", encoding="utf-8") as fh:
+                return json.load(fh)
+    except Exception:
+        return None
+
+
+_ALLOWED_ITEM_LETTERS_10K: dict[int, set[str]] = {
+    1: {"A", "B", "C"},
+    7: {"A"},
+    9: {"A", "B", "C"},
+}
+
+_ITEM_REGIME_SPEC = _load_item_regime_spec()
+# Regime spec is optional; missing or unreadable specs fall back to permissive behavior.
+_ITEM_REGIME_ITEMS = _ITEM_REGIME_SPEC.get("items", {}) if _ITEM_REGIME_SPEC else {}
+_ITEM_REGIME_LEGACY = (
+    {entry["slot"]: entry for entry in _ITEM_REGIME_SPEC.get("legacy_slots", [])}
+    if _ITEM_REGIME_SPEC
+    else {}
+)
+_ITEM_REGIME_BY_ID: dict[str, list[tuple[str, dict]]] = {}
+if _ITEM_REGIME_SPEC:
+    combined = dict(_ITEM_REGIME_ITEMS)
+    combined.update(_ITEM_REGIME_LEGACY)
+    for key, entry in combined.items():
+        item_id = entry.get("item_id")
+        if not item_id and ":" in key:
+            item_id = key.split(":", 1)[1]
+        if not item_id:
+            continue
+        _ITEM_REGIME_BY_ID.setdefault(item_id, []).append((key, entry))

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from thesis_pkg.core.sec.filing_text import _prefix_looks_like_cross_ref
+from thesis_pkg.core.sec.heuristics import _prefix_looks_like_cross_ref
 from thesis_pkg.core.sec.suspicious_boundary_diagnostics import (
     _find_internal_heading_leak,
     _is_midline_heading_prefix,
