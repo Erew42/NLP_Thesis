@@ -67,6 +67,13 @@ def _filing_filename(doc_id: str, accession: str) -> str:
     return f"{_safe_slug(doc_id)}_{_safe_slug(accession)}.html"
 
 
+def _asset_link(path: str, *, depth: int) -> str:
+    if not path:
+        return ""
+    prefix = "../" * max(depth, 0)
+    return f"{prefix}{path}"
+
+
 def normalize_sample_weights(weights: dict[str, float] | None) -> dict[str, float]:
     merged = dict(DEFAULT_SAMPLE_WEIGHTS)
     if weights:
@@ -552,6 +559,20 @@ def write_html_audit(
             )
         file_lines.extend(["    </div>", "  </div>"])
 
+        filing_text_asset = str(row.get("filing_text_asset") or "")
+        filing_text_preview = str(row.get("filing_text_preview") or "")
+        if filing_text_asset or filing_text_preview:
+            file_lines.append(
+                "<div class=\"section-title\">Filing text (normalized extractor body)</div>"
+            )
+            if filing_text_asset:
+                asset_link = _asset_link(filing_text_asset, depth=1)
+                file_lines.append(
+                    f"<div class=\"muted\"><a href=\"{asset_link}\">Download full text</a></div>"
+                )
+            if filing_text_preview:
+                file_lines.append(f"<pre>{_html_escape(filing_text_preview)}</pre>")
+
         if not filing_items:
             file_lines.append("<div class=\"card\">No items found for this filing.</div>")
         else:
@@ -618,6 +639,20 @@ def write_html_audit(
                         "<div class=\"section-title\">Embedded flags</div>"
                     )
                     file_lines.append(_render_kv(embedded_fields))
+
+                item_text_asset = str(item.get("item_text_asset") or "")
+                item_text_preview = str(item.get("item_text_preview") or "")
+                if item_text_asset or item_text_preview:
+                    file_lines.append(
+                        "<div class=\"section-title\">Item text (normalized extractor body)</div>"
+                    )
+                    if item_text_asset:
+                        asset_link = _asset_link(item_text_asset, depth=1)
+                        file_lines.append(
+                            f"<div class=\"muted\"><a href=\"{asset_link}\">Download item text</a></div>"
+                        )
+                    if item_text_preview:
+                        file_lines.append(f"<pre>{_html_escape(item_text_preview)}</pre>")
 
                 doc_head = str(item.get("doc_head_200") or "")
                 doc_tail = str(item.get("doc_tail_200") or "")

@@ -84,15 +84,34 @@ def parse_args() -> argparse.Namespace:
         help="Emit extraction manifest CSVs for items and filings.",
     )
     parser.add_argument(
+        "--no-manifest",
+        action="store_false",
+        dest="emit_manifest",
+        help="Disable manifest CSV outputs.",
+    )
+    parser.add_argument(
         "--sample-pass",
         type=int,
-        default=0,
+        default=None,
         help="Sample N pass filings for CSV review outputs (requires manifests).",
+    )
+    parser.add_argument(
+        "--no-pass-sample",
+        action="store_const",
+        const=0,
+        dest="sample_pass",
+        help="Disable pass-sample CSV outputs.",
     )
     parser.add_argument(
         "--emit-html",
         action="store_true",
         help="Emit offline HTML audit pages (requires manifests).",
+    )
+    parser.add_argument(
+        "--no-html",
+        action="store_false",
+        dest="emit_html",
+        help="Disable HTML audit outputs.",
     )
     parser.add_argument(
         "--html-out",
@@ -119,7 +138,22 @@ def parse_args() -> argparse.Namespace:
         default="1,1A,7,7A,8",
         help="Comma-separated core item IDs for missing_core_items.",
     )
-    return parser.parse_args()
+    parser.set_defaults(
+        emit_manifest=True,
+        emit_html=True,
+        sample_pass=100,
+    )
+    args = parser.parse_args()
+    if not args.emit_manifest and args.emit_html:
+        parser.error(
+            "HTML output requires manifests. Remove --no-manifest or add --no-html."
+        )
+    if not args.emit_manifest and args.sample_pass and args.sample_pass > 0:
+        parser.error(
+            "Pass-sample outputs require manifests. Remove --no-manifest or set "
+            "--sample-pass 0 / use --no-pass-sample."
+        )
+    return args
 
 
 def _parse_core_items(value: str | None) -> tuple[str, ...]:

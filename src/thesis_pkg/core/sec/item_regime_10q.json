@@ -1,0 +1,300 @@
+{
+  "spec_version": 2,
+  "form": "10-Q",
+  "timezone": "UTC",
+  "date_conventions": {
+    "segments_start_inclusive": true,
+    "segments_end_exclusive": true,
+    "default_date_field_for_effective_rules": "filing_date",
+    "notes": [
+      "Coverage starts at 1990-01-01.",
+      "Market Risk (Part I, Item 3) was phased in by filer category (Release 33-7386).",
+      "During the 2010-2012 window (Release 33-9089), Item 4 was removed and Items 5/6 were shifted up to 4/5. They were restored to their original slots by Release 33-9286 in 2012."
+    ]
+  },
+  "sources": [
+    {
+      "release": "33-7386",
+      "topic": "Part I Item 3 Market Risk (Phase-in)",
+      "year": 1997
+    },
+    {
+      "release": "33-8124",
+      "topic": "Part I Item 4 Controls and Procedures (SOX 302)",
+      "year": 2002
+    },
+    {
+      "release": "33-8400",
+      "topic": "Part II Item 2 Unregistered Sales / Removal of 8-K from Exhibits",
+      "year": 2004
+    },
+    {
+      "release": "33-8591",
+      "topic": "Part II Item 1A Risk Factors",
+      "year": 2005
+    },
+    {
+      "release": "33-9089",
+      "topic": "Part II Item 4 Removed; Items 5/6 Redesignated as 4/5",
+      "year": 2010
+    },
+    {
+      "release": "33-9286",
+      "topic": "Part II Item 4 Mine Safety Disclosures (Items 5/6 Restored)",
+      "year": 2012
+    }
+  ],
+  "triggers": {
+    "effective_date": {
+      "type": "date",
+      "format": "YYYY-MM-DD"
+    }
+  },
+  "items": {
+    "I:1": {
+      "item_id": "1",
+      "part": "I",
+      "label": "Financial Statements",
+      "status": "active",
+      "validity": [
+        {
+          "start": "1990-01-01",
+          "end": null,
+          "trigger": "effective_date",
+          "canonical": "I:1_FINANCIAL_STATEMENTS"
+        }
+      ]
+    },
+    "I:2": {
+      "item_id": "2",
+      "part": "I",
+      "label": "Management's Discussion and Analysis of Financial Condition and Results of Operations",
+      "status": "active",
+      "validity": [
+        {
+          "start": "1990-01-01",
+          "end": null,
+          "trigger": "effective_date",
+          "canonical": "I:2_MDA"
+        }
+      ]
+    },
+    "I:3": {
+      "item_id": "3",
+      "part": "I",
+      "label": "Quantitative and Qualitative Disclosures About Market Risk",
+      "status": "time_varying",
+      "validity": [
+        {
+          "start": "1990-01-01",
+          "end": "1997-06-15",
+          "trigger": "effective_date",
+          "canonical": "I:3_NOT_IN_FORM_PRE_EFFECTIVE",
+          "label_override": "Not in form (pre-effective)"
+        },
+        {
+          "start": "1997-06-15",
+          "end": null,
+          "trigger": "effective_date",
+          "canonical": "I:3_MARKET_RISK"
+        }
+      ]
+    },
+    "I:4": {
+      "item_id": "4",
+      "part": "I",
+      "label": "Controls and Procedures",
+      "status": "time_varying",
+      "validity": [
+        {
+          "start": "1990-01-01",
+          "end": "2002-08-29",
+          "trigger": "effective_date",
+          "canonical": "I:4_NOT_IN_FORM_PRE_EFFECTIVE",
+          "label_override": "Not in form (pre-effective)"
+        },
+        {
+          "start": "2002-08-29",
+          "end": null,
+          "trigger": "effective_date",
+          "canonical": "I:4_CONTROLS_AND_PROCEDURES"
+        }
+      ]
+    },
+    "II:1": {
+      "item_id": "1",
+      "part": "II",
+      "label": "Legal Proceedings",
+      "status": "active",
+      "validity": [
+        {
+          "start": "1990-01-01",
+          "end": null,
+          "trigger": "effective_date",
+          "canonical": "II:1_LEGAL_PROCEEDINGS"
+        }
+      ]
+    },
+    "II:1A": {
+      "item_id": "1A",
+      "part": "II",
+      "label": "Risk Factors",
+      "status": "time_varying",
+      "validity": [
+        {
+          "start": "1990-01-01",
+          "end": "2005-12-01",
+          "trigger": "effective_date",
+          "canonical": "II:1A_NOT_IN_FORM_PRE_EFFECTIVE",
+          "label_override": "Not in form (pre-effective)"
+        },
+        {
+          "start": "2005-12-01",
+          "end": null,
+          "trigger": "effective_date",
+          "canonical": "II:1A_RISK_FACTORS"
+        }
+      ]
+    },
+    "II:2": {
+      "item_id": "2",
+      "part": "II",
+      "label": "Unregistered Sales of Equity Securities and Use of Proceeds",
+      "status": "active",
+      "validity": [
+        {
+          "start": "1990-01-01",
+          "end": "1996-11-17",
+          "trigger": "effective_date",
+          "canonical": "II:2_CHANGES_IN_SECURITIES_AND_USE_OF_PROCEEDS"
+        },
+        {
+          "start": "1996-11-17",
+          "end": "2004-08-23",
+          "trigger": "effective_date",
+          "canonical": "II:2_CHANGES_IN_SECURITIES_AND_USE_OF_PROCEEDS_WITH_UNREGISTERED_EQUITY_SALES"
+        },
+        {
+          "start": "2004-08-23",
+          "end": null,
+          "trigger": "effective_date",
+          "canonical": "II:2_UNREGISTERED_SALES_OF_EQUITY_SECURITIES_AND_USE_OF_PROCEEDS"
+        }
+      ]
+    },
+    "II:3": {
+      "item_id": "3",
+      "part": "II",
+      "label": "Defaults upon Senior Securities",
+      "status": "active",
+      "validity": [
+        {
+          "start": "1990-01-01",
+          "end": null,
+          "trigger": "effective_date",
+          "canonical": "II:3_DEFAULTS_UPON_SENIOR_SECURITIES"
+        }
+      ]
+    },
+    "II:4": {
+      "item_id": "4",
+      "part": "II",
+      "label": "Submission of Matters to a Vote / Other Information / Mine Safety Disclosures",
+      "status": "active",
+      "validity": [
+        {
+          "start": "1990-01-01",
+          "end": "2010-02-28",
+          "trigger": "effective_date",
+          "canonical": "II:4_SUBMISSION_OF_MATTERS_TO_A_VOTE_OF_SECURITY_HOLDERS",
+          "label_override": "Submission of Matters to a Vote of Security Holders"
+        },
+        {
+          "start": "2010-02-28",
+          "end": "2012-01-27",
+          "trigger": "effective_date",
+          "canonical": "II:4_OTHER_INFORMATION_REDESIGNATED",
+          "label_override": "Other Information",
+          "notes": [
+            "During this window, Item 5 was redesignated as Item 4 (Release 33-9089)."
+          ]
+        },
+        {
+          "start": "2012-01-27",
+          "end": null,
+          "trigger": "effective_date",
+          "canonical": "II:4_MINE_SAFETY_DISCLOSURES",
+          "label_override": "Mine Safety Disclosures"
+        }
+      ]
+    },
+    "II:5": {
+      "item_id": "5",
+      "part": "II",
+      "label": "Other Information / Exhibits (redesignated window)",
+      "status": "active",
+      "validity": [
+        {
+          "start": "1990-01-01",
+          "end": "2010-02-28",
+          "trigger": "effective_date",
+          "canonical": "II:5_OTHER_INFORMATION",
+          "label_override": "Other Information"
+        },
+        {
+          "start": "2010-02-28",
+          "end": "2012-01-27",
+          "trigger": "effective_date",
+          "canonical": "II:5_EXHIBITS_REDESIGNATED",
+          "label_override": "Exhibits",
+          "notes": [
+            "During this window, Item 6 was redesignated as Item 5 (Release 33-9089)."
+          ]
+        },
+        {
+          "start": "2012-01-27",
+          "end": null,
+          "trigger": "effective_date",
+          "canonical": "II:5_OTHER_INFORMATION",
+          "label_override": "Other Information"
+        }
+      ]
+    },
+    "II:6": {
+      "item_id": "6",
+      "part": "II",
+      "label": "Exhibits (and formerly Reports on Form 8-K)",
+      "status": "active",
+      "validity": [
+        {
+          "start": "1990-01-01",
+          "end": "2004-08-23",
+          "trigger": "effective_date",
+          "canonical": "II:6_EXHIBITS_AND_REPORTS_ON_FORM_8K"
+        },
+        {
+          "start": "2004-08-23",
+          "end": "2010-02-28",
+          "trigger": "effective_date",
+          "canonical": "II:6_EXHIBITS"
+        },
+        {
+          "start": "2010-02-28",
+          "end": "2012-01-27",
+          "trigger": "effective_date",
+          "canonical": "II:6_NOT_IN_FORM_REDESIGNATION_WINDOW",
+          "label_override": "Not in form (redesignation window)",
+          "notes": [
+            "Item 6 was redesignated as Item 5; this slot was empty during this period."
+          ]
+        },
+        {
+          "start": "2012-01-27",
+          "end": null,
+          "trigger": "effective_date",
+          "canonical": "II:6_EXHIBITS"
+        }
+      ]
+    }
+  }
+}

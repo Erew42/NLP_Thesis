@@ -98,6 +98,7 @@ from .html_audit import (
     sample_filings_by_status,
     write_html_audit,
 )
+from .parquet_stream import iter_parquet_filing_texts
 
 
 ITEM_MENTION_PATTERN = re.compile(r"\bITEM\s+(?:\d+|[IVXLCDM]+)[A-Z]?\b", re.IGNORECASE)
@@ -127,6 +128,8 @@ OFFSET_BASIS_EXTRACTOR_BODY = "extractor_body"
 DEFAULT_HTML_OUT_DIR = Path("results/html_audit")
 DEFAULT_HTML_SCOPE = "sample"
 DEFAULT_HTML_SAMPLE_SIZE = 100
+DEFAULT_HTML_FILING_PREVIEW_CHARS = 1200
+DEFAULT_HTML_ITEM_PREVIEW_CHARS = 800
 
 PROVENANCE_FIELDS = [
     "prov_python",
@@ -269,15 +272,15 @@ class DiagnosticsConfig:
     max_files: int = 0
     max_examples: int = 25
     enable_embedded_verifier: bool = True
-    emit_manifest: bool = False
+    emit_manifest: bool = True
     manifest_items_path: Path = DEFAULT_MANIFEST_ITEMS_PATH
     manifest_filings_path: Path = DEFAULT_MANIFEST_FILINGS_PATH
-    sample_pass: int = 0
+    sample_pass: int = 100
     sample_seed: int = 42
     sample_filings_path: Path = DEFAULT_SAMPLE_FILINGS_PATH
     sample_items_path: Path = DEFAULT_SAMPLE_ITEMS_PATH
     core_items: tuple[str, ...] = DEFAULT_CORE_ITEMS
-    emit_html: bool = False
+    emit_html: bool = True
     html_out: Path = DEFAULT_HTML_OUT_DIR
     html_scope: str = DEFAULT_HTML_SCOPE
     html_sample_weights: dict[str, float] | None = None
@@ -1813,6 +1816,71 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
                     if doc_id in selected_doc_ids:
                         items_by_filing[doc_id].append(row)
 
+        index_rows_by_doc_id = {
+            str(row.get("doc_id") or ""): row for row in index_rows if row.get("doc_id")
+        }
+        normalized_by_doc_id: dict[str, str] = {}
+        assets_root = config.html_out / "assets"
+        filing_assets_dir = assets_root / "filings"
+        item_assets_dir = assets_root / "items"
+
+        if selected_doc_ids:
+            filing_assets_dir.mkdir(parents=True, exist_ok=True)
+            item_assets_dir.mkdir(parents=True, exist_ok=True)
+            accession_lookup = {
+                str(row.get("doc_id") or ""): str(row.get("accession") or "")
+                for row in index_rows
+            }
+            for entry in iter_parquet_filing_texts(
+                config.parquet_dir, selected_doc_ids, batch_size=config.batch_size
+            ):
+                doc_id = entry.get("doc_id") or ""
+                if not doc_id:
+                    continue
+                full_text = entry.get("full_text") or ""
+                if not full_text:
+                    continue
+                accession = accession_lookup.get(doc_id) or entry.get("accession", "")
+                normalized = normalize_extractor_body(full_text)
+                normalized_by_doc_id[doc_id] = normalized
+                asset_name = f"{_safe_slug(doc_id)}_{_safe_slug(accession)}.txt"
+                asset_rel = f"assets/filings/{asset_name}"
+                (filing_assets_dir / asset_name).write_text(normalized, encoding="utf-8")
+                row = index_rows_by_doc_id.get(doc_id)
+                if row is not None:
+                    row["filing_text_asset"] = asset_rel
+                    row["filing_text_preview"] = _truncate_text(
+                        normalized, limit=DEFAULT_HTML_FILING_PREVIEW_CHARS
+                    )
+
+            for doc_id, items in items_by_filing.items():
+                normalized = normalized_by_doc_id.get(doc_id)
+                if not normalized:
+                    continue
+                row_accession = str(
+                    index_rows_by_doc_id.get(doc_id, {}).get("accession") or ""
+                )
+                for item in items:
+                    accession = str(item.get("accession") or row_accession)
+                    item_part = str(item.get("item_part") or "")
+                    item_id = str(item.get("item_id") or "")
+                    content_start = _parse_int(item.get("content_start"), default=-1)
+                    content_end = _parse_int(item.get("content_end"), default=-1)
+                    if content_start < 0 or content_end <= content_start:
+                        continue
+                    item_text = normalized[content_start:content_end]
+                    item_name = (
+                        f"{_safe_slug(doc_id)}_{_safe_slug(accession)}_"
+                        f"{_safe_slug(item_part)}_{_safe_slug(item_id)}_"
+                        f"{content_start}_{content_end}.txt"
+                    ).strip("_")
+                    item_rel = f"assets/items/{item_name}"
+                    (item_assets_dir / item_name).write_text(item_text, encoding="utf-8")
+                    item["item_text_asset"] = item_rel
+                    item["item_text_preview"] = _truncate_text(
+                        item_text, limit=DEFAULT_HTML_ITEM_PREVIEW_CHARS
+                    )
+
         weights = normalize_sample_weights(config.html_sample_weights)
         weights_label = (
             f"{STATUS_PASS}={weights.get(STATUS_PASS, 0):.2f}, "
@@ -2299,6 +2367,14 @@ def _format_suspicious_items_line(items: list[DiagnosticsRow], *, max_items: int
     return line
 
 
+def _truncate_text(text: str, *, limit: int) -> str:
+    if limit <= 0:
+        return ""
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + "\n...[truncated]..."
+
+
 def _write_sample_file(
     path: Path,
     *,
@@ -2402,7 +2478,7 @@ def _write_sample_file(
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
-def _build_parser() -> argparse.ArgumentParser:
+def _build_parser() -> tuple[argparse.ArgumentParser, argparse.ArgumentParser]:
     parser = argparse.ArgumentParser(
         description="Unified diagnostics for suspicious item boundaries."
     )
@@ -2462,15 +2538,34 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Emit extraction manifest CSVs for items and filings.",
     )
     scan.add_argument(
+        "--no-manifest",
+        action="store_false",
+        dest="emit_manifest",
+        help="Disable manifest CSV outputs.",
+    )
+    scan.add_argument(
         "--sample-pass",
         type=int,
-        default=0,
+        default=None,
         help="Sample N pass filings for CSV review outputs (requires manifests).",
+    )
+    scan.add_argument(
+        "--no-pass-sample",
+        action="store_const",
+        const=0,
+        dest="sample_pass",
+        help="Disable pass-sample CSV outputs.",
     )
     scan.add_argument(
         "--emit-html",
         action="store_true",
         help="Emit offline HTML audit pages (requires manifests).",
+    )
+    scan.add_argument(
+        "--no-html",
+        action="store_false",
+        dest="emit_html",
+        help="Disable HTML audit outputs.",
     )
     scan.add_argument(
         "--html-out",
@@ -2496,6 +2591,11 @@ def _build_parser() -> argparse.ArgumentParser:
         type=str,
         default=",".join(DEFAULT_CORE_ITEMS),
         help="Comma-separated core item IDs for missing_core_items.",
+    )
+    scan.set_defaults(
+        emit_manifest=True,
+        emit_html=True,
+        sample_pass=100,
     )
 
     regress = subparsers.add_parser(
@@ -2526,14 +2626,23 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Optional cap on parquet files scanned (0 = no cap).",
     )
 
-    return parser
+    return parser, scan
 
 
 def main(argv: list[str] | None = None) -> None:
-    parser = _build_parser()
+    parser, scan_parser = _build_parser()
     args = parser.parse_args(argv)
 
     if args.command == "scan":
+        if not args.emit_manifest and args.emit_html:
+            scan_parser.error(
+                "HTML output requires manifests. Remove --no-manifest or add --no-html."
+            )
+        if not args.emit_manifest and args.sample_pass and args.sample_pass > 0:
+            scan_parser.error(
+                "Pass-sample outputs require manifests. Remove --no-manifest or set "
+                "--sample-pass 0 / use --no-pass-sample."
+            )
         config = DiagnosticsConfig(
             parquet_dir=args.parquet_dir,
             out_path=args.out_path,
