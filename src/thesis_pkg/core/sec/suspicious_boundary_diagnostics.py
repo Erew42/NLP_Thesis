@@ -25,6 +25,7 @@ from .heuristics import (
     _looks_like_toc_heading_line,
     _prefix_is_part_only,
     _prefix_looks_like_cross_ref,
+    _evaluate_regime_validity,
 )
 from .patterns import (
     EMBEDDED_CONTINUATION_PATTERN,
@@ -85,7 +86,7 @@ from .embedded_headings import (
     _toc_like_line,
     _toc_window_flags,
 )
-from .regime import normalize_form_type
+from .regime import get_regime_index, normalize_form_type
 from .html_audit import (
     _parse_bool,
     _parse_int,
@@ -98,6 +99,7 @@ from .html_audit import (
     normalize_sample_weights,
     sample_filings_by_status,
     write_html_audit,
+    write_html_audit_root_index,
 )
 from .parquet_stream import iter_parquet_filing_texts
 
@@ -131,6 +133,35 @@ DEFAULT_HTML_SCOPE = "sample"
 DEFAULT_HTML_SAMPLE_SIZE = 100
 DEFAULT_HTML_FILING_PREVIEW_CHARS = 1200
 DEFAULT_HTML_ITEM_PREVIEW_CHARS = 800
+COHEN2020_COMMON_CANONICAL: dict[str, set[str]] = {
+    "10-K": {
+        "II:7_MDA",
+        "I:3_LEGAL_PROCEEDINGS",
+        "II:7A_MARKET_RISK",
+        "I:1A_RISK_FACTORS",
+        "II:9B_OTHER_INFORMATION",
+    },
+    "10-Q": {
+        "I:2_MDA",
+        "II:1_LEGAL_PROCEEDINGS",
+        "I:3_MARKET_RISK",
+        "II:1A_RISK_FACTORS",
+        "II:5_OTHER_INFORMATION",
+    },
+}
+
+COHEN2020_ALL_ITEMS_10Q_IDS = {
+    "1",
+    "2",
+    "3",
+    "4",
+    "21",
+    "21A",
+    "22",
+    "23",
+    "24",
+    "25",
+}
 
 PROVENANCE_FIELDS = [
     "prov_python",
@@ -153,6 +184,7 @@ DIAGNOSTICS_ROW_FIELDS = [
     "canonical_item",
     "exists_by_regime",
     "item_status",
+    "counts_for_target",
     "filing_exclusion_reason",
     "gij_omitted_items",
     "heading_line",
@@ -253,6 +285,7 @@ MANIFEST_FILING_FIELDS = [
     "n_items_extracted",
     "items_extracted",
     "missing_core_items",
+    "missing_expected_canonicals",
     "any_warn",
     "any_fail",
     "filing_exclusion_reason",
@@ -282,10 +315,14 @@ class DiagnosticsConfig:
     sample_filings_path: Path = DEFAULT_SAMPLE_FILINGS_PATH
     sample_items_path: Path = DEFAULT_SAMPLE_ITEMS_PATH
     core_items: tuple[str, ...] = DEFAULT_CORE_ITEMS
+    target_set: str | None = None
     emit_html: bool = True
     html_out: Path = DEFAULT_HTML_OUT_DIR
     html_scope: str = DEFAULT_HTML_SCOPE
     html_sample_weights: dict[str, float] | None = None
+    html_min_total_chars: int | None = None
+    html_min_largest_item_chars: int | None = None
+    html_min_largest_item_chars_pct_total: float | None = None
 
 
 @dataclass(frozen=True)
@@ -317,6 +354,7 @@ class DiagnosticsRow:
     canonical_item: str
     exists_by_regime: str | bool | None
     item_status: str
+    counts_for_target: bool
     filing_exclusion_reason: str
     gij_omitted_items: str
     heading_line: str
@@ -382,6 +420,7 @@ class DiagnosticsRow:
             "canonical_item": self.canonical_item,
             "exists_by_regime": self.exists_by_regime,
             "item_status": self.item_status,
+            "counts_for_target": self.counts_for_target,
             "filing_exclusion_reason": self.filing_exclusion_reason,
             "gij_omitted_items": self.gij_omitted_items,
             "heading_line": self.heading_line,
@@ -496,6 +535,169 @@ def _expected_part_for_item(item: dict, *, normalized_form: str | None) -> str |
     if normalized_form == "10-K" and isinstance(item_id, str):
         return _default_part_for_item_id(item_id)
     return None
+
+
+def _normalize_target_set(value: str | None) -> str | None:
+    if not value:
+        return None
+    cleaned = str(value).strip().lower()
+    if cleaned == "cohen2020":
+        return "cohen2020_common"
+    return cleaned or None
+
+
+def _target_set_for_form(
+    normalized_form: str | None,
+    target_set: str | None,
+) -> set[str]:
+    if not normalized_form or not target_set:
+        return set()
+    if target_set == "cohen2020_common":
+        return COHEN2020_COMMON_CANONICAL.get(normalized_form, set())
+    if target_set == "cohen2020_all_items":
+        if normalized_form == "10-Q":
+            return _canonicals_for_item_ids(
+                normalized_form,
+                COHEN2020_ALL_ITEMS_10Q_IDS,
+            )
+        if normalized_form == "10-K":
+            return _all_canonicals_for_form(normalized_form)
+    return set()
+
+
+def _item_counts_for_target(
+    canonical_item: str | None,
+    *,
+    normalized_form: str | None,
+    target_set: str | None,
+) -> bool:
+    if not target_set:
+        return True
+    if not canonical_item:
+        return False
+    targets = _target_set_for_form(normalized_form, target_set)
+    return canonical_item in targets
+
+
+def _expected_canonical_items(
+    *,
+    normalized_form: str | None,
+    filing_date: date | None,
+    period_end: date | None,
+    target_set: str | None,
+) -> set[str]:
+    if not normalized_form:
+        return set()
+    index = get_regime_index(normalized_form)
+    if not index:
+        return set()
+    expected: set[str] = set()
+    for key, entry in index.items_by_key.items():
+        status = str(entry.get("status") or "").lower()
+        if status in {"reserved", "optional"}:
+            continue
+        match, decidable = _evaluate_regime_validity(
+            entry.get("validity", []),
+            filing_date=filing_date,
+            period_end=period_end,
+        )
+        if not decidable or match is None:
+            continue
+        canonical = match.get("canonical") or key
+        if isinstance(canonical, str) and "NOT_IN_FORM" in canonical:
+            continue
+        if canonical:
+            expected.add(str(canonical))
+    if target_set:
+        expected &= _target_set_for_form(normalized_form, target_set)
+    return expected
+
+
+def _canonicals_for_item_ids(
+    normalized_form: str | None,
+    item_ids: set[str],
+) -> set[str]:
+    if not normalized_form or not item_ids:
+        return set()
+    index = get_regime_index(normalized_form)
+    if not index:
+        return set()
+    results: set[str] = set()
+    for key, entry in index.items_by_key.items():
+        item_id = entry.get("item_id")
+        if not item_id and ":" in key:
+            item_id = key.split(":", 1)[1]
+        if not item_id or item_id.upper() not in item_ids:
+            continue
+        for validity in entry.get("validity", []) or []:
+            canonical = validity.get("canonical")
+            if canonical:
+                results.add(str(canonical))
+    return results
+
+
+def _all_canonicals_for_form(normalized_form: str | None) -> set[str]:
+    if not normalized_form:
+        return set()
+    index = get_regime_index(normalized_form)
+    if not index:
+        return set()
+    results: set[str] = set()
+    for key, entry in index.items_by_key.items():
+        for validity in entry.get("validity", []) or []:
+            canonical = validity.get("canonical") or key
+            if canonical:
+                results.add(str(canonical))
+    return results
+
+
+def _compute_html_metrics(
+    items_by_doc: dict[str, list[dict[str, object]]]
+) -> dict[str, dict[str, float]]:
+    metrics: dict[str, dict[str, float]] = {}
+    for doc_id, items in items_by_doc.items():
+        total = 0
+        largest = 0
+        for item in items:
+            length = _parse_int(item.get("length_chars"), default=0)
+            total += max(length, 0)
+            if length > largest:
+                largest = length
+        pct = (largest / total) if total > 0 else 0.0
+        metrics[doc_id] = {
+            "total_chars": float(total),
+            "largest_item_chars": float(largest),
+            "largest_item_chars_pct_total": float(pct),
+        }
+    return metrics
+
+
+def _passes_html_filters(
+    row: dict[str, object],
+    *,
+    metrics_by_doc: dict[str, dict[str, float]],
+    min_total_chars: int | None,
+    min_largest_item_chars: int | None,
+    min_largest_item_chars_pct_total: float | None,
+) -> bool:
+    if min_total_chars is None and min_largest_item_chars is None and min_largest_item_chars_pct_total is None:
+        return True
+    doc_id = str(row.get("doc_id") or "")
+    metrics = metrics_by_doc.get(doc_id, {})
+    if min_total_chars is not None and metrics.get("total_chars", 0.0) < min_total_chars:
+        return False
+    if (
+        min_largest_item_chars is not None
+        and metrics.get("largest_item_chars", 0.0) < min_largest_item_chars
+    ):
+        return False
+    if (
+        min_largest_item_chars_pct_total is not None
+        and metrics.get("largest_item_chars_pct_total", 0.0)
+        < min_largest_item_chars_pct_total
+    ):
+        return False
+    return True
 
 
 def _prefix_text(heading_line: str, heading_offset: int | None) -> str:
@@ -799,6 +1001,7 @@ def _build_flagged_row(
     leak_next_item_id: str,
     leak_next_heading: str,
     item_full_text: str,
+    counts_for_target: bool,
 ) -> DiagnosticsRow:
     filing_exclusion_reason = str(item.get("_filing_exclusion_reason") or "")
     gij_omitted_items = item.get("_gij_omitted_items")
@@ -819,6 +1022,7 @@ def _build_flagged_row(
         canonical_item=item.get("canonical_item") or "",
         exists_by_regime=item.get("exists_by_regime"),
         item_status=item.get("item_status") or "",
+        counts_for_target=counts_for_target,
         filing_exclusion_reason=filing_exclusion_reason,
         gij_omitted_items=gij_omitted_items_str,
         heading_line=heading_line_clean.strip(),
@@ -1184,6 +1388,7 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
     core_items = {item.strip().upper() for item in config.core_items if item}
     if not core_items:
         core_items = set(DEFAULT_CORE_ITEMS)
+    target_set = _normalize_target_set(config.target_set)
 
     total_filings = 0
     total_items = 0
@@ -1241,7 +1446,7 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
                 for row in df.iter_rows(named=True):
                     form_type = row.get("document_type_filename")
                     normalized_form = _normalized_form_type(form_type)
-                    if normalized_form != "10-K":
+                    if normalized_form not in {"10-K", "10-Q"}:
                         continue
 
                     total_filings += 1
@@ -1258,9 +1463,15 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
                     doc_id = str(row.get("doc_id") or "")
                     accession = str(row.get("accession_number") or "")
                     cik = str(row.get("cik") or "")
-                    form_label = str(form_type or "")
+                    form_label = normalized_form or str(form_type or "")
                     filing_date_str = filing_date.isoformat() if filing_date else ""
                     period_end_str = period_end.isoformat() if period_end else ""
+                    expected_canonicals = _expected_canonical_items(
+                        normalized_form=normalized_form,
+                        filing_date=filing_date,
+                        period_end=period_end,
+                        target_set=target_set,
+                    )
 
                     items = extract_filing_items(
                         text,
@@ -1273,6 +1484,7 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
                     if not items:
                         if emit_manifest and manifest_filings_writer:
                             missing_core_items = ",".join(sorted(core_items))
+                            missing_expected = ",".join(sorted(expected_canonicals))
                             filing_row = {
                                 "doc_id": doc_id,
                                 "accession": accession,
@@ -1283,6 +1495,7 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
                                 "n_items_extracted": 0,
                                 "items_extracted": "",
                                 "missing_core_items": missing_core_items,
+                                "missing_expected_canonicals": missing_expected,
                                 "any_warn": False,
                                 "any_fail": False,
                                 "filing_exclusion_reason": "",
@@ -1313,6 +1526,7 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
                     flagged_items_for_doc: list[DiagnosticsRow] = []
                     item_ids_ordered: list[str] = []
                     item_ids_set: set[str] = set()
+                    extracted_canonicals: set[str] = set()
                     filing_exclusion_reason = ""
                     filing_any_warn = False
                     filing_any_fail = False
@@ -1347,6 +1561,9 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
                         item_id = str(item.get("item_id") or "")
                         item_id_norm = item_id.strip().upper()
                         item_part = item.get("item_part")
+                        canonical_item = str(item.get("canonical_item") or "")
+                        if canonical_item:
+                            extracted_canonicals.add(canonical_item)
                         current_part_norm = _normalize_part(item_part) or _normalize_part(
                             _expected_part_for_item(item, normalized_form=normalized_form)
                         )
@@ -1470,8 +1687,14 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
                         )
                         item_fail = embedded_fail or bool(first_fail_classification)
                         item_warn = bool(flags) and not item_fail
-                        filing_any_fail = filing_any_fail or item_fail
-                        filing_any_warn = filing_any_warn or item_warn
+                        counts_for_target = _item_counts_for_target(
+                            canonical_item,
+                            normalized_form=normalized_form,
+                            target_set=target_set,
+                        )
+                        if counts_for_target:
+                            filing_any_fail = filing_any_fail or item_fail
+                            filing_any_warn = filing_any_warn or item_warn
 
                         if item_id_norm:
                             item_ids_ordered.append(item_id_norm)
@@ -1659,6 +1882,7 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
                             leak_next_item_id=leak_next_item_id,
                             leak_next_heading=leak_next_heading,
                             item_full_text=item_full_text,
+                            counts_for_target=counts_for_target,
                         )
                         flagged_rows.append(row_entry)
                         flagged_items_for_doc.append(row_entry)
@@ -1667,6 +1891,8 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
                     if emit_manifest and manifest_filings_writer:
                         missing_core = sorted(core_items - item_ids_set)
                         missing_core_items_str = ",".join(missing_core)
+                        missing_expected = sorted(expected_canonicals - extracted_canonicals)
+                        missing_expected_str = ",".join(missing_expected)
                         filing_row = {
                             "doc_id": doc_id,
                             "accession": accession,
@@ -1677,6 +1903,7 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
                             "n_items_extracted": len(items),
                             "items_extracted": ",".join(item_ids_ordered),
                             "missing_core_items": missing_core_items_str,
+                            "missing_expected_canonicals": missing_expected_str,
                             "any_warn": filing_any_warn,
                             "any_fail": filing_any_fail,
                             "filing_exclusion_reason": filing_exclusion_reason,
@@ -1785,137 +2012,186 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
 
         csv.field_size_limit(10**7)
         manifest_rows = _read_csv_rows(config.manifest_filings_path)
-        pass_rows: list[dict[str, object]] = []
-        warning_rows: list[dict[str, object]] = []
-        fail_rows: list[dict[str, object]] = []
-        not_failed_rows: list[dict[str, object]] = []
+        items_by_doc_id: dict[str, list[dict[str, object]]] = defaultdict(list)
+        with config.manifest_items_path.open(
+            "r", newline="", encoding="utf-8"
+        ) as manifest_items:
+            reader = csv.DictReader(manifest_items)
+            for row in reader:
+                doc_id = str(row.get("doc_id") or "")
+                if doc_id:
+                    items_by_doc_id[doc_id].append(row)
+        metrics_by_doc = _compute_html_metrics(items_by_doc_id)
+
+        rows_by_form: dict[str, list[dict[str, object]]] = defaultdict(list)
         for row in manifest_rows:
-            status = classify_filing_status(row)
-            if status == STATUS_FAIL:
-                fail_rows.append(row)
+            normalized_form = _normalized_form_type(row.get("form"))
+            if normalized_form not in {"10-K", "10-Q"}:
                 continue
-            not_failed_rows.append(row)
-            if status == STATUS_WARNING:
-                warning_rows.append(row)
-            else:
-                pass_rows.append(row)
+            row["form"] = normalized_form
+            rows_by_form[normalized_form].append(row)
 
-        scope_label = config.html_scope
-        index_rows: list[dict[str, object]] = []
-        items_by_filing: dict[str, list[dict[str, object]]] = defaultdict(list)
-
-        if config.html_scope == "all":
-            index_rows = not_failed_rows
-            scope_label = f"all (not failed: {len(index_rows)})"
-        else:
-            index_rows = sample_filings_by_status(
-                manifest_rows,
-                sample_size=DEFAULT_HTML_SAMPLE_SIZE,
-                seed=config.sample_seed,
-                weights=config.html_sample_weights,
-            )
-            scope_label = f"sample ({len(index_rows)})"
-
-        selected_doc_ids = {str(row.get("doc_id") or "") for row in index_rows}
-        items_source = config.manifest_items_path
-
-        if selected_doc_ids:
-            with items_source.open("r", newline="", encoding="utf-8") as manifest_items:
-                reader = csv.DictReader(manifest_items)
-                for row in reader:
-                    doc_id = str(row.get("doc_id") or "")
-                    if doc_id in selected_doc_ids:
-                        items_by_filing[doc_id].append(row)
-
-        index_rows_by_doc_id = {
-            str(row.get("doc_id") or ""): row for row in index_rows if row.get("doc_id")
-        }
-        normalized_by_doc_id: dict[str, str] = {}
-        assets_root = config.html_out / "assets"
-        filing_assets_dir = assets_root / "filings"
-        item_assets_dir = assets_root / "items"
-
-        if selected_doc_ids:
-            filing_assets_dir.mkdir(parents=True, exist_ok=True)
-            item_assets_dir.mkdir(parents=True, exist_ok=True)
-            accession_lookup = {
-                str(row.get("doc_id") or ""): str(row.get("accession") or "")
-                for row in index_rows
-            }
-            for entry in iter_parquet_filing_texts(
-                config.parquet_dir, selected_doc_ids, batch_size=config.batch_size
-            ):
-                doc_id = entry.get("doc_id") or ""
-                if not doc_id:
-                    continue
-                full_text = entry.get("full_text") or ""
-                if not full_text:
-                    continue
-                accession = accession_lookup.get(doc_id) or entry.get("accession", "")
-                normalized = normalize_extractor_body(full_text)
-                normalized_by_doc_id[doc_id] = normalized
-                asset_name = f"{_safe_slug(doc_id)}_{_safe_slug(accession)}.txt"
-                asset_rel = f"assets/filings/{asset_name}"
-                (filing_assets_dir / asset_name).write_text(normalized, encoding="utf-8")
-                row = index_rows_by_doc_id.get(doc_id)
-                if row is not None:
-                    row["filing_text_asset"] = asset_rel
-                    row["filing_text_preview"] = _truncate_text(
-                        normalized, limit=DEFAULT_HTML_FILING_PREVIEW_CHARS
-                    )
-
-            for doc_id, items in items_by_filing.items():
-                normalized = normalized_by_doc_id.get(doc_id)
-                if not normalized:
-                    continue
-                row_accession = str(
-                    index_rows_by_doc_id.get(doc_id, {}).get("accession") or ""
-                )
-                for item in items:
-                    accession = str(item.get("accession") or row_accession)
-                    item_part = str(item.get("item_part") or "")
-                    item_id = str(item.get("item_id") or "")
-                    content_start = _parse_int(item.get("content_start"), default=-1)
-                    content_end = _parse_int(item.get("content_end"), default=-1)
-                    if content_start < 0 or content_end <= content_start:
-                        continue
-                    item_text = normalized[content_start:content_end]
-                    item_name = (
-                        f"{_safe_slug(doc_id)}_{_safe_slug(accession)}_"
-                        f"{_safe_slug(item_part)}_{_safe_slug(item_id)}_"
-                        f"{content_start}_{content_end}.txt"
-                    ).strip("_")
-                    item_rel = f"assets/items/{item_name}"
-                    (item_assets_dir / item_name).write_text(item_text, encoding="utf-8")
-                    item["item_text_asset"] = item_rel
-                    item["item_text_preview"] = _truncate_text(
-                        item_text, limit=DEFAULT_HTML_ITEM_PREVIEW_CHARS
-                    )
-
+        form_entries: list[dict[str, object]] = []
         weights = normalize_sample_weights(config.html_sample_weights)
         weights_label = (
             f"{STATUS_PASS}={weights.get(STATUS_PASS, 0):.2f}, "
             f"{STATUS_WARNING}={weights.get(STATUS_WARNING, 0):.2f}, "
             f"{STATUS_FAIL}={weights.get(STATUS_FAIL, 0):.2f}"
         )
-        metadata = {
+        for normalized_form in sorted(rows_by_form):
+            form_rows = rows_by_form[normalized_form]
+            eligible_rows = [
+                row
+                for row in form_rows
+                if _passes_html_filters(
+                    row,
+                    metrics_by_doc=metrics_by_doc,
+                    min_total_chars=config.html_min_total_chars,
+                    min_largest_item_chars=config.html_min_largest_item_chars,
+                    min_largest_item_chars_pct_total=config.html_min_largest_item_chars_pct_total,
+                )
+            ]
+            pass_rows = [row for row in eligible_rows if classify_filing_status(row) == STATUS_PASS]
+            warning_rows = [
+                row for row in eligible_rows if classify_filing_status(row) == STATUS_WARNING
+            ]
+            fail_rows = [row for row in eligible_rows if classify_filing_status(row) == STATUS_FAIL]
+            not_failed_rows = [
+                row for row in eligible_rows if classify_filing_status(row) != STATUS_FAIL
+            ]
+
+            if config.html_scope == "all":
+                index_rows = not_failed_rows
+                scope_label = f"all (not failed: {len(index_rows)})"
+            else:
+                index_rows = sample_filings_by_status(
+                    eligible_rows,
+                    sample_size=DEFAULT_HTML_SAMPLE_SIZE,
+                    seed=config.sample_seed,
+                    weights=config.html_sample_weights,
+                )
+                scope_label = f"sample ({len(index_rows)})"
+
+            selected_doc_ids = {str(row.get("doc_id") or "") for row in index_rows}
+            items_by_filing: dict[str, list[dict[str, object]]] = defaultdict(list)
+            if selected_doc_ids:
+                for doc_id in selected_doc_ids:
+                    items_by_filing[doc_id] = list(items_by_doc_id.get(doc_id, []))
+
+            index_rows_by_doc_id = {
+                str(row.get("doc_id") or ""): row
+                for row in index_rows
+                if row.get("doc_id")
+            }
+            normalized_by_doc_id: dict[str, str] = {}
+            form_out_dir = config.html_out / normalized_form
+            assets_root = form_out_dir / "assets"
+            filing_assets_dir = assets_root / "filings"
+            item_assets_dir = assets_root / "items"
+
+            if selected_doc_ids:
+                filing_assets_dir.mkdir(parents=True, exist_ok=True)
+                item_assets_dir.mkdir(parents=True, exist_ok=True)
+                accession_lookup = {
+                    str(row.get("doc_id") or ""): str(row.get("accession") or "")
+                    for row in index_rows
+                }
+                for entry in iter_parquet_filing_texts(
+                    config.parquet_dir, selected_doc_ids, batch_size=config.batch_size
+                ):
+                    doc_id = entry.get("doc_id") or ""
+                    if not doc_id:
+                        continue
+                    full_text = entry.get("full_text") or ""
+                    if not full_text:
+                        continue
+                    accession = accession_lookup.get(doc_id) or entry.get("accession", "")
+                    normalized = normalize_extractor_body(full_text)
+                    normalized_by_doc_id[doc_id] = normalized
+                    asset_name = f"{_safe_slug(doc_id)}_{_safe_slug(accession)}.txt"
+                    asset_rel = f"assets/filings/{asset_name}"
+                    (filing_assets_dir / asset_name).write_text(normalized, encoding="utf-8")
+                    row = index_rows_by_doc_id.get(doc_id)
+                    if row is not None:
+                        row["filing_text_asset"] = asset_rel
+                        row["filing_text_preview"] = _truncate_text(
+                            normalized, limit=DEFAULT_HTML_FILING_PREVIEW_CHARS
+                        )
+
+                for doc_id, items in items_by_filing.items():
+                    normalized = normalized_by_doc_id.get(doc_id)
+                    if not normalized:
+                        continue
+                    row_accession = str(
+                        index_rows_by_doc_id.get(doc_id, {}).get("accession") or ""
+                    )
+                    for item in items:
+                        accession = str(item.get("accession") or row_accession)
+                        item_part = str(item.get("item_part") or "")
+                        item_id = str(item.get("item_id") or "")
+                        content_start = _parse_int(item.get("content_start"), default=-1)
+                        content_end = _parse_int(item.get("content_end"), default=-1)
+                        if content_start < 0 or content_end <= content_start:
+                            continue
+                        item_text = normalized[content_start:content_end]
+                        item_name = (
+                            f"{_safe_slug(doc_id)}_{_safe_slug(accession)}_"
+                            f"{_safe_slug(item_part)}_{_safe_slug(item_id)}_"
+                            f"{content_start}_{content_end}.txt"
+                        ).strip("_")
+                        item_rel = f"assets/items/{item_name}"
+                        (item_assets_dir / item_name).write_text(item_text, encoding="utf-8")
+                        item["item_text_asset"] = item_rel
+                        item["item_text_preview"] = _truncate_text(
+                            item_text, limit=DEFAULT_HTML_ITEM_PREVIEW_CHARS
+                        )
+
+            metadata = {
+                "pass_definition": "any_fail == False and filing_exclusion_reason is empty",
+                "total_filings": len(eligible_rows),
+                "total_items": sum(
+                    _parse_int(row.get("n_items_extracted"), default=0)
+                    for row in eligible_rows
+                ),
+                "total_pass_filings": len(pass_rows),
+                "total_warning_filings": len(warning_rows),
+                "total_fail_filings": len(fail_rows),
+                "sample_size": len(index_rows),
+                "sample_weights": weights_label,
+                "generated_at": datetime.now().isoformat(timespec="seconds"),
+                "offset_basis": OFFSET_BASIS_EXTRACTOR_BODY,
+            }
+            write_html_audit(
+                index_rows=index_rows,
+                items_by_filing=items_by_filing,
+                out_dir=form_out_dir,
+                scope_label=scope_label,
+                metadata=metadata,
+            )
+            form_entries.append(
+                {
+                    "form": normalized_form,
+                    "index_path": f"{normalized_form}/index.html",
+                    "total_filings": len(eligible_rows),
+                    "pass_count": len(pass_rows),
+                    "warn_count": len(warning_rows),
+                    "fail_count": len(fail_rows),
+                    "scope": scope_label,
+                }
+            )
+
+        root_metadata = {
             "pass_definition": "any_fail == False and filing_exclusion_reason is empty",
             "total_filings": total_filings,
             "total_items": total_items,
-            "total_pass_filings": len(pass_rows),
-            "total_warning_filings": len(warning_rows),
-            "total_fail_filings": len(fail_rows),
-            "sample_size": len(index_rows),
             "sample_weights": weights_label,
             "generated_at": datetime.now().isoformat(timespec="seconds"),
             "offset_basis": OFFSET_BASIS_EXTRACTOR_BODY,
         }
-        write_html_audit(
-            index_rows=index_rows,
-            items_by_filing=items_by_filing,
+        write_html_audit_root_index(
+            form_entries=form_entries,
             out_dir=config.html_out,
-            scope_label=scope_label,
-            metadata=metadata,
+            metadata=root_metadata,
         )
         print(f"HTML audit written to {config.html_out / 'index.html'}")
 
@@ -2016,7 +2292,7 @@ def run_boundary_regression(config: RegressionConfig) -> dict[str, int]:
                 seen_doc_ids.add(doc_id)
                 form_type = row.get("document_type_filename")
                 normalized_form = _normalized_form_type(form_type)
-                if normalized_form != "10-K":
+                if normalized_form not in {"10-K", "10-Q"}:
                     continue
 
                 total_filings += 1
@@ -2606,6 +2882,30 @@ def _build_parser() -> tuple[argparse.ArgumentParser, argparse.ArgumentParser]:
         default=",".join(DEFAULT_CORE_ITEMS),
         help="Comma-separated core item IDs for missing_core_items.",
     )
+    scan.add_argument(
+        "--target-set",
+        type=str,
+        default=None,
+        help="Restrict WARN/FAIL and missing-items to a target set (e.g., cohen2020).",
+    )
+    scan.add_argument(
+        "--html-min-total-chars",
+        type=int,
+        default=None,
+        help="Minimum total extracted chars for filings included in HTML audit.",
+    )
+    scan.add_argument(
+        "--html-min-largest-item-chars",
+        type=int,
+        default=None,
+        help="Minimum largest-item length for filings included in HTML audit.",
+    )
+    scan.add_argument(
+        "--html-min-largest-item-chars-pct-total",
+        type=float,
+        default=None,
+        help="Minimum largest-item share of total chars for HTML audit.",
+    )
     scan.set_defaults(
         emit_manifest=True,
         emit_html=True,
@@ -2670,9 +2970,13 @@ def main(argv: list[str] | None = None) -> None:
             sample_pass=args.sample_pass,
             sample_seed=args.seed,
             core_items=_parse_core_items_arg(args.core_items),
+            target_set=_normalize_target_set(args.target_set),
             emit_html=args.emit_html,
             html_out=args.html_out,
             html_scope=args.html_scope,
+            html_min_total_chars=args.html_min_total_chars,
+            html_min_largest_item_chars=args.html_min_largest_item_chars,
+            html_min_largest_item_chars_pct_total=args.html_min_largest_item_chars_pct_total,
         )
         run_boundary_diagnostics(config)
         return

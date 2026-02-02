@@ -28,7 +28,8 @@ DEFAULT_HTML_OUT_DIR = Path("results/html_audit")
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Run suspicious boundary diagnostics with optional HTML audit output."
+            "Run suspicious boundary diagnostics on extracted 10-K/10-Q items with "
+            "optional HTML audit output."
         )
     )
     parser.add_argument(
@@ -138,6 +139,34 @@ def parse_args() -> argparse.Namespace:
         default="1,1A,7,7A,8",
         help="Comma-separated core item IDs for missing_core_items.",
     )
+    parser.add_argument(
+        "--target-set",
+        type=str,
+        default=None,
+        choices=("cohen2020_common", "cohen2020_all_items"),
+        help=(
+            "Restrict WARN/FAIL and missing-items to a target set "
+            "(cohen2020_common or cohen2020_all_items)."
+        ),
+    )
+    parser.add_argument(
+        "--html-min-total-chars",
+        type=int,
+        default=None,
+        help="Minimum total extracted chars for filings included in HTML audit.",
+    )
+    parser.add_argument(
+        "--html-min-largest-item-chars",
+        type=int,
+        default=None,
+        help="Minimum largest-item length for filings included in HTML audit.",
+    )
+    parser.add_argument(
+        "--html-min-largest-item-chars-pct-total",
+        type=float,
+        default=None,
+        help="Minimum largest-item share of total chars for HTML audit.",
+    )
     parser.set_defaults(
         emit_manifest=True,
         emit_html=True,
@@ -179,9 +208,13 @@ def main() -> None:
         sample_pass=args.sample_pass,
         sample_seed=args.seed,
         core_items=_parse_core_items(args.core_items),
+        target_set=args.target_set,
         emit_html=args.emit_html,
         html_out=args.html_out,
         html_scope=args.html_scope,
+        html_min_total_chars=args.html_min_total_chars,
+        html_min_largest_item_chars=args.html_min_largest_item_chars,
+        html_min_largest_item_chars_pct_total=args.html_min_largest_item_chars_pct_total,
     )
     run_boundary_diagnostics(config)
 

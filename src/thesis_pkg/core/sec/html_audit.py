@@ -26,6 +26,120 @@ DEFAULT_SAMPLE_WEIGHTS: dict[str, float] = {
 }
 
 
+def _base_style() -> str:
+    return """
+    :root {
+      --bg: #f6f7f9;
+      --card: #ffffff;
+      --text: #1f2a33;
+      --muted: #5e6b76;
+      --border: #d9e0e6;
+      --accent: #2f6fad;
+      --warn: #b06a00;
+      --fail: #9b2226;
+      --ok: #2d6a4f;
+      --mono: "Consolas", "SFMono-Regular", Menlo, Monaco, "Liberation Mono", monospace;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 24px;
+      background: var(--bg);
+      color: var(--text);
+      font-family: "Segoe UI", Tahoma, Arial, sans-serif;
+    }
+    h1, h2, h3 { margin: 0 0 12px 0; }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 16px;
+      margin-bottom: 16px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    }
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 12px;
+      margin-top: 8px;
+    }
+    .summary-item {
+      padding: 10px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #fbfcfd;
+      font-size: 13px;
+    }
+    .summary-item .label { color: var(--muted); display: block; font-size: 11px; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+    }
+    th, td {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+      text-align: left;
+      font-size: 13px;
+    }
+    th { background: #f0f3f6; color: var(--muted); font-size: 12px; }
+    tr:hover td { background: #f9fbfc; }
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+      font-weight: 600;
+    }
+    .badge.ok { background: #d8f3dc; color: var(--ok); }
+    .badge.warn { background: #ffead1; color: var(--warn); }
+    .badge.fail { background: #f8d7da; color: var(--fail); }
+    .mono { font-family: var(--mono); }
+    .kv {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 8px 0 0;
+      font-size: 13px;
+    }
+    .kv th, .kv td {
+      border-bottom: 1px solid var(--border);
+      padding: 6px 8px;
+    }
+    .kv th { width: 190px; color: var(--muted); font-weight: 600; }
+    details {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 12px;
+      margin-bottom: 12px;
+    }
+    summary {
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 14px;
+    }
+    pre {
+      background: #0f172a;
+      color: #e2e8f0;
+      padding: 10px;
+      border-radius: 8px;
+      overflow-x: auto;
+      font-family: var(--mono);
+      font-size: 12px;
+      white-space: pre-wrap;
+    }
+    .section-title { margin-top: 18px; font-size: 15px; color: var(--muted); }
+    .toolbar { display: flex; gap: 12px; align-items: center; margin-bottom: 16px; }
+    .muted { color: var(--muted); font-size: 12px; }
+    """.strip()
+
+
 def _safe_slug(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9_-]+", "_", value).strip("_") or "unknown"
 
@@ -197,6 +311,13 @@ def _forms_label(rows: list[dict[str, object]]) -> str:
     return f"{prefix}: {', '.join(forms)}"
 
 
+def _missing_items_display(row: dict[str, object]) -> str:
+    expected = str(row.get("missing_expected_canonicals") or "").strip()
+    if expected:
+        return expected
+    return str(row.get("missing_core_items") or "")
+
+
 def _sample_stratified_rows(
     rows: list[dict[str, object]],
     *,
@@ -310,117 +431,7 @@ def write_html_audit(
     filings_dir = out_dir / "filings"
     filings_dir.mkdir(parents=True, exist_ok=True)
 
-    style = """
-    :root {
-      --bg: #f6f7f9;
-      --card: #ffffff;
-      --text: #1f2a33;
-      --muted: #5e6b76;
-      --border: #d9e0e6;
-      --accent: #2f6fad;
-      --warn: #b06a00;
-      --fail: #9b2226;
-      --ok: #2d6a4f;
-      --mono: "Consolas", "SFMono-Regular", Menlo, Monaco, "Liberation Mono", monospace;
-    }
-    * { box-sizing: border-box; }
-    body {
-      margin: 24px;
-      background: var(--bg);
-      color: var(--text);
-      font-family: "Segoe UI", Tahoma, Arial, sans-serif;
-    }
-    h1, h2, h3 { margin: 0 0 12px 0; }
-    a { color: var(--accent); text-decoration: none; }
-    a:hover { text-decoration: underline; }
-    .card {
-      background: var(--card);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 16px;
-      margin-bottom: 16px;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-    }
-    .summary-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-      gap: 12px;
-      margin-top: 8px;
-    }
-    .summary-item {
-      padding: 10px;
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      background: #fbfcfd;
-      font-size: 13px;
-    }
-    .summary-item .label { color: var(--muted); display: block; font-size: 11px; }
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      background: var(--card);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      overflow: hidden;
-    }
-    th, td {
-      padding: 10px 12px;
-      border-bottom: 1px solid var(--border);
-      text-align: left;
-      font-size: 13px;
-    }
-    th { background: #f0f3f6; color: var(--muted); font-size: 12px; }
-    tr:hover td { background: #f9fbfc; }
-    .badge {
-      display: inline-block;
-      padding: 2px 8px;
-      border-radius: 999px;
-      font-size: 11px;
-      text-transform: uppercase;
-      letter-spacing: 0.4px;
-      font-weight: 600;
-    }
-    .badge.ok { background: #d8f3dc; color: var(--ok); }
-    .badge.warn { background: #ffead1; color: var(--warn); }
-    .badge.fail { background: #f8d7da; color: var(--fail); }
-    .mono { font-family: var(--mono); }
-    .kv {
-      width: 100%;
-      border-collapse: collapse;
-      margin: 8px 0 0;
-      font-size: 13px;
-    }
-    .kv th, .kv td {
-      border-bottom: 1px solid var(--border);
-      padding: 6px 8px;
-    }
-    .kv th { width: 190px; color: var(--muted); font-weight: 600; }
-    details {
-      background: var(--card);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 10px 12px;
-      margin-bottom: 12px;
-    }
-    summary {
-      cursor: pointer;
-      font-weight: 600;
-      font-size: 14px;
-    }
-    pre {
-      background: #0f172a;
-      color: #e2e8f0;
-      padding: 10px;
-      border-radius: 8px;
-      overflow-x: auto;
-      font-family: var(--mono);
-      font-size: 12px;
-      white-space: pre-wrap;
-    }
-    .section-title { margin-top: 18px; font-size: 15px; color: var(--muted); }
-    .toolbar { display: flex; gap: 12px; align-items: center; margin-bottom: 16px; }
-    .muted { color: var(--muted); font-size: 12px; }
-    """.strip()
+    style = _base_style()
 
     def _badge(value: object, *, fail: bool = False) -> str:
         if _parse_bool(value):
@@ -493,7 +504,7 @@ def write_html_audit(
             "        <th>n_items_extracted</th>",
             "        <th>status</th>",
             "        <th>any_warn</th>",
-            "        <th>missing_core_items</th>",
+            "        <th>missing_items</th>",
             "        <th>filing_exclusion_reason</th>",
             "      </tr>",
             "    </thead>",
@@ -519,7 +530,7 @@ def write_html_audit(
         index_lines.append(f"        <td>{_status_badge(status)}</td>")
         index_lines.append(f"        <td>{_badge(row.get('any_warn'))}</td>")
         index_lines.append(
-            f"        <td>{_html_escape(row.get('missing_core_items',''))}</td>"
+            f"        <td>{_html_escape(_missing_items_display(row))}</td>"
         )
         index_lines.append(
             f"        <td>{_html_escape(row.get('filing_exclusion_reason',''))}</td>"
@@ -562,7 +573,7 @@ def write_html_audit(
             ("Period end", row.get("period_end", "")),
             ("CIK", row.get("cik", "")),
             ("Items extracted", row.get("items_extracted", "")),
-            ("Missing core items", row.get("missing_core_items", "")),
+            ("Missing items", _missing_items_display(row)),
             ("Any warn", "yes" if _parse_bool(row.get("any_warn")) else "no"),
             ("Any fail", "yes" if _parse_bool(row.get("any_fail")) else "no"),
             ("Filing exclusion reason", row.get("filing_exclusion_reason", "")),
@@ -695,6 +706,96 @@ def write_html_audit(
         (filings_dir / filename).write_text("\n".join(file_lines), encoding="utf-8")
 
 
+def write_html_audit_root_index(
+    *,
+    form_entries: list[dict[str, object]],
+    out_dir: Path,
+    metadata: dict[str, object],
+) -> None:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    style = _base_style()
+    index_lines = [
+        "<!doctype html>",
+        "<html lang=\"en\">",
+        "<head>",
+        "  <meta charset=\"utf-8\">",
+        "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">",
+        "  <title>SEC Item Extraction Manual Review</title>",
+        f"  <style>{style}</style>",
+        "</head>",
+        "<body>",
+        "  <div class=\"card\">",
+        "    <h1>SEC Item Extraction Manual Review</h1>",
+        "    <div class=\"summary-grid\">",
+    ]
+    summary_fields = [
+        ("Pass definition", metadata.get("pass_definition", "")),
+        ("Total filings", metadata.get("total_filings", "")),
+        ("Total items", metadata.get("total_items", "")),
+        ("Sample weights", metadata.get("sample_weights", "")),
+        ("Generated at", metadata.get("generated_at", "")),
+        ("Offset basis", metadata.get("offset_basis", "")),
+    ]
+    for label, value in summary_fields:
+        index_lines.append(
+            "      <div class=\"summary-item\">"
+            f"<span class=\"label\">{_html_escape(label)}</span>"
+            f"{_html_escape(value)}</div>"
+        )
+    index_lines.extend(
+        [
+            "    </div>",
+            "  </div>",
+            "  <table>",
+            "    <thead>",
+            "      <tr>",
+            "        <th>form</th>",
+            "        <th>total_filings</th>",
+            "        <th>pass</th>",
+            "        <th>warn</th>",
+            "        <th>fail</th>",
+            "        <th>scope</th>",
+            "        <th>index</th>",
+            "      </tr>",
+            "    </thead>",
+            "    <tbody>",
+        ]
+    )
+    if form_entries:
+        for entry in form_entries:
+            form = str(entry.get("form") or "")
+            index_path = str(entry.get("index_path") or "")
+            index_lines.append("      <tr>")
+            index_lines.append(f"        <td>{_html_escape(form)}</td>")
+            index_lines.append(
+                f"        <td>{_html_escape(entry.get('total_filings',''))}</td>"
+            )
+            index_lines.append(
+                f"        <td>{_html_escape(entry.get('pass_count',''))}</td>"
+            )
+            index_lines.append(
+                f"        <td>{_html_escape(entry.get('warn_count',''))}</td>"
+            )
+            index_lines.append(
+                f"        <td>{_html_escape(entry.get('fail_count',''))}</td>"
+            )
+            index_lines.append(f"        <td>{_html_escape(entry.get('scope',''))}</td>")
+            if index_path:
+                index_lines.append(
+                    f"        <td><a href=\"{_html_escape(index_path)}\">open</a></td>"
+                )
+            else:
+                index_lines.append("        <td></td>")
+            index_lines.append("      </tr>")
+    else:
+        index_lines.append(
+            "      <tr><td colspan=\"7\">No filings available for HTML audit.</td></tr>"
+        )
+
+    index_lines.extend(["    </tbody>", "  </table>", "</body>", "</html>"])
+    (out_dir / "index.html").write_text("\n".join(index_lines), encoding="utf-8")
+
+
 __all__ = [
     "DEFAULT_SAMPLE_WEIGHTS",
     "STATUS_FAIL",
@@ -705,4 +806,5 @@ __all__ = [
     "normalize_sample_weights",
     "sample_filings_by_status",
     "write_html_audit",
+    "write_html_audit_root_index",
 ]
