@@ -56,6 +56,8 @@ from .regime import (
     _ITEM_REGIME_ITEMS,
     _ITEM_REGIME_LEGACY,
     _ITEM_REGIME_SPEC,
+    get_regime_index,
+    normalize_form_type,
 )
 from .utilities import (
     _default_part_for_item_id,
@@ -781,6 +783,63 @@ def _regime_annotation_for_item(
         }
 
     return _annotation_from_match(entry, match, fallback=fallback)
+
+def _regime_annotation_for_item_10q(
+    item_part: str | None,
+    item_id: str | None,
+    *,
+    form_type: str | None,
+    filing_date: date | None,
+    period_end: date | None,
+    fallback: str | None,
+) -> dict[str, str | bool | None]:
+    part = item_part.strip().upper() if isinstance(item_part, str) and item_part.strip() else None
+    item_id_norm = item_id.strip().upper() if isinstance(item_id, str) and item_id.strip() else None
+    key = f"{part}:{item_id_norm}" if part and item_id_norm else None
+    canonical_fallback = key or item_id_norm or fallback
+    if not key:
+        return {
+            "canonical_item": canonical_fallback,
+            "exists_by_regime": None,
+            "item_status": "unknown",
+        }
+
+    index = get_regime_index(form_type)
+    if not index:
+        return {
+            "canonical_item": canonical_fallback,
+            "exists_by_regime": None,
+            "item_status": "unknown",
+        }
+
+    entry = index.items_by_key.get(key)
+    if not entry:
+        return {
+            "canonical_item": canonical_fallback,
+            "exists_by_regime": None,
+            "item_status": "unknown",
+        }
+
+    match, decidable = _evaluate_regime_validity(
+        entry.get("validity", []),
+        filing_date=filing_date,
+        period_end=period_end,
+    )
+    if not decidable:
+        return {
+            "canonical_item": canonical_fallback,
+            "exists_by_regime": None,
+            "item_status": "unknown",
+        }
+    if match is None:
+        return {
+            "canonical_item": canonical_fallback,
+            "exists_by_regime": False,
+            "item_status": "unknown",
+        }
+
+    # NOTE: Exists-by-regime stays True even for NOT_IN_FORM canonicals in this phase.
+    return _annotation_from_match(entry, match, fallback=canonical_fallback)
 
 def _build_regime_item_titles_10k(
     *,
@@ -1867,18 +1926,32 @@ def _annotate_items_with_regime(
 ) -> None:
     if not items:
         return
-    form = (form_type or "").upper().strip()
-    apply_regime = enable_regime and (form.startswith("10K") or form.startswith("10-K"))
+    normalized_form = normalize_form_type(form_type)
+    apply_regime = enable_regime and normalized_form in {"10-K", "10-Q"}
     for item in items:
         if apply_regime:
-            item.update(
-                _regime_annotation_for_item(
-                    item.get("item_part"),
-                    item.get("item_id"),
-                    filing_date=filing_date,
-                    period_end=period_end,
+            if normalized_form == "10-K":
+                item.update(
+                    _regime_annotation_for_item(
+                        item.get("item_part"),
+                        item.get("item_id"),
+                        filing_date=filing_date,
+                        period_end=period_end,
+                    )
                 )
-            )
+                continue
+            if normalized_form == "10-Q":
+                item.update(
+                    _regime_annotation_for_item_10q(
+                        item.get("item_part"),
+                        item.get("item_id"),
+                        form_type=form_type,
+                        filing_date=filing_date,
+                        period_end=period_end,
+                        fallback=item.get("item") or item.get("item_id"),
+                    )
+                )
+                continue
             continue
 
         fallback = item.get("item") or item.get("item_id")
