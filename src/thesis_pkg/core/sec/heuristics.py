@@ -130,10 +130,17 @@ for _item_id, _titles in ITEM_TITLES_10K.items():
     normed = {_normalize_heading_text(t) for t in _titles}
     _ITEM_TITLES_10K_NORM[_item_id] = {t for t in normed if t}
 
-def _resolve_item_key(item_part: str | None, item_id: str | None) -> str | None:
+def _resolve_item_key(
+    item_part: str | None,
+    item_id: str | None,
+    *,
+    allow_default_part: bool = True,
+) -> str | None:
     if not item_id:
         return None
-    part = item_part or _default_part_for_item_id(item_id)
+    part = item_part
+    if not part and allow_default_part:
+        part = _default_part_for_item_id(item_id)
     if not part:
         return None
     return f"{part}:{item_id}"
@@ -641,6 +648,8 @@ def _item_order_key(
             period_end=period_end,
             is_10k=is_10k,
         )
+    if not is_10k and not part:
+        return None
     part = part or _default_part_for_item_id(item_id)
     part_order = {"I": 1, "II": 2, "III": 3, "IV": 4}.get(part or "", 99)
 
@@ -796,7 +805,7 @@ def _regime_annotation_for_item_10q(
     part = item_part.strip().upper() if isinstance(item_part, str) and item_part.strip() else None
     item_id_norm = item_id.strip().upper() if isinstance(item_id, str) and item_id.strip() else None
     key = f"{part}:{item_id_norm}" if part and item_id_norm else None
-    canonical_fallback = key or item_id_norm or fallback
+    canonical_fallback = fallback or key or item_id_norm
     if not key:
         return {
             "canonical_item": canonical_fallback,
@@ -1634,7 +1643,8 @@ def _select_best_boundaries(
 
     orderable: list[tuple[tuple[int, int, int, str], tuple[str | None, str]]] = []
     unordered: list[tuple[str | None, str]] = []
-    for key in by_key:
+    unordered_with_pos: list[tuple[int, tuple[str | None, str]]] = []
+    for key, entries in by_key.items():
         part, item_id = key
         if part is None and not is_10k:
             order_key = None
@@ -1647,12 +1657,20 @@ def _select_best_boundaries(
                 is_10k=is_10k,
             )
         if order_key is None:
-            unordered.append(key)
+            if not is_10k:
+                first_idx = entries[0][0] if entries else 0
+                unordered_with_pos.append((first_idx, key))
+            else:
+                unordered.append(key)
         else:
             orderable.append((order_key, key))
 
     orderable.sort(key=lambda t: t[0])
-    unordered.sort(key=lambda k: str(k[1]))
+    if not is_10k:
+        unordered_with_pos.sort(key=lambda t: t[0])
+        unordered = [key for _, key in unordered_with_pos]
+    else:
+        unordered.sort(key=lambda k: str(k[1]))
     ordered_keys = [k for _, k in orderable] + unordered
 
     next_map: dict[tuple[str | None, str], tuple[str | None, str]] = {}

@@ -183,6 +183,20 @@ def _stratified_sample(
     return sampled
 
 
+def _forms_label(rows: list[dict[str, object]]) -> str:
+    forms = sorted(
+        {
+            str(row.get("form") or "").strip()
+            for row in rows
+            if str(row.get("form") or "").strip()
+        }
+    )
+    if not forms:
+        return ""
+    prefix = "Form" if len(forms) == 1 else "Forms"
+    return f"{prefix}: {', '.join(forms)}"
+
+
 def _sample_stratified_rows(
     rows: list[dict[str, object]],
     *,
@@ -428,20 +442,23 @@ def write_html_audit(
         content_start = _parse_int(row.get("content_start"), default=0)
         return (part, item_num, item_letter, content_start)
 
+    forms_label = _forms_label(index_rows)
     index_lines = [
         "<!doctype html>",
         "<html lang=\"en\">",
         "<head>",
         "  <meta charset=\"utf-8\">",
         "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">",
-        "  <title>10-K Extraction Manual Review</title>",
+        "  <title>SEC Item Extraction Manual Review</title>",
         f"  <style>{style}</style>",
         "</head>",
         "<body>",
         "  <div class=\"card\">",
-        "    <h1>10-K Extraction Manual Review</h1>",
-        "    <div class=\"summary-grid\">",
+        "    <h1>SEC Item Extraction Manual Review</h1>",
     ]
+    if forms_label:
+        index_lines.append(f"    <div class=\"muted\">{_html_escape(forms_label)}</div>")
+    index_lines.append("    <div class=\"summary-grid\">")
 
     summary_fields = [
         ("Pass definition", metadata.get("pass_definition", "")),
@@ -591,9 +608,17 @@ def write_html_audit(
                     summary += f" ({item_status})"
                 if length_chars:
                     summary += f" - {length_chars} chars"
+                missing_part = _parse_bool(item.get("item_missing_part")) or str(
+                    item.get("item") or ""
+                ).strip().startswith("?:")
+                summary_html = _html_escape(summary)
+                if missing_part:
+                    summary_html += (
+                        " <span class=\"badge warn\">missing PART marker</span>"
+                    )
 
                 file_lines.append("<details>")
-                file_lines.append(f"  <summary>{_html_escape(summary)}</summary>")
+                file_lines.append(f"  <summary>{summary_html}</summary>")
 
                 file_lines.append(
                     _render_kv(

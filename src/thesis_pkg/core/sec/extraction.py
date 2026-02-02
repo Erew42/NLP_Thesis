@@ -157,7 +157,7 @@ def extract_filing_items(
     Returns a list of dicts with:
       - item_part: roman numeral part when detected (e.g., 'I', 'II'); may be None
       - item_id: normalized item id (e.g., '1', '1A')
-      - item: combined key '<part>:<id>' when part exists, else '<id>'
+      - item: combined key '<part>:<id>' when part exists; for 10-Q without part uses '?:<id>' placeholder
       - full_text: extracted text for the item (pagination artifacts removed)
       - canonical_item: regime-stable meaning when available
       - exists_by_regime: True/False when regime rules can be evaluated, else None
@@ -177,7 +177,8 @@ def extract_filing_items(
         # Skip amended filings (10-K-A/10-Q-A) to avoid duplicate extraction.
         return []
     is_10k = form.startswith("10K") or form.startswith("10-K")
-    if form.startswith("10Q") or form.startswith("10-Q"):
+    is_10q = form.startswith("10Q") or form.startswith("10-Q")
+    if is_10q:
         allowed_parts = {"I", "II"}
     else:
         # Default to 10-K style parts (I-IV). This also prevents accidental matches like "Part D".
@@ -514,11 +515,15 @@ def extract_filing_items(
         truncated_part = False
         item_id = b.item_id
         part = b.item_part
-        inferred_part = _infer_part_for_item_id(
-            item_id,
-            filing_date=filing_date_parsed,
-            period_end=period_end_parsed,
-            is_10k=is_10k,
+        inferred_part = (
+            _infer_part_for_item_id(
+                item_id,
+                filing_date=filing_date_parsed,
+                period_end=period_end_parsed,
+                is_10k=is_10k,
+            )
+            if is_10k
+            else None
         )
         part_for_detection = inferred_part or part
         raw_chunk: str | None = None
@@ -559,9 +564,17 @@ def extract_filing_items(
                 raw_chunk = raw_chunk_candidate
             chunk = chunk[:reserved_end].rstrip()
 
-        if inferred_part and (part is None or part != inferred_part):
-            part = inferred_part
-        item_key = f"{part}:{item_id}" if part else item_id
+        item_missing_part = False
+        if is_10k:
+            if inferred_part and (part is None or part != inferred_part):
+                part = inferred_part
+            item_key = f"{part}:{item_id}" if part else item_id
+        else:
+            if part:
+                item_key = f"{part}:{item_id}"
+            else:
+                item_key = f"?:{item_id}" if item_id else "?:"
+                item_missing_part = True
 
         record = {
             "item_part": part,
@@ -569,6 +582,8 @@ def extract_filing_items(
             "item": item_key,
             "full_text": chunk,
         }
+        if is_10q:
+            record["item_missing_part"] = item_missing_part
         if gij_context.get("gij_asset_backed"):
             record["_filing_exclusion_reason"] = str(gij_context.get("gij_reason") or "")
             omitted_items = gij_context.get("gij_omitted_items")

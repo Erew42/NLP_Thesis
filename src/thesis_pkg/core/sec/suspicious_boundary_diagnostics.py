@@ -85,6 +85,7 @@ from .embedded_headings import (
     _toc_like_line,
     _toc_window_flags,
 )
+from .regime import normalize_form_type
 from .html_audit import (
     _parse_bool,
     _parse_int,
@@ -148,6 +149,7 @@ DIAGNOSTICS_ROW_FIELDS = [
     "item_part",
     "item_id",
     "item",
+    "item_missing_part",
     "canonical_item",
     "exists_by_regime",
     "item_status",
@@ -451,18 +453,12 @@ def _parse_date(value: str | date | datetime | None) -> date | None:
     return None
 
 
+def _normalized_form_type(form_type: str | None) -> str | None:
+    return normalize_form_type(form_type)
+
+
 def _is_10k(form_type: str | None) -> bool:
-    form = (form_type or "").upper().strip()
-    if not (form.startswith("10-K") or form.startswith("10K")):
-        return False
-    # Exclude amendments like 10-K/A, 10KSB-A, 10-K405/A, etc.
-    if "/A" in form:
-        return False
-    if form.endswith("-A") or form.endswith("/A"):
-        return False
-    if re.search(r"[-/]\s*A$", form):
-        return False
-    return True
+    return _normalized_form_type(form_type) == "10-K"
 
 def _lettered_item(item_id: str) -> bool:
     return bool(re.search(r"\d+[A-Z]$", item_id))
@@ -478,19 +474,26 @@ def _weak_heading_letter(item_id: str, heading_line: str) -> bool:
     return not detected.endswith(item_id[-1])
 
 
-def _expected_part_for_item(item: dict) -> str | None:
+def _expected_part_for_item(item: dict, *, normalized_form: str | None) -> str | None:
+    if normalized_form == "10-Q":
+        allowed_parts = {"I", "II"}
+    else:
+        allowed_parts = {"I", "II", "III", "IV"}
+
     canonical = item.get("canonical_item")
     if isinstance(canonical, str) and ":" in canonical:
         part = canonical.split(":", 1)[0].upper()
-        if part in {"I", "II", "III", "IV"}:
+        if part in allowed_parts:
             return part
     item_key = item.get("item")
+    if isinstance(item_key, str) and item_key.startswith("?:"):
+        return None
     if isinstance(item_key, str) and ":" in item_key:
         part = item_key.split(":", 1)[0].upper()
-        if part in {"I", "II", "III", "IV"}:
+        if part in allowed_parts:
             return part
     item_id = item.get("item_id")
-    if isinstance(item_id, str):
+    if normalized_form == "10-K" and isinstance(item_id, str):
         return _default_part_for_item_id(item_id)
     return None
 
@@ -1237,7 +1240,8 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
                 df = pl.from_arrow(tbl)
                 for row in df.iter_rows(named=True):
                     form_type = row.get("document_type_filename")
-                    if not _is_10k(form_type):
+                    normalized_form = _normalized_form_type(form_type)
+                    if normalized_form != "10-K":
                         continue
 
                     total_filings += 1
@@ -1344,7 +1348,7 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
                         item_id_norm = item_id.strip().upper()
                         item_part = item.get("item_part")
                         current_part_norm = _normalize_part(item_part) or _normalize_part(
-                            _expected_part_for_item(item)
+                            _expected_part_for_item(item, normalized_form=normalized_form)
                         )
                         (
                             prefix_text,
@@ -1429,7 +1433,9 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
                                     if item_id in {"1", "7", "9"} or _lettered_item(item_id):
                                         flags.append("split_letter_line")
 
-                        expected_part = _expected_part_for_item(item)
+                        expected_part = _expected_part_for_item(
+                            item, normalized_form=normalized_form
+                        )
                         if expected_part and not item_part:
                             flags.append("missing_part")
                         if item_part and expected_part and item_part != expected_part:
@@ -1509,6 +1515,10 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
                             if item_id_norm == "16":
                                 item_status = "excluded"
 
+                            item_key = str(item.get("item") or "")
+                            item_missing_part = bool(item.get("item_missing_part")) or item_key.startswith(
+                                "?:"
+                            )
                             manifest_items_writer.writerow(
                                 {
                                     "doc_id": doc_id,
@@ -1519,7 +1529,8 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
                                     "form": form_label,
                                     "item_part": str(item_part or ""),
                                     "item_id": item_id,
-                                    "item": str(item.get("item") or ""),
+                                    "item": item_key,
+                                    "item_missing_part": item_missing_part,
                                     "canonical_item": str(item.get("canonical_item") or ""),
                                     "item_status": item_status,
                                     "heading_start": _csv_value(heading_start),
@@ -2004,7 +2015,8 @@ def run_boundary_regression(config: RegressionConfig) -> dict[str, int]:
                     continue
                 seen_doc_ids.add(doc_id)
                 form_type = row.get("document_type_filename")
-                if not _is_10k(form_type):
+                normalized_form = _normalized_form_type(form_type)
+                if normalized_form != "10-K":
                     continue
 
                 total_filings += 1
@@ -2060,7 +2072,7 @@ def run_boundary_regression(config: RegressionConfig) -> dict[str, int]:
                     item_id = str(item.get("item_id") or "")
                     item_part = item.get("item_part")
                     current_part_norm = _normalize_part(item_part) or _normalize_part(
-                        _expected_part_for_item(item)
+                        _expected_part_for_item(item, normalized_form=normalized_form)
                     )
                     (
                         prefix_text,
@@ -2148,7 +2160,9 @@ def run_boundary_regression(config: RegressionConfig) -> dict[str, int]:
                                 if item_id in {"1", "7", "9"} or _lettered_item(item_id):
                                     flags.append("split_letter_line")
 
-                    expected_part = _expected_part_for_item(item)
+                    expected_part = _expected_part_for_item(
+                        item, normalized_form=normalized_form
+                    )
                     if expected_part and not item_part:
                         flags.append("missing_part")
                     if item_part and expected_part and item_part != expected_part:

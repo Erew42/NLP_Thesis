@@ -87,3 +87,6 @@ def test_write_html_audit_creates_files(tmp_path: Path) -> None:
     assert len(filing_files) == 1
     index_text = index_path.read_text(encoding="utf-8")
     assert doc_id in index_text
+    assert "SEC Item Extraction Manual Review" in index_text
+    assert "10-K Extraction Manual Review" not in index_text
+    assert "Form: 10-K" in index_text
