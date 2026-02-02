@@ -9,7 +9,8 @@
     "notes": [
       "Coverage starts at 1990-01-01.",
       "Market Risk (Part I, Item 3) was phased in by filer category (Release 33-7386).",
-      "During the 2010-2012 window (Release 33-9089), Item 4 was removed and Items 5/6 were shifted up to 4/5. They were restored to their original slots by Release 33-9286 in 2012."
+      "Effective 2010-02-28 (Release 33-9089 / 33-9089A), Part II Item 4 (Submission of Matters to a Vote of Security Holders) was removed/reserved; numbering of Items 5 and 6 was retained (no renumbering).",
+      "Effective 2012-01-27 (Release 33-9286), Part II Item 4 became Mine Safety Disclosures."
     ]
   },
   "sources": [
@@ -35,12 +36,12 @@
     },
     {
       "release": "33-9089",
-      "topic": "Part II Item 4 Removed; Items 5/6 Redesignated as 4/5",
+      "topic": "Part II Item 4 removed/reserved (Voting Results removed); Items 5/6 retained",
       "year": 2010
     },
     {
       "release": "33-9286",
-      "topic": "Part II Item 4 Mine Safety Disclosures (Items 5/6 Restored)",
+      "topic": "Part II Item 4 Mine Safety Disclosures added",
       "year": 2012
     }
   ],
@@ -199,8 +200,8 @@
     "II:4": {
       "item_id": "4",
       "part": "II",
-      "label": "Submission of Matters to a Vote / Other Information / Mine Safety Disclosures",
-      "status": "active",
+      "label": "Submission of Matters to a Vote / Reserved / Mine Safety Disclosures",
+      "status": "time_varying",
       "validity": [
         {
           "start": "1990-01-01",
@@ -213,10 +214,10 @@
           "start": "2010-02-28",
           "end": "2012-01-27",
           "trigger": "effective_date",
-          "canonical": "II:4_OTHER_INFORMATION_REDESIGNATED",
-          "label_override": "Other Information",
+          "canonical": "II:4_NOT_IN_FORM_RESERVED",
+          "label_override": "Reserved (removed; not in form)",
           "notes": [
-            "During this window, Item 5 was redesignated as Item 4 (Release 33-9089)."
+            "Effective 2010-02-28, Part II Item 4 was removed/reserved; Items 5 and 6 retained their numbering (no renumbering)."
           ]
         },
         {
@@ -231,32 +232,14 @@
     "II:5": {
       "item_id": "5",
       "part": "II",
-      "label": "Other Information / Exhibits (redesignated window)",
+      "label": "Other Information",
       "status": "active",
       "validity": [
         {
           "start": "1990-01-01",
-          "end": "2010-02-28",
-          "trigger": "effective_date",
-          "canonical": "II:5_OTHER_INFORMATION",
-          "label_override": "Other Information"
-        },
-        {
-          "start": "2010-02-28",
-          "end": "2012-01-27",
-          "trigger": "effective_date",
-          "canonical": "II:5_EXHIBITS_REDESIGNATED",
-          "label_override": "Exhibits",
-          "notes": [
-            "During this window, Item 6 was redesignated as Item 5 (Release 33-9089)."
-          ]
-        },
-        {
-          "start": "2012-01-27",
           "end": null,
           "trigger": "effective_date",
-          "canonical": "II:5_OTHER_INFORMATION",
-          "label_override": "Other Information"
+          "canonical": "II:5_OTHER_INFORMATION"
         }
       ]
     },
@@ -274,26 +257,41 @@
         },
         {
           "start": "2004-08-23",
-          "end": "2010-02-28",
-          "trigger": "effective_date",
-          "canonical": "II:6_EXHIBITS"
-        },
-        {
-          "start": "2010-02-28",
-          "end": "2012-01-27",
-          "trigger": "effective_date",
-          "canonical": "II:6_NOT_IN_FORM_REDESIGNATION_WINDOW",
-          "label_override": "Not in form (redesignation window)",
-          "notes": [
-            "Item 6 was redesignated as Item 5; this slot was empty during this period."
-          ]
-        },
-        {
-          "start": "2012-01-27",
           "end": null,
           "trigger": "effective_date",
           "canonical": "II:6_EXHIBITS"
         }
+      ]
+    }
+  },
+  "recommended_metadata_fields": {
+    "filing_date": {
+      "type": "date",
+      "format": "YYYY-MM-DD",
+      "source": "header FILED AS OF DATE or filename"
+    },
+    "period_end": {
+      "type": "date",
+      "format": "YYYY-MM-DD",
+      "source": "header CONFORMED PERIOD OF REPORT"
+    }
+  },
+  "recommended_output_annotations": {
+    "canonical_item": {
+      "type": "string",
+      "example": "II:4_MINE_SAFETY_DISCLOSURES"
+    },
+    "exists_by_regime": {
+      "type": "boolean"
+    },
+    "item_status": {
+      "type": "string",
+      "enum": [
+        "active",
+        "reserved",
+        "optional",
+        "time_varying",
+        "unknown"
       ]
     }
   }
