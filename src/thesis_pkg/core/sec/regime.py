@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import re
+from dataclasses import dataclass, field
 from functools import lru_cache
 from importlib import resources
 from pathlib import Path
@@ -139,3 +141,150 @@ if _ITEM_REGIME_SPEC:
         if not item_id:
             continue
         _ITEM_REGIME_BY_ID.setdefault(item_id, []).append((key, entry))
+
+
+@dataclass(frozen=True)
+class RegimeSpec:
+    form: str
+    spec_version: int
+    triggers: dict
+    items: dict[str, dict]
+    recommended_metadata_fields: dict | None = None
+    recommended_output_annotations: dict | None = None
+
+
+@dataclass(frozen=True)
+class RegimeIndex:
+    form: str
+    items_by_key: dict[str, dict] = field(default_factory=dict)
+    requires_part: bool = False
+    triggers: dict = field(default_factory=dict)
+    spec_version: int = 0
+    items_by_id: dict[str, dict] | None = None
+
+
+def _is_amendment_form(form: str) -> bool:
+    if "/A" in form:
+        return True
+    if form.endswith("-A") or form.endswith("/A"):
+        return True
+    if re.search(r"[-/]\s*A$", form):
+        return True
+    return False
+
+
+def normalize_form_type(form_type: str | None) -> str | None:
+    if not form_type:
+        return None
+    form = str(form_type).strip().upper()
+    if not form:
+        return None
+    if _is_amendment_form(form):
+        return None
+    if form.startswith("10-K") or form.startswith("10K"):
+        return "10-K"
+    if form.startswith("10-Q") or form.startswith("10Q"):
+        return "10-Q"
+    return None
+
+
+def load_regime_spec(form: str) -> dict | None:
+    normalized = normalize_form_type(form)
+    if not normalized:
+        return None
+    filename = "item_regime_10k.json" if normalized == "10-K" else "item_regime_10q.json"
+    try:
+        data_path = resources.files(__package__).joinpath(filename)
+        with data_path.open("r", encoding="utf-8") as fh:
+            return json.load(fh)
+    except Exception:
+        return None
+
+
+def _coerce_spec_version(value: object) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return 0
+
+
+def _derive_item_key(raw_key: object, entry: dict) -> str | None:
+    if not isinstance(raw_key, str):
+        return None
+    key = raw_key.strip()
+    if not key:
+        return None
+    if ":" in key:
+        return key
+    part = entry.get("part")
+    if isinstance(part, str) and part.strip():
+        return f"{part.strip()}:{key}"
+    return key
+
+
+def _iter_spec_items(spec: dict) -> list[tuple[str, dict]]:
+    items: list[tuple[str, dict]] = []
+    raw_items = spec.get("items") or {}
+    if isinstance(raw_items, dict):
+        for key, entry in raw_items.items():
+            if isinstance(entry, dict):
+                items.append((key, entry))
+    raw_legacy = spec.get("legacy_slots") or []
+    if isinstance(raw_legacy, list):
+        for entry in raw_legacy:
+            if not isinstance(entry, dict):
+                continue
+            slot = entry.get("slot")
+            if isinstance(slot, str) and slot.strip():
+                items.append((slot, entry))
+    return items
+
+
+def build_regime_index(spec: dict) -> RegimeIndex:
+    if not isinstance(spec, dict):
+        raise TypeError("spec must be a dict")
+    raw_form = spec.get("form")
+    normalized_form = normalize_form_type(raw_form) if isinstance(raw_form, str) else None
+    form = normalized_form or (raw_form.strip() if isinstance(raw_form, str) else "")
+    triggers = spec.get("triggers") if isinstance(spec.get("triggers"), dict) else {}
+    spec_version = _coerce_spec_version(spec.get("spec_version"))
+    items_by_key: dict[str, dict] = {}
+    for raw_key, entry in _iter_spec_items(spec):
+        item_key = _derive_item_key(raw_key, entry)
+        if not item_key:
+            continue
+        items_by_key[item_key] = entry
+    requires_part = normalized_form == "10-Q"
+    items_by_id: dict[str, dict] | None = None
+    if normalized_form == "10-K":
+        items_by_id = {}
+        for item_key, entry in items_by_key.items():
+            item_id = entry.get("item_id")
+            if not item_id and ":" in item_key:
+                item_id = item_key.split(":", 1)[1]
+            if not item_id or item_id in items_by_id:
+                continue
+            items_by_id[item_id] = entry
+    return RegimeIndex(
+        form=form,
+        items_by_key=items_by_key,
+        requires_part=requires_part,
+        triggers=triggers,
+        spec_version=spec_version,
+        items_by_id=items_by_id,
+    )
+
+
+@lru_cache(maxsize=4)
+def _get_regime_index_cached(normalized_form: str) -> RegimeIndex | None:
+    spec = load_regime_spec(normalized_form)
+    if not spec:
+        return None
+    return build_regime_index(spec)
+
+
+def get_regime_index(form_type: str | None) -> RegimeIndex | None:
+    normalized = normalize_form_type(form_type)
+    if not normalized:
+        return None
+    return _get_regime_index_cached(normalized)
