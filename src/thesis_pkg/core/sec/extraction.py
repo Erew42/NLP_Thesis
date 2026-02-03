@@ -569,12 +569,14 @@ def extract_filing_items(
             if inferred_part and (part is None or part != inferred_part):
                 part = inferred_part
             item_key = f"{part}:{item_id}" if part else item_id
-        else:
+        elif is_10q:
             if part:
                 item_key = f"{part}:{item_id}"
             else:
                 item_key = f"?:{item_id}" if item_id else "?:"
                 item_missing_part = True
+        else:
+            item_key = f"{part}:{item_id}" if part else item_id
 
         record = {
             "item_part": part,

@@ -146,21 +146,21 @@ COHEN2020_COMMON_CANONICAL: dict[str, set[str]] = {
         "II:1_LEGAL_PROCEEDINGS",
         "I:3_MARKET_RISK",
         "II:1A_RISK_FACTORS",
+        "II:4_OTHER_INFORMATION_REDESIGNATED",
         "II:5_OTHER_INFORMATION",
     },
 }
-
-COHEN2020_ALL_ITEMS_10Q_IDS = {
-    "1",
-    "2",
-    "3",
-    "4",
-    "21",
-    "21A",
-    "22",
-    "23",
-    "24",
-    "25",
+COHEN2020_ALL_ITEMS_10Q_KEYS = {
+    "I:1",
+    "I:2",
+    "I:3",
+    "I:4",
+    "II:1",
+    "II:1A",
+    "II:2",
+    "II:3",
+    "II:4",
+    "II:5",
 }
 
 PROVENANCE_FIELDS = [
@@ -243,6 +243,7 @@ MANIFEST_ITEM_FIELDS = [
     "item_part",
     "item_id",
     "item",
+    "item_missing_part",
     "canonical_item",
     "item_status",
     "heading_start",
@@ -556,10 +557,17 @@ def _target_set_for_form(
         return COHEN2020_COMMON_CANONICAL.get(normalized_form, set())
     if target_set == "cohen2020_all_items":
         if normalized_form == "10-Q":
-            return _canonicals_for_item_ids(
+            canonicals = _canonicals_for_item_keys(
                 normalized_form,
-                COHEN2020_ALL_ITEMS_10Q_IDS,
+                COHEN2020_ALL_ITEMS_10Q_KEYS,
             )
+            canonicals.update(
+                {
+                    "II:4_OTHER_INFORMATION_REDESIGNATED",
+                    "II:5_OTHER_INFORMATION",
+                }
+            )
+            return canonicals
         if normalized_form == "10-K":
             return _all_canonicals_for_form(normalized_form)
     return set()
@@ -613,24 +621,22 @@ def _expected_canonical_items(
     return expected
 
 
-def _canonicals_for_item_ids(
+def _canonicals_for_item_keys(
     normalized_form: str | None,
-    item_ids: set[str],
+    item_keys: set[str],
 ) -> set[str]:
-    if not normalized_form or not item_ids:
+    if not normalized_form or not item_keys:
         return set()
     index = get_regime_index(normalized_form)
     if not index:
         return set()
     results: set[str] = set()
-    for key, entry in index.items_by_key.items():
-        item_id = entry.get("item_id")
-        if not item_id and ":" in key:
-            item_id = key.split(":", 1)[1]
-        if not item_id or item_id.upper() not in item_ids:
+    for key in item_keys:
+        entry = index.items_by_key.get(key)
+        if not entry:
             continue
         for validity in entry.get("validity", []) or []:
-            canonical = validity.get("canonical")
+            canonical = validity.get("canonical") or key
             if canonical:
                 results.add(str(canonical))
     return results

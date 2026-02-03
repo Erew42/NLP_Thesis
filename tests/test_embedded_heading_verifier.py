@@ -271,6 +271,7 @@ def test_flagged_row_includes_embedded_fields() -> None:
         leak_next_item_id="",
         leak_next_heading="",
         item_full_text=text,
+        counts_for_target=True,
     )
     provenance = {
         "prov_python": "py",
@@ -346,6 +347,7 @@ def test_report_includes_embedded_summary_and_not_v3() -> None:
         leak_next_item_id="",
         leak_next_heading="",
         item_full_text=text,
+        counts_for_target=True,
     )
     report = _build_diagnostics_report(
         rows=[row],
