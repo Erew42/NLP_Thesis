@@ -12,6 +12,7 @@ if SRC.exists():
 
 from thesis_pkg.core.sec.suspicious_boundary_diagnostics import (  # noqa: E402
     DiagnosticsConfig,
+    parse_focus_items,
     run_boundary_diagnostics,
 )
 
@@ -150,6 +151,26 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--focus-items",
+        type=str,
+        default=None,
+        help=(
+            "Optional per-item focus set (e.g., "
+            "\"10K:1A,7,7A,8,15;10Q:I:1,I:2,I:3,II:1,II:2\")."
+        ),
+    )
+    parser.add_argument(
+        "--report-item-scope",
+        type=str,
+        default=None,
+        choices=("all", "target", "focus"),
+        help=(
+            "Scope for per-item breakdown sections: all items, target-set items, "
+            "or focus-items only. Default is target if --target-set is provided, "
+            "otherwise all."
+        ),
+    )
+    parser.add_argument(
         "--html-min-total-chars",
         type=int,
         default=None,
@@ -196,6 +217,10 @@ def parse_args() -> argparse.Namespace:
             "Pass-sample outputs require manifests. Remove --no-manifest or set "
             "--sample-pass 0 / use --no-pass-sample."
         )
+    if args.report_item_scope == "focus" and not args.focus_items:
+        parser.error("--report-item-scope focus requires --focus-items.")
+    if args.report_item_scope == "target" and not args.target_set:
+        parser.error("--report-item-scope target requires --target-set.")
     return args
 
 
@@ -209,6 +234,10 @@ def _parse_core_items(value: str | None) -> tuple[str, ...]:
 
 def main() -> None:
     args = parse_args()
+    if args.report_item_scope is None:
+        report_item_scope = "target" if args.target_set else "all"
+    else:
+        report_item_scope = args.report_item_scope
     config = DiagnosticsConfig(
         parquet_dir=args.parquet_dir,
         out_path=args.out_path,
@@ -223,6 +252,8 @@ def main() -> None:
         sample_seed=args.seed,
         core_items=_parse_core_items(args.core_items),
         target_set=args.target_set,
+        focus_items=parse_focus_items(args.focus_items),
+        report_item_scope=report_item_scope,
         emit_html=args.emit_html,
         html_out=args.html_out,
         html_scope=args.html_scope,

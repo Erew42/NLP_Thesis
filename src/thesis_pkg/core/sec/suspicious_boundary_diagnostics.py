@@ -154,6 +154,10 @@ COHEN2020_COMMON_CANONICAL: dict[str, set[str]] = {
         "II:5_OTHER_INFORMATION",
     },
 }
+COHEN2020_ALL_ITEMS_10K_CANONICAL = {
+    *COHEN2020_COMMON_CANONICAL.get("10-K", set())
+}
+# TODO: Replace with a dedicated Cohen 2020 10-K item list if/when defined.
 COHEN2020_ALL_ITEMS_10Q_KEYS = {
     "I:1",
     "I:2",
@@ -333,6 +337,7 @@ class DiagnosticsConfig:
     extraction_regime: Literal["legacy", "v2"] = "legacy"
     diagnostics_regime: Literal["legacy", "v2"] = "legacy"
     focus_items: dict[str, set[str]] | None = None
+    report_item_scope: Literal["all", "target", "focus"] | None = None
 
 
 @dataclass(frozen=True)
@@ -593,7 +598,7 @@ def _target_set_for_form(
             )
             return canonicals
         if normalized_form == "10-K":
-            return _all_canonicals_for_form(normalized_form)
+            return set(COHEN2020_ALL_ITEMS_10K_CANONICAL)
     return set()
 
 
@@ -956,7 +961,7 @@ def _normalize_focus_item_key(form_type: str, token: str) -> str | None:
     return cleaned
 
 
-def _parse_focus_items(value: str | None) -> dict[str, set[str]] | None:
+def parse_focus_items(value: str | None) -> dict[str, set[str]] | None:
     if not value or not str(value).strip():
         return None
     focus: dict[str, set[str]] = {}
@@ -999,6 +1004,45 @@ def _item_key_for_report(
             return f"{part_clean}:{item_id_clean}"
         return part_clean
     return item_id_clean or "UNKNOWN"
+
+
+def _report_focus_items_from_target_set(target_set: str) -> dict[str, set[str]]:
+    focus: dict[str, set[str]] = {}
+    for form in ("10-K", "10-Q"):
+        canonicals = _target_set_for_form(form, target_set)
+        if not canonicals:
+            continue
+        keys: set[str] = set()
+        for canonical in canonicals:
+            if not canonical:
+                continue
+            prefix = str(canonical).split("_", 1)[0].strip()
+            item_key = _normalize_focus_item_key(form, prefix)
+            if item_key:
+                keys.add(item_key)
+        if form == "10-Q":
+            missing_part_keys: set[str] = set()
+            for item_key in keys:
+                if ":" in item_key:
+                    _, item_id = item_key.split(":", 1)
+                else:
+                    item_id = item_key
+                item_id = item_id.strip().upper()
+                if item_id:
+                    missing_part_keys.add(f"?:{item_id}")
+            keys |= missing_part_keys
+        if keys:
+            focus[form] = keys
+    return focus
+
+
+def _resolve_report_item_scope(
+    scope: str | None,
+    target_set: str | None,
+) -> Literal["all", "target", "focus"]:
+    if scope in {"all", "target", "focus"}:
+        return scope
+    return "target" if target_set else "all"
 
 
 def _quartile_edges(values: list[int]) -> tuple[int, int, int]:
@@ -1576,6 +1620,8 @@ def _build_diagnostics_report(
     provenance: dict[str, str],
     item_breakdown: dict[tuple[str, str], _ItemBreakdownStats],
     focus_items: dict[str, set[str]] | None,
+    report_item_scope: Literal["all", "target", "focus"],
+    target_set: str | None,
 ) -> str:
     flags_count: Counter[str] = Counter()
     examples_by_flag: dict[str, list[dict[str, str]]] = defaultdict(list)
@@ -1829,18 +1875,29 @@ def _build_diagnostics_report(
     else:
         lines_out.append("  (no internal heading leaks detected)")
 
-    rows_all = _build_item_breakdown_rows(item_breakdown, focus_items=None)
-    _append_item_breakdown_sections(
-        lines_out,
-        title="Per-item breakdown (All extracted items)",
-        rows_by_form=rows_all,
-    )
-    if focus_items is not None:
+    if report_item_scope == "all":
+        rows_all = _build_item_breakdown_rows(item_breakdown, focus_items=None)
+        _append_item_breakdown_sections(
+            lines_out,
+            title="Per-item breakdown (All extracted items)",
+            rows_by_form=rows_all,
+        )
+    elif report_item_scope == "focus":
         rows_focus = _build_item_breakdown_rows(item_breakdown, focus_items=focus_items)
         _append_item_breakdown_sections(
             lines_out,
-            title="Per-item breakdown (Focus set)",
+            title="Per-item breakdown (Focus set: custom)",
             rows_by_form=rows_focus,
+        )
+    elif report_item_scope == "target":
+        target_items = _report_focus_items_from_target_set(target_set or "")
+        rows_target = _build_item_breakdown_rows(
+            item_breakdown, focus_items=target_items
+        )
+        _append_item_breakdown_sections(
+            lines_out,
+            title=f"Per-item breakdown (Target set: {target_set})",
+            rows_by_form=rows_target,
         )
 
     return "\n".join(lines_out)
@@ -1876,6 +1933,13 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
     if not core_items:
         core_items = set(DEFAULT_CORE_ITEMS)
     target_set = _normalize_target_set(config.target_set)
+    report_item_scope = _resolve_report_item_scope(
+        config.report_item_scope, target_set
+    )
+    if report_item_scope == "focus" and not config.focus_items:
+        raise ValueError("report_item_scope='focus' requires focus_items.")
+    if report_item_scope == "target" and not target_set:
+        raise ValueError("report_item_scope='target' requires target_set.")
 
     total_filings = 0
     total_items = 0
@@ -2484,6 +2548,8 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
         provenance=provenance,
         item_breakdown=item_breakdown,
         focus_items=config.focus_items,
+        report_item_scope=report_item_scope,
+        target_set=target_set,
     )
     print(report)
     config.report_path.write_text(report, encoding="utf-8")
@@ -3580,6 +3646,17 @@ def _build_parser() -> tuple[argparse.ArgumentParser, argparse.ArgumentParser]:
         ),
     )
     scan.add_argument(
+        "--report-item-scope",
+        type=str,
+        default=None,
+        choices=("all", "target", "focus"),
+        help=(
+            "Scope for per-item breakdown sections: all items, target-set items, "
+            "or focus-items only. Default is target if --target-set is provided, "
+            "otherwise all."
+        ),
+    )
+    scan.add_argument(
         "--html-min-total-chars",
         type=int,
         default=None,
@@ -3662,6 +3739,14 @@ def main(argv: list[str] | None = None) -> None:
                 "Pass-sample outputs require manifests. Remove --no-manifest or set "
                 "--sample-pass 0 / use --no-pass-sample."
             )
+        if args.report_item_scope == "focus" and not args.focus_items:
+            scan_parser.error("--report-item-scope focus requires --focus-items.")
+        if args.report_item_scope == "target" and not args.target_set:
+            scan_parser.error("--report-item-scope target requires --target-set.")
+        if args.report_item_scope is None:
+            report_item_scope = "target" if args.target_set else "all"
+        else:
+            report_item_scope = args.report_item_scope
         config = DiagnosticsConfig(
             parquet_dir=args.parquet_dir,
             out_path=args.out_path,
@@ -3676,7 +3761,8 @@ def main(argv: list[str] | None = None) -> None:
             sample_seed=args.seed,
             core_items=_parse_core_items_arg(args.core_items),
             target_set=_normalize_target_set(args.target_set),
-            focus_items=_parse_focus_items(args.focus_items),
+            focus_items=parse_focus_items(args.focus_items),
+            report_item_scope=report_item_scope,
             emit_html=args.emit_html,
             html_out=args.html_out,
             html_scope=args.html_scope,
@@ -3707,6 +3793,7 @@ __all__ = [
     "RegressionConfig",
     "DEFAULT_ROOT_CAUSES_PATH",
     "load_root_causes_text",
+    "parse_focus_items",
     "run_boundary_comparison",
     "run_boundary_diagnostics",
     "run_boundary_regression",
