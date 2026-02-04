@@ -1,0 +1,2792 @@
+diff --git a/full_change.patch b/full_change.patch
+new file mode 100644
+index 0000000..50bf1ec
+--- /dev/null
++++ b/full_change.patch
+@@ -0,0 +1,1424 @@
++diff --git a/run_diagnostics.py b/run_diagnostics.py
++index 7f0450b..f983592 100644
++--- a/run_diagnostics.py
+++++ b/run_diagnostics.py
++@@ -28,7 +28,8 @@ DEFAULT_HTML_OUT_DIR = Path("results/html_audit")
++ def parse_args() -> argparse.Namespace:
++     parser = argparse.ArgumentParser(
++         description=(
++-            "Run suspicious boundary diagnostics with optional HTML audit output."
+++            "Run suspicious boundary diagnostics on extracted 10-K/10-Q items with "
+++            "optional HTML audit output."
++         )
++     )
++     parser.add_argument(
++@@ -138,6 +139,30 @@ def parse_args() -> argparse.Namespace:
++         default="1,1A,7,7A,8",
++         help="Comma-separated core item IDs for missing_core_items.",
++     )
+++    parser.add_argument(
+++        "--target-set",
+++        type=str,
+++        default=None,
+++        help="Restrict WARN/FAIL and missing-items to a target set (e.g., cohen2020).",
+++    )
+++    parser.add_argument(
+++        "--html-min-total-chars",
+++        type=int,
+++        default=None,
+++        help="Minimum total extracted chars for filings included in HTML audit.",
+++    )
+++    parser.add_argument(
+++        "--html-min-largest-item-chars",
+++        type=int,
+++        default=None,
+++        help="Minimum largest-item length for filings included in HTML audit.",
+++    )
+++    parser.add_argument(
+++        "--html-min-largest-item-chars-pct-total",
+++        type=float,
+++        default=None,
+++        help="Minimum largest-item share of total chars for HTML audit.",
+++    )
++     parser.set_defaults(
++         emit_manifest=True,
++         emit_html=True,
++@@ -179,9 +204,13 @@ def main() -> None:
++         sample_pass=args.sample_pass,
++         sample_seed=args.seed,
++         core_items=_parse_core_items(args.core_items),
+++        target_set=args.target_set,
++         emit_html=args.emit_html,
++         html_out=args.html_out,
++         html_scope=args.html_scope,
+++        html_min_total_chars=args.html_min_total_chars,
+++        html_min_largest_item_chars=args.html_min_largest_item_chars,
+++        html_min_largest_item_chars_pct_total=args.html_min_largest_item_chars_pct_total,
++     )
++     run_boundary_diagnostics(config)
++ 
++diff --git a/src/thesis_pkg/core/sec/html_audit.py b/src/thesis_pkg/core/sec/html_audit.py
++index e691684..a8c8026 100644
++--- a/src/thesis_pkg/core/sec/html_audit.py
+++++ b/src/thesis_pkg/core/sec/html_audit.py
++@@ -26,6 +26,120 @@ DEFAULT_SAMPLE_WEIGHTS: dict[str, float] = {
++ }
++ 
++ 
+++def _base_style() -> str:
+++    return """
+++    :root {
+++      --bg: #f6f7f9;
+++      --card: #ffffff;
+++      --text: #1f2a33;
+++      --muted: #5e6b76;
+++      --border: #d9e0e6;
+++      --accent: #2f6fad;
+++      --warn: #b06a00;
+++      --fail: #9b2226;
+++      --ok: #2d6a4f;
+++      --mono: "Consolas", "SFMono-Regular", Menlo, Monaco, "Liberation Mono", monospace;
+++    }
+++    * { box-sizing: border-box; }
+++    body {
+++      margin: 24px;
+++      background: var(--bg);
+++      color: var(--text);
+++      font-family: "Segoe UI", Tahoma, Arial, sans-serif;
+++    }
+++    h1, h2, h3 { margin: 0 0 12px 0; }
+++    a { color: var(--accent); text-decoration: none; }
+++    a:hover { text-decoration: underline; }
+++    .card {
+++      background: var(--card);
+++      border: 1px solid var(--border);
+++      border-radius: 10px;
+++      padding: 16px;
+++      margin-bottom: 16px;
+++      box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+++    }
+++    .summary-grid {
+++      display: grid;
+++      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+++      gap: 12px;
+++      margin-top: 8px;
+++    }
+++    .summary-item {
+++      padding: 10px;
+++      border: 1px solid var(--border);
+++      border-radius: 8px;
+++      background: #fbfcfd;
+++      font-size: 13px;
+++    }
+++    .summary-item .label { color: var(--muted); display: block; font-size: 11px; }
+++    table {
+++      width: 100%;
+++      border-collapse: collapse;
+++      background: var(--card);
+++      border: 1px solid var(--border);
+++      border-radius: 10px;
+++      overflow: hidden;
+++    }
+++    th, td {
+++      padding: 10px 12px;
+++      border-bottom: 1px solid var(--border);
+++      text-align: left;
+++      font-size: 13px;
+++    }
+++    th { background: #f0f3f6; color: var(--muted); font-size: 12px; }
+++    tr:hover td { background: #f9fbfc; }
+++    .badge {
+++      display: inline-block;
+++      padding: 2px 8px;
+++      border-radius: 999px;
+++      font-size: 11px;
+++      text-transform: uppercase;
+++      letter-spacing: 0.4px;
+++      font-weight: 600;
+++    }
+++    .badge.ok { background: #d8f3dc; color: var(--ok); }
+++    .badge.warn { background: #ffead1; color: var(--warn); }
+++    .badge.fail { background: #f8d7da; color: var(--fail); }
+++    .mono { font-family: var(--mono); }
+++    .kv {
+++      width: 100%;
+++      border-collapse: collapse;
+++      margin: 8px 0 0;
+++      font-size: 13px;
+++    }
+++    .kv th, .kv td {
+++      border-bottom: 1px solid var(--border);
+++      padding: 6px 8px;
+++    }
+++    .kv th { width: 190px; color: var(--muted); font-weight: 600; }
+++    details {
+++      background: var(--card);
+++      border: 1px solid var(--border);
+++      border-radius: 10px;
+++      padding: 10px 12px;
+++      margin-bottom: 12px;
+++    }
+++    summary {
+++      cursor: pointer;
+++      font-weight: 600;
+++      font-size: 14px;
+++    }
+++    pre {
+++      background: #0f172a;
+++      color: #e2e8f0;
+++      padding: 10px;
+++      border-radius: 8px;
+++      overflow-x: auto;
+++      font-family: var(--mono);
+++      font-size: 12px;
+++      white-space: pre-wrap;
+++    }
+++    .section-title { margin-top: 18px; font-size: 15px; color: var(--muted); }
+++    .toolbar { display: flex; gap: 12px; align-items: center; margin-bottom: 16px; }
+++    .muted { color: var(--muted); font-size: 12px; }
+++    """.strip()
+++
+++
++ def _safe_slug(value: str) -> str:
++     return re.sub(r"[^A-Za-z0-9_-]+", "_", value).strip("_") or "unknown"
++ 
++@@ -197,6 +311,13 @@ def _forms_label(rows: list[dict[str, object]]) -> str:
++     return f"{prefix}: {', '.join(forms)}"
++ 
++ 
+++def _missing_items_display(row: dict[str, object]) -> str:
+++    expected = str(row.get("missing_expected_canonicals") or "").strip()
+++    if expected:
+++        return expected
+++    return str(row.get("missing_core_items") or "")
+++
+++
++ def _sample_stratified_rows(
++     rows: list[dict[str, object]],
++     *,
++@@ -310,117 +431,7 @@ def write_html_audit(
++     filings_dir = out_dir / "filings"
++     filings_dir.mkdir(parents=True, exist_ok=True)
++ 
++-    style = """
++-    :root {
++-      --bg: #f6f7f9;
++-      --card: #ffffff;
++-      --text: #1f2a33;
++-      --muted: #5e6b76;
++-      --border: #d9e0e6;
++-      --accent: #2f6fad;
++-      --warn: #b06a00;
++-      --fail: #9b2226;
++-      --ok: #2d6a4f;
++-      --mono: "Consolas", "SFMono-Regular", Menlo, Monaco, "Liberation Mono", monospace;
++-    }
++-    * { box-sizing: border-box; }
++-    body {
++-      margin: 24px;
++-      background: var(--bg);
++-      color: var(--text);
++-      font-family: "Segoe UI", Tahoma, Arial, sans-serif;
++-    }
++-    h1, h2, h3 { margin: 0 0 12px 0; }
++-    a { color: var(--accent); text-decoration: none; }
++-    a:hover { text-decoration: underline; }
++-    .card {
++-      background: var(--card);
++-      border: 1px solid var(--border);
++-      border-radius: 10px;
++-      padding: 16px;
++-      margin-bottom: 16px;
++-      box-shadow: 0 1px 3px rgba(0,0,0,0.05);
++-    }
++-    .summary-grid {
++-      display: grid;
++-      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
++-      gap: 12px;
++-      margin-top: 8px;
++-    }
++-    .summary-item {
++-      padding: 10px;
++-      border: 1px solid var(--border);
++-      border-radius: 8px;
++-      background: #fbfcfd;
++-      font-size: 13px;
++-    }
++-    .summary-item .label { color: var(--muted); display: block; font-size: 11px; }
++-    table {
++-      width: 100%;
++-      border-collapse: collapse;
++-      background: var(--card);
++-      border: 1px solid var(--border);
++-      border-radius: 10px;
++-      overflow: hidden;
++-    }
++-    th, td {
++-      padding: 10px 12px;
++-      border-bottom: 1px solid var(--border);
++-      text-align: left;
++-      font-size: 13px;
++-    }
++-    th { background: #f0f3f6; color: var(--muted); font-size: 12px; }
++-    tr:hover td { background: #f9fbfc; }
++-    .badge {
++-      display: inline-block;
++-      padding: 2px 8px;
++-      border-radius: 999px;
++-      font-size: 11px;
++-      text-transform: uppercase;
++-      letter-spacing: 0.4px;
++-      font-weight: 600;
++-    }
++-    .badge.ok { background: #d8f3dc; color: var(--ok); }
++-    .badge.warn { background: #ffead1; color: var(--warn); }
++-    .badge.fail { background: #f8d7da; color: var(--fail); }
++-    .mono { font-family: var(--mono); }
++-    .kv {
++-      width: 100%;
++-      border-collapse: collapse;
++-      margin: 8px 0 0;
++-      font-size: 13px;
++-    }
++-    .kv th, .kv td {
++-      border-bottom: 1px solid var(--border);
++-      padding: 6px 8px;
++-    }
++-    .kv th { width: 190px; color: var(--muted); font-weight: 600; }
++-    details {
++-      background: var(--card);
++-      border: 1px solid var(--border);
++-      border-radius: 10px;
++-      padding: 10px 12px;
++-      margin-bottom: 12px;
++-    }
++-    summary {
++-      cursor: pointer;
++-      font-weight: 600;
++-      font-size: 14px;
++-    }
++-    pre {
++-      background: #0f172a;
++-      color: #e2e8f0;
++-      padding: 10px;
++-      border-radius: 8px;
++-      overflow-x: auto;
++-      font-family: var(--mono);
++-      font-size: 12px;
++-      white-space: pre-wrap;
++-    }
++-    .section-title { margin-top: 18px; font-size: 15px; color: var(--muted); }
++-    .toolbar { display: flex; gap: 12px; align-items: center; margin-bottom: 16px; }
++-    .muted { color: var(--muted); font-size: 12px; }
++-    """.strip()
+++    style = _base_style()
++ 
++     def _badge(value: object, *, fail: bool = False) -> str:
++         if _parse_bool(value):
++@@ -493,7 +504,7 @@ def write_html_audit(
++             "        <th>n_items_extracted</th>",
++             "        <th>status</th>",
++             "        <th>any_warn</th>",
++-            "        <th>missing_core_items</th>",
+++            "        <th>missing_items</th>",
++             "        <th>filing_exclusion_reason</th>",
++             "      </tr>",
++             "    </thead>",
++@@ -519,7 +530,7 @@ def write_html_audit(
++         index_lines.append(f"        <td>{_status_badge(status)}</td>")
++         index_lines.append(f"        <td>{_badge(row.get('any_warn'))}</td>")
++         index_lines.append(
++-            f"        <td>{_html_escape(row.get('missing_core_items',''))}</td>"
+++            f"        <td>{_html_escape(_missing_items_display(row))}</td>"
++         )
++         index_lines.append(
++             f"        <td>{_html_escape(row.get('filing_exclusion_reason',''))}</td>"
++@@ -562,7 +573,7 @@ def write_html_audit(
++             ("Period end", row.get("period_end", "")),
++             ("CIK", row.get("cik", "")),
++             ("Items extracted", row.get("items_extracted", "")),
++-            ("Missing core items", row.get("missing_core_items", "")),
+++            ("Missing items", _missing_items_display(row)),
++             ("Any warn", "yes" if _parse_bool(row.get("any_warn")) else "no"),
++             ("Any fail", "yes" if _parse_bool(row.get("any_fail")) else "no"),
++             ("Filing exclusion reason", row.get("filing_exclusion_reason", "")),
++@@ -695,6 +706,96 @@ def write_html_audit(
++         (filings_dir / filename).write_text("\n".join(file_lines), encoding="utf-8")
++ 
++ 
+++def write_html_audit_root_index(
+++    *,
+++    form_entries: list[dict[str, object]],
+++    out_dir: Path,
+++    metadata: dict[str, object],
+++) -> None:
+++    out_dir.mkdir(parents=True, exist_ok=True)
+++    style = _base_style()
+++    index_lines = [
+++        "<!doctype html>",
+++        "<html lang=\"en\">",
+++        "<head>",
+++        "  <meta charset=\"utf-8\">",
+++        "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">",
+++        "  <title>SEC Item Extraction Manual Review</title>",
+++        f"  <style>{style}</style>",
+++        "</head>",
+++        "<body>",
+++        "  <div class=\"card\">",
+++        "    <h1>SEC Item Extraction Manual Review</h1>",
+++        "    <div class=\"summary-grid\">",
+++    ]
+++    summary_fields = [
+++        ("Pass definition", metadata.get("pass_definition", "")),
+++        ("Total filings", metadata.get("total_filings", "")),
+++        ("Total items", metadata.get("total_items", "")),
+++        ("Sample weights", metadata.get("sample_weights", "")),
+++        ("Generated at", metadata.get("generated_at", "")),
+++        ("Offset basis", metadata.get("offset_basis", "")),
+++    ]
+++    for label, value in summary_fields:
+++        index_lines.append(
+++            "      <div class=\"summary-item\">"
+++            f"<span class=\"label\">{_html_escape(label)}</span>"
+++            f"{_html_escape(value)}</div>"
+++        )
+++    index_lines.extend(
+++        [
+++            "    </div>",
+++            "  </div>",
+++            "  <table>",
+++            "    <thead>",
+++            "      <tr>",
+++            "        <th>form</th>",
+++            "        <th>total_filings</th>",
+++            "        <th>pass</th>",
+++            "        <th>warn</th>",
+++            "        <th>fail</th>",
+++            "        <th>scope</th>",
+++            "        <th>index</th>",
+++            "      </tr>",
+++            "    </thead>",
+++            "    <tbody>",
+++        ]
+++    )
+++    if form_entries:
+++        for entry in form_entries:
+++            form = str(entry.get("form") or "")
+++            index_path = str(entry.get("index_path") or "")
+++            index_lines.append("      <tr>")
+++            index_lines.append(f"        <td>{_html_escape(form)}</td>")
+++            index_lines.append(
+++                f"        <td>{_html_escape(entry.get('total_filings',''))}</td>"
+++            )
+++            index_lines.append(
+++                f"        <td>{_html_escape(entry.get('pass_count',''))}</td>"
+++            )
+++            index_lines.append(
+++                f"        <td>{_html_escape(entry.get('warn_count',''))}</td>"
+++            )
+++            index_lines.append(
+++                f"        <td>{_html_escape(entry.get('fail_count',''))}</td>"
+++            )
+++            index_lines.append(f"        <td>{_html_escape(entry.get('scope',''))}</td>")
+++            if index_path:
+++                index_lines.append(
+++                    f"        <td><a href=\"{_html_escape(index_path)}\">open</a></td>"
+++                )
+++            else:
+++                index_lines.append("        <td></td>")
+++            index_lines.append("      </tr>")
+++    else:
+++        index_lines.append(
+++            "      <tr><td colspan=\"7\">No filings available for HTML audit.</td></tr>"
+++        )
+++
+++    index_lines.extend(["    </tbody>", "  </table>", "</body>", "</html>"])
+++    (out_dir / "index.html").write_text("\n".join(index_lines), encoding="utf-8")
+++
+++
++ __all__ = [
++     "DEFAULT_SAMPLE_WEIGHTS",
++     "STATUS_FAIL",
++@@ -705,4 +806,5 @@ __all__ = [
++     "normalize_sample_weights",
++     "sample_filings_by_status",
++     "write_html_audit",
+++    "write_html_audit_root_index",
++ ]
++diff --git a/src/thesis_pkg/core/sec/suspicious_boundary_diagnostics.py b/src/thesis_pkg/core/sec/suspicious_boundary_diagnostics.py
++index e201240..1194e06 100644
++--- a/src/thesis_pkg/core/sec/suspicious_boundary_diagnostics.py
+++++ b/src/thesis_pkg/core/sec/suspicious_boundary_diagnostics.py
++@@ -25,6 +25,7 @@ from .heuristics import (
++     _looks_like_toc_heading_line,
++     _prefix_is_part_only,
++     _prefix_looks_like_cross_ref,
+++    _evaluate_regime_validity,
++ )
++ from .patterns import (
++     EMBEDDED_CONTINUATION_PATTERN,
++@@ -85,7 +86,7 @@ from .embedded_headings import (
++     _toc_like_line,
++     _toc_window_flags,
++ )
++-from .regime import normalize_form_type
+++from .regime import get_regime_index, normalize_form_type
++ from .html_audit import (
++     _parse_bool,
++     _parse_int,
++@@ -98,6 +99,7 @@ from .html_audit import (
++     normalize_sample_weights,
++     sample_filings_by_status,
++     write_html_audit,
+++    write_html_audit_root_index,
++ )
++ from .parquet_stream import iter_parquet_filing_texts
++ 
++@@ -131,6 +133,35 @@ DEFAULT_HTML_SCOPE = "sample"
++ DEFAULT_HTML_SAMPLE_SIZE = 100
++ DEFAULT_HTML_FILING_PREVIEW_CHARS = 1200
++ DEFAULT_HTML_ITEM_PREVIEW_CHARS = 800
+++COHEN2020_COMMON_CANONICAL: dict[str, set[str]] = {
+++    "10-K": {
+++        "II:7_MDA",
+++        "I:3_LEGAL_PROCEEDINGS",
+++        "II:7A_MARKET_RISK",
+++        "I:1A_RISK_FACTORS",
+++        "II:9B_OTHER_INFORMATION",
+++    },
+++    "10-Q": {
+++        "I:2_MDA",
+++        "II:1_LEGAL_PROCEEDINGS",
+++        "I:3_MARKET_RISK",
+++        "II:1A_RISK_FACTORS",
+++        "II:5_OTHER_INFORMATION",
+++    },
+++}
+++
+++COHEN2020_ALL_ITEMS_10Q_IDS = {
+++    "1",
+++    "2",
+++    "3",
+++    "4",
+++    "21",
+++    "21A",
+++    "22",
+++    "23",
+++    "24",
+++    "25",
+++}
++ 
++ PROVENANCE_FIELDS = [
++     "prov_python",
++@@ -153,6 +184,7 @@ DIAGNOSTICS_ROW_FIELDS = [
++     "canonical_item",
++     "exists_by_regime",
++     "item_status",
+++    "counts_for_target",
++     "filing_exclusion_reason",
++     "gij_omitted_items",
++     "heading_line",
++@@ -253,6 +285,7 @@ MANIFEST_FILING_FIELDS = [
++     "n_items_extracted",
++     "items_extracted",
++     "missing_core_items",
+++    "missing_expected_canonicals",
++     "any_warn",
++     "any_fail",
++     "filing_exclusion_reason",
++@@ -282,10 +315,14 @@ class DiagnosticsConfig:
++     sample_filings_path: Path = DEFAULT_SAMPLE_FILINGS_PATH
++     sample_items_path: Path = DEFAULT_SAMPLE_ITEMS_PATH
++     core_items: tuple[str, ...] = DEFAULT_CORE_ITEMS
+++    target_set: str | None = None
++     emit_html: bool = True
++     html_out: Path = DEFAULT_HTML_OUT_DIR
++     html_scope: str = DEFAULT_HTML_SCOPE
++     html_sample_weights: dict[str, float] | None = None
+++    html_min_total_chars: int | None = None
+++    html_min_largest_item_chars: int | None = None
+++    html_min_largest_item_chars_pct_total: float | None = None
++ 
++ 
++ @dataclass(frozen=True)
++@@ -317,6 +354,7 @@ class DiagnosticsRow:
++     canonical_item: str
++     exists_by_regime: str | bool | None
++     item_status: str
+++    counts_for_target: bool
++     filing_exclusion_reason: str
++     gij_omitted_items: str
++     heading_line: str
++@@ -382,6 +420,7 @@ class DiagnosticsRow:
++             "canonical_item": self.canonical_item,
++             "exists_by_regime": self.exists_by_regime,
++             "item_status": self.item_status,
+++            "counts_for_target": self.counts_for_target,
++             "filing_exclusion_reason": self.filing_exclusion_reason,
++             "gij_omitted_items": self.gij_omitted_items,
++             "heading_line": self.heading_line,
++@@ -498,6 +537,169 @@ def _expected_part_for_item(item: dict, *, normalized_form: str | None) -> str |
++     return None
++ 
++ 
+++def _normalize_target_set(value: str | None) -> str | None:
+++    if not value:
+++        return None
+++    cleaned = str(value).strip().lower()
+++    if cleaned == "cohen2020":
+++        return "cohen2020_common"
+++    return cleaned or None
+++
+++
+++def _target_set_for_form(
+++    normalized_form: str | None,
+++    target_set: str | None,
+++) -> set[str]:
+++    if not normalized_form or not target_set:
+++        return set()
+++    if target_set == "cohen2020_common":
+++        return COHEN2020_COMMON_CANONICAL.get(normalized_form, set())
+++    if target_set == "cohen2020_all_items":
+++        if normalized_form == "10-Q":
+++            return _canonicals_for_item_ids(
+++                normalized_form,
+++                COHEN2020_ALL_ITEMS_10Q_IDS,
+++            )
+++        if normalized_form == "10-K":
+++            return _all_canonicals_for_form(normalized_form)
+++    return set()
+++
+++
+++def _item_counts_for_target(
+++    canonical_item: str | None,
+++    *,
+++    normalized_form: str | None,
+++    target_set: str | None,
+++) -> bool:
+++    if not target_set:
+++        return True
+++    if not canonical_item:
+++        return False
+++    targets = _target_set_for_form(normalized_form, target_set)
+++    return canonical_item in targets
+++
+++
+++def _expected_canonical_items(
+++    *,
+++    normalized_form: str | None,
+++    filing_date: date | None,
+++    period_end: date | None,
+++    target_set: str | None,
+++) -> set[str]:
+++    if not normalized_form:
+++        return set()
+++    index = get_regime_index(normalized_form)
+++    if not index:
+++        return set()
+++    expected: set[str] = set()
+++    for key, entry in index.items_by_key.items():
+++        status = str(entry.get("status") or "").lower()
+++        if status in {"reserved", "optional"}:
+++            continue
+++        match, decidable = _evaluate_regime_validity(
+++            entry.get("validity", []),
+++            filing_date=filing_date,
+++            period_end=period_end,
+++        )
+++        if not decidable or match is None:
+++            continue
+++        canonical = match.get("canonical") or key
+++        if isinstance(canonical, str) and "NOT_IN_FORM" in canonical:
+++            continue
+++        if canonical:
+++            expected.add(str(canonical))
+++    if target_set:
+++        expected &= _target_set_for_form(normalized_form, target_set)
+++    return expected
+++
+++
+++def _canonicals_for_item_ids(
+++    normalized_form: str | None,
+++    item_ids: set[str],
+++) -> set[str]:
+++    if not normalized_form or not item_ids:
+++        return set()
+++    index = get_regime_index(normalized_form)
+++    if not index:
+++        return set()
+++    results: set[str] = set()
+++    for key, entry in index.items_by_key.items():
+++        item_id = entry.get("item_id")
+++        if not item_id and ":" in key:
+++            item_id = key.split(":", 1)[1]
+++        if not item_id or item_id.upper() not in item_ids:
+++            continue
+++        for validity in entry.get("validity", []) or []:
+++            canonical = validity.get("canonical")
+++            if canonical:
+++                results.add(str(canonical))
+++    return results
+++
+++
+++def _all_canonicals_for_form(normalized_form: str | None) -> set[str]:
+++    if not normalized_form:
+++        return set()
+++    index = get_regime_index(normalized_form)
+++    if not index:
+++        return set()
+++    results: set[str] = set()
+++    for key, entry in index.items_by_key.items():
+++        for validity in entry.get("validity", []) or []:
+++            canonical = validity.get("canonical") or key
+++            if canonical:
+++                results.add(str(canonical))
+++    return results
+++
+++
+++def _compute_html_metrics(
+++    items_by_doc: dict[str, list[dict[str, object]]]
+++) -> dict[str, dict[str, float]]:
+++    metrics: dict[str, dict[str, float]] = {}
+++    for doc_id, items in items_by_doc.items():
+++        total = 0
+++        largest = 0
+++        for item in items:
+++            length = _parse_int(item.get("length_chars"), default=0)
+++            total += max(length, 0)
+++            if length > largest:
+++                largest = length
+++        pct = (largest / total) if total > 0 else 0.0
+++        metrics[doc_id] = {
+++            "total_chars": float(total),
+++            "largest_item_chars": float(largest),
+++            "largest_item_chars_pct_total": float(pct),
+++        }
+++    return metrics
+++
+++
+++def _passes_html_filters(
+++    row: dict[str, object],
+++    *,
+++    metrics_by_doc: dict[str, dict[str, float]],
+++    min_total_chars: int | None,
+++    min_largest_item_chars: int | None,
+++    min_largest_item_chars_pct_total: float | None,
+++) -> bool:
+++    if min_total_chars is None and min_largest_item_chars is None and min_largest_item_chars_pct_total is None:
+++        return True
+++    doc_id = str(row.get("doc_id") or "")
+++    metrics = metrics_by_doc.get(doc_id, {})
+++    if min_total_chars is not None and metrics.get("total_chars", 0.0) < min_total_chars:
+++        return False
+++    if (
+++        min_largest_item_chars is not None
+++        and metrics.get("largest_item_chars", 0.0) < min_largest_item_chars
+++    ):
+++        return False
+++    if (
+++        min_largest_item_chars_pct_total is not None
+++        and metrics.get("largest_item_chars_pct_total", 0.0)
+++        < min_largest_item_chars_pct_total
+++    ):
+++        return False
+++    return True
+++
+++
++ def _prefix_text(heading_line: str, heading_offset: int | None) -> str:
++     if heading_offset is None or heading_offset <= 0:
++         return ""
++@@ -799,6 +1001,7 @@ def _build_flagged_row(
++     leak_next_item_id: str,
++     leak_next_heading: str,
++     item_full_text: str,
+++    counts_for_target: bool,
++ ) -> DiagnosticsRow:
++     filing_exclusion_reason = str(item.get("_filing_exclusion_reason") or "")
++     gij_omitted_items = item.get("_gij_omitted_items")
++@@ -819,6 +1022,7 @@ def _build_flagged_row(
++         canonical_item=item.get("canonical_item") or "",
++         exists_by_regime=item.get("exists_by_regime"),
++         item_status=item.get("item_status") or "",
+++        counts_for_target=counts_for_target,
++         filing_exclusion_reason=filing_exclusion_reason,
++         gij_omitted_items=gij_omitted_items_str,
++         heading_line=heading_line_clean.strip(),
++@@ -1184,6 +1388,7 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
++     core_items = {item.strip().upper() for item in config.core_items if item}
++     if not core_items:
++         core_items = set(DEFAULT_CORE_ITEMS)
+++    target_set = _normalize_target_set(config.target_set)
++ 
++     total_filings = 0
++     total_items = 0
++@@ -1241,7 +1446,7 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
++                 for row in df.iter_rows(named=True):
++                     form_type = row.get("document_type_filename")
++                     normalized_form = _normalized_form_type(form_type)
++-                    if normalized_form != "10-K":
+++                    if normalized_form not in {"10-K", "10-Q"}:
++                         continue
++ 
++                     total_filings += 1
++@@ -1258,9 +1463,15 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
++                     doc_id = str(row.get("doc_id") or "")
++                     accession = str(row.get("accession_number") or "")
++                     cik = str(row.get("cik") or "")
++-                    form_label = str(form_type or "")
+++                    form_label = normalized_form or str(form_type or "")
++                     filing_date_str = filing_date.isoformat() if filing_date else ""
++                     period_end_str = period_end.isoformat() if period_end else ""
+++                    expected_canonicals = _expected_canonical_items(
+++                        normalized_form=normalized_form,
+++                        filing_date=filing_date,
+++                        period_end=period_end,
+++                        target_set=target_set,
+++                    )
++ 
++                     items = extract_filing_items(
++                         text,
++@@ -1273,6 +1484,7 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
++                     if not items:
++                         if emit_manifest and manifest_filings_writer:
++                             missing_core_items = ",".join(sorted(core_items))
+++                            missing_expected = ",".join(sorted(expected_canonicals))
++                             filing_row = {
++                                 "doc_id": doc_id,
++                                 "accession": accession,
++@@ -1283,6 +1495,7 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
++                                 "n_items_extracted": 0,
++                                 "items_extracted": "",
++                                 "missing_core_items": missing_core_items,
+++                                "missing_expected_canonicals": missing_expected,
++                                 "any_warn": False,
++                                 "any_fail": False,
++                                 "filing_exclusion_reason": "",
++@@ -1313,6 +1526,7 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
++                     flagged_items_for_doc: list[DiagnosticsRow] = []
++                     item_ids_ordered: list[str] = []
++                     item_ids_set: set[str] = set()
+++                    extracted_canonicals: set[str] = set()
++                     filing_exclusion_reason = ""
++                     filing_any_warn = False
++                     filing_any_fail = False
++@@ -1347,6 +1561,9 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
++                         item_id = str(item.get("item_id") or "")
++                         item_id_norm = item_id.strip().upper()
++                         item_part = item.get("item_part")
+++                        canonical_item = str(item.get("canonical_item") or "")
+++                        if canonical_item:
+++                            extracted_canonicals.add(canonical_item)
++                         current_part_norm = _normalize_part(item_part) or _normalize_part(
++                             _expected_part_for_item(item, normalized_form=normalized_form)
++                         )
++@@ -1470,8 +1687,14 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
++                         )
++                         item_fail = embedded_fail or bool(first_fail_classification)
++                         item_warn = bool(flags) and not item_fail
++-                        filing_any_fail = filing_any_fail or item_fail
++-                        filing_any_warn = filing_any_warn or item_warn
+++                        counts_for_target = _item_counts_for_target(
+++                            canonical_item,
+++                            normalized_form=normalized_form,
+++                            target_set=target_set,
+++                        )
+++                        if counts_for_target:
+++                            filing_any_fail = filing_any_fail or item_fail
+++                            filing_any_warn = filing_any_warn or item_warn
++ 
++                         if item_id_norm:
++                             item_ids_ordered.append(item_id_norm)
++@@ -1659,6 +1882,7 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
++                             leak_next_item_id=leak_next_item_id,
++                             leak_next_heading=leak_next_heading,
++                             item_full_text=item_full_text,
+++                            counts_for_target=counts_for_target,
++                         )
++                         flagged_rows.append(row_entry)
++                         flagged_items_for_doc.append(row_entry)
++@@ -1667,6 +1891,8 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
++                     if emit_manifest and manifest_filings_writer:
++                         missing_core = sorted(core_items - item_ids_set)
++                         missing_core_items_str = ",".join(missing_core)
+++                        missing_expected = sorted(expected_canonicals - extracted_canonicals)
+++                        missing_expected_str = ",".join(missing_expected)
++                         filing_row = {
++                             "doc_id": doc_id,
++                             "accession": accession,
++@@ -1677,6 +1903,7 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
++                             "n_items_extracted": len(items),
++                             "items_extracted": ",".join(item_ids_ordered),
++                             "missing_core_items": missing_core_items_str,
+++                            "missing_expected_canonicals": missing_expected_str,
++                             "any_warn": filing_any_warn,
++                             "any_fail": filing_any_fail,
++                             "filing_exclusion_reason": filing_exclusion_reason,
++@@ -1785,137 +2012,186 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
++ 
++         csv.field_size_limit(10**7)
++         manifest_rows = _read_csv_rows(config.manifest_filings_path)
++-        pass_rows: list[dict[str, object]] = []
++-        warning_rows: list[dict[str, object]] = []
++-        fail_rows: list[dict[str, object]] = []
++-        not_failed_rows: list[dict[str, object]] = []
+++        items_by_doc_id: dict[str, list[dict[str, object]]] = defaultdict(list)
+++        with config.manifest_items_path.open(
+++            "r", newline="", encoding="utf-8"
+++        ) as manifest_items:
+++            reader = csv.DictReader(manifest_items)
+++            for row in reader:
+++                doc_id = str(row.get("doc_id") or "")
+++                if doc_id:
+++                    items_by_doc_id[doc_id].append(row)
+++        metrics_by_doc = _compute_html_metrics(items_by_doc_id)
+++
+++        rows_by_form: dict[str, list[dict[str, object]]] = defaultdict(list)
++         for row in manifest_rows:
++-            status = classify_filing_status(row)
++-            if status == STATUS_FAIL:
++-                fail_rows.append(row)
+++            normalized_form = _normalized_form_type(row.get("form"))
+++            if normalized_form not in {"10-K", "10-Q"}:
++                 continue
++-            not_failed_rows.append(row)
++-            if status == STATUS_WARNING:
++-                warning_rows.append(row)
++-            else:
++-                pass_rows.append(row)
+++            row["form"] = normalized_form
+++            rows_by_form[normalized_form].append(row)
++ 
++-        scope_label = config.html_scope
++-        index_rows: list[dict[str, object]] = []
++-        items_by_filing: dict[str, list[dict[str, object]]] = defaultdict(list)
++-
++-        if config.html_scope == "all":
++-            index_rows = not_failed_rows
++-            scope_label = f"all (not failed: {len(index_rows)})"
++-        else:
++-            index_rows = sample_filings_by_status(
++-                manifest_rows,
++-                sample_size=DEFAULT_HTML_SAMPLE_SIZE,
++-                seed=config.sample_seed,
++-                weights=config.html_sample_weights,
++-            )
++-            scope_label = f"sample ({len(index_rows)})"
++-
++-        selected_doc_ids = {str(row.get("doc_id") or "") for row in index_rows}
++-        items_source = config.manifest_items_path
+++        form_entries: list[dict[str, object]] = []
+++        weights = normalize_sample_weights(config.html_sample_weights)
+++        weights_label = (
+++            f"{STATUS_PASS}={weights.get(STATUS_PASS, 0):.2f}, "
+++            f"{STATUS_WARNING}={weights.get(STATUS_WARNING, 0):.2f}, "
+++            f"{STATUS_FAIL}={weights.get(STATUS_FAIL, 0):.2f}"
+++        )
+++        for normalized_form in sorted(rows_by_form):
+++            form_rows = rows_by_form[normalized_form]
+++            eligible_rows = [
+++                row
+++                for row in form_rows
+++                if _passes_html_filters(
+++                    row,
+++                    metrics_by_doc=metrics_by_doc,
+++                    min_total_chars=config.html_min_total_chars,
+++                    min_largest_item_chars=config.html_min_largest_item_chars,
+++                    min_largest_item_chars_pct_total=config.html_min_largest_item_chars_pct_total,
+++                )
+++            ]
+++            pass_rows = [row for row in eligible_rows if classify_filing_status(row) == STATUS_PASS]
+++            warning_rows = [
+++                row for row in eligible_rows if classify_filing_status(row) == STATUS_WARNING
+++            ]
+++            fail_rows = [row for row in eligible_rows if classify_filing_status(row) == STATUS_FAIL]
+++            not_failed_rows = [
+++                row for row in eligible_rows if classify_filing_status(row) != STATUS_FAIL
+++            ]
+++
+++            if config.html_scope == "all":
+++                index_rows = not_failed_rows
+++                scope_label = f"all (not failed: {len(index_rows)})"
+++            else:
+++                index_rows = sample_filings_by_status(
+++                    eligible_rows,
+++                    sample_size=DEFAULT_HTML_SAMPLE_SIZE,
+++                    seed=config.sample_seed,
+++                    weights=config.html_sample_weights,
+++                )
+++                scope_label = f"sample ({len(index_rows)})"
++ 
++-        if selected_doc_ids:
++-            with items_source.open("r", newline="", encoding="utf-8") as manifest_items:
++-                reader = csv.DictReader(manifest_items)
++-                for row in reader:
++-                    doc_id = str(row.get("doc_id") or "")
++-                    if doc_id in selected_doc_ids:
++-                        items_by_filing[doc_id].append(row)
+++            selected_doc_ids = {str(row.get("doc_id") or "") for row in index_rows}
+++            items_by_filing: dict[str, list[dict[str, object]]] = defaultdict(list)
+++            if selected_doc_ids:
+++                for doc_id in selected_doc_ids:
+++                    items_by_filing[doc_id] = list(items_by_doc_id.get(doc_id, []))
++ 
++-        index_rows_by_doc_id = {
++-            str(row.get("doc_id") or ""): row for row in index_rows if row.get("doc_id")
++-        }
++-        normalized_by_doc_id: dict[str, str] = {}
++-        assets_root = config.html_out / "assets"
++-        filing_assets_dir = assets_root / "filings"
++-        item_assets_dir = assets_root / "items"
++-
++-        if selected_doc_ids:
++-            filing_assets_dir.mkdir(parents=True, exist_ok=True)
++-            item_assets_dir.mkdir(parents=True, exist_ok=True)
++-            accession_lookup = {
++-                str(row.get("doc_id") or ""): str(row.get("accession") or "")
+++            index_rows_by_doc_id = {
+++                str(row.get("doc_id") or ""): row
++                 for row in index_rows
+++                if row.get("doc_id")
++             }
++-            for entry in iter_parquet_filing_texts(
++-                config.parquet_dir, selected_doc_ids, batch_size=config.batch_size
++-            ):
++-                doc_id = entry.get("doc_id") or ""
++-                if not doc_id:
++-                    continue
++-                full_text = entry.get("full_text") or ""
++-                if not full_text:
++-                    continue
++-                accession = accession_lookup.get(doc_id) or entry.get("accession", "")
++-                normalized = normalize_extractor_body(full_text)
++-                normalized_by_doc_id[doc_id] = normalized
++-                asset_name = f"{_safe_slug(doc_id)}_{_safe_slug(accession)}.txt"
++-                asset_rel = f"assets/filings/{asset_name}"
++-                (filing_assets_dir / asset_name).write_text(normalized, encoding="utf-8")
++-                row = index_rows_by_doc_id.get(doc_id)
++-                if row is not None:
++-                    row["filing_text_asset"] = asset_rel
++-                    row["filing_text_preview"] = _truncate_text(
++-                        normalized, limit=DEFAULT_HTML_FILING_PREVIEW_CHARS
++-                    )
+++            normalized_by_doc_id: dict[str, str] = {}
+++            form_out_dir = config.html_out / normalized_form
+++            assets_root = form_out_dir / "assets"
+++            filing_assets_dir = assets_root / "filings"
+++            item_assets_dir = assets_root / "items"
+++
+++            if selected_doc_ids:
+++                filing_assets_dir.mkdir(parents=True, exist_ok=True)
+++                item_assets_dir.mkdir(parents=True, exist_ok=True)
+++                accession_lookup = {
+++                    str(row.get("doc_id") or ""): str(row.get("accession") or "")
+++                    for row in index_rows
+++                }
+++                for entry in iter_parquet_filing_texts(
+++                    config.parquet_dir, selected_doc_ids, batch_size=config.batch_size
+++                ):
+++                    doc_id = entry.get("doc_id") or ""
+++                    if not doc_id:
+++                        continue
+++                    full_text = entry.get("full_text") or ""
+++                    if not full_text:
+++                        continue
+++                    accession = accession_lookup.get(doc_id) or entry.get("accession", "")
+++                    normalized = normalize_extractor_body(full_text)
+++                    normalized_by_doc_id[doc_id] = normalized
+++                    asset_name = f"{_safe_slug(doc_id)}_{_safe_slug(accession)}.txt"
+++                    asset_rel = f"assets/filings/{asset_name}"
+++                    (filing_assets_dir / asset_name).write_text(normalized, encoding="utf-8")
+++                    row = index_rows_by_doc_id.get(doc_id)
+++                    if row is not None:
+++                        row["filing_text_asset"] = asset_rel
+++                        row["filing_text_preview"] = _truncate_text(
+++                            normalized, limit=DEFAULT_HTML_FILING_PREVIEW_CHARS
+++                        )
++ 
++-            for doc_id, items in items_by_filing.items():
++-                normalized = normalized_by_doc_id.get(doc_id)
++-                if not normalized:
++-                    continue
++-                row_accession = str(
++-                    index_rows_by_doc_id.get(doc_id, {}).get("accession") or ""
++-                )
++-                for item in items:
++-                    accession = str(item.get("accession") or row_accession)
++-                    item_part = str(item.get("item_part") or "")
++-                    item_id = str(item.get("item_id") or "")
++-                    content_start = _parse_int(item.get("content_start"), default=-1)
++-                    content_end = _parse_int(item.get("content_end"), default=-1)
++-                    if content_start < 0 or content_end <= content_start:
+++                for doc_id, items in items_by_filing.items():
+++                    normalized = normalized_by_doc_id.get(doc_id)
+++                    if not normalized:
++                         continue
++-                    item_text = normalized[content_start:content_end]
++-                    item_name = (
++-                        f"{_safe_slug(doc_id)}_{_safe_slug(accession)}_"
++-                        f"{_safe_slug(item_part)}_{_safe_slug(item_id)}_"
++-                        f"{content_start}_{content_end}.txt"
++-                    ).strip("_")
++-                    item_rel = f"assets/items/{item_name}"
++-                    (item_assets_dir / item_name).write_text(item_text, encoding="utf-8")
++-                    item["item_text_asset"] = item_rel
++-                    item["item_text_preview"] = _truncate_text(
++-                        item_text, limit=DEFAULT_HTML_ITEM_PREVIEW_CHARS
+++                    row_accession = str(
+++                        index_rows_by_doc_id.get(doc_id, {}).get("accession") or ""
++                     )
+++                    for item in items:
+++                        accession = str(item.get("accession") or row_accession)
+++                        item_part = str(item.get("item_part") or "")
+++                        item_id = str(item.get("item_id") or "")
+++                        content_start = _parse_int(item.get("content_start"), default=-1)
+++                        content_end = _parse_int(item.get("content_end"), default=-1)
+++                        if content_start < 0 or content_end <= content_start:
+++                            continue
+++                        item_text = normalized[content_start:content_end]
+++                        item_name = (
+++                            f"{_safe_slug(doc_id)}_{_safe_slug(accession)}_"
+++                            f"{_safe_slug(item_part)}_{_safe_slug(item_id)}_"
+++                            f"{content_start}_{content_end}.txt"
+++                        ).strip("_")
+++                        item_rel = f"assets/items/{item_name}"
+++                        (item_assets_dir / item_name).write_text(item_text, encoding="utf-8")
+++                        item["item_text_asset"] = item_rel
+++                        item["item_text_preview"] = _truncate_text(
+++                            item_text, limit=DEFAULT_HTML_ITEM_PREVIEW_CHARS
+++                        )
++ 
++-        weights = normalize_sample_weights(config.html_sample_weights)
++-        weights_label = (
++-            f"{STATUS_PASS}={weights.get(STATUS_PASS, 0):.2f}, "
++-            f"{STATUS_WARNING}={weights.get(STATUS_WARNING, 0):.2f}, "
++-            f"{STATUS_FAIL}={weights.get(STATUS_FAIL, 0):.2f}"
++-        )
++-        metadata = {
+++            metadata = {
+++                "pass_definition": "any_fail == False and filing_exclusion_reason is empty",
+++                "total_filings": len(eligible_rows),
+++                "total_items": sum(
+++                    _parse_int(row.get("n_items_extracted"), default=0)
+++                    for row in eligible_rows
+++                ),
+++                "total_pass_filings": len(pass_rows),
+++                "total_warning_filings": len(warning_rows),
+++                "total_fail_filings": len(fail_rows),
+++                "sample_size": len(index_rows),
+++                "sample_weights": weights_label,
+++                "generated_at": datetime.now().isoformat(timespec="seconds"),
+++                "offset_basis": OFFSET_BASIS_EXTRACTOR_BODY,
+++            }
+++            write_html_audit(
+++                index_rows=index_rows,
+++                items_by_filing=items_by_filing,
+++                out_dir=form_out_dir,
+++                scope_label=scope_label,
+++                metadata=metadata,
+++            )
+++            form_entries.append(
+++                {
+++                    "form": normalized_form,
+++                    "index_path": f"{normalized_form}/index.html",
+++                    "total_filings": len(eligible_rows),
+++                    "pass_count": len(pass_rows),
+++                    "warn_count": len(warning_rows),
+++                    "fail_count": len(fail_rows),
+++                    "scope": scope_label,
+++                }
+++            )
+++
+++        root_metadata = {
++             "pass_definition": "any_fail == False and filing_exclusion_reason is empty",
++             "total_filings": total_filings,
++             "total_items": total_items,
++-            "total_pass_filings": len(pass_rows),
++-            "total_warning_filings": len(warning_rows),
++-            "total_fail_filings": len(fail_rows),
++-            "sample_size": len(index_rows),
++             "sample_weights": weights_label,
++             "generated_at": datetime.now().isoformat(timespec="seconds"),
++             "offset_basis": OFFSET_BASIS_EXTRACTOR_BODY,
++         }
++-        write_html_audit(
++-            index_rows=index_rows,
++-            items_by_filing=items_by_filing,
+++        write_html_audit_root_index(
+++            form_entries=form_entries,
++             out_dir=config.html_out,
++-            scope_label=scope_label,
++-            metadata=metadata,
+++            metadata=root_metadata,
++         )
++         print(f"HTML audit written to {config.html_out / 'index.html'}")
++ 
++@@ -2016,7 +2292,7 @@ def run_boundary_regression(config: RegressionConfig) -> dict[str, int]:
++                 seen_doc_ids.add(doc_id)
++                 form_type = row.get("document_type_filename")
++                 normalized_form = _normalized_form_type(form_type)
++-                if normalized_form != "10-K":
+++                if normalized_form not in {"10-K", "10-Q"}:
++                     continue
++ 
++                 total_filings += 1
++@@ -2606,6 +2882,30 @@ def _build_parser() -> tuple[argparse.ArgumentParser, argparse.ArgumentParser]:
++         default=",".join(DEFAULT_CORE_ITEMS),
++         help="Comma-separated core item IDs for missing_core_items.",
++     )
+++    scan.add_argument(
+++        "--target-set",
+++        type=str,
+++        default=None,
+++        help="Restrict WARN/FAIL and missing-items to a target set (e.g., cohen2020).",
+++    )
+++    scan.add_argument(
+++        "--html-min-total-chars",
+++        type=int,
+++        default=None,
+++        help="Minimum total extracted chars for filings included in HTML audit.",
+++    )
+++    scan.add_argument(
+++        "--html-min-largest-item-chars",
+++        type=int,
+++        default=None,
+++        help="Minimum largest-item length for filings included in HTML audit.",
+++    )
+++    scan.add_argument(
+++        "--html-min-largest-item-chars-pct-total",
+++        type=float,
+++        default=None,
+++        help="Minimum largest-item share of total chars for HTML audit.",
+++    )
++     scan.set_defaults(
++         emit_manifest=True,
++         emit_html=True,
++@@ -2670,9 +2970,13 @@ def main(argv: list[str] | None = None) -> None:
++             sample_pass=args.sample_pass,
++             sample_seed=args.seed,
++             core_items=_parse_core_items_arg(args.core_items),
+++            target_set=_normalize_target_set(args.target_set),
++             emit_html=args.emit_html,
++             html_out=args.html_out,
++             html_scope=args.html_scope,
+++            html_min_total_chars=args.html_min_total_chars,
+++            html_min_largest_item_chars=args.html_min_largest_item_chars,
+++            html_min_largest_item_chars_pct_total=args.html_min_largest_item_chars_pct_total,
++         )
++         run_boundary_diagnostics(config)
++         return
++diff --git a/tests/test_html_audit_multiform.py b/tests/test_html_audit_multiform.py
++new file mode 100644
++index 0000000..cdb27b8
++--- /dev/null
+++++ b/tests/test_html_audit_multiform.py
++@@ -0,0 +1,152 @@
+++from __future__ import annotations
+++
+++from pathlib import Path
+++
+++from thesis_pkg.core.sec.html_audit import (
+++    write_html_audit,
+++    write_html_audit_root_index,
+++)
+++
+++
+++def _metadata(total_filings: int) -> dict[str, object]:
+++    return {
+++        "pass_definition": "any_fail == False and filing_exclusion_reason is empty",
+++        "total_filings": total_filings,
+++        "total_items": total_filings,
+++        "total_pass_filings": total_filings,
+++        "sample_size": total_filings,
+++        "generated_at": "2026-02-02T12:00:00",
+++        "offset_basis": "extractor_body",
+++    }
+++
+++
+++def test_html_audit_root_index_and_forms(tmp_path: Path) -> None:
+++    out_dir = tmp_path / "html_audit"
+++    doc_k = "0000000001:000000000123456789"
+++    doc_q = "0000000002:000000000223456789"
+++    index_rows_k = [
+++        {
+++            "doc_id": doc_k,
+++            "accession": "000000000123456789",
+++            "cik": "0000000001",
+++            "form": "10-K",
+++            "filing_date": "2023-01-01",
+++            "period_end": "2022-12-31",
+++            "n_items_extracted": "1",
+++            "items_extracted": "1",
+++            "missing_core_items": "",
+++            "any_warn": "False",
+++            "any_fail": "False",
+++            "filing_exclusion_reason": "",
+++        }
+++    ]
+++    index_rows_q = [
+++        {
+++            "doc_id": doc_q,
+++            "accession": "000000000223456789",
+++            "cik": "0000000002",
+++            "form": "10-Q",
+++            "filing_date": "2023-01-01",
+++            "period_end": "2022-12-31",
+++            "n_items_extracted": "1",
+++            "items_extracted": "I:1",
+++            "missing_core_items": "",
+++            "any_warn": "False",
+++            "any_fail": "False",
+++            "filing_exclusion_reason": "",
+++        }
+++    ]
+++    items_by_filing_k = {doc_k: [{"item_part": "I", "item_id": "1", "item": "I:1"}]}
+++    items_by_filing_q = {doc_q: [{"item_part": "I", "item_id": "1", "item": "I:1"}]}
+++
+++    write_html_audit(
+++        index_rows=index_rows_k,
+++        items_by_filing=items_by_filing_k,
+++        out_dir=out_dir / "10-K",
+++        scope_label="sample (1)",
+++        metadata=_metadata(total_filings=1),
+++    )
+++    write_html_audit(
+++        index_rows=index_rows_q,
+++        items_by_filing=items_by_filing_q,
+++        out_dir=out_dir / "10-Q",
+++        scope_label="sample (1)",
+++        metadata=_metadata(total_filings=1),
+++    )
+++
+++    write_html_audit_root_index(
+++        form_entries=[
+++            {
+++                "form": "10-K",
+++                "index_path": "10-K/index.html",
+++                "total_filings": 1,
+++                "pass_count": 1,
+++                "warn_count": 0,
+++                "fail_count": 0,
+++                "scope": "sample (1)",
+++            },
+++            {
+++                "form": "10-Q",
+++                "index_path": "10-Q/index.html",
+++                "total_filings": 1,
+++                "pass_count": 1,
+++                "warn_count": 0,
+++                "fail_count": 0,
+++                "scope": "sample (1)",
+++            },
+++        ],
+++        out_dir=out_dir,
+++        metadata=_metadata(total_filings=2),
+++    )
+++
+++    assert (out_dir / "index.html").exists()
+++    assert (out_dir / "10-K" / "index.html").exists()
+++    assert (out_dir / "10-Q" / "index.html").exists()
+++    index_text = (out_dir / "index.html").read_text(encoding="utf-8")
+++    assert "10-K/index.html" in index_text
+++    assert "10-Q/index.html" in index_text
+++
+++
+++def test_non_target_item_still_rendered(tmp_path: Path) -> None:
+++    out_dir = tmp_path / "html_audit"
+++    doc_id = "0000000003:000000000323456789"
+++    index_rows = [
+++        {
+++            "doc_id": doc_id,
+++            "accession": "000000000323456789",
+++            "cik": "0000000003",
+++            "form": "10-Q",
+++            "filing_date": "2023-01-01",
+++            "period_end": "2022-12-31",
+++            "n_items_extracted": "1",
+++            "items_extracted": "II:2",
+++            "missing_core_items": "",
+++            "missing_expected_canonicals": "",
+++            "any_warn": "False",
+++            "any_fail": "False",
+++            "filing_exclusion_reason": "",
+++        }
+++    ]
+++    items_by_filing = {
+++        doc_id: [
+++            {
+++                "item_part": "II",
+++                "item_id": "2",
+++                "item": "II:2",
+++                "counts_for_target": False,
+++            }
+++        ]
+++    }
+++    write_html_audit(
+++        index_rows=index_rows,
+++        items_by_filing=items_by_filing,
+++        out_dir=out_dir / "10-Q",
+++        scope_label="sample (1)",
+++        metadata=_metadata(total_filings=1),
+++    )
+++    filing_path = out_dir / "10-Q" / "filings"
+++    html_files = list(filing_path.glob("*.html"))
+++    assert html_files
+++    html_text = html_files[0].read_text(encoding="utf-8")
+++    assert "II:2" in html_text
+++    assert "PASS" in html_text
++diff --git a/tests/test_target_set_diagnostics.py b/tests/test_target_set_diagnostics.py
++new file mode 100644
++index 0000000..1e3a73d
++--- /dev/null
+++++ b/tests/test_target_set_diagnostics.py
++@@ -0,0 +1,52 @@
+++from __future__ import annotations
+++
+++from datetime import date
+++
+++from thesis_pkg.core.sec.suspicious_boundary_diagnostics import (
+++    _expected_canonical_items,
+++    _item_counts_for_target,
+++)
+++
+++
+++def test_target_set_excludes_non_target_warn() -> None:
+++    canonical = "II:2_CHANGES_IN_SECURITIES_AND_USE_OF_PROCEEDS"
+++    assert (
+++        _item_counts_for_target(
+++            canonical,
+++            normalized_form="10-Q",
+++            target_set="cohen2020_common",
+++        )
+++        is False
+++    )
+++
+++
+++def test_missing_items_regime_driven_with_target_set() -> None:
+++    filing_date = date(2024, 2, 1)
+++    period_end = date(2023, 12, 31)
+++    expected_core = _expected_canonical_items(
+++        normalized_form="10-K",
+++        filing_date=filing_date,
+++        period_end=period_end,
+++        target_set=None,
+++    )
+++    expected_target = _expected_canonical_items(
+++        normalized_form="10-K",
+++        filing_date=filing_date,
+++        period_end=period_end,
+++        target_set="cohen2020_common",
+++    )
+++    assert "I:1A_RISK_FACTORS" in expected_core
+++    assert "II:7_MDA" in expected_target
+++    missing_core = expected_core - {"I:1A_RISK_FACTORS"}
+++    missing_target = expected_target - {"I:1A_RISK_FACTORS"}
+++    assert missing_core != missing_target
+++
+++
+++def test_expected_canonical_excludes_not_in_form() -> None:
+++    expected = _expected_canonical_items(
+++        normalized_form="10-Q",
+++        filing_date=date(1995, 1, 1),
+++        period_end=None,
+++        target_set=None,
+++    )
+++    assert "I:3_NOT_IN_FORM_PRE_EFFECTIVE" not in expected
+diff --git a/run_diagnostics.py b/run_diagnostics.py
+index d47aa52..89214f3 100644
+--- a/run_diagnostics.py
++++ b/run_diagnostics.py
+@@ -167,6 +167,20 @@ def parse_args() -> argparse.Namespace:
+         default=None,
+         help="Minimum largest-item share of total chars for HTML audit.",
+     )
++    parser.add_argument(
++        "--extraction-regime",
++        type=str,
++        default="legacy",
++        choices=("legacy", "v2"),
++        help="Extraction regime to use (default: legacy).",
++    )
++    parser.add_argument(
++        "--diagnostics-regime",
++        type=str,
++        default="legacy",
++        choices=("legacy", "v2"),
++        help="Diagnostics regime to use (default: legacy).",
++    )
+     parser.set_defaults(
+         emit_manifest=True,
+         emit_html=True,
+@@ -215,6 +229,8 @@ def main() -> None:
+         html_min_total_chars=args.html_min_total_chars,
+         html_min_largest_item_chars=args.html_min_largest_item_chars,
+         html_min_largest_item_chars_pct_total=args.html_min_largest_item_chars_pct_total,
++        extraction_regime=args.extraction_regime,
++        diagnostics_regime=args.diagnostics_regime,
+     )
+     run_boundary_diagnostics(config)
+ 
+diff --git a/src/thesis_pkg/core/sec/extraction.py b/src/thesis_pkg/core/sec/extraction.py
+index bb47fc8..fd553f9 100644
+--- a/src/thesis_pkg/core/sec/extraction.py
++++ b/src/thesis_pkg/core/sec/extraction.py
+@@ -2,7 +2,9 @@ from __future__ import annotations
+ 
+ import re
+ from bisect import bisect_right
++from dataclasses import dataclass, replace
+ from datetime import date, datetime
++from typing import Literal
+ 
+ from . import embedded_headings
+ from .extraction_utils import _ItemBoundary
+@@ -57,6 +59,7 @@ from .patterns import (
+     PART_MARKER_PATTERN,
+     PART_LINESTART_PATTERN,
+     ITEM_CANDIDATE_PATTERN,
++    COMBINED_PART_ITEM_PATTERN,
+ )
+ from .utilities import (
+     _normalize_newlines,
+@@ -66,6 +69,15 @@ from .utilities import (
+ 
+ HEADER_SEARCH_LIMIT_DEFAULT = 5000
+ 
++
++@dataclass(frozen=True)
++class _PartMarker:
++    start: int
++    part: str
++    line_index: int
++    high_confidence: bool
++
++
+ def _strip_leading_header_block(full_text: str) -> str:
+     """
+     Remove the synthetic <Header>...</Header> block when present.
+@@ -139,6 +151,81 @@ def _extract_fallback_items_10k(
+ 
+     return boundaries
+ 
++
++def _scan_part_markers_v2(
++    lines: list[str],
++    line_starts: list[int],
++    *,
++    allowed_parts: set[str],
++    scan_sparse_layout: bool,
++    toc_mask: set[int],
++) -> list[_PartMarker]:
++    markers: list[_PartMarker] = []
++    for i, line in enumerate(lines):
++        if not line:
++            continue
++        if i in toc_mask:
++            continue
++
++        matches: list[re.Match[str]] = []
++        if scan_sparse_layout:
++            matches = list(PART_MARKER_PATTERN.finditer(line))
++        else:
++            match = PART_LINESTART_PATTERN.match(line)
++            if match is not None:
++                matches = [match]
++
++        for match in matches:
++            part = match.group("part").upper()
++            if part not in allowed_parts:
++                continue
++            prefix = line[: match.start()]
++            if prefix.strip() and not _prefix_is_bullet(prefix):
++                continue
++            high_confidence = _part_marker_is_heading(line, match)
++            if not high_confidence and scan_sparse_layout and match.start() == 0:
++                if ITEM_WORD_PATTERN.search(line) and not _looks_like_toc_heading_line(lines, i):
++                    high_confidence = True
++            if not high_confidence:
++                continue
++            markers.append(
++                _PartMarker(
++                    start=line_starts[i] + match.start(),
++                    part=part,
++                    line_index=i,
++                    high_confidence=high_confidence,
++                )
++            )
++
++    return markers
++
++
++def _apply_part_by_position_v2(
++    boundaries: list[_ItemBoundary],
++    part_markers: list[_PartMarker],
++) -> list[_ItemBoundary]:
++    if not boundaries or not part_markers:
++        return boundaries
++    markers = sorted(
++        [marker for marker in part_markers if marker.high_confidence],
++        key=lambda marker: marker.start,
++    )
++    if not markers:
++        return boundaries
++    marker_starts = [marker.start for marker in markers]
++    updated: list[_ItemBoundary] = []
++    for boundary in boundaries:
++        if boundary.item_part is not None:
++            updated.append(boundary)
++            continue
++        idx = bisect_right(marker_starts, boundary.start) - 1
++        if idx >= 0:
++            updated.append(replace(boundary, item_part=markers[idx].part))
++        else:
++            updated.append(boundary)
++    return updated
++
++
+ def extract_filing_items(
+     full_text: str,
+     *,
+@@ -150,6 +237,7 @@ def extract_filing_items(
+     diagnostics: bool = False,
+     repair_boundaries: bool = True,
+     max_item_number: int = 20,
++    extraction_regime: Literal["legacy", "v2"] = "legacy",
+ ) -> list[dict[str, str | bool | None]]:
+     """
+     Extract filing item sections from `full_text`.
+@@ -166,6 +254,7 @@ def extract_filing_items(
+       - _heading_start/_heading_end/_content_start/_content_end offsets in extractor body when diagnostics=True
+       - when drop_impossible=True, items with exists_by_regime == False are dropped
+       - when repair_boundaries=True, high-confidence end-boundary truncation is applied
++      - extraction_regime controls legacy vs v2-only behaviors (default legacy)
+ 
+     The function does not emit TOC rows; TOC is only used internally to avoid false starts.
+     """
+@@ -268,6 +357,15 @@ def extract_filing_items(
+         boundaries = []
+         current_part: str | None = None
+         toc_part: str | None = None
++        part_markers: list[_PartMarker] = []
++        if extraction_regime == "v2" and is_10q:
++            part_markers = _scan_part_markers_v2(
++                lines,
++                line_starts,
++                allowed_parts=allowed_parts,
++                scan_sparse_layout=scan_sparse_layout,
++                toc_mask=toc_mask,
++            )
+ 
+         # Build candidates by scanning lines in order while tracking PART markers within each line.
+         for i, line in enumerate(lines):
+@@ -282,6 +380,113 @@ def extract_filing_items(
+             events: list[tuple[int, str, str | None, re.Match[str] | None]] = []
+             line_has_item_word = ITEM_WORD_PATTERN.search(line) is not None
+ 
++            combined_match = (
++                COMBINED_PART_ITEM_PATTERN.match(line) if extraction_regime == "v2" else None
++            )
++            if combined_match:
++                part = combined_match.group("part").upper()
++                if part in allowed_parts:
++                    item_match = ITEM_CANDIDATE_PATTERN.search(
++                        line,
++                        combined_match.start("item"),
++                    )
++                    if item_match and item_match.start() == combined_match.start("item"):
++                        item_id, content_adjust = _normalize_item_match(
++                            line,
++                            item_match,
++                            is_10k=is_10k,
++                            max_item=max_item_number,
++                        )
++                        if item_id is not None and item_id != "16":
++                            prefix = line[: item_match.start()]
++                            if not _prefix_looks_like_cross_ref(prefix):
++                                suffix = line[item_match.end() : item_match.end() + 64]
++                                if not re.search(r"(?i)^\s*[\(\[]?\s*continued\b", suffix):
++                                    if not re.match(
++                                        r"(?i)^\s*[\(\[]\s*[a-z0-9]",
++                                        suffix,
++                                    ):
++                                        is_toc_marker = TOC_MARKER_PATTERN.search(line) is not None
++                                        item_word_count = 0
++                                        if i < 800 or is_toc_marker or line_in_toc_range:
++                                            item_word_count = len(
++                                                ITEM_WORD_PATTERN.findall(line)
++                                            )
++                                        line_toc_like = _looks_like_toc_heading_line(lines, i)
++                                        if (
++                                            item_word_count >= 3
++                                            and len(line) <= 5_000
++                                            and (i < 800 or is_toc_marker or line_in_toc_range)
++                                        ):
++                                            line_toc_like = True
++                                        if (
++                                            is_toc_marker
++                                            and item_word_count >= 1
++                                            and len(line) <= 8_000
++                                        ):
++                                            line_toc_like = True
++                                        content_after = False
++                                        if line_in_toc_range or toc_window_flags[i]:
++                                            content_after = _has_content_after(
++                                                lines,
++                                                i,
++                                                toc_cache=toc_cache,
++                                                toc_window_flags=toc_window_flags,
++                                            )
++                                        toc_window_like = False
++                                        if not line_toc_like:
++                                            if embedded_headings._toc_candidate_line(line):
++                                                line_toc_like = True
++                                            elif toc_window_flags[i] and not content_after:
++                                                if not (
++                                                    scan_sparse_layout and len(line) > 2_000
++                                                ):
++                                                    line_toc_like = True
++                                                    toc_window_like = True
++                                        compound_line = _line_has_compound_items(line)
++                                        title_match = is_10k and _heading_title_matches_item(
++                                            item_id, line, item_match
++                                        )
++                                        confidence = HEADING_CONF_HIGH
++                                        if is_10k and not title_match and _heading_suffix_looks_like_prose(
++                                            line[item_match.end() :]
++                                        ):
++                                            confidence = min(confidence, HEADING_CONF_MED)
++                                        if compound_line:
++                                            confidence = min(confidence, HEADING_CONF_LOW)
++                                        if _pageish_line(line):
++                                            confidence = min(confidence, HEADING_CONF_LOW)
++                                        candidate_toc_like = line_toc_like
++                                        if (
++                                            candidate_toc_like
++                                            and toc_window_like
++                                            and scan_sparse_layout
++                                            and item_match.start()
++                                            > embedded_headings.EMBEDDED_TOC_START_EARLY_MAX_CHAR
++                                        ):
++                                            candidate_toc_like = False
++                                        boundaries.append(
++                                            _ItemBoundary(
++                                                start=line_starts[i] + item_match.start(),
++                                                content_start=(
++                                                    line_starts[i]
++                                                    + item_match.end()
++                                                    + content_adjust
++                                                ),
++                                                item_part=part,
++                                                item_id=item_id,
++                                                line_index=i,
++                                                confidence=confidence,
++                                                in_toc_range=(
++                                                    line_in_toc_range and not content_after
++                                                ),
++                                                toc_like_line=candidate_toc_like,
++                                            )
++                                        )
++                                        if not line_in_toc_range:
++                                            current_part = part
++                                        continue
++
+             if scan_sparse_layout:
+                 for m in PART_MARKER_PATTERN.finditer(line):
+                     if not _part_marker_is_heading(line, m):
+@@ -466,6 +671,9 @@ def extract_filing_items(
+     if not boundaries:
+         return []
+ 
++    if extraction_regime == "v2" and is_10q:
++        boundaries = _apply_part_by_position_v2(boundaries, part_markers)
++
+     boundaries, selection_meta = _select_best_boundaries(
+         boundaries,
+         lines=lines,
+diff --git a/src/thesis_pkg/core/sec/patterns.py b/src/thesis_pkg/core/sec/patterns.py
+index aafda80..2b77519 100644
+--- a/src/thesis_pkg/core/sec/patterns.py
++++ b/src/thesis_pkg/core/sec/patterns.py
+@@ -52,6 +52,12 @@ ITEM_CANDIDATE_PATTERN = re.compile(
+     r"\bITEM\s+(?P<num>\d+|[IVXLCDM]+)(?P<let>[A-Z])?\s*[\.:]?",
+     re.IGNORECASE,
+ )
++COMBINED_PART_ITEM_PATTERN = re.compile(
++    r"^[ \t\-\*\u2022\u00b7\u2013\u2014]*"
++    r"PART\s+(?P<part>IV|III|II|I)\s*[,:\-\u2013\u2014]+\s*"
++    r"(?P<item>ITEM\s+(?P<num>\d+|[IVXLCDM]+)(?P<let>[A-Z])?\s*[\.:]?)",
++    re.IGNORECASE,
++)
+ ITEM_LINESTART_PATTERN = re.compile(
+     r"^\s*(?:PART\s+[IVXLCDM]+\s*[:\-]?\s*)?ITEM\s+(?P<num>\d+|[IVXLCDM]+)"
+     r"(?P<let>[A-Z])?(?=\b|(?-i:[A-Z]))",
+diff --git a/src/thesis_pkg/core/sec/suspicious_boundary_diagnostics.py b/src/thesis_pkg/core/sec/suspicious_boundary_diagnostics.py
+index 26ab635..2a71752 100644
+--- a/src/thesis_pkg/core/sec/suspicious_boundary_diagnostics.py
++++ b/src/thesis_pkg/core/sec/suspicious_boundary_diagnostics.py
+@@ -8,9 +8,10 @@ import re
+ import sys
+ from collections import Counter, defaultdict
+ from contextlib import ExitStack
+-from dataclasses import dataclass
++from dataclasses import dataclass, replace
+ from datetime import date, datetime
+ from pathlib import Path
++from typing import Literal
+ 
+ import polars as pl
+ import pyarrow as pa
+@@ -113,6 +114,7 @@ PREFIX_KIND_BLANK = "blank"
+ PREFIX_KIND_PART_ONLY = "part_only"
+ PREFIX_KIND_BULLET = "bullet"
+ PREFIX_KIND_TEXTUAL = "textual"
++EMBEDDED_WARN_CLUSTER_MIN = 2
+ 
+ DEFAULT_PARQUET_DIR = Path(
+     r"C:\Users\erik9\Documents\SEC_Data\Data\Sample_Filings\parquet_batches"
+@@ -324,6 +326,8 @@ class DiagnosticsConfig:
+     html_min_total_chars: int | None = None
+     html_min_largest_item_chars: int | None = None
+     html_min_largest_item_chars_pct_total: float | None = None
++    extraction_regime: Literal["legacy", "v2"] = "legacy"
++    diagnostics_regime: Literal["legacy", "v2"] = "legacy"
+ 
+ 
+ @dataclass(frozen=True)
+@@ -621,6 +625,119 @@ def _expected_canonical_items(
+     return expected
+ 
+ 
++def _expected_item_tokens_from_canonicals(
++    canonicals: set[str],
++) -> tuple[set[str], set[str]]:
++    item_ids: set[str] = set()
++    parts: set[str] = set()
++    for canonical in canonicals:
++        if not canonical:
++            continue
++        head = canonical.split("_", 1)[0]
++        if ":" in head:
++            part, item_id = head.split(":", 1)
++            if part:
++                parts.add(part.upper())
++            if item_id:
++                item_ids.add(item_id.upper())
++        else:
++            item_ids.add(head.upper())
++    return item_ids, parts
++
++
++def _parse_internal_leak_token(match_text: str) -> tuple[str | None, str | None]:
++    if not match_text:
++        return None, None
++    item_match = re.search(
++        r"(?i)\bITEM\s+(?P<num>\d{1,2})(?P<let>[A-Z])?\b",
++        match_text,
++    )
++    if item_match:
++        return (
++            f"{item_match.group('num')}{item_match.group('let') or ''}".upper(),
++            None,
++        )
++    part_match = re.search(r"(?i)\bPART\s+(?P<roman>[IVX]+)\b", match_text)
++    if part_match:
++        return None, part_match.group("roman").upper()
++    return None, None
++
++
++def _internal_leak_prose_confirmed(text: str, leak_pos: int) -> bool:
++    if not text:
++        return False
++    if leak_pos < 0:
++        return False
++    normalized = _normalize_newlines(text)
++    if leak_pos >= len(normalized):
++        return False
++    lines = normalized.splitlines(keepends=True)
++    lines_noeol = [line.rstrip("\r\n") for line in lines]
++    offset = 0
++    line_idx = None
++    for idx, line in enumerate(lines):
++        next_offset = offset + len(line)
++        if leak_pos < next_offset:
++            line_idx = idx
++            break
++        offset = next_offset
++    if line_idx is None:
++        return False
++    toc_window_flags = _toc_window_flags(lines_noeol)
++    toc_cache: dict[tuple[int, bool], bool] = {}
++    return _confirm_prose_after(lines_noeol, line_idx, toc_cache, toc_window_flags)
++
++
++def _should_escalate_internal_leak_v2(
++    *,
++    leak_info: InternalHeadingLeak,
++    item_full_text: str,
++    next_item_id: str | None,
++    next_part: str | None,
++    expected_item_ids: set[str],
++    expected_parts: set[str],
++) -> bool:
++    leak_item_id, leak_part = _parse_internal_leak_token(leak_info.match_text)
++    next_item_norm = _normalize_item_id(next_item_id)
++    next_part_norm = _normalize_part(next_part)
++    if leak_item_id and next_item_norm and leak_item_id == next_item_norm:
++        return True
++    if leak_part and next_part_norm and leak_part == next_part_norm:
++        return True
++    if leak_item_id and leak_item_id in expected_item_ids:
++        return True
++    if leak_part and leak_part in expected_parts:
++        return True
++    return _internal_leak_prose_confirmed(item_full_text, leak_info.position)
++
++
++def _embedded_warn_v2(hits: list[EmbeddedHeadingHit]) -> bool:
++    if not hits:
++        return False
++    warn_hits = [hit for hit in hits if hit.classification in EMBEDDED_WARN_CLASSIFICATIONS]
++    if not warn_hits:
++        return False
++    non_toc_cross = [
++        hit
++        for hit in warn_hits
++        if hit.classification not in {"toc_row", "cross_ref_line"}
++    ]
++    if non_toc_cross:
++        return True
++    toc_cross = [
++        hit
++        for hit in warn_hits
++        if hit.classification in {"toc_row", "cross_ref_line"}
++    ]
++    if not toc_cross:
++        return False
++    early = any(
++        hit.char_pos <= EMBEDDED_TOC_START_EARLY_MAX_CHAR for hit in toc_cross
++    )
++    clustered = len(toc_cross) >= EMBEDDED_WARN_CLUSTER_MIN
++    return early or clustered
++
++
+ def _canonicals_for_item_keys(
+     normalized_form: str | None,
+     item_keys: set[str],
+@@ -1478,6 +1595,9 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
+                         period_end=period_end,
+                         target_set=target_set,
+                     )
++                    expected_item_ids, expected_parts = _expected_item_tokens_from_canonicals(
++                        expected_canonicals
++                    )
+ 
+                     items = extract_filing_items(
+                         text,
+@@ -1486,6 +1606,7 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
+                         period_end=period_end,
+                         regime=True,
+                         diagnostics=True,
++                        extraction_regime=config.extraction_regime,
+                     )
+                     if not items:
+                         if emit_manifest and manifest_filings_writer:
+@@ -1548,6 +1669,11 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
+                             if item_idx + 1 < len(item_id_sequence)
+                             else None
+                         )
++                        next_part = (
++                            items[item_idx + 1].get("item_part")
++                            if item_idx + 1 < len(items)
++                            else None
++                        )
+                         nearby_slice = item_id_sequence[
+                             item_idx + 1 : item_idx + 1 + EMBEDDED_NEARBY_ITEM_WINDOW
+                         ]
+@@ -1589,6 +1715,16 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
+                         leak_context = ""
+                         leak_next_item_id = ""
+                         leak_next_heading = ""
++                        leak_escalate = True
++                        if leak_info is not None and config.diagnostics_regime == "v2":
++                            leak_escalate = _should_escalate_internal_leak_v2(
++                                leak_info=leak_info,
++                                item_full_text=str(item.get("full_text") or ""),
++                                next_item_id=next_item_id,
++                                next_part=str(next_part or ""),
++                                expected_item_ids=expected_item_ids,
++                                expected_parts=expected_parts,
++                            )
+                         embedded_hits = (
+                             _find_embedded_heading_hits(
+                                 item.get("full_text") or "",
+@@ -1608,6 +1744,8 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
+                             embedded_first_fail,
+                             _embedded_counts,
+                         ) = _summarize_embedded_hits(embedded_hits)
++                        if config.diagnostics_regime == "v2":
++                            embedded_warn = _embedded_warn_v2(embedded_hits)
+                         start_candidates_total += int(item.get("_start_candidates_total") or 0)
+                         start_candidates_toc_rejected_total += int(
+                             item.get("_start_candidates_toc_rejected") or 0
+@@ -1668,7 +1806,8 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
+                             flags.append("dot_leader_heading")
+ 
+                         if leak_info is not None:
+-                            flags.append("internal_heading_leak")
++                            if leak_escalate:
++                                flags.append("internal_heading_leak")
+                             leak_pos = leak_info.position
+                             leak_match = leak_info.match_text
+                             leak_context = leak_info.context
+@@ -2619,6 +2758,159 @@ def _read_csv_rows(path: Path) -> list[dict[str, object]]:
+         return [row for row in reader]
+ 
+ 
++def _summary_stats(values: list[int]) -> dict[str, int]:
++    if not values:
++        return {"min": 0, "p25": 0, "median": 0, "p75": 0, "max": 0}
++    ordered = sorted(values)
++    q1, q2, q3 = _quartile_edges(ordered)
++    return {
++        "min": ordered[0],
++        "p25": q1,
++        "median": q2,
++        "p75": q3,
++        "max": ordered[-1],
++    }
++
++
++def _summarize_compare_metrics(
++    *,
++    manifest_filings: list[dict[str, object]],
++    manifest_items: list[dict[str, object]],
++    flagged_rows: list[dict[str, object]],
++) -> dict[str, object]:
++    status_counts: Counter[str] = Counter()
++    n_items_values: list[int] = []
++    truncated_successor_total = 0
++    truncated_part_total = 0
++    for row in manifest_filings:
++        status_counts[classify_filing_status(row)] += 1
++        n_items_values.append(_parse_int(row.get("n_items_extracted"), default=0))
++        truncated_successor_total += _parse_int(
++            row.get("truncated_successor_total"), default=0
++        )
++        truncated_part_total += _parse_int(row.get("truncated_part_total"), default=0)
++
++    flag_counts: Counter[str] = Counter()
++    for row in flagged_rows:
++        for flag in _split_flags(str(row.get("flags") or "")):
++            flag_counts[flag] += 1
++
++    embedded_fail_counts: Counter[str] = Counter()
++    missing_part_10q = 0
++    for row in manifest_items:
++        if _parse_bool(row.get("embedded_heading_fail")):
++            classification = str(row.get("first_fail_classification") or "")
++            if classification:
++                embedded_fail_counts[classification] += 1
++        if _normalized_form_type(row.get("form")) == "10-Q":
++            if _parse_bool(row.get("item_missing_part")):
++                missing_part_10q += 1
++
++    return {
++        "status_counts": dict(status_counts),
++        "flag_counts": dict(flag_counts),
++        "embedded_fail_counts": dict(embedded_fail_counts),
++        "truncated_successor_total": truncated_successor_total,
++        "truncated_part_total": truncated_part_total,
++        "missing_part_10q": missing_part_10q,
++        "n_items_extracted_summary": _summary_stats(n_items_values),
++    }
++
++
++def _diff_counter(a: dict[str, int], b: dict[str, int]) -> dict[str, int]:
++    keys = set(a) | set(b)
++    return {key: int(b.get(key, 0)) - int(a.get(key, 0)) for key in sorted(keys)}
++
++
++def run_boundary_comparison(
++    base_config: DiagnosticsConfig,
++    *,
++    extraction_regime_b: Literal["legacy", "v2"] = "v2",
++    diagnostics_regime_b: Literal["legacy", "v2"] = "v2",
++    out_dir: Path | None = None,
++) -> dict[str, dict[str, object]]:
++    """
++    Run diagnostics twice (legacy vs v2) on the same inputs and return summary deltas.
++    """
++    base_dir = out_dir or (base_config.out_path.parent / "boundary_compare")
++    base_dir.mkdir(parents=True, exist_ok=True)
++
++    def _build_config(label: str, extraction_regime: str, diagnostics_regime: str) -> DiagnosticsConfig:
++        out_path = base_dir / f"suspicious_{label}.csv"
++        report_path = base_dir / f"suspicious_report_{label}.txt"
++        samples_dir = base_dir / f"samples_{label}"
++        manifest_items_path = base_dir / f"manifest_items_{label}.csv"
++        manifest_filings_path = base_dir / f"manifest_filings_{label}.csv"
++        sample_filings_path = base_dir / f"sample_filings_{label}.csv"
++        sample_items_path = base_dir / f"sample_items_{label}.csv"
++        html_out = base_dir / f"html_{label}"
++        return replace(
++            base_config,
++            out_path=out_path,
++            report_path=report_path,
++            samples_dir=samples_dir,
++            manifest_items_path=manifest_items_path,
++            manifest_filings_path=manifest_filings_path,
++            sample_filings_path=sample_filings_path,
++            sample_items_path=sample_items_path,
++            html_out=html_out,
++            emit_html=False,
++            emit_manifest=True,
++            sample_pass=0,
++            extraction_regime=extraction_regime,
++            diagnostics_regime=diagnostics_regime,
++        )
++
++    legacy_config = _build_config("legacy", "legacy", "legacy")
++    v2_config = _build_config("v2", extraction_regime_b, diagnostics_regime_b)
++
++    run_boundary_diagnostics(legacy_config)
++    run_boundary_diagnostics(v2_config)
++
++    legacy_metrics = _summarize_compare_metrics(
++        manifest_filings=_read_csv_rows(legacy_config.manifest_filings_path),
++        manifest_items=_read_csv_rows(legacy_config.manifest_items_path),
++        flagged_rows=_read_csv_rows(legacy_config.out_path),
++    )
++    v2_metrics = _summarize_compare_metrics(
++        manifest_filings=_read_csv_rows(v2_config.manifest_filings_path),
++        manifest_items=_read_csv_rows(v2_config.manifest_items_path),
++        flagged_rows=_read_csv_rows(v2_config.out_path),
++    )
++
++    delta = {
++        "status_counts": _diff_counter(
++            legacy_metrics["status_counts"], v2_metrics["status_counts"]
++        ),
++        "flag_counts": _diff_counter(
++            legacy_metrics["flag_counts"], v2_metrics["flag_counts"]
++        ),
++        "embedded_fail_counts": _diff_counter(
++            legacy_metrics["embedded_fail_counts"], v2_metrics["embedded_fail_counts"]
++        ),
++        "truncated_successor_total": (
++            v2_metrics["truncated_successor_total"]
++            - legacy_metrics["truncated_successor_total"]
++        ),
++        "truncated_part_total": (
++            v2_metrics["truncated_part_total"] - legacy_metrics["truncated_part_total"]
++        ),
++        "missing_part_10q": v2_metrics["missing_part_10q"]
++        - legacy_metrics["missing_part_10q"],
++        "n_items_extracted_summary": {
++            key: v2_metrics["n_items_extracted_summary"][key]
++            - legacy_metrics["n_items_extracted_summary"][key]
++            for key in v2_metrics["n_items_extracted_summary"]
++        },
++    }
++
++    return {
++        "legacy": legacy_metrics,
++        "v2": v2_metrics,
++        "delta": delta,
++    }
++
++
+ def _is_pass_filing(row: dict[str, object]) -> bool:
+     any_fail = _parse_bool(row.get("any_fail"))
+     exclusion = str(row.get("filing_exclusion_reason") or "").strip()
+@@ -2912,6 +3204,20 @@ def _build_parser() -> tuple[argparse.ArgumentParser, argparse.ArgumentParser]:
+         default=None,
+         help="Minimum largest-item share of total chars for HTML audit.",
+     )
++    scan.add_argument(
++        "--extraction-regime",
++        type=str,
++        default="legacy",
++        choices=("legacy", "v2"),
++        help="Extraction regime to use (default: legacy).",
++    )
++    scan.add_argument(
++        "--diagnostics-regime",
++        type=str,
++        default="legacy",
++        choices=("legacy", "v2"),
++        help="Diagnostics regime to use (default: legacy).",
++    )
+     scan.set_defaults(
+         emit_manifest=True,
+         emit_html=True,
+@@ -2983,6 +3289,8 @@ def main(argv: list[str] | None = None) -> None:
+             html_min_total_chars=args.html_min_total_chars,
+             html_min_largest_item_chars=args.html_min_largest_item_chars,
+             html_min_largest_item_chars_pct_total=args.html_min_largest_item_chars_pct_total,
++            extraction_regime=args.extraction_regime,
++            diagnostics_regime=args.diagnostics_regime,
+         )
+         run_boundary_diagnostics(config)
+         return
+@@ -3005,6 +3313,7 @@ __all__ = [
+     "RegressionConfig",
+     "DEFAULT_ROOT_CAUSES_PATH",
+     "load_root_causes_text",
++    "run_boundary_comparison",
+     "run_boundary_diagnostics",
+     "run_boundary_regression",
+     "main",
+diff --git a/tests/fixtures/legacy_simple_10q.txt b/tests/fixtures/legacy_simple_10q.txt
+new file mode 100644
+index 0000000..d31cf8f
+--- /dev/null
++++ b/tests/fixtures/legacy_simple_10q.txt
+@@ -0,0 +1,14 @@
++﻿FILED AS OF DATE: 20200131
++CONFORMED PERIOD OF REPORT: 20191231
++FORM 10-Q
++PART I
++ITEM 1. Financial Statements
++Alpha line one.
++Alpha line two.
++ITEM 2. Management's Discussion and Analysis
++Bravo line.
++PART II
++ITEM 1. Legal Proceedings
++Charlie line.
++ITEM 2. Unregistered Sales of Equity Securities
++Delta line.
+diff --git a/tests/fixtures/legacy_simple_10q_diagnostics_expected.json b/tests/fixtures/legacy_simple_10q_diagnostics_expected.json
+new file mode 100644
+index 0000000..eca784f
+--- /dev/null
++++ b/tests/fixtures/legacy_simple_10q_diagnostics_expected.json
+@@ -0,0 +1,195 @@
++{
++  "flagged_rows": [],
++  "manifest_filings": [
++    {
++      "accession": "0000000000-00-000001",
++      "any_fail": "False",
++      "any_warn": "False",
++      "cik": "0000000001",
++      "doc_id": "0000000001:000000000000000001",
++      "filing_date": "2020-01-31",
++      "filing_exclusion_reason": "",
++      "form": "10-Q",
++      "items_extracted": "1,2,1,2",
++      "missing_core_items": "",
++      "missing_expected_canonicals": "I:3_MARKET_RISK,I:4_CONTROLS_AND_PROCEDURES,II:1A_RISK_FACTORS,II:3_DEFAULTS_UPON_SENIOR_SECURITIES,II:4_MINE_SAFETY_DISCLOSURES,II:5_OTHER_INFORMATION,II:6_EXHIBITS",
++      "n_items_extracted": "4",
++      "period_end": "2019-12-31",
++      "start_candidates_toc_rejected": "0",
++      "start_candidates_total": "4",
++      "start_selection_unverified": "0",
++      "truncated_part_total": "0",
++      "truncated_successor_total": "0"
++    }
++  ],
++  "manifest_items": [
++    {
++      "accession": "0000000000-00-000001",
++      "canonical_item": "I:1_FINANCIAL_STATEMENTS",
++      "cik": "0000000001",
++      "content_end": "143",
++      "content_start": "90",
++      "doc_head_200": "Financial Statements\nAlpha line one.\nAlpha line two.\nITEM 2. Management's Discussion and Analysis\nBravo line.\nPART II\nITEM 1. Legal Proceedings\nCharlie line.\nITEM 2. Unregistered Sales of Equity Secur",
++      "doc_id": "0000000001:000000000000000001",
++      "doc_tail_200": "Financial Statements\nAlpha line one.\nAlpha line two.\n",
++      "embedded_heading_fail": "False",
++      "embedded_heading_warn": "False",
++      "filing_date": "2020-01-31",
++      "filing_exclusion_reason": "",
++      "first_embedded_char_pos": "",
++      "first_embedded_classification": "",
++      "first_embedded_item_id": "",
++      "first_embedded_kind": "",
++      "first_embedded_line_idx": "",
++      "first_embedded_part": "",
++      "first_embedded_snippet": "",
++      "first_fail_char_pos": "",
++      "first_fail_classification": "",
++      "first_fail_item_id": "",
++      "first_fail_kind": "",
++      "first_fail_line_idx": "",
++      "first_fail_part": "",
++      "first_fail_snippet": "",
++      "form": "10-Q",
++      "gij_omitted_items": "",
++      "heading_end": "89",
++      "heading_line_clean": "ITEM 1. Financial Statements",
++      "heading_line_raw": "ITEM 1. Financial Statements",
++      "heading_start": "82",
++      "item": "I:1",
++      "item_id": "1",
++      "item_missing_part": "False",
++      "item_part": "I",
++      "item_status": "active",
++      "length_chars": "53",
++      "offset_basis": "extractor_body",
++      "period_end": "2019-12-31"
++    },
++    {
++      "accession": "0000000000-00-000001",
++      "canonical_item": "I:2_MDA",
++      "cik": "0000000001",
++      "content_end": "208",
++      "content_start": "151",
++      "doc_head_200": "Management's Discussion and Analysis\nBravo line.\nPART II\nITEM 1. Legal Proceedings\nCharlie line.\nITEM 2. Unregistered Sales of Equity Securities\nDelta line.\n",
++      "doc_id": "0000000001:000000000000000001",
++      "doc_tail_200": "Management's Discussion and Analysis\nBravo line.\nPART II\n",
++      "embedded_heading_fail": "False",
++      "embedded_heading_warn": "False",
++      "filing_date": "2020-01-31",
++      "filing_exclusion_reason": "",
++      "first_embedded_char_pos": "",
++      "first_embedded_classification": "",
++      "first_embedded_item_id": "",
++      "first_embedded_kind": "",
++      "first_embedded_line_idx": "",
++      "first_embedded_part": "",
++      "first_embedded_snippet": "",
++      "first_fail_char_pos": "",
++      "first_fail_classification": "",
++      "first_fail_item_id": "",
++      "first_fail_kind": "",
++      "first_fail_line_idx": "",
++      "first_fail_part": "",
++      "first_fail_snippet": "",
++      "form": "10-Q",
++      "gij_omitted_items": "",
++      "heading_end": "150",
++      "heading_line_clean": "ITEM 2. Management's Discussion and Analysis",
++      "heading_line_raw": "ITEM 2. Management's Discussion and Analysis",
++      "heading_start": "143",
++      "item": "I:2",
++      "item_id": "2",
++      "item_missing_part": "False",
++      "item_part": "I",
++      "item_status": "active",
++      "length_chars": "57",
++      "offset_basis": "extractor_body",
++      "period_end": "2019-12-31"
++    },
++    {
++      "accession": "0000000000-00-000001",
++      "canonical_item": "II:1_LEGAL_PROCEEDINGS",
++      "cik": "0000000001",
++      "content_end": "248",
++      "content_start": "216",
++      "doc_head_200": "Legal Proceedings\nCharlie line.\nITEM 2. Unregistered Sales of Equity Securities\nDelta line.\n",
++      "doc_id": "0000000001:000000000000000001",
++      "doc_tail_200": "Legal Proceedings\nCharlie line.\n",
++      "embedded_heading_fail": "False",
++      "embedded_heading_warn": "False",
++      "filing_date": "2020-01-31",
++      "filing_exclusion_reason": "",
++      "first_embedded_char_pos": "",
++      "first_embedded_classification": "",
++      "first_embedded_item_id": "",
++      "first_embedded_kind": "",
++      "first_embedded_line_idx": "",
++      "first_embedded_part": "",
++      "first_embedded_snippet": "",
++      "first_fail_char_pos": "",
++      "first_fail_classification": "",
++      "first_fail_item_id": "",
++      "first_fail_kind": "",
++      "first_fail_line_idx": "",
++      "first_fail_part": "",
++      "first_fail_snippet": "",
++      "form": "10-Q",
++      "gij_omitted_items": "",
++      "heading_end": "215",
++      "heading_line_clean": "ITEM 1. Legal Proceedings",
++      "heading_line_raw": "ITEM 1. Legal Proceedings",
++      "heading_start": "208",
++      "item": "II:1",
++      "item_id": "1",
++      "item_missing_part": "False",
++      "item_part": "II",
++      "item_status": "active",
++      "length_chars": "32",
++      "offset_basis": "extractor_body",
++      "period_end": "2019-12-31"
++    },
++    {
++      "accession": "0000000000-00-000001",
++      "canonical_item": "II:2_UNREGISTERED_SALES_OF_EQUITY_SECURITIES_AND_USE_OF_PROCEEDS",
++      "cik": "0000000001",
++      "content_end": "308",
++      "content_start": "256",
++      "doc_head_200": "Unregistered Sales of Equity Securities\nDelta line.\n",
++      "doc_id": "0000000001:000000000000000001",
++      "doc_tail_200": "Unregistered Sales of Equity Securities\nDelta line.\n",
++      "embedded_heading_fail": "False",
++      "embedded_heading_warn": "False",
++      "filing_date": "2020-01-31",
++      "filing_exclusion_reason": "",
++      "first_embedded_char_pos": "",
++      "first_embedded_classification": "",
++      "first_embedded_item_id": "",
++      "first_embedded_kind": "",
++      "first_embedded_line_idx": "",
++      "first_embedded_part": "",
++      "first_embedded_snippet": "",
++      "first_fail_char_pos": "",
++      "first_fail_classification": "",
++      "first_fail_item_id": "",
++      "first_fail_kind": "",
++      "first_fail_line_idx": "",
++      "first_fail_part": "",
++      "first_fail_snippet": "",
++      "form": "10-Q",
++      "gij_omitted_items": "",
++      "heading_end": "255",
++      "heading_line_clean": "ITEM 2. Unregistered Sales of Equity Securities",
++      "heading_line_raw": "ITEM 2. Unregistered Sales of Equity Securities",
++      "heading_start": "248",
++      "item": "II:2",
++      "item_id": "2",
++      "item_missing_part": "False",
++      "item_part": "II",
++      "item_status": "active",
++      "length_chars": "52",
++      "offset_basis": "extractor_body",
++      "period_end": "2019-12-31"
++    }
++  ]
++}
+\ No newline at end of file
+diff --git a/tests/fixtures/legacy_simple_10q_expected.json b/tests/fixtures/legacy_simple_10q_expected.json
+new file mode 100644
+index 0000000..f6849a7
+--- /dev/null
++++ b/tests/fixtures/legacy_simple_10q_expected.json
+@@ -0,0 +1,97 @@
++{
++  "hash": "9c04497ab3fb0965aa50e46f53d3944ff20e36909468943fcfd94ddea810ad1c",
++  "items": [
++    {
++      "_content_end": 143,
++      "_content_start": 90,
++      "_heading_end": 89,
++      "_heading_line": "ITEM 1. Financial Statements",
++      "_heading_line_index": 4,
++      "_heading_line_raw": "ITEM 1. Financial Statements",
++      "_heading_offset": 0,
++      "_heading_start": 82,
++      "_start_candidates_toc_rejected": 0,
++      "_start_candidates_total": 1,
++      "_start_selection_verified": true,
++      "_truncated_part_boundary": false,
++      "_truncated_successor_heading": false,
++      "canonical_item": "I:1_FINANCIAL_STATEMENTS",
++      "exists_by_regime": true,
++      "full_text": "Financial Statements\nAlpha line one.\nAlpha line two.",
++      "item": "I:1",
++      "item_id": "1",
++      "item_missing_part": false,
++      "item_part": "I",
++      "item_status": "active"
++    },
++    {
++      "_content_end": 208,
++      "_content_start": 151,
++      "_heading_end": 150,
++      "_heading_line": "ITEM 2. Management's Discussion and Analysis",
++      "_heading_line_index": 7,
++      "_heading_line_raw": "ITEM 2. Management's Discussion and Analysis",
++      "_heading_offset": 0,
++      "_heading_start": 143,
++      "_start_candidates_toc_rejected": 0,
++      "_start_candidates_total": 1,
++      "_start_selection_verified": true,
++      "_truncated_part_boundary": false,
++      "_truncated_successor_heading": false,
++      "canonical_item": "I:2_MDA",
++      "exists_by_regime": true,
++      "full_text": "Management's Discussion and Analysis\nBravo line.",
++      "item": "I:2",
++      "item_id": "2",
++      "item_missing_part": false,
++      "item_part": "I",
++      "item_status": "active"
++    },
++    {
++      "_content_end": 248,
++      "_content_start": 216,
++      "_heading_end": 215,
++      "_heading_line": "ITEM 1. Legal Proceedings",
++      "_heading_line_index": 10,
++      "_heading_line_raw": "ITEM 1. Legal Proceedings",
++      "_heading_offset": 0,
++      "_heading_start": 208,
++      "_start_candidates_toc_rejected": 0,
++      "_start_candidates_total": 1,
++      "_start_selection_verified": true,
++      "_truncated_part_boundary": false,
++      "_truncated_successor_heading": false,
++      "canonical_item": "II:1_LEGAL_PROCEEDINGS",
++      "exists_by_regime": true,
++      "full_text": "Legal Proceedings\nCharlie line.",
++      "item": "II:1",
++      "item_id": "1",
++      "item_missing_part": false,
++      "item_part": "II",
++      "item_status": "active"
++    },
++    {
++      "_content_end": 308,
++      "_content_start": 256,
++      "_heading_end": 255,
++      "_heading_line": "ITEM 2. Unregistered Sales of Equity Securities",
++      "_heading_line_index": 12,
++      "_heading_line_raw": "ITEM 2. Unregistered Sales of Equity Securities",
++      "_heading_offset": 0,
++      "_heading_start": 248,
++      "_start_candidates_toc_rejected": 0,
++      "_start_candidates_total": 1,
++      "_start_selection_verified": true,
++      "_truncated_part_boundary": false,
++      "_truncated_successor_heading": false,
++      "canonical_item": "II:2_UNREGISTERED_SALES_OF_EQUITY_SECURITIES_AND_USE_OF_PROCEEDS",
++      "exists_by_regime": true,
++      "full_text": "Unregistered Sales of Equity Securities\nDelta line.",
++      "item": "II:2",
++      "item_id": "2",
++      "item_missing_part": false,
++      "item_part": "II",
++      "item_status": "active"
++    }
++  ]
++}
+\ No newline at end of file
+diff --git a/tests/fixtures/v2_combined_heading_10q.txt b/tests/fixtures/v2_combined_heading_10q.txt
+new file mode 100644
+index 0000000..7447d38
+--- /dev/null
++++ b/tests/fixtures/v2_combined_heading_10q.txt
+@@ -0,0 +1,5 @@
++﻿FILED AS OF DATE: 20200131
++CONFORMED PERIOD OF REPORT: 20191231
++FORM 10-Q
++PART I, ITEM 1. Financial Statements
++Alpha content.
+diff --git a/tests/fixtures/v2_missing_parts_10q.txt b/tests/fixtures/v2_missing_parts_10q.txt
+new file mode 100644
+index 0000000..f002f80
+--- /dev/null
++++ b/tests/fixtures/v2_missing_parts_10q.txt
+@@ -0,0 +1,7 @@
++﻿FILED AS OF DATE: 20200131
++CONFORMED PERIOD OF REPORT: 20191231
++FORM 10-Q
++PART I AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA. ITEM 1. Financial Statements
++Content for part I.
++PART II BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB. ITEM 1. Legal Proceedings
++Content for part II.
+diff --git a/tests/test_regime_switches.py b/tests/test_regime_switches.py
+new file mode 100644
+index 0000000..fa8820a
+--- /dev/null
++++ b/tests/test_regime_switches.py
+@@ -0,0 +1,262 @@
++﻿from __future__ import annotations
++
++import hashlib
++import json
++from pathlib import Path
++
++import polars as pl
++
++from thesis_pkg.core.sec.extraction import extract_filing_items
++from thesis_pkg.core.sec.suspicious_boundary_diagnostics import (
++    DiagnosticsConfig,
++    InternalHeadingLeak,
++    _embedded_warn_v2,
++    _should_escalate_internal_leak_v2,
++    run_boundary_comparison,
++    run_boundary_diagnostics,
++)
++from thesis_pkg.core.sec.extraction_utils import EmbeddedHeadingHit
++
++
++FIXTURES = Path(__file__).resolve().parent / "fixtures"
++
++
++def _load_fixture(name: str) -> str:
++    return (FIXTURES / name).read_text(encoding="utf-8")
++
++
++def _write_parquet(tmp_path: Path, text: str) -> Path:
++    parquet_dir = tmp_path / "parquet"
++    parquet_dir.mkdir(parents=True, exist_ok=True)
++    df = pl.DataFrame(
++        [
++            {
++                "doc_id": "0000000001:000000000000000001",
++                "cik": "0000000001",
++                "accession_number": "0000000000-00-000001",
++                "document_type_filename": "10-Q",
++                "file_date_filename": "20200131",
++                "full_text": text,
++            }
++        ]
++    )
++    df.write_parquet(parquet_dir / "sample_batch_000.parquet")
++    return parquet_dir
++
++
++def _hash_items(items: list[dict[str, object]]) -> str:
++    payload = json.dumps(items, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
++    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
++
++
++def test_legacy_extraction_snapshot() -> None:
++    text = _load_fixture("legacy_simple_10q.txt")
++    expected = json.loads(
++        (FIXTURES / "legacy_simple_10q_expected.json").read_text(encoding="utf-8")
++    )
++    items = extract_filing_items(
++        text,
++        form_type="10-Q",
++        filing_date="20200131",
++        period_end="20191231",
++        diagnostics=True,
++        extraction_regime="legacy",
++    )
++    assert items == expected["items"]
++    assert _hash_items(items) == expected["hash"]
++
++
++def test_legacy_diagnostics_snapshot(tmp_path: Path) -> None:
++    text = _load_fixture("legacy_simple_10q.txt")
++    parquet_dir = _write_parquet(tmp_path, text)
++
++    out_path = tmp_path / "suspicious.csv"
++    report_path = tmp_path / "report.txt"
++    samples_dir = tmp_path / "samples"
++    manifest_items_path = tmp_path / "manifest_items.csv"
++    manifest_filings_path = tmp_path / "manifest_filings.csv"
++    sample_filings_path = tmp_path / "sample_filings.csv"
++    sample_items_path = tmp_path / "sample_items.csv"
++
++    config = DiagnosticsConfig(
++        parquet_dir=parquet_dir,
++        out_path=out_path,
++        report_path=report_path,
++        samples_dir=samples_dir,
++        batch_size=8,
++        max_files=0,
++        max_examples=5,
++        enable_embedded_verifier=True,
++        emit_manifest=True,
++        manifest_items_path=manifest_items_path,
++        manifest_filings_path=manifest_filings_path,
++        sample_pass=0,
++        sample_seed=42,
++        core_items=("1", "2"),
++        target_set=None,
++        emit_html=False,
++        html_out=tmp_path / "html",
++        html_scope="sample",
++        extraction_regime="legacy",
++        diagnostics_regime="legacy",
++    )
++    run_boundary_diagnostics(config)
++
++    def _read_csv(path: Path) -> list[dict[str, object]]:
++        import csv
++
++        if not path.exists():
++            return []
++        with path.open("r", newline="", encoding="utf-8") as handle:
++            return list(csv.DictReader(handle))
++
++    actual = {
++        "flagged_rows": _read_csv(out_path),
++        "manifest_items": _read_csv(manifest_items_path),
++        "manifest_filings": _read_csv(manifest_filings_path),
++    }
++    expected = json.loads(
++        (FIXTURES / "legacy_simple_10q_diagnostics_expected.json").read_text(
++            encoding="utf-8"
++        )
++    )
++    assert actual == expected
++
++
++def test_v2_combined_heading_extracts_single_item() -> None:
++    text = _load_fixture("v2_combined_heading_10q.txt")
++    legacy_items = extract_filing_items(
++        text,
++        form_type="10-Q",
++        filing_date="20200131",
++        period_end="20191231",
++        diagnostics=True,
++        extraction_regime="legacy",
++    )
++    assert legacy_items == []
++
++    v2_items = extract_filing_items(
++        text,
++        form_type="10-Q",
++        filing_date="20200131",
++        period_end="20191231",
++        diagnostics=True,
++        extraction_regime="v2",
++    )
++    assert len(v2_items) == 1
++    assert v2_items[0]["item_part"] == "I"
++    assert v2_items[0]["item_id"] == "1"
++    heading_starts = [item.get("_heading_start") for item in v2_items]
++    assert len(set(heading_starts)) == len(heading_starts)
++
++
++def test_v2_part_by_position_separates_10q_items() -> None:
++    text = _load_fixture("v2_missing_parts_10q.txt")
++    legacy_items = extract_filing_items(
++        text,
++        form_type="10-Q",
++        filing_date="20200131",
++        period_end="20191231",
++        diagnostics=True,
++        extraction_regime="legacy",
++    )
++    assert len(legacy_items) == 1
++    assert legacy_items[0]["item"].startswith("?:")
++
++    v2_items = extract_filing_items(
++        text,
++        form_type="10-Q",
++        filing_date="20200131",
++        period_end="20191231",
++        diagnostics=True,
++        extraction_regime="v2",
++    )
++    keys = [item["item"] for item in v2_items]
++    assert sorted(keys) == ["I:1", "II:1"]
++    assert all(not item.get("item_missing_part") for item in v2_items)
++
++
++def test_v2_embedded_warn_filtering() -> None:
++    hits = [
++        EmbeddedHeadingHit(
++            kind="item",
++            classification="toc_row",
++            item_id="2",
++            part=None,
++            line_idx=1,
++            char_pos=900,
++            full_text_len=2000,
++            snippet="ITEM 2 ...",
++        )
++    ]
++    assert not _embedded_warn_v2(hits)
++    clustered = hits + [
++        EmbeddedHeadingHit(
++            kind="item",
++            classification="toc_row",
++            item_id="3",
++            part=None,
++            line_idx=2,
++            char_pos=950,
++            full_text_len=2000,
++            snippet="ITEM 3 ...",
++        )
++    ]
++    assert _embedded_warn_v2(clustered)
++
++
++def test_internal_leak_escalation_v2_successor() -> None:
++    leak = InternalHeadingLeak(position=220, match_text="ITEM 2. Properties", context="")
++    assert _should_escalate_internal_leak_v2(
++        leak_info=leak,
++        item_full_text=("A" * 230) + "\nITEM 2. Properties\nMore text.",
++        next_item_id="2",
++        next_part=None,
++        expected_item_ids=set(),
++        expected_parts=set(),
++    )
++
++
++def test_internal_leak_escalation_v2_suppresses_non_successor() -> None:
++    leak = InternalHeadingLeak(position=220, match_text="ITEM 9. Notes", context="")
++    assert not _should_escalate_internal_leak_v2(
++        leak_info=leak,
++        item_full_text=("A" * 230) + "\nITEM 9. Notes\n12345\n",
++        next_item_id="2",
++        next_part=None,
++        expected_item_ids=set(),
++        expected_parts=set(),
++    )
++
++
++def test_run_boundary_comparison_smoke(tmp_path: Path) -> None:
++    text = _load_fixture("legacy_simple_10q.txt")
++    parquet_dir = _write_parquet(tmp_path, text)
++
++    base_config = DiagnosticsConfig(
++        parquet_dir=parquet_dir,
++        out_path=tmp_path / "baseline.csv",
++        report_path=tmp_path / "baseline.txt",
++        samples_dir=tmp_path / "samples",
++        batch_size=8,
++        max_files=0,
++        max_examples=5,
++        enable_embedded_verifier=True,
++        emit_manifest=True,
++        manifest_items_path=tmp_path / "manifest_items.csv",
++        manifest_filings_path=tmp_path / "manifest_filings.csv",
++        sample_pass=0,
++        sample_seed=42,
++        core_items=("1", "2"),
++        target_set=None,
++        emit_html=False,
++        html_out=tmp_path / "html",
++        html_scope="sample",
++        extraction_regime="legacy",
++        diagnostics_regime="legacy",
++    )
++    result = run_boundary_comparison(base_config, out_dir=tmp_path / "compare")
++    assert set(result) == {"legacy", "v2", "delta"}
++    assert sum(result["legacy"]["status_counts"].values()) == 1
++    assert sum(result["v2"]["status_counts"].values()) == 1
++    assert result["delta"]["status_counts"].get("PASS", 0) == 0

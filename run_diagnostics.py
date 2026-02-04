@@ -167,6 +167,20 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Minimum largest-item share of total chars for HTML audit.",
     )
+    parser.add_argument(
+        "--extraction-regime",
+        type=str,
+        default="legacy",
+        choices=("legacy", "v2"),
+        help="Extraction regime to use (default: legacy).",
+    )
+    parser.add_argument(
+        "--diagnostics-regime",
+        type=str,
+        default="legacy",
+        choices=("legacy", "v2"),
+        help="Diagnostics regime to use (default: legacy).",
+    )
     parser.set_defaults(
         emit_manifest=True,
         emit_html=True,
@@ -215,6 +229,8 @@ def main() -> None:
         html_min_total_chars=args.html_min_total_chars,
         html_min_largest_item_chars=args.html_min_largest_item_chars,
         html_min_largest_item_chars_pct_total=args.html_min_largest_item_chars_pct_total,
+        extraction_regime=args.extraction_regime,
+        diagnostics_regime=args.diagnostics_regime,
     )
     run_boundary_diagnostics(config)
 

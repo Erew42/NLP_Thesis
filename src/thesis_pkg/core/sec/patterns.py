@@ -52,6 +52,12 @@ ITEM_CANDIDATE_PATTERN = re.compile(
     r"\bITEM\s+(?P<num>\d+|[IVXLCDM]+)(?P<let>[A-Z])?\s*[\.:]?",
     re.IGNORECASE,
 )
+COMBINED_PART_ITEM_PATTERN = re.compile(
+    r"^[ \t\-\*\u2022\u00b7\u2013\u2014]*"
+    r"PART\s+(?P<part>IV|III|II|I)\s*[,:\-\u2013\u2014]+\s*"
+    r"(?P<item>ITEM\s+(?P<num>\d+|[IVXLCDM]+)(?P<let>[A-Z])?\s*[\.:]?)",
+    re.IGNORECASE,
+)
 ITEM_LINESTART_PATTERN = re.compile(
     r"^\s*(?:PART\s+[IVXLCDM]+\s*[:\-]?\s*)?ITEM\s+(?P<num>\d+|[IVXLCDM]+)"
     r"(?P<let>[A-Z])?(?=\b|(?-i:[A-Z]))",

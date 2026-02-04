@@ -1,0 +1,14 @@
+﻿FILED AS OF DATE: 20200131
+CONFORMED PERIOD OF REPORT: 20191231
+FORM 10-Q
+PART I
+ITEM 1. Financial Statements
+Alpha line one.
+Alpha line two.
+ITEM 2. Management's Discussion and Analysis
+Bravo line.
+PART II
+ITEM 1. Legal Proceedings
+Charlie line.
+ITEM 2. Unregistered Sales of Equity Securities
+Delta line.

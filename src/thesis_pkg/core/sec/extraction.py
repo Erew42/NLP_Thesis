@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import re
 from bisect import bisect_right
+from dataclasses import dataclass, replace
 from datetime import date, datetime
+from typing import Literal
 
 from . import embedded_headings
 from .extraction_utils import _ItemBoundary
@@ -57,6 +59,7 @@ from .patterns import (
     PART_MARKER_PATTERN,
     PART_LINESTART_PATTERN,
     ITEM_CANDIDATE_PATTERN,
+    COMBINED_PART_ITEM_PATTERN,
 )
 from .utilities import (
     _normalize_newlines,
@@ -65,6 +68,15 @@ from .utilities import (
 )
 
 HEADER_SEARCH_LIMIT_DEFAULT = 5000
+
+
+@dataclass(frozen=True)
+class _PartMarker:
+    start: int
+    part: str
+    line_index: int
+    high_confidence: bool
+
 
 def _strip_leading_header_block(full_text: str) -> str:
     """
@@ -139,6 +151,81 @@ def _extract_fallback_items_10k(
 
     return boundaries
 
+
+def _scan_part_markers_v2(
+    lines: list[str],
+    line_starts: list[int],
+    *,
+    allowed_parts: set[str],
+    scan_sparse_layout: bool,
+    toc_mask: set[int],
+) -> list[_PartMarker]:
+    markers: list[_PartMarker] = []
+    for i, line in enumerate(lines):
+        if not line:
+            continue
+        if i in toc_mask:
+            continue
+
+        matches: list[re.Match[str]] = []
+        if scan_sparse_layout:
+            matches = list(PART_MARKER_PATTERN.finditer(line))
+        else:
+            match = PART_LINESTART_PATTERN.match(line)
+            if match is not None:
+                matches = [match]
+
+        for match in matches:
+            part = match.group("part").upper()
+            if part not in allowed_parts:
+                continue
+            prefix = line[: match.start()]
+            if prefix.strip() and not _prefix_is_bullet(prefix):
+                continue
+            high_confidence = _part_marker_is_heading(line, match)
+            if not high_confidence and scan_sparse_layout and match.start() == 0:
+                if ITEM_WORD_PATTERN.search(line) and not _looks_like_toc_heading_line(lines, i):
+                    high_confidence = True
+            if not high_confidence:
+                continue
+            markers.append(
+                _PartMarker(
+                    start=line_starts[i] + match.start(),
+                    part=part,
+                    line_index=i,
+                    high_confidence=high_confidence,
+                )
+            )
+
+    return markers
+
+
+def _apply_part_by_position_v2(
+    boundaries: list[_ItemBoundary],
+    part_markers: list[_PartMarker],
+) -> list[_ItemBoundary]:
+    if not boundaries or not part_markers:
+        return boundaries
+    markers = sorted(
+        [marker for marker in part_markers if marker.high_confidence],
+        key=lambda marker: marker.start,
+    )
+    if not markers:
+        return boundaries
+    marker_starts = [marker.start for marker in markers]
+    updated: list[_ItemBoundary] = []
+    for boundary in boundaries:
+        if boundary.item_part is not None:
+            updated.append(boundary)
+            continue
+        idx = bisect_right(marker_starts, boundary.start) - 1
+        if idx >= 0:
+            updated.append(replace(boundary, item_part=markers[idx].part))
+        else:
+            updated.append(boundary)
+    return updated
+
+
 def extract_filing_items(
     full_text: str,
     *,
@@ -150,6 +237,7 @@ def extract_filing_items(
     diagnostics: bool = False,
     repair_boundaries: bool = True,
     max_item_number: int = 20,
+    extraction_regime: Literal["legacy", "v2"] = "legacy",
 ) -> list[dict[str, str | bool | None]]:
     """
     Extract filing item sections from `full_text`.
@@ -166,6 +254,7 @@ def extract_filing_items(
       - _heading_start/_heading_end/_content_start/_content_end offsets in extractor body when diagnostics=True
       - when drop_impossible=True, items with exists_by_regime == False are dropped
       - when repair_boundaries=True, high-confidence end-boundary truncation is applied
+      - extraction_regime controls legacy vs v2-only behaviors (default legacy)
 
     The function does not emit TOC rows; TOC is only used internally to avoid false starts.
     """
@@ -268,6 +357,15 @@ def extract_filing_items(
         boundaries = []
         current_part: str | None = None
         toc_part: str | None = None
+        part_markers: list[_PartMarker] = []
+        if extraction_regime == "v2" and is_10q:
+            part_markers = _scan_part_markers_v2(
+                lines,
+                line_starts,
+                allowed_parts=allowed_parts,
+                scan_sparse_layout=scan_sparse_layout,
+                toc_mask=toc_mask,
+            )
 
         # Build candidates by scanning lines in order while tracking PART markers within each line.
         for i, line in enumerate(lines):
@@ -281,6 +379,113 @@ def extract_filing_items(
 
             events: list[tuple[int, str, str | None, re.Match[str] | None]] = []
             line_has_item_word = ITEM_WORD_PATTERN.search(line) is not None
+
+            combined_match = (
+                COMBINED_PART_ITEM_PATTERN.match(line) if extraction_regime == "v2" else None
+            )
+            if combined_match:
+                part = combined_match.group("part").upper()
+                if part in allowed_parts:
+                    item_match = ITEM_CANDIDATE_PATTERN.search(
+                        line,
+                        combined_match.start("item"),
+                    )
+                    if item_match and item_match.start() == combined_match.start("item"):
+                        item_id, content_adjust = _normalize_item_match(
+                            line,
+                            item_match,
+                            is_10k=is_10k,
+                            max_item=max_item_number,
+                        )
+                        if item_id is not None and item_id != "16":
+                            prefix = line[: item_match.start()]
+                            if not _prefix_looks_like_cross_ref(prefix):
+                                suffix = line[item_match.end() : item_match.end() + 64]
+                                if not re.search(r"(?i)^\s*[\(\[]?\s*continued\b", suffix):
+                                    if not re.match(
+                                        r"(?i)^\s*[\(\[]\s*[a-z0-9]",
+                                        suffix,
+                                    ):
+                                        is_toc_marker = TOC_MARKER_PATTERN.search(line) is not None
+                                        item_word_count = 0
+                                        if i < 800 or is_toc_marker or line_in_toc_range:
+                                            item_word_count = len(
+                                                ITEM_WORD_PATTERN.findall(line)
+                                            )
+                                        line_toc_like = _looks_like_toc_heading_line(lines, i)
+                                        if (
+                                            item_word_count >= 3
+                                            and len(line) <= 5_000
+                                            and (i < 800 or is_toc_marker or line_in_toc_range)
+                                        ):
+                                            line_toc_like = True
+                                        if (
+                                            is_toc_marker
+                                            and item_word_count >= 1
+                                            and len(line) <= 8_000
+                                        ):
+                                            line_toc_like = True
+                                        content_after = False
+                                        if line_in_toc_range or toc_window_flags[i]:
+                                            content_after = _has_content_after(
+                                                lines,
+                                                i,
+                                                toc_cache=toc_cache,
+                                                toc_window_flags=toc_window_flags,
+                                            )
+                                        toc_window_like = False
+                                        if not line_toc_like:
+                                            if embedded_headings._toc_candidate_line(line):
+                                                line_toc_like = True
+                                            elif toc_window_flags[i] and not content_after:
+                                                if not (
+                                                    scan_sparse_layout and len(line) > 2_000
+                                                ):
+                                                    line_toc_like = True
+                                                    toc_window_like = True
+                                        compound_line = _line_has_compound_items(line)
+                                        title_match = is_10k and _heading_title_matches_item(
+                                            item_id, line, item_match
+                                        )
+                                        confidence = HEADING_CONF_HIGH
+                                        if is_10k and not title_match and _heading_suffix_looks_like_prose(
+                                            line[item_match.end() :]
+                                        ):
+                                            confidence = min(confidence, HEADING_CONF_MED)
+                                        if compound_line:
+                                            confidence = min(confidence, HEADING_CONF_LOW)
+                                        if _pageish_line(line):
+                                            confidence = min(confidence, HEADING_CONF_LOW)
+                                        candidate_toc_like = line_toc_like
+                                        if (
+                                            candidate_toc_like
+                                            and toc_window_like
+                                            and scan_sparse_layout
+                                            and item_match.start()
+                                            > embedded_headings.EMBEDDED_TOC_START_EARLY_MAX_CHAR
+                                        ):
+                                            candidate_toc_like = False
+                                        boundaries.append(
+                                            _ItemBoundary(
+                                                start=line_starts[i] + item_match.start(),
+                                                content_start=(
+                                                    line_starts[i]
+                                                    + item_match.end()
+                                                    + content_adjust
+                                                ),
+                                                item_part=part,
+                                                item_id=item_id,
+                                                line_index=i,
+                                                confidence=confidence,
+                                                in_toc_range=(
+                                                    line_in_toc_range and not content_after
+                                                ),
+                                                toc_like_line=candidate_toc_like,
+                                            )
+                                        )
+                                        if not line_in_toc_range:
+                                            current_part = part
+                                        continue
 
             if scan_sparse_layout:
                 for m in PART_MARKER_PATTERN.finditer(line):
@@ -465,6 +670,9 @@ def extract_filing_items(
 
     if not boundaries:
         return []
+
+    if extraction_regime == "v2" and is_10q:
+        boundaries = _apply_part_by_position_v2(boundaries, part_markers)
 
     boundaries, selection_meta = _select_best_boundaries(
         boundaries,

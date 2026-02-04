@@ -8,9 +8,10 @@ import re
 import sys
 from collections import Counter, defaultdict
 from contextlib import ExitStack
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime
 from pathlib import Path
+from typing import Literal
 
 import polars as pl
 import pyarrow as pa
@@ -113,6 +114,7 @@ PREFIX_KIND_BLANK = "blank"
 PREFIX_KIND_PART_ONLY = "part_only"
 PREFIX_KIND_BULLET = "bullet"
 PREFIX_KIND_TEXTUAL = "textual"
+EMBEDDED_WARN_CLUSTER_MIN = 2
 
 DEFAULT_PARQUET_DIR = Path(
     r"C:\Users\erik9\Documents\SEC_Data\Data\Sample_Filings\parquet_batches"
@@ -324,6 +326,8 @@ class DiagnosticsConfig:
     html_min_total_chars: int | None = None
     html_min_largest_item_chars: int | None = None
     html_min_largest_item_chars_pct_total: float | None = None
+    extraction_regime: Literal["legacy", "v2"] = "legacy"
+    diagnostics_regime: Literal["legacy", "v2"] = "legacy"
 
 
 @dataclass(frozen=True)
@@ -619,6 +623,119 @@ def _expected_canonical_items(
     if target_set:
         expected &= _target_set_for_form(normalized_form, target_set)
     return expected
+
+
+def _expected_item_tokens_from_canonicals(
+    canonicals: set[str],
+) -> tuple[set[str], set[str]]:
+    item_ids: set[str] = set()
+    parts: set[str] = set()
+    for canonical in canonicals:
+        if not canonical:
+            continue
+        head = canonical.split("_", 1)[0]
+        if ":" in head:
+            part, item_id = head.split(":", 1)
+            if part:
+                parts.add(part.upper())
+            if item_id:
+                item_ids.add(item_id.upper())
+        else:
+            item_ids.add(head.upper())
+    return item_ids, parts
+
+
+def _parse_internal_leak_token(match_text: str) -> tuple[str | None, str | None]:
+    if not match_text:
+        return None, None
+    item_match = re.search(
+        r"(?i)\bITEM\s+(?P<num>\d{1,2})(?P<let>[A-Z])?\b",
+        match_text,
+    )
+    if item_match:
+        return (
+            f"{item_match.group('num')}{item_match.group('let') or ''}".upper(),
+            None,
+        )
+    part_match = re.search(r"(?i)\bPART\s+(?P<roman>[IVX]+)\b", match_text)
+    if part_match:
+        return None, part_match.group("roman").upper()
+    return None, None
+
+
+def _internal_leak_prose_confirmed(text: str, leak_pos: int) -> bool:
+    if not text:
+        return False
+    if leak_pos < 0:
+        return False
+    normalized = _normalize_newlines(text)
+    if leak_pos >= len(normalized):
+        return False
+    lines = normalized.splitlines(keepends=True)
+    lines_noeol = [line.rstrip("\r\n") for line in lines]
+    offset = 0
+    line_idx = None
+    for idx, line in enumerate(lines):
+        next_offset = offset + len(line)
+        if leak_pos < next_offset:
+            line_idx = idx
+            break
+        offset = next_offset
+    if line_idx is None:
+        return False
+    toc_window_flags = _toc_window_flags(lines_noeol)
+    toc_cache: dict[tuple[int, bool], bool] = {}
+    return _confirm_prose_after(lines_noeol, line_idx, toc_cache, toc_window_flags)
+
+
+def _should_escalate_internal_leak_v2(
+    *,
+    leak_info: InternalHeadingLeak,
+    item_full_text: str,
+    next_item_id: str | None,
+    next_part: str | None,
+    expected_item_ids: set[str],
+    expected_parts: set[str],
+) -> bool:
+    leak_item_id, leak_part = _parse_internal_leak_token(leak_info.match_text)
+    next_item_norm = _normalize_item_id(next_item_id)
+    next_part_norm = _normalize_part(next_part)
+    if leak_item_id and next_item_norm and leak_item_id == next_item_norm:
+        return True
+    if leak_part and next_part_norm and leak_part == next_part_norm:
+        return True
+    if leak_item_id and leak_item_id in expected_item_ids:
+        return True
+    if leak_part and leak_part in expected_parts:
+        return True
+    return _internal_leak_prose_confirmed(item_full_text, leak_info.position)
+
+
+def _embedded_warn_v2(hits: list[EmbeddedHeadingHit]) -> bool:
+    if not hits:
+        return False
+    warn_hits = [hit for hit in hits if hit.classification in EMBEDDED_WARN_CLASSIFICATIONS]
+    if not warn_hits:
+        return False
+    non_toc_cross = [
+        hit
+        for hit in warn_hits
+        if hit.classification not in {"toc_row", "cross_ref_line"}
+    ]
+    if non_toc_cross:
+        return True
+    toc_cross = [
+        hit
+        for hit in warn_hits
+        if hit.classification in {"toc_row", "cross_ref_line"}
+    ]
+    if not toc_cross:
+        return False
+    early = any(
+        hit.char_pos <= EMBEDDED_TOC_START_EARLY_MAX_CHAR for hit in toc_cross
+    )
+    clustered = len(toc_cross) >= EMBEDDED_WARN_CLUSTER_MIN
+    return early or clustered
 
 
 def _canonicals_for_item_keys(
@@ -1478,6 +1595,9 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
                         period_end=period_end,
                         target_set=target_set,
                     )
+                    expected_item_ids, expected_parts = _expected_item_tokens_from_canonicals(
+                        expected_canonicals
+                    )
 
                     items = extract_filing_items(
                         text,
@@ -1486,6 +1606,7 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
                         period_end=period_end,
                         regime=True,
                         diagnostics=True,
+                        extraction_regime=config.extraction_regime,
                     )
                     if not items:
                         if emit_manifest and manifest_filings_writer:
@@ -1548,6 +1669,11 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
                             if item_idx + 1 < len(item_id_sequence)
                             else None
                         )
+                        next_part = (
+                            items[item_idx + 1].get("item_part")
+                            if item_idx + 1 < len(items)
+                            else None
+                        )
                         nearby_slice = item_id_sequence[
                             item_idx + 1 : item_idx + 1 + EMBEDDED_NEARBY_ITEM_WINDOW
                         ]
@@ -1589,6 +1715,16 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
                         leak_context = ""
                         leak_next_item_id = ""
                         leak_next_heading = ""
+                        leak_escalate = True
+                        if leak_info is not None and config.diagnostics_regime == "v2":
+                            leak_escalate = _should_escalate_internal_leak_v2(
+                                leak_info=leak_info,
+                                item_full_text=str(item.get("full_text") or ""),
+                                next_item_id=next_item_id,
+                                next_part=str(next_part or ""),
+                                expected_item_ids=expected_item_ids,
+                                expected_parts=expected_parts,
+                            )
                         embedded_hits = (
                             _find_embedded_heading_hits(
                                 item.get("full_text") or "",
@@ -1608,6 +1744,8 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
                             embedded_first_fail,
                             _embedded_counts,
                         ) = _summarize_embedded_hits(embedded_hits)
+                        if config.diagnostics_regime == "v2":
+                            embedded_warn = _embedded_warn_v2(embedded_hits)
                         start_candidates_total += int(item.get("_start_candidates_total") or 0)
                         start_candidates_toc_rejected_total += int(
                             item.get("_start_candidates_toc_rejected") or 0
@@ -1668,7 +1806,8 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
                             flags.append("dot_leader_heading")
 
                         if leak_info is not None:
-                            flags.append("internal_heading_leak")
+                            if leak_escalate:
+                                flags.append("internal_heading_leak")
                             leak_pos = leak_info.position
                             leak_match = leak_info.match_text
                             leak_context = leak_info.context
@@ -2619,6 +2758,159 @@ def _read_csv_rows(path: Path) -> list[dict[str, object]]:
         return [row for row in reader]
 
 
+def _summary_stats(values: list[int]) -> dict[str, int]:
+    if not values:
+        return {"min": 0, "p25": 0, "median": 0, "p75": 0, "max": 0}
+    ordered = sorted(values)
+    q1, q2, q3 = _quartile_edges(ordered)
+    return {
+        "min": ordered[0],
+        "p25": q1,
+        "median": q2,
+        "p75": q3,
+        "max": ordered[-1],
+    }
+
+
+def _summarize_compare_metrics(
+    *,
+    manifest_filings: list[dict[str, object]],
+    manifest_items: list[dict[str, object]],
+    flagged_rows: list[dict[str, object]],
+) -> dict[str, object]:
+    status_counts: Counter[str] = Counter()
+    n_items_values: list[int] = []
+    truncated_successor_total = 0
+    truncated_part_total = 0
+    for row in manifest_filings:
+        status_counts[classify_filing_status(row)] += 1
+        n_items_values.append(_parse_int(row.get("n_items_extracted"), default=0))
+        truncated_successor_total += _parse_int(
+            row.get("truncated_successor_total"), default=0
+        )
+        truncated_part_total += _parse_int(row.get("truncated_part_total"), default=0)
+
+    flag_counts: Counter[str] = Counter()
+    for row in flagged_rows:
+        for flag in _split_flags(str(row.get("flags") or "")):
+            flag_counts[flag] += 1
+
+    embedded_fail_counts: Counter[str] = Counter()
+    missing_part_10q = 0
+    for row in manifest_items:
+        if _parse_bool(row.get("embedded_heading_fail")):
+            classification = str(row.get("first_fail_classification") or "")
+            if classification:
+                embedded_fail_counts[classification] += 1
+        if _normalized_form_type(row.get("form")) == "10-Q":
+            if _parse_bool(row.get("item_missing_part")):
+                missing_part_10q += 1
+
+    return {
+        "status_counts": dict(status_counts),
+        "flag_counts": dict(flag_counts),
+        "embedded_fail_counts": dict(embedded_fail_counts),
+        "truncated_successor_total": truncated_successor_total,
+        "truncated_part_total": truncated_part_total,
+        "missing_part_10q": missing_part_10q,
+        "n_items_extracted_summary": _summary_stats(n_items_values),
+    }
+
+
+def _diff_counter(a: dict[str, int], b: dict[str, int]) -> dict[str, int]:
+    keys = set(a) | set(b)
+    return {key: int(b.get(key, 0)) - int(a.get(key, 0)) for key in sorted(keys)}
+
+
+def run_boundary_comparison(
+    base_config: DiagnosticsConfig,
+    *,
+    extraction_regime_b: Literal["legacy", "v2"] = "v2",
+    diagnostics_regime_b: Literal["legacy", "v2"] = "v2",
+    out_dir: Path | None = None,
+) -> dict[str, dict[str, object]]:
+    """
+    Run diagnostics twice (legacy vs v2) on the same inputs and return summary deltas.
+    """
+    base_dir = out_dir or (base_config.out_path.parent / "boundary_compare")
+    base_dir.mkdir(parents=True, exist_ok=True)
+
+    def _build_config(label: str, extraction_regime: str, diagnostics_regime: str) -> DiagnosticsConfig:
+        out_path = base_dir / f"suspicious_{label}.csv"
+        report_path = base_dir / f"suspicious_report_{label}.txt"
+        samples_dir = base_dir / f"samples_{label}"
+        manifest_items_path = base_dir / f"manifest_items_{label}.csv"
+        manifest_filings_path = base_dir / f"manifest_filings_{label}.csv"
+        sample_filings_path = base_dir / f"sample_filings_{label}.csv"
+        sample_items_path = base_dir / f"sample_items_{label}.csv"
+        html_out = base_dir / f"html_{label}"
+        return replace(
+            base_config,
+            out_path=out_path,
+            report_path=report_path,
+            samples_dir=samples_dir,
+            manifest_items_path=manifest_items_path,
+            manifest_filings_path=manifest_filings_path,
+            sample_filings_path=sample_filings_path,
+            sample_items_path=sample_items_path,
+            html_out=html_out,
+            emit_html=False,
+            emit_manifest=True,
+            sample_pass=0,
+            extraction_regime=extraction_regime,
+            diagnostics_regime=diagnostics_regime,
+        )
+
+    legacy_config = _build_config("legacy", "legacy", "legacy")
+    v2_config = _build_config("v2", extraction_regime_b, diagnostics_regime_b)
+
+    run_boundary_diagnostics(legacy_config)
+    run_boundary_diagnostics(v2_config)
+
+    legacy_metrics = _summarize_compare_metrics(
+        manifest_filings=_read_csv_rows(legacy_config.manifest_filings_path),
+        manifest_items=_read_csv_rows(legacy_config.manifest_items_path),
+        flagged_rows=_read_csv_rows(legacy_config.out_path),
+    )
+    v2_metrics = _summarize_compare_metrics(
+        manifest_filings=_read_csv_rows(v2_config.manifest_filings_path),
+        manifest_items=_read_csv_rows(v2_config.manifest_items_path),
+        flagged_rows=_read_csv_rows(v2_config.out_path),
+    )
+
+    delta = {
+        "status_counts": _diff_counter(
+            legacy_metrics["status_counts"], v2_metrics["status_counts"]
+        ),
+        "flag_counts": _diff_counter(
+            legacy_metrics["flag_counts"], v2_metrics["flag_counts"]
+        ),
+        "embedded_fail_counts": _diff_counter(
+            legacy_metrics["embedded_fail_counts"], v2_metrics["embedded_fail_counts"]
+        ),
+        "truncated_successor_total": (
+            v2_metrics["truncated_successor_total"]
+            - legacy_metrics["truncated_successor_total"]
+        ),
+        "truncated_part_total": (
+            v2_metrics["truncated_part_total"] - legacy_metrics["truncated_part_total"]
+        ),
+        "missing_part_10q": v2_metrics["missing_part_10q"]
+        - legacy_metrics["missing_part_10q"],
+        "n_items_extracted_summary": {
+            key: v2_metrics["n_items_extracted_summary"][key]
+            - legacy_metrics["n_items_extracted_summary"][key]
+            for key in v2_metrics["n_items_extracted_summary"]
+        },
+    }
+
+    return {
+        "legacy": legacy_metrics,
+        "v2": v2_metrics,
+        "delta": delta,
+    }
+
+
 def _is_pass_filing(row: dict[str, object]) -> bool:
     any_fail = _parse_bool(row.get("any_fail"))
     exclusion = str(row.get("filing_exclusion_reason") or "").strip()
@@ -2912,6 +3204,20 @@ def _build_parser() -> tuple[argparse.ArgumentParser, argparse.ArgumentParser]:
         default=None,
         help="Minimum largest-item share of total chars for HTML audit.",
     )
+    scan.add_argument(
+        "--extraction-regime",
+        type=str,
+        default="legacy",
+        choices=("legacy", "v2"),
+        help="Extraction regime to use (default: legacy).",
+    )
+    scan.add_argument(
+        "--diagnostics-regime",
+        type=str,
+        default="legacy",
+        choices=("legacy", "v2"),
+        help="Diagnostics regime to use (default: legacy).",
+    )
     scan.set_defaults(
         emit_manifest=True,
         emit_html=True,
@@ -2983,6 +3289,8 @@ def main(argv: list[str] | None = None) -> None:
             html_min_total_chars=args.html_min_total_chars,
             html_min_largest_item_chars=args.html_min_largest_item_chars,
             html_min_largest_item_chars_pct_total=args.html_min_largest_item_chars_pct_total,
+            extraction_regime=args.extraction_regime,
+            diagnostics_regime=args.diagnostics_regime,
         )
         run_boundary_diagnostics(config)
         return
@@ -3005,6 +3313,7 @@ __all__ = [
     "RegressionConfig",
     "DEFAULT_ROOT_CAUSES_PATH",
     "load_root_causes_text",
+    "run_boundary_comparison",
     "run_boundary_diagnostics",
     "run_boundary_regression",
     "main",
