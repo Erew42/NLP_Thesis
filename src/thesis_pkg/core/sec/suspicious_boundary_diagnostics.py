@@ -3,12 +3,14 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
+import math
 import random
 import re
+import statistics
 import sys
 from collections import Counter, defaultdict
 from contextlib import ExitStack
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from pathlib import Path
 from typing import Literal
@@ -164,6 +166,8 @@ COHEN2020_ALL_ITEMS_10Q_KEYS = {
     "II:4",
     "II:5",
 }
+
+PER_ITEM_REPORT_LIMIT = 30
 
 PROVENANCE_FIELDS = [
     "prov_python",
@@ -328,6 +332,7 @@ class DiagnosticsConfig:
     html_min_largest_item_chars_pct_total: float | None = None
     extraction_regime: Literal["legacy", "v2"] = "legacy"
     diagnostics_regime: Literal["legacy", "v2"] = "legacy"
+    focus_items: dict[str, set[str]] | None = None
 
 
 @dataclass(frozen=True)
@@ -471,6 +476,21 @@ class DiagnosticsRow:
             "leak_next_heading": self.leak_next_heading,
         }
         return {**provenance, **row}
+
+
+@dataclass
+class _ItemBreakdownStats:
+    n_items: int = 0
+    warn_items: int = 0
+    fail_items: int = 0
+    internal_heading_leak: int = 0
+    warn_class_counts: Counter[str] = field(default_factory=Counter)
+    warn_flag_counts: Counter[str] = field(default_factory=Counter)
+    fail_class_counts: Counter[str] = field(default_factory=Counter)
+    truncated_successor: int = 0
+    truncated_part: int = 0
+    missing_part: int = 0
+    embedded_pos_pcts: list[float] = field(default_factory=list)
 
 
 def _parse_date(value: str | date | datetime | None) -> date | None:
@@ -903,6 +923,84 @@ def _parse_core_items_arg(value: str | None) -> tuple[str, ...]:
     return cleaned or DEFAULT_CORE_ITEMS
 
 
+def _normalize_focus_form(value: str | None) -> str | None:
+    if not value:
+        return None
+    cleaned = re.sub(r"[^A-Z0-9]", "", str(value).upper())
+    if cleaned == "10K":
+        return "10-K"
+    if cleaned == "10Q":
+        return "10-Q"
+    return None
+
+
+def _normalize_focus_item_key(form_type: str, token: str) -> str | None:
+    cleaned = str(token).strip().upper()
+    if not cleaned:
+        return None
+    normalized_form = _normalized_form_type(form_type) or form_type
+    if normalized_form == "10-Q":
+        if ":" in cleaned:
+            part, item_id = cleaned.split(":", 1)
+            part = part.strip().upper() or "?"
+            item_id = item_id.strip().upper()
+            return f"{part}:{item_id}" if item_id else f"{part}:?"
+        return f"?:{cleaned}"
+    if ":" in cleaned:
+        part, item_id = cleaned.split(":", 1)
+        part = part.strip().upper()
+        item_id = item_id.strip().upper()
+        if part and item_id:
+            return f"{part}:{item_id}"
+        return item_id or part or None
+    return cleaned
+
+
+def _parse_focus_items(value: str | None) -> dict[str, set[str]] | None:
+    if not value or not str(value).strip():
+        return None
+    focus: dict[str, set[str]] = {}
+    for raw_section in str(value).split(";"):
+        section = raw_section.strip()
+        if not section or ":" not in section:
+            continue
+        form_raw, items_raw = section.split(":", 1)
+        form = _normalize_focus_form(form_raw)
+        if not form:
+            continue
+        items: set[str] = set()
+        for token in items_raw.split(","):
+            item_key = _normalize_focus_item_key(form, token)
+            if item_key:
+                items.add(item_key)
+        if items:
+            focus[form] = items
+    return focus or None
+
+
+def _item_key_for_report(
+    form_type: str | None,
+    item_part: str | None,
+    item_id: str | None,
+) -> str:
+    normalized_form = _normalized_form_type(form_type) or str(form_type or "")
+    item_id_clean = str(item_id or "").strip().upper()
+    part_clean = _normalize_part(item_part) or str(item_part or "").strip().upper()
+    if normalized_form == "10-Q":
+        if part_clean:
+            if item_id_clean:
+                return f"{part_clean}:{item_id_clean}"
+            return f"{part_clean}:?"
+        if item_id_clean:
+            return f"?:{item_id_clean}"
+        return "?:?"
+    if part_clean:
+        if item_id_clean:
+            return f"{part_clean}:{item_id_clean}"
+        return part_clean
+    return item_id_clean or "UNKNOWN"
+
+
 def _quartile_edges(values: list[int]) -> tuple[int, int, int]:
     if not values:
         return (0, 0, 0)
@@ -1062,6 +1160,256 @@ def _format_embedded_fail_entry(
         ]
     )
     return f"{prefix}{' '.join(fields)}"
+
+
+def _rate(count: int, total: int) -> float:
+    if total <= 0:
+        return 0.0
+    return count / total
+
+
+def _format_counter_top(counter: Counter[str], *, top_n: int = 3) -> str:
+    if not counter:
+        return "(none)"
+    return ", ".join(
+        f"{label}={count}" for label, count in counter.most_common(top_n)
+    )
+
+
+def _summarize_pos_pcts(values: list[float]) -> tuple[float | None, float | None]:
+    if not values:
+        return (None, None)
+    ordered = sorted(values)
+    median = statistics.median(ordered)
+    p90_index = max(0, min(len(ordered) - 1, math.ceil(0.9 * len(ordered)) - 1))
+    return (median, ordered[p90_index])
+
+
+def _update_item_breakdown(
+    item_breakdown: dict[tuple[str, str], _ItemBreakdownStats],
+    *,
+    form_type: str | None,
+    item_part: str | None,
+    item_id: str | None,
+    flags: list[str],
+    item_warn: bool,
+    item_fail: bool,
+    internal_heading_leak: bool,
+    embedded_hits: list[EmbeddedHeadingHit],
+    embedded_first_flagged: EmbeddedHeadingHit | None,
+    truncated_successor: bool,
+    truncated_part: bool,
+    item_missing_part: bool,
+    item_full_text: str,
+) -> None:
+    form_label = _normalized_form_type(form_type) or str(form_type or "UNKNOWN")
+    item_key = _item_key_for_report(form_label, item_part, item_id)
+    stats = item_breakdown.setdefault((form_label, item_key), _ItemBreakdownStats())
+
+    stats.n_items += 1
+    if item_warn:
+        stats.warn_items += 1
+    if item_fail:
+        stats.fail_items += 1
+
+    if item_warn and internal_heading_leak:
+        stats.internal_heading_leak += 1
+
+    if item_warn and flags:
+        for flag in flags:
+            if flag in {"embedded_heading_warn", "embedded_heading_fail"}:
+                continue
+            stats.warn_flag_counts[flag] += 1
+
+    if item_warn and embedded_hits:
+        for hit in embedded_hits:
+            if hit.classification in EMBEDDED_WARN_CLASSIFICATIONS:
+                stats.warn_class_counts[hit.classification] += 1
+
+    if item_fail and embedded_hits:
+        for hit in embedded_hits:
+            if hit.classification in EMBEDDED_FAIL_CLASSIFICATIONS:
+                stats.fail_class_counts[hit.classification] += 1
+
+    if truncated_successor:
+        stats.truncated_successor += 1
+    if truncated_part:
+        stats.truncated_part += 1
+
+    if _normalized_form_type(form_type) == "10-Q" and item_missing_part:
+        stats.missing_part += 1
+
+    if embedded_first_flagged is not None:
+        full_len = embedded_first_flagged.full_text_len
+        if full_len <= 0:
+            full_len = len(item_full_text or "")
+        stats.embedded_pos_pcts.append(
+            _char_pos_pct(embedded_first_flagged.char_pos, full_len)
+        )
+
+
+def _build_item_breakdown_rows(
+    item_breakdown: dict[tuple[str, str], _ItemBreakdownStats],
+    *,
+    focus_items: dict[str, set[str]] | None,
+) -> dict[str, list[dict[str, object]]]:
+    rows_by_form: dict[str, list[dict[str, object]]] = defaultdict(list)
+    for (form, item_key), stats in item_breakdown.items():
+        if focus_items is not None:
+            allowed = focus_items.get(form)
+            if not allowed or item_key not in allowed:
+                continue
+        n_items = stats.n_items
+        warn_rate = _rate(stats.warn_items, n_items)
+        fail_rate = _rate(stats.fail_items, n_items)
+        median_pct, p90_pct = _summarize_pos_pcts(stats.embedded_pos_pcts)
+        rows_by_form[form].append(
+            {
+                "form": form,
+                "item_key": item_key,
+                "n_items": n_items,
+                "warn_items": stats.warn_items,
+                "warn_rate": warn_rate,
+                "fail_items": stats.fail_items,
+                "fail_rate": fail_rate,
+                "top_warn_drivers": (
+                    "internal_heading_leak="
+                    f"{stats.internal_heading_leak}; embedded_warn: "
+                    f"{_format_counter_top(stats.warn_class_counts)}; flags: "
+                    f"{_format_counter_top(stats.warn_flag_counts)}"
+                ),
+                "top_fail_drivers": (
+                    "embedded_fail: "
+                    f"{_format_counter_top(stats.fail_class_counts)}"
+                ),
+                "pct_truncated_successor": _rate(stats.truncated_successor, n_items),
+                "pct_truncated_part": _rate(stats.truncated_part, n_items),
+                "pct_missing_part": _rate(stats.missing_part, n_items)
+                if form == "10-Q"
+                else None,
+                "median_first_embedded_pct": median_pct,
+                "p90_first_embedded_pct": p90_pct,
+            }
+        )
+
+    for form, rows in rows_by_form.items():
+        rows.sort(
+            key=lambda row: (
+                float(row["fail_rate"]),
+                float(row["warn_rate"]),
+                int(row["n_items"]),
+            ),
+            reverse=True,
+        )
+    return rows_by_form
+
+
+def _format_per_item_breakdown_table(
+    rows: list[dict[str, object]],
+    *,
+    limit: int,
+) -> list[str]:
+    if not rows:
+        return ["  (no items matched)"]
+    header = (
+        "  item_key  n_items  warn_items  warn_rate  fail_items  fail_rate  "
+        "top_warn_drivers | top_fail_drivers"
+    )
+    lines = [header]
+    for row in rows[:limit]:
+        lines.append(
+            "  "
+            f"{row['item_key']:<8} "
+            f"{int(row['n_items']):>7} "
+            f"{int(row['warn_items']):>10} "
+            f"{float(row['warn_rate']):>8.1%} "
+            f"{int(row['fail_items']):>10} "
+            f"{float(row['fail_rate']):>8.1%} "
+            f"{row['top_warn_drivers']} | {row['top_fail_drivers']}"
+        )
+    return lines
+
+
+def _format_boundary_health_table(
+    rows: list[dict[str, object]],
+    *,
+    limit: int,
+) -> list[str]:
+    if not rows:
+        return ["  (no items matched)"]
+    header = (
+        "  item_key  n_items  pct_truncated_successor  pct_truncated_part  "
+        "pct_missing_part  median_first_embedded_pct  p90_first_embedded_pct"
+    )
+    lines = [header]
+    for row in rows[:limit]:
+        missing_part = row["pct_missing_part"]
+        median_pct = row["median_first_embedded_pct"]
+        p90_pct = row["p90_first_embedded_pct"]
+        lines.append(
+            "  "
+            f"{row['item_key']:<8} "
+            f"{int(row['n_items']):>7} "
+            f"{float(row['pct_truncated_successor']):>23.1%} "
+            f"{float(row['pct_truncated_part']):>18.1%} "
+            f"{(f'{missing_part:.1%}' if isinstance(missing_part, float) else 'n/a'):>16} "
+            f"{(f'{median_pct:.1%}' if isinstance(median_pct, float) else 'n/a'):>24} "
+            f"{(f'{p90_pct:.1%}' if isinstance(p90_pct, float) else 'n/a'):>21}"
+        )
+    return lines
+
+
+def _sorted_forms(forms: list[str]) -> list[str]:
+    order = {"10-K": 0, "10-Q": 1}
+    return sorted(forms, key=lambda form: (order.get(form, 99), form))
+
+
+def _append_item_breakdown_sections(
+    lines_out: list[str],
+    *,
+    title: str,
+    rows_by_form: dict[str, list[dict[str, object]]],
+) -> None:
+    lines_out.append("")
+    lines_out.append(title)
+    lines_out.append("Rates shown as % of n_items.")
+    lines_out.append(
+        "Showing top "
+        f"{PER_ITEM_REPORT_LIMIT} rows per form. Increase PER_ITEM_REPORT_LIMIT in "
+        "suspicious_boundary_diagnostics.py to show more."
+    )
+    if not rows_by_form:
+        lines_out.append("  (no items matched)")
+    else:
+        for form in _sorted_forms(list(rows_by_form)):
+            lines_out.append(f"Form: {form}")
+            lines_out.extend(
+                _format_per_item_breakdown_table(
+                    rows_by_form[form], limit=PER_ITEM_REPORT_LIMIT
+                )
+            )
+
+    lines_out.append("")
+    lines_out.append("Boundary health signals by item")
+    lines_out.append(
+        "Rates shown as % of n_items. Embedded position stats use first_embedded "
+        "hit positions (char_pos / item_len)."
+    )
+    lines_out.append(
+        "Showing top "
+        f"{PER_ITEM_REPORT_LIMIT} rows per form. Increase PER_ITEM_REPORT_LIMIT in "
+        "suspicious_boundary_diagnostics.py to show more."
+    )
+    if not rows_by_form:
+        lines_out.append("  (no items matched)")
+    else:
+        for form in _sorted_forms(list(rows_by_form)):
+            lines_out.append(f"Form: {form}")
+            lines_out.extend(
+                _format_boundary_health_table(
+                    rows_by_form[form], limit=PER_ITEM_REPORT_LIMIT
+                )
+            )
 
 
 def load_root_causes_text(path: Path = DEFAULT_ROOT_CAUSES_PATH) -> str:
@@ -1226,6 +1574,8 @@ def _build_diagnostics_report(
     parquet_dir: Path,
     max_examples: int,
     provenance: dict[str, str],
+    item_breakdown: dict[tuple[str, str], _ItemBreakdownStats],
+    focus_items: dict[str, set[str]] | None,
 ) -> str:
     flags_count: Counter[str] = Counter()
     examples_by_flag: dict[str, list[dict[str, str]]] = defaultdict(list)
@@ -1479,6 +1829,20 @@ def _build_diagnostics_report(
     else:
         lines_out.append("  (no internal heading leaks detected)")
 
+    rows_all = _build_item_breakdown_rows(item_breakdown, focus_items=None)
+    _append_item_breakdown_sections(
+        lines_out,
+        title="Per-item breakdown (All extracted items)",
+        rows_by_form=rows_all,
+    )
+    if focus_items is not None:
+        rows_focus = _build_item_breakdown_rows(item_breakdown, focus_items=focus_items)
+        _append_item_breakdown_sections(
+            lines_out,
+            title="Per-item breakdown (Focus set)",
+            rows_by_form=rows_focus,
+        )
+
     return "\n".join(lines_out)
 
 
@@ -1523,6 +1887,7 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
     truncated_part_total = 0
     # Keep a single row representation to avoid CSV/report/sample schema drift.
     flagged_rows: list[DiagnosticsRow] = []
+    item_breakdown: dict[tuple[str, str], _ItemBreakdownStats] = {}
     filing_rows_for_sampling: list[dict[str, object]] = []
 
     want_cols = [
@@ -1693,6 +2058,8 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
                         item_id = str(item.get("item_id") or "")
                         item_id_norm = item_id.strip().upper()
                         item_part = item.get("item_part")
+                        item_key = str(item.get("item") or "")
+                        item_full_text = str(item.get("full_text") or "")
                         canonical_item = str(item.get("canonical_item") or "")
                         if canonical_item:
                             extracted_canonicals.add(canonical_item)
@@ -1709,7 +2076,7 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
                         if is_part_only_prefix and heading_offset and heading_offset > 0:
                             total_part_only_prefix += 1
 
-                        leak_info = _find_internal_heading_leak(item.get("full_text") or "")
+                        leak_info = _find_internal_heading_leak(item_full_text)
                         leak_pos: int | str = ""
                         leak_match = ""
                         leak_context = ""
@@ -1719,7 +2086,7 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
                         if leak_info is not None and config.diagnostics_regime == "v2":
                             leak_escalate = _should_escalate_internal_leak_v2(
                                 leak_info=leak_info,
-                                item_full_text=str(item.get("full_text") or ""),
+                                item_full_text=item_full_text,
                                 next_item_id=next_item_id,
                                 next_part=str(next_part or ""),
                                 expected_item_ids=expected_item_ids,
@@ -1727,7 +2094,7 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
                             )
                         embedded_hits = (
                             _find_embedded_heading_hits(
-                                item.get("full_text") or "",
+                                item_full_text,
                                 current_item_id=item_id,
                                 current_part=current_part_norm,
                                 next_item_id=next_item_id,
@@ -1832,6 +2199,25 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
                         )
                         item_fail = embedded_fail or bool(first_fail_classification)
                         item_warn = bool(flags) and not item_fail
+                        item_missing_part = bool(item.get("item_missing_part")) or item_key.startswith(
+                            "?:"
+                        )
+                        _update_item_breakdown(
+                            item_breakdown,
+                            form_type=form_label,
+                            item_part=str(item_part or ""),
+                            item_id=item_id,
+                            flags=flags,
+                            item_warn=item_warn,
+                            item_fail=item_fail,
+                            internal_heading_leak=leak_info is not None,
+                            embedded_hits=embedded_hits,
+                            embedded_first_flagged=embedded_first_flagged,
+                            truncated_successor=bool(item.get("_truncated_successor_heading")),
+                            truncated_part=bool(item.get("_truncated_part_boundary")),
+                            item_missing_part=item_missing_part,
+                            item_full_text=item_full_text,
+                        )
                         counts_for_target = _item_counts_for_target(
                             canonical_item,
                             normalized_form=normalized_form,
@@ -1883,10 +2269,6 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
                             if item_id_norm == "16":
                                 item_status = "excluded"
 
-                            item_key = str(item.get("item") or "")
-                            item_missing_part = bool(item.get("item_missing_part")) or item_key.startswith(
-                                "?:"
-                            )
                             manifest_items_writer.writerow(
                                 {
                                     "doc_id": doc_id,
@@ -2100,6 +2482,8 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
         parquet_dir=parquet_dir,
         max_examples=config.max_examples,
         provenance=provenance,
+        item_breakdown=item_breakdown,
+        focus_items=config.focus_items,
     )
     print(report)
     config.report_path.write_text(report, encoding="utf-8")
@@ -3187,6 +3571,15 @@ def _build_parser() -> tuple[argparse.ArgumentParser, argparse.ArgumentParser]:
         help="Restrict WARN/FAIL and missing-items to a target set (e.g., cohen2020).",
     )
     scan.add_argument(
+        "--focus-items",
+        type=str,
+        default=None,
+        help=(
+            "Optional per-item focus set (e.g., "
+            "\"10K:1A,7,7A,8,15;10Q:I:1,I:2,I:3,II:1,II:2\")."
+        ),
+    )
+    scan.add_argument(
         "--html-min-total-chars",
         type=int,
         default=None,
@@ -3283,6 +3676,7 @@ def main(argv: list[str] | None = None) -> None:
             sample_seed=args.seed,
             core_items=_parse_core_items_arg(args.core_items),
             target_set=_normalize_target_set(args.target_set),
+            focus_items=_parse_focus_items(args.focus_items),
             emit_html=args.emit_html,
             html_out=args.html_out,
             html_scope=args.html_scope,
