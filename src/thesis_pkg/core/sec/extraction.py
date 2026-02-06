@@ -68,6 +68,7 @@ from .utilities import (
 )
 
 HEADER_SEARCH_LIMIT_DEFAULT = 5000
+MISSING_PART_PLACEHOLDER_PREFIX = "?:"
 
 
 @dataclass(frozen=True)
@@ -159,6 +160,7 @@ def _scan_part_markers_v2(
     allowed_parts: set[str],
     scan_sparse_layout: bool,
     toc_mask: set[int],
+    is_10q: bool = False,
 ) -> list[_PartMarker]:
     markers: list[_PartMarker] = []
     for i, line in enumerate(lines):
@@ -180,9 +182,20 @@ def _scan_part_markers_v2(
             if part not in allowed_parts:
                 continue
             prefix = line[: match.start()]
+            allow_form_header = False
             if prefix.strip() and not _prefix_is_bullet(prefix):
-                continue
+                if is_10q and not _prefix_looks_like_cross_ref(prefix):
+                    if re.search(r"(?i)form\s+10-q|quarterly report", prefix):
+                        suffix = line[match.end() :].lower()
+                        if part == "I" and "financial" in suffix:
+                            allow_form_header = True
+                        elif part == "II" and "other" in suffix:
+                            allow_form_header = True
+                if not allow_form_header:
+                    continue
             high_confidence = _part_marker_is_heading(line, match)
+            if allow_form_header:
+                high_confidence = True
             if not high_confidence and scan_sparse_layout and match.start() == 0:
                 if ITEM_WORD_PATTERN.search(line) and not _looks_like_toc_heading_line(lines, i):
                     high_confidence = True
@@ -197,7 +210,24 @@ def _scan_part_markers_v2(
                 )
             )
 
-    return markers
+    if not is_10q or not markers:
+        return markers
+
+    filtered: list[_PartMarker] = []
+    seen_part_i = False
+    seen_part_ii = False
+    for marker in markers:
+        if marker.part == "I":
+            if not seen_part_i and not seen_part_ii:
+                filtered.append(marker)
+                seen_part_i = True
+            continue
+        if marker.part == "II":
+            if seen_part_i and not seen_part_ii:
+                filtered.append(marker)
+                seen_part_ii = True
+            continue
+    return filtered
 
 
 def _apply_part_by_position_v2(
@@ -224,6 +254,78 @@ def _apply_part_by_position_v2(
         else:
             updated.append(boundary)
     return updated
+
+
+def _infer_10q_part_from_heading(item_id: str, heading_line: str) -> str | None:
+    item_id_norm = item_id.strip().upper()
+    if item_id_norm in {"1A", "3", "4", "5", "6"}:
+        return "II"
+
+    normalized = re.sub(r"\s+", " ", heading_line.lower()).strip()
+    if item_id_norm == "1":
+        if "financial statements" in normalized or "financial information" in normalized:
+            return "I"
+        if "legal proceedings" in normalized:
+            return "II"
+        return None
+
+    if item_id_norm == "2":
+        has_management = "management" in normalized
+        has_discussion = "discussion" in normalized or re.search(r"md\s*&\s*a", normalized)
+        if (has_management and has_discussion) or "results of operations" in normalized:
+            return "I"
+        if (
+            "unregistered sales" in normalized
+            or "use of proceeds" in normalized
+            or "equity securities" in normalized
+        ):
+            return "II"
+    return None
+
+
+def _apply_part_by_title_10q_v2(
+    boundaries: list[_ItemBoundary],
+    lines: list[str],
+) -> list[_ItemBoundary]:
+    if not boundaries:
+        return boundaries
+    updated: list[_ItemBoundary] = []
+    for boundary in boundaries:
+        if boundary.item_part is not None:
+            updated.append(boundary)
+            continue
+        heading_line = (
+            lines[boundary.line_index]
+            if 0 <= boundary.line_index < len(lines)
+            else ""
+        )
+        inferred = _infer_10q_part_from_heading(boundary.item_id, heading_line)
+        if inferred:
+            updated.append(replace(boundary, item_part=inferred))
+        else:
+            updated.append(boundary)
+    return updated
+
+
+def _apply_missing_part_placeholder_v2(
+    boundaries: list[_ItemBoundary],
+) -> list[_ItemBoundary]:
+    if not boundaries:
+        return boundaries
+    updated: list[_ItemBoundary] = []
+    missing_idx = 0
+    for boundary in boundaries:
+        if boundary.item_part is None:
+            placeholder = f"{MISSING_PART_PLACEHOLDER_PREFIX}{missing_idx}"
+            missing_idx += 1
+            updated.append(replace(boundary, item_part=placeholder))
+        else:
+            updated.append(boundary)
+    return updated
+
+
+def _is_missing_part_placeholder(part: str | None) -> bool:
+    return isinstance(part, str) and part.startswith(MISSING_PART_PLACEHOLDER_PREFIX)
 
 
 def extract_filing_items(
@@ -363,8 +465,9 @@ def extract_filing_items(
                 lines,
                 line_starts,
                 allowed_parts=allowed_parts,
-                scan_sparse_layout=scan_sparse_layout,
+                scan_sparse_layout=scan_sparse_layout or is_10q,
                 toc_mask=toc_mask,
+                is_10q=True,
             )
 
         # Build candidates by scanning lines in order while tracking PART markers within each line.
@@ -673,6 +776,8 @@ def extract_filing_items(
 
     if extraction_regime == "v2" and is_10q:
         boundaries = _apply_part_by_position_v2(boundaries, part_markers)
+        boundaries = _apply_part_by_title_10q_v2(boundaries, lines)
+        boundaries = _apply_missing_part_placeholder_v2(boundaries)
 
     boundaries, selection_meta = _select_best_boundaries(
         boundaries,
@@ -723,6 +828,8 @@ def extract_filing_items(
         truncated_part = False
         item_id = b.item_id
         part = b.item_part
+        if is_10q and extraction_regime == "v2" and _is_missing_part_placeholder(part):
+            part = None
         inferred_part = (
             _infer_part_for_item_id(
                 item_id,

@@ -640,6 +640,8 @@ def _item_order_key(
 ) -> tuple[int, int, int, str] | None:
     if not item_id:
         return None
+    if not is_10k and isinstance(item_part, str) and item_part.startswith("?:"):
+        item_part = None
     part = item_part
     if part is None and is_10k:
         part = _infer_part_for_item_id(

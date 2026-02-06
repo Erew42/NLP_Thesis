@@ -117,6 +117,23 @@ PREFIX_KIND_PART_ONLY = "part_only"
 PREFIX_KIND_BULLET = "bullet"
 PREFIX_KIND_TEXTUAL = "textual"
 EMBEDDED_WARN_CLUSTER_MIN = 2
+MISSING_PART_BUCKETS = (
+    "combined_heading_part_item",
+    "form_header_midline_part",
+    "part_marker_line_only",
+    "item_only_no_part",
+    "other_unclear",
+)
+MISSING_PART_PART_PATTERN = re.compile(r"\bPART\s+(I|II)\b", re.IGNORECASE)
+MISSING_PART_ITEM_PATTERN = re.compile(r"\bITEM\b", re.IGNORECASE)
+MISSING_PART_FORM_HEADER_PATTERN = re.compile(
+    r"\bFORM\s+10-Q\b|\bQUARTERLY\s+REPORT\b", re.IGNORECASE
+)
+MISSING_PART_PART_ITEM_PUNCT_PATTERN = re.compile(
+    r"\bPART\b[^\n]{0,80}[,\-][^\n]{0,80}\bITEM\b"
+    r"|\bITEM\b[^\n]{0,80}[,\-][^\n]{0,80}\bPART\b",
+    re.IGNORECASE,
+)
 
 DEFAULT_PARQUET_DIR = Path(
     r"C:\Users\erik9\Documents\SEC_Data\Data\Sample_Filings\parquet_batches"
@@ -130,6 +147,7 @@ DEFAULT_MANIFEST_ITEMS_PATH = Path("results/extraction_manifest_items.csv")
 DEFAULT_MANIFEST_FILINGS_PATH = Path("results/extraction_manifest_filings.csv")
 DEFAULT_SAMPLE_FILINGS_PATH = Path("results/review_sample_pass_filings.csv")
 DEFAULT_SAMPLE_ITEMS_PATH = Path("results/review_sample_pass_items.csv")
+DEFAULT_MISSING_PART_SAMPLES_PATH = Path("results/missing_part_10q_samples.csv")
 DEFAULT_CORE_ITEMS = ("1", "1A", "7", "7A", "8")
 OFFSET_BASIS_EXTRACTOR_BODY = "extractor_body"
 DEFAULT_HTML_OUT_DIR = Path("results/html_audit")
@@ -185,6 +203,7 @@ DIAGNOSTICS_ROW_FIELDS = [
     "doc_id",
     "cik",
     "accession",
+    "form_type",
     "filing_date",
     "period_end",
     "item_part",
@@ -286,6 +305,23 @@ MANIFEST_ITEM_FIELDS = [
     "offset_basis",
 ]
 
+MISSING_PART_SAMPLE_FIELDS = [
+    "doc_id",
+    "accession",
+    "filing_date",
+    "period_end",
+    "form_type",
+    "item_id",
+    "canonical_item",
+    "heading_line_raw",
+    "heading_index",
+    "heading_offset",
+    "prefix_text",
+    "prefix_kind",
+    "next_line",
+    "bucket_name",
+]
+
 MANIFEST_FILING_FIELDS = [
     "doc_id",
     "accession",
@@ -325,6 +361,8 @@ class DiagnosticsConfig:
     sample_seed: int = 42
     sample_filings_path: Path = DEFAULT_SAMPLE_FILINGS_PATH
     sample_items_path: Path = DEFAULT_SAMPLE_ITEMS_PATH
+    dump_missing_part_samples: int = 0
+    missing_part_samples_path: Path = DEFAULT_MISSING_PART_SAMPLES_PATH
     core_items: tuple[str, ...] = DEFAULT_CORE_ITEMS
     target_set: str | None = None
     emit_html: bool = True
@@ -366,6 +404,7 @@ class DiagnosticsRow:
     item_part: str
     item_id: str
     item: str
+    item_missing_part: bool
     canonical_item: str
     exists_by_regime: str | bool | None
     item_status: str
@@ -427,11 +466,13 @@ class DiagnosticsRow:
             "doc_id": self.doc_id,
             "cik": self.cik,
             "accession": self.accession,
+            "form_type": self.form_type,
             "filing_date": self.filing_date,
             "period_end": self.period_end,
             "item_part": self.item_part,
             "item_id": self.item_id,
             "item": self.item,
+            "item_missing_part": self.item_missing_part,
             "canonical_item": self.canonical_item,
             "exists_by_regime": self.exists_by_regime,
             "item_status": self.item_status,
@@ -497,6 +538,18 @@ class _ItemBreakdownStats:
     missing_part: int = 0
     embedded_pos_pcts: list[float] = field(default_factory=list)
 
+
+@dataclass
+class _MissingPartDiagnostics:
+    total_10q_items: int = 0
+    missing_part_count: int = 0
+    missing_by_item_id: Counter[str] = field(default_factory=Counter)
+    missing_by_canonical: Counter[str] = field(default_factory=Counter)
+    missing_by_bucket: Counter[str] = field(default_factory=Counter)
+    missing_by_bucket_nonbullet_prefix: Counter[str] = field(default_factory=Counter)
+    examples_by_bucket: dict[str, list[dict[str, str]]] = field(
+        default_factory=lambda: defaultdict(list)
+    )
 
 def _parse_date(value: str | date | datetime | None) -> date | None:
     if value is None:
@@ -1229,6 +1282,94 @@ def _summarize_pos_pcts(values: list[float]) -> tuple[float | None, float | None
     return (median, ordered[p90_index])
 
 
+def _missing_part_bucket(
+    heading_line_raw: str,
+    prefix_text: str,
+    next_line: str,
+) -> str:
+    combined = " ".join(
+        part for part in (heading_line_raw, prefix_text, next_line) if part
+    )
+    if not combined:
+        return "other_unclear"
+    if MISSING_PART_PART_PATTERN.search(combined) and MISSING_PART_ITEM_PATTERN.search(
+        combined
+    ):
+        if MISSING_PART_PART_ITEM_PUNCT_PATTERN.search(combined):
+            return "combined_heading_part_item"
+    if MISSING_PART_FORM_HEADER_PATTERN.search(combined) and MISSING_PART_PART_PATTERN.search(
+        combined
+    ):
+        return "form_header_midline_part"
+    if MISSING_PART_PART_PATTERN.search(combined) and not MISSING_PART_ITEM_PATTERN.search(
+        combined
+    ):
+        return "part_marker_line_only"
+    if MISSING_PART_ITEM_PATTERN.search(combined) and not MISSING_PART_PART_PATTERN.search(
+        combined
+    ):
+        return "item_only_no_part"
+    return "other_unclear"
+
+
+def _prefix_non_empty_non_bullet(prefix_kind: str) -> bool:
+    return prefix_kind not in {"", PREFIX_KIND_BLANK, PREFIX_KIND_BULLET}
+
+
+def _update_missing_part_diagnostics(
+    stats: _MissingPartDiagnostics,
+    *,
+    doc_id: str,
+    accession: str,
+    item_key: str,
+    item_id: str,
+    canonical_item: str,
+    heading_line_raw: str,
+    prefix_text: str,
+    prefix_kind: str,
+    next_line: str,
+) -> str:
+    bucket = _missing_part_bucket(heading_line_raw, prefix_text, next_line)
+    stats.missing_part_count += 1
+    stats.missing_by_item_id[item_id or ""] += 1
+    if canonical_item:
+        stats.missing_by_canonical[canonical_item] += 1
+    stats.missing_by_bucket[bucket] += 1
+    if _prefix_non_empty_non_bullet(prefix_kind):
+        stats.missing_by_bucket_nonbullet_prefix[bucket] += 1
+    examples = stats.examples_by_bucket[bucket]
+    if len(examples) < 3:
+        examples.append(
+            {
+                "doc_id": doc_id,
+                "accession": accession,
+                "item": item_key,
+                "heading": heading_line_raw,
+            }
+        )
+    return bucket
+
+
+def _reservoir_sample_update(
+    sample: list[dict[str, object]],
+    entry: dict[str, object],
+    *,
+    seen: int,
+    sample_size: int,
+    rng: random.Random,
+) -> int:
+    seen += 1
+    if sample_size <= 0:
+        return seen
+    if len(sample) < sample_size:
+        sample.append(entry)
+        return seen
+    pick = rng.randint(1, seen)
+    if pick <= sample_size:
+        sample[pick - 1] = entry
+    return seen
+
+
 def _update_item_breakdown(
     item_breakdown: dict[tuple[str, str], _ItemBreakdownStats],
     *,
@@ -1492,6 +1633,7 @@ def _build_flagged_row(
     item: dict,
     item_id: str,
     item_part: str,
+    item_missing_part: bool,
     heading_line_clean: str,
     heading_line_raw: str,
     heading_idx: int | None,
@@ -1534,6 +1676,7 @@ def _build_flagged_row(
         item_part=item_part or "",
         item_id=item_id,
         item=item.get("item") or "",
+        item_missing_part=item_missing_part,
         canonical_item=item.get("canonical_item") or "",
         exists_by_regime=item.get("exists_by_regime"),
         item_status=item.get("item_status") or "",
@@ -1618,7 +1761,10 @@ def _build_diagnostics_report(
     parquet_dir: Path,
     max_examples: int,
     provenance: dict[str, str],
+    extraction_regime: str,
+    diagnostics_regime: str,
     item_breakdown: dict[tuple[str, str], _ItemBreakdownStats],
+    missing_part_diagnostics: _MissingPartDiagnostics,
     focus_items: dict[str, set[str]] | None,
     report_item_scope: Literal["all", "target", "focus"],
     target_set: str | None,
@@ -1715,6 +1861,8 @@ def _build_diagnostics_report(
         "  enable_embedded_verifier: "
         f"{provenance.get('prov_enable_embedded_verifier', '')}"
     )
+    lines_out.append(f"  extraction_regime: {extraction_regime}")
+    lines_out.append(f"  diagnostics_regime: {diagnostics_regime}")
     lines_out.append("")
     lines_out.append(f"Parquet dir: {parquet_dir}")
     lines_out.append(f"Total filings processed: {total_filings}")
@@ -1728,6 +1876,68 @@ def _build_diagnostics_report(
     lines_out.append(f"Start selections unverified: {start_selection_unverified_total}")
     lines_out.append(f"Truncated by successor heading: {truncated_successor_total}")
     lines_out.append(f"Truncated by PART boundary: {truncated_part_total}")
+    lines_out.append("")
+    lines_out.append("10-Q PART completeness diagnostics")
+    total_10q_items = missing_part_diagnostics.total_10q_items
+    missing_part_count = missing_part_diagnostics.missing_part_count
+    missing_part_rate = _rate(missing_part_count, total_10q_items)
+    lines_out.append(f"  total_10q_items: {total_10q_items}")
+    lines_out.append(f"  missing_part_count: {missing_part_count}")
+    lines_out.append(f"  missing_part_rate: {missing_part_rate:.2%}")
+    if missing_part_diagnostics.missing_by_item_id:
+        top_items = missing_part_diagnostics.missing_by_item_id.most_common(15)
+        lines_out.append("  missing_part_by_item_id (top 15):")
+        for item_id, count in top_items:
+            lines_out.append(f"    {item_id or 'UNKNOWN'}: {count}")
+    else:
+        lines_out.append("  missing_part_by_item_id (top 15): (none)")
+    if missing_part_diagnostics.missing_by_canonical:
+        top_canonicals = missing_part_diagnostics.missing_by_canonical.most_common(15)
+        lines_out.append("  missing_part_by_canonical_item (top 15):")
+        for canonical, count in top_canonicals:
+            lines_out.append(f"    {canonical}: {count}")
+    else:
+        lines_out.append("  missing_part_by_canonical_item (top 15): (none)")
+    lines_out.append("  missing_part_by_heading_bucket:")
+    if missing_part_count > 0 and missing_part_diagnostics.missing_by_bucket:
+        for bucket in MISSING_PART_BUCKETS:
+            count = missing_part_diagnostics.missing_by_bucket.get(bucket, 0)
+            if count <= 0:
+                continue
+            rate = _rate(count, missing_part_count)
+            prefix_nonbullet = missing_part_diagnostics.missing_by_bucket_nonbullet_prefix.get(
+                bucket, 0
+            )
+            prefix_pct = _rate(prefix_nonbullet, count)
+            lines_out.append(
+                f"    {bucket}: count={count} rate={rate:.2%} "
+                f"prefix_nonbullet_pct={prefix_pct:.2%}"
+            )
+    else:
+        lines_out.append("    (none)")
+    top_bucket_counts = sorted(
+        missing_part_diagnostics.missing_by_bucket.items(),
+        key=lambda entry: entry[1],
+        reverse=True,
+    )[:5]
+    if top_bucket_counts:
+        lines_out.append("  missing_part_bucket_examples:")
+        for bucket, _count in top_bucket_counts:
+            examples = missing_part_diagnostics.examples_by_bucket.get(bucket, [])
+            if not examples:
+                continue
+            lines_out.append(f"    {bucket}:")
+            for example in examples[:3]:
+                heading = str(example.get("heading", "")).replace("\"", "'")
+                lines_out.append(
+                    "      "
+                    f"doc_id={example.get('doc_id','')} "
+                    f"accession={example.get('accession','')} "
+                    f"item={example.get('item','')} "
+                    f"heading=\"{heading}\""
+                )
+    else:
+        lines_out.append("  missing_part_bucket_examples: (none)")
     lines_out.append("")
     lines_out.append("Flags (counts):")
     for flag, count in flags_count.most_common():
@@ -1949,6 +2159,10 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
     start_selection_unverified_total = 0
     truncated_successor_total = 0
     truncated_part_total = 0
+    missing_part_diagnostics = _MissingPartDiagnostics()
+    missing_part_samples: list[dict[str, object]] = []
+    missing_part_seen = 0
+    missing_part_rng = random.Random(config.sample_seed)
     # Keep a single row representation to avoid CSV/report/sample schema drift.
     flagged_rows: list[DiagnosticsRow] = []
     item_breakdown: dict[tuple[str, str], _ItemBreakdownStats] = {}
@@ -2119,6 +2333,11 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
 
                         heading_idx = item.get("_heading_line_index")
                         heading_offset = item.get("_heading_offset")
+                        next_line_non_empty = ""
+                        if heading_idx is not None and heading_idx >= 0:
+                            _, next_line_non_empty = _non_empty_line(
+                                lines, heading_idx + 1
+                            )
                         item_id = str(item.get("item_id") or "")
                         item_id_norm = item_id.strip().upper()
                         item_part = item.get("item_part")
@@ -2219,9 +2438,10 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
                             flags.append("weak_letter_heading")
 
                         if heading_idx is not None and heading_idx >= 0:
-                            _, next_line = _non_empty_line(lines, heading_idx + 1)
-                            if next_line:
-                                if re.match(r"^\s*[ABC]\s*[\.\):\-]", next_line):
+                            if next_line_non_empty:
+                                if re.match(
+                                    r"^\s*[ABC]\s*[\.\):\-]", next_line_non_empty
+                                ):
                                     if item_id in {"1", "7", "9"} or _lettered_item(item_id):
                                         flags.append("split_letter_line")
 
@@ -2266,6 +2486,45 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
                         item_missing_part = bool(item.get("item_missing_part")) or item_key.startswith(
                             "?:"
                         )
+                        if normalized_form == "10-Q":
+                            missing_part_diagnostics.total_10q_items += 1
+                            if item_missing_part:
+                                bucket = _update_missing_part_diagnostics(
+                                    missing_part_diagnostics,
+                                    doc_id=doc_id,
+                                    accession=accession,
+                                    item_key=item_key or f"{item_part or ''}:{item_id}".strip(":"),
+                                    item_id=item_id,
+                                    canonical_item=canonical_item,
+                                    heading_line_raw=heading_line_raw,
+                                    prefix_text=prefix_text,
+                                    prefix_kind=prefix_kind,
+                                    next_line=next_line_non_empty,
+                                )
+                                if config.dump_missing_part_samples > 0:
+                                    entry = {
+                                        "doc_id": doc_id,
+                                        "accession": accession,
+                                        "filing_date": filing_date_str,
+                                        "period_end": period_end_str,
+                                        "form_type": form_label,
+                                        "item_id": item_id,
+                                        "canonical_item": canonical_item,
+                                        "heading_line_raw": heading_line_raw,
+                                        "heading_index": heading_idx,
+                                        "heading_offset": heading_offset,
+                                        "prefix_text": prefix_text,
+                                        "prefix_kind": prefix_kind,
+                                        "next_line": next_line_non_empty,
+                                        "bucket_name": bucket,
+                                    }
+                                    missing_part_seen = _reservoir_sample_update(
+                                        missing_part_samples,
+                                        entry,
+                                        seen=missing_part_seen,
+                                        sample_size=config.dump_missing_part_samples,
+                                        rng=missing_part_rng,
+                                    )
                         _update_item_breakdown(
                             item_breakdown,
                             form_type=form_label,
@@ -2449,6 +2708,7 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
                             item=item,
                             item_id=item_id,
                             item_part=str(item_part or ""),
+                            item_missing_part=item_missing_part,
                             heading_line_clean=heading_line_clean,
                             heading_line_raw=heading_line_raw,
                             heading_idx=heading_idx,
@@ -2546,7 +2806,10 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
         parquet_dir=parquet_dir,
         max_examples=config.max_examples,
         provenance=provenance,
+        extraction_regime=config.extraction_regime,
+        diagnostics_regime=config.diagnostics_regime,
         item_breakdown=item_breakdown,
+        missing_part_diagnostics=missing_part_diagnostics,
         focus_items=config.focus_items,
         report_item_scope=report_item_scope,
         target_set=target_set,
@@ -2554,6 +2817,27 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
     print(report)
     config.report_path.write_text(report, encoding="utf-8")
     print(f"\nReport written to {config.report_path}")
+
+    if config.dump_missing_part_samples > 0:
+        config.missing_part_samples_path.parent.mkdir(parents=True, exist_ok=True)
+        with config.missing_part_samples_path.open(
+            "w", newline="", encoding="utf-8"
+        ) as samples_handle:
+            writer = csv.DictWriter(
+                samples_handle, fieldnames=MISSING_PART_SAMPLE_FIELDS
+            )
+            writer.writeheader()
+            for entry in missing_part_samples:
+                writer.writerow(
+                    {
+                        **entry,
+                        "heading_index": _csv_value(entry.get("heading_index")),
+                        "heading_offset": _csv_value(entry.get("heading_offset")),
+                    }
+                )
+        print(
+            f"Missing-part sample CSV written to {config.missing_part_samples_path}"
+        )
 
     if config.sample_pass and config.sample_pass > 0:
         pass_rows = [
@@ -3675,6 +3959,15 @@ def _build_parser() -> tuple[argparse.ArgumentParser, argparse.ArgumentParser]:
         help="Minimum largest-item share of total chars for HTML audit.",
     )
     scan.add_argument(
+        "--dump-missing-part-samples",
+        type=int,
+        default=0,
+        help=(
+            "Write a CSV of N sampled missing-part 10-Q items "
+            f"(0 = disabled, default path: {DEFAULT_MISSING_PART_SAMPLES_PATH})."
+        ),
+    )
+    scan.add_argument(
         "--extraction-regime",
         type=str,
         default="legacy",
@@ -3769,6 +4062,7 @@ def main(argv: list[str] | None = None) -> None:
             html_min_total_chars=args.html_min_total_chars,
             html_min_largest_item_chars=args.html_min_largest_item_chars,
             html_min_largest_item_chars_pct_total=args.html_min_largest_item_chars_pct_total,
+            dump_missing_part_samples=args.dump_missing_part_samples,
             extraction_regime=args.extraction_regime,
             diagnostics_regime=args.diagnostics_regime,
         )

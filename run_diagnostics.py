@@ -189,6 +189,12 @@ def parse_args() -> argparse.Namespace:
         help="Minimum largest-item share of total chars for HTML audit.",
     )
     parser.add_argument(
+        "--dump-missing-part-samples",
+        type=int,
+        default=0,
+        help="Write a CSV of N sampled missing-part 10-Q items (0 = disabled).",
+    )
+    parser.add_argument(
         "--extraction-regime",
         type=str,
         default="legacy",
@@ -260,6 +266,7 @@ def main() -> None:
         html_min_total_chars=args.html_min_total_chars,
         html_min_largest_item_chars=args.html_min_largest_item_chars,
         html_min_largest_item_chars_pct_total=args.html_min_largest_item_chars_pct_total,
+        dump_missing_part_samples=args.dump_missing_part_samples,
         extraction_regime=args.extraction_regime,
         diagnostics_regime=args.diagnostics_regime,
     )
