@@ -41,13 +41,15 @@ from .patterns import (
 cdef inline bint _contains_item_hint(str line):
     if not line:
         return False
-    return ("ITEM" in line) or ("Item" in line) or ("item" in line)
+    # Keep parity with case-insensitive regex patterns used by the Python path.
+    return "item" in line.lower()
 
 
 cdef inline bint _contains_part_hint(str line):
     if not line:
         return False
-    return ("PART" in line) or ("Part" in line) or ("part" in line)
+    # Keep parity with case-insensitive regex patterns used by the Python path.
+    return "part" in line.lower()
 
 
 cdef inline bint _prefix_is_bullet_fast(str prefix):
@@ -219,7 +221,7 @@ cpdef list scan_part_markers_v2_fast(
             high_confidence = _part_marker_is_heading(line, match)
             if allow_form_header:
                 high_confidence = True
-            if not high_confidence and match.start() == 0:
+            if not high_confidence and scan_sparse_layout and match.start() == 0:
                 if ITEM_WORD_PATTERN.search(line) and not _looks_like_toc_heading_line(
                     lines, i
                 ):

@@ -3139,7 +3139,7 @@ typedef struct {
   PyObject *__pyx_slice[1];
   PyObject *__pyx_tuple[2];
   PyObject *__pyx_codeobj_tab[2];
-  PyObject *__pyx_string_tab[212];
+  PyObject *__pyx_string_tab[208];
   PyObject *__pyx_number_tab[6];
 /* #### Code section: module_state_contents ### */
 /* IterNextPlain.module_state_decls */
@@ -3260,144 +3260,140 @@ static __pyx_mstatetype * const __pyx_mstate_global = &__pyx_mstate_global_stati
 #define __pyx_n_u_HEADING_CONF_MED __pyx_string_tab[71]
 #define __pyx_n_u_I __pyx_string_tab[72]
 #define __pyx_n_u_II __pyx_string_tab[73]
-#define __pyx_n_u_ITEM __pyx_string_tab[74]
-#define __pyx_n_u_ITEM_CANDIDATE_PATTERN __pyx_string_tab[75]
-#define __pyx_n_u_ITEM_WORD_PATTERN __pyx_string_tab[76]
-#define __pyx_n_u_Item __pyx_string_tab[77]
-#define __pyx_n_u_PART __pyx_string_tab[78]
-#define __pyx_n_u_PART_LINESTART_PATTERN __pyx_string_tab[79]
-#define __pyx_n_u_PART_MARKER_PATTERN __pyx_string_tab[80]
-#define __pyx_n_u_PART_ONLY_PREFIX_PATTERN __pyx_string_tab[81]
-#define __pyx_n_u_PART_PREFIX_TAIL_PATTERN __pyx_string_tab[82]
-#define __pyx_n_u_Part __pyx_string_tab[83]
-#define __pyx_n_u_Pyx_PyDict_NextRef __pyx_string_tab[84]
-#define __pyx_n_u_Sequence __pyx_string_tab[85]
-#define __pyx_n_u_TOC_HEADER_LINE_PATTERN __pyx_string_tab[86]
-#define __pyx_n_u_TOC_MARKER_PATTERN __pyx_string_tab[87]
-#define __pyx_n_u_View_MemoryView __pyx_string_tab[88]
-#define __pyx_n_u__12 __pyx_string_tab[89]
-#define __pyx_n_u_abc __pyx_string_tab[90]
-#define __pyx_n_u_allocate_buffer __pyx_string_tab[91]
-#define __pyx_n_u_allowed_parts __pyx_string_tab[92]
-#define __pyx_n_u_append __pyx_string_tab[93]
-#define __pyx_n_u_array __pyx_string_tab[94]
-#define __pyx_n_u_asyncio_coroutines __pyx_string_tab[95]
-#define __pyx_n_u_base __pyx_string_tab[96]
-#define __pyx_n_u_body __pyx_string_tab[97]
-#define __pyx_n_u_c __pyx_string_tab[98]
-#define __pyx_n_u_class __pyx_string_tab[99]
-#define __pyx_n_u_class_getitem __pyx_string_tab[100]
-#define __pyx_n_u_cline_in_traceback __pyx_string_tab[101]
-#define __pyx_n_u_count __pyx_string_tab[102]
-#define __pyx_n_u_dict __pyx_string_tab[103]
-#define __pyx_n_u_dtype_is_object __pyx_string_tab[104]
-#define __pyx_n_u_embedded_headings __pyx_string_tab[105]
-#define __pyx_n_u_encode __pyx_string_tab[106]
-#define __pyx_n_u_end __pyx_string_tab[107]
-#define __pyx_n_u_enumerate __pyx_string_tab[108]
-#define __pyx_n_u_error __pyx_string_tab[109]
-#define __pyx_n_u_extraction_regime_v2 __pyx_string_tab[110]
-#define __pyx_n_u_financial __pyx_string_tab[111]
-#define __pyx_n_u_findall __pyx_string_tab[112]
-#define __pyx_n_u_finditer __pyx_string_tab[113]
-#define __pyx_n_u_flags __pyx_string_tab[114]
-#define __pyx_n_u_format __pyx_string_tab[115]
-#define __pyx_n_u_fortran __pyx_string_tab[116]
-#define __pyx_n_u_func __pyx_string_tab[117]
-#define __pyx_n_u_getstate __pyx_string_tab[118]
-#define __pyx_n_u_group __pyx_string_tab[119]
-#define __pyx_n_u_has_content_after __pyx_string_tab[120]
-#define __pyx_n_u_heading_suffix_looks_like_prose __pyx_string_tab[121]
-#define __pyx_n_u_heading_title_matches_item __pyx_string_tab[122]
-#define __pyx_n_u_heuristics __pyx_string_tab[123]
-#define __pyx_n_u_id __pyx_string_tab[124]
-#define __pyx_n_u_import __pyx_string_tab[125]
-#define __pyx_n_u_index __pyx_string_tab[126]
-#define __pyx_n_u_is_10k __pyx_string_tab[127]
-#define __pyx_n_u_is_10q __pyx_string_tab[128]
-#define __pyx_n_u_is_coroutine __pyx_string_tab[129]
-#define __pyx_n_u_isalpha __pyx_string_tab[130]
-#define __pyx_n_u_islower __pyx_string_tab[131]
-#define __pyx_n_u_isspace __pyx_string_tab[132]
-#define __pyx_n_u_item __pyx_string_tab[133]
-#define __pyx_n_u_items __pyx_string_tab[134]
-#define __pyx_n_u_itemsize __pyx_string_tab[135]
-#define __pyx_n_u_line_has_compound_items __pyx_string_tab[136]
-#define __pyx_n_u_line_starts __pyx_string_tab[137]
-#define __pyx_n_u_lines __pyx_string_tab[138]
-#define __pyx_n_u_looks_like_toc_heading_line __pyx_string_tab[139]
-#define __pyx_n_u_lower __pyx_string_tab[140]
-#define __pyx_n_u_lstrip __pyx_string_tab[141]
-#define __pyx_n_u_main __pyx_string_tab[142]
-#define __pyx_n_u_match __pyx_string_tab[143]
-#define __pyx_n_u_max_item __pyx_string_tab[144]
-#define __pyx_n_u_max_item_number __pyx_string_tab[145]
-#define __pyx_n_u_memview __pyx_string_tab[146]
-#define __pyx_n_u_mode __pyx_string_tab[147]
-#define __pyx_n_u_module __pyx_string_tab[148]
-#define __pyx_n_u_name __pyx_string_tab[149]
-#define __pyx_n_u_name_2 __pyx_string_tab[150]
-#define __pyx_n_u_ndim __pyx_string_tab[151]
-#define __pyx_n_u_new __pyx_string_tab[152]
-#define __pyx_n_u_next __pyx_string_tab[153]
-#define __pyx_n_u_normalize_item_match __pyx_string_tab[154]
-#define __pyx_n_u_obj __pyx_string_tab[155]
-#define __pyx_n_u_other __pyx_string_tab[156]
-#define __pyx_n_u_pack __pyx_string_tab[157]
-#define __pyx_n_u_pageish_line __pyx_string_tab[158]
-#define __pyx_n_u_part __pyx_string_tab[159]
-#define __pyx_n_u_part_marker_is_heading __pyx_string_tab[160]
-#define __pyx_n_u_patterns __pyx_string_tab[161]
-#define __pyx_n_u_pop __pyx_string_tab[162]
-#define __pyx_n_u_prefix_is_part_only __pyx_string_tab[163]
-#define __pyx_n_u_prefix_looks_like_cross_ref __pyx_string_tab[164]
-#define __pyx_n_u_prefix_part_tail __pyx_string_tab[165]
-#define __pyx_n_u_pyx_capi __pyx_string_tab[166]
-#define __pyx_n_u_pyx_checksum __pyx_string_tab[167]
-#define __pyx_n_u_pyx_state __pyx_string_tab[168]
-#define __pyx_n_u_pyx_type __pyx_string_tab[169]
-#define __pyx_n_u_pyx_unpickle_Enum __pyx_string_tab[170]
-#define __pyx_n_u_pyx_vtable __pyx_string_tab[171]
-#define __pyx_n_u_q __pyx_string_tab[172]
-#define __pyx_n_u_qualname __pyx_string_tab[173]
-#define __pyx_n_u_re __pyx_string_tab[174]
-#define __pyx_n_u_reduce __pyx_string_tab[175]
-#define __pyx_n_u_reduce_cython __pyx_string_tab[176]
-#define __pyx_n_u_reduce_ex __pyx_string_tab[177]
-#define __pyx_n_u_register __pyx_string_tab[178]
-#define __pyx_n_u_reserved __pyx_string_tab[179]
-#define __pyx_n_u_rstrip __pyx_string_tab[180]
-#define __pyx_n_u_scan_item_boundaries_fast __pyx_string_tab[181]
-#define __pyx_n_u_scan_part_markers_v2_fast __pyx_string_tab[182]
-#define __pyx_n_u_scan_sparse_layout __pyx_string_tab[183]
-#define __pyx_n_u_search __pyx_string_tab[184]
-#define __pyx_n_u_set_name __pyx_string_tab[185]
-#define __pyx_n_u_setdefault __pyx_string_tab[186]
-#define __pyx_n_u_setstate __pyx_string_tab[187]
-#define __pyx_n_u_setstate_cython __pyx_string_tab[188]
-#define __pyx_n_u_shape __pyx_string_tab[189]
-#define __pyx_n_u_size __pyx_string_tab[190]
-#define __pyx_n_u_start __pyx_string_tab[191]
-#define __pyx_n_u_starts_with_lowercase_title __pyx_string_tab[192]
-#define __pyx_n_u_step __pyx_string_tab[193]
-#define __pyx_n_u_stop __pyx_string_tab[194]
-#define __pyx_n_u_strip __pyx_string_tab[195]
-#define __pyx_n_u_struct __pyx_string_tab[196]
-#define __pyx_n_u_test __pyx_string_tab[197]
-#define __pyx_n_u_thesis_pkg_core_sec_extraction_f __pyx_string_tab[198]
-#define __pyx_n_u_toc_cache __pyx_string_tab[199]
-#define __pyx_n_u_toc_candidate_line __pyx_string_tab[200]
-#define __pyx_n_u_toc_mask __pyx_string_tab[201]
-#define __pyx_n_u_toc_window_flags __pyx_string_tab[202]
-#define __pyx_n_u_unpack __pyx_string_tab[203]
-#define __pyx_n_u_update __pyx_string_tab[204]
-#define __pyx_n_u_upper __pyx_string_tab[205]
-#define __pyx_n_u_values __pyx_string_tab[206]
-#define __pyx_n_u_x __pyx_string_tab[207]
-#define __pyx_kp_b_PyObject_PyObject_PyObject_PyObj __pyx_string_tab[208]
-#define __pyx_kp_b_iso88591_F_Q_U_5_q_1_c_U_1_uAQ_Bc_4q_q_1 __pyx_string_tab[209]
-#define __pyx_kp_b_iso88591_U_5_A_Q_c_U_1_uAQ_4q_2S_1A_4q_1 __pyx_string_tab[210]
-#define __pyx_n_b_O __pyx_string_tab[211]
+#define __pyx_n_u_ITEM_CANDIDATE_PATTERN __pyx_string_tab[74]
+#define __pyx_n_u_ITEM_WORD_PATTERN __pyx_string_tab[75]
+#define __pyx_n_u_PART_LINESTART_PATTERN __pyx_string_tab[76]
+#define __pyx_n_u_PART_MARKER_PATTERN __pyx_string_tab[77]
+#define __pyx_n_u_PART_ONLY_PREFIX_PATTERN __pyx_string_tab[78]
+#define __pyx_n_u_PART_PREFIX_TAIL_PATTERN __pyx_string_tab[79]
+#define __pyx_n_u_Pyx_PyDict_NextRef __pyx_string_tab[80]
+#define __pyx_n_u_Sequence __pyx_string_tab[81]
+#define __pyx_n_u_TOC_HEADER_LINE_PATTERN __pyx_string_tab[82]
+#define __pyx_n_u_TOC_MARKER_PATTERN __pyx_string_tab[83]
+#define __pyx_n_u_View_MemoryView __pyx_string_tab[84]
+#define __pyx_n_u__12 __pyx_string_tab[85]
+#define __pyx_n_u_abc __pyx_string_tab[86]
+#define __pyx_n_u_allocate_buffer __pyx_string_tab[87]
+#define __pyx_n_u_allowed_parts __pyx_string_tab[88]
+#define __pyx_n_u_append __pyx_string_tab[89]
+#define __pyx_n_u_array __pyx_string_tab[90]
+#define __pyx_n_u_asyncio_coroutines __pyx_string_tab[91]
+#define __pyx_n_u_base __pyx_string_tab[92]
+#define __pyx_n_u_body __pyx_string_tab[93]
+#define __pyx_n_u_c __pyx_string_tab[94]
+#define __pyx_n_u_class __pyx_string_tab[95]
+#define __pyx_n_u_class_getitem __pyx_string_tab[96]
+#define __pyx_n_u_cline_in_traceback __pyx_string_tab[97]
+#define __pyx_n_u_count __pyx_string_tab[98]
+#define __pyx_n_u_dict __pyx_string_tab[99]
+#define __pyx_n_u_dtype_is_object __pyx_string_tab[100]
+#define __pyx_n_u_embedded_headings __pyx_string_tab[101]
+#define __pyx_n_u_encode __pyx_string_tab[102]
+#define __pyx_n_u_end __pyx_string_tab[103]
+#define __pyx_n_u_enumerate __pyx_string_tab[104]
+#define __pyx_n_u_error __pyx_string_tab[105]
+#define __pyx_n_u_extraction_regime_v2 __pyx_string_tab[106]
+#define __pyx_n_u_financial __pyx_string_tab[107]
+#define __pyx_n_u_findall __pyx_string_tab[108]
+#define __pyx_n_u_finditer __pyx_string_tab[109]
+#define __pyx_n_u_flags __pyx_string_tab[110]
+#define __pyx_n_u_format __pyx_string_tab[111]
+#define __pyx_n_u_fortran __pyx_string_tab[112]
+#define __pyx_n_u_func __pyx_string_tab[113]
+#define __pyx_n_u_getstate __pyx_string_tab[114]
+#define __pyx_n_u_group __pyx_string_tab[115]
+#define __pyx_n_u_has_content_after __pyx_string_tab[116]
+#define __pyx_n_u_heading_suffix_looks_like_prose __pyx_string_tab[117]
+#define __pyx_n_u_heading_title_matches_item __pyx_string_tab[118]
+#define __pyx_n_u_heuristics __pyx_string_tab[119]
+#define __pyx_n_u_id __pyx_string_tab[120]
+#define __pyx_n_u_import __pyx_string_tab[121]
+#define __pyx_n_u_index __pyx_string_tab[122]
+#define __pyx_n_u_is_10k __pyx_string_tab[123]
+#define __pyx_n_u_is_10q __pyx_string_tab[124]
+#define __pyx_n_u_is_coroutine __pyx_string_tab[125]
+#define __pyx_n_u_isalpha __pyx_string_tab[126]
+#define __pyx_n_u_islower __pyx_string_tab[127]
+#define __pyx_n_u_isspace __pyx_string_tab[128]
+#define __pyx_n_u_item __pyx_string_tab[129]
+#define __pyx_n_u_items __pyx_string_tab[130]
+#define __pyx_n_u_itemsize __pyx_string_tab[131]
+#define __pyx_n_u_line_has_compound_items __pyx_string_tab[132]
+#define __pyx_n_u_line_starts __pyx_string_tab[133]
+#define __pyx_n_u_lines __pyx_string_tab[134]
+#define __pyx_n_u_looks_like_toc_heading_line __pyx_string_tab[135]
+#define __pyx_n_u_lower __pyx_string_tab[136]
+#define __pyx_n_u_lstrip __pyx_string_tab[137]
+#define __pyx_n_u_main __pyx_string_tab[138]
+#define __pyx_n_u_match __pyx_string_tab[139]
+#define __pyx_n_u_max_item __pyx_string_tab[140]
+#define __pyx_n_u_max_item_number __pyx_string_tab[141]
+#define __pyx_n_u_memview __pyx_string_tab[142]
+#define __pyx_n_u_mode __pyx_string_tab[143]
+#define __pyx_n_u_module __pyx_string_tab[144]
+#define __pyx_n_u_name __pyx_string_tab[145]
+#define __pyx_n_u_name_2 __pyx_string_tab[146]
+#define __pyx_n_u_ndim __pyx_string_tab[147]
+#define __pyx_n_u_new __pyx_string_tab[148]
+#define __pyx_n_u_next __pyx_string_tab[149]
+#define __pyx_n_u_normalize_item_match __pyx_string_tab[150]
+#define __pyx_n_u_obj __pyx_string_tab[151]
+#define __pyx_n_u_other __pyx_string_tab[152]
+#define __pyx_n_u_pack __pyx_string_tab[153]
+#define __pyx_n_u_pageish_line __pyx_string_tab[154]
+#define __pyx_n_u_part __pyx_string_tab[155]
+#define __pyx_n_u_part_marker_is_heading __pyx_string_tab[156]
+#define __pyx_n_u_patterns __pyx_string_tab[157]
+#define __pyx_n_u_pop __pyx_string_tab[158]
+#define __pyx_n_u_prefix_is_part_only __pyx_string_tab[159]
+#define __pyx_n_u_prefix_looks_like_cross_ref __pyx_string_tab[160]
+#define __pyx_n_u_prefix_part_tail __pyx_string_tab[161]
+#define __pyx_n_u_pyx_capi __pyx_string_tab[162]
+#define __pyx_n_u_pyx_checksum __pyx_string_tab[163]
+#define __pyx_n_u_pyx_state __pyx_string_tab[164]
+#define __pyx_n_u_pyx_type __pyx_string_tab[165]
+#define __pyx_n_u_pyx_unpickle_Enum __pyx_string_tab[166]
+#define __pyx_n_u_pyx_vtable __pyx_string_tab[167]
+#define __pyx_n_u_q __pyx_string_tab[168]
+#define __pyx_n_u_qualname __pyx_string_tab[169]
+#define __pyx_n_u_re __pyx_string_tab[170]
+#define __pyx_n_u_reduce __pyx_string_tab[171]
+#define __pyx_n_u_reduce_cython __pyx_string_tab[172]
+#define __pyx_n_u_reduce_ex __pyx_string_tab[173]
+#define __pyx_n_u_register __pyx_string_tab[174]
+#define __pyx_n_u_reserved __pyx_string_tab[175]
+#define __pyx_n_u_rstrip __pyx_string_tab[176]
+#define __pyx_n_u_scan_item_boundaries_fast __pyx_string_tab[177]
+#define __pyx_n_u_scan_part_markers_v2_fast __pyx_string_tab[178]
+#define __pyx_n_u_scan_sparse_layout __pyx_string_tab[179]
+#define __pyx_n_u_search __pyx_string_tab[180]
+#define __pyx_n_u_set_name __pyx_string_tab[181]
+#define __pyx_n_u_setdefault __pyx_string_tab[182]
+#define __pyx_n_u_setstate __pyx_string_tab[183]
+#define __pyx_n_u_setstate_cython __pyx_string_tab[184]
+#define __pyx_n_u_shape __pyx_string_tab[185]
+#define __pyx_n_u_size __pyx_string_tab[186]
+#define __pyx_n_u_start __pyx_string_tab[187]
+#define __pyx_n_u_starts_with_lowercase_title __pyx_string_tab[188]
+#define __pyx_n_u_step __pyx_string_tab[189]
+#define __pyx_n_u_stop __pyx_string_tab[190]
+#define __pyx_n_u_strip __pyx_string_tab[191]
+#define __pyx_n_u_struct __pyx_string_tab[192]
+#define __pyx_n_u_test __pyx_string_tab[193]
+#define __pyx_n_u_thesis_pkg_core_sec_extraction_f __pyx_string_tab[194]
+#define __pyx_n_u_toc_cache __pyx_string_tab[195]
+#define __pyx_n_u_toc_candidate_line __pyx_string_tab[196]
+#define __pyx_n_u_toc_mask __pyx_string_tab[197]
+#define __pyx_n_u_toc_window_flags __pyx_string_tab[198]
+#define __pyx_n_u_unpack __pyx_string_tab[199]
+#define __pyx_n_u_update __pyx_string_tab[200]
+#define __pyx_n_u_upper __pyx_string_tab[201]
+#define __pyx_n_u_values __pyx_string_tab[202]
+#define __pyx_n_u_x __pyx_string_tab[203]
+#define __pyx_kp_b_PyObject_PyObject_PyObject_PyObj __pyx_string_tab[204]
+#define __pyx_kp_b_iso88591_F_Q_U_5_q_1_c_U_1_uAQ_Bc_4q_q_1 __pyx_string_tab[205]
+#define __pyx_kp_b_iso88591_U_5_A_Q_c_U_1_uAQ_4q_2S_1A_4q_1 __pyx_string_tab[206]
+#define __pyx_n_b_O __pyx_string_tab[207]
 #define __pyx_int_0 __pyx_number_tab[0]
 #define __pyx_int_neg_1 __pyx_number_tab[1]
 #define __pyx_int_1 __pyx_number_tab[2]
@@ -3429,7 +3425,7 @@ static CYTHON_SMALL_CODE int __pyx_m_clear(PyObject *m) {
   for (int i=0; i<1; ++i) { Py_CLEAR(clear_module_state->__pyx_slice[i]); }
   for (int i=0; i<2; ++i) { Py_CLEAR(clear_module_state->__pyx_tuple[i]); }
   for (int i=0; i<2; ++i) { Py_CLEAR(clear_module_state->__pyx_codeobj_tab[i]); }
-  for (int i=0; i<212; ++i) { Py_CLEAR(clear_module_state->__pyx_string_tab[i]); }
+  for (int i=0; i<208; ++i) { Py_CLEAR(clear_module_state->__pyx_string_tab[i]); }
   for (int i=0; i<6; ++i) { Py_CLEAR(clear_module_state->__pyx_number_tab[i]); }
 /* #### Code section: module_state_clear_contents ### */
 /* CommonTypesMetaclass.module_state_clear */
@@ -3464,7 +3460,7 @@ static CYTHON_SMALL_CODE int __pyx_m_traverse(PyObject *m, visitproc visit, void
   for (int i=0; i<1; ++i) { __Pyx_VISIT_CONST(traverse_module_state->__pyx_slice[i]); }
   for (int i=0; i<2; ++i) { __Pyx_VISIT_CONST(traverse_module_state->__pyx_tuple[i]); }
   for (int i=0; i<2; ++i) { __Pyx_VISIT_CONST(traverse_module_state->__pyx_codeobj_tab[i]); }
-  for (int i=0; i<212; ++i) { __Pyx_VISIT_CONST(traverse_module_state->__pyx_string_tab[i]); }
+  for (int i=0; i<208; ++i) { __Pyx_VISIT_CONST(traverse_module_state->__pyx_string_tab[i]); }
   for (int i=0; i<6; ++i) { __Pyx_VISIT_CONST(traverse_module_state->__pyx_number_tab[i]); }
 /* #### Code section: module_state_traverse_contents ### */
 /* CommonTypesMetaclass.module_state_traverse */
@@ -16756,18 +16752,21 @@ static PyObject *__pyx_unpickle_Enum__set_state(struct __pyx_MemviewEnum_obj *__
 
 static CYTHON_INLINE int __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__contains_item_hint(PyObject *__pyx_v_line) {
   int __pyx_r;
+  __Pyx_RefNannyDeclarations
   int __pyx_t_1;
   int __pyx_t_2;
+  PyObject *__pyx_t_3 = NULL;
   int __pyx_lineno = 0;
   const char *__pyx_filename = NULL;
   int __pyx_clineno = 0;
+  __Pyx_RefNannySetupContext("_contains_item_hint", 0);
 
   /* "thesis_pkg/core/sec/extraction_fast.pyx":42
  * 
  * cdef inline bint _contains_item_hint(str line):
  *     if not line:             # <<<<<<<<<<<<<<
  *         return False
- *     return ("ITEM" in line) or ("Item" in line) or ("item" in line)
+ *     # Keep parity with case-insensitive regex patterns used by the Python path.
 */
   if (__pyx_v_line == Py_None) __pyx_t_1 = 0;
   else
@@ -16784,8 +16783,8 @@ static CYTHON_INLINE int __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__cont
  * cdef inline bint _contains_item_hint(str line):
  *     if not line:
  *         return False             # <<<<<<<<<<<<<<
- *     return ("ITEM" in line) or ("Item" in line) or ("item" in line)
- * 
+ *     # Keep parity with case-insensitive regex patterns used by the Python path.
+ *     return "item" in line.lower()
 */
     __pyx_r = 0;
     goto __pyx_L0;
@@ -16795,44 +16794,21 @@ static CYTHON_INLINE int __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__cont
  * cdef inline bint _contains_item_hint(str line):
  *     if not line:             # <<<<<<<<<<<<<<
  *         return False
- *     return ("ITEM" in line) or ("Item" in line) or ("item" in line)
+ *     # Keep parity with case-insensitive regex patterns used by the Python path.
 */
   }
 
-  /* "thesis_pkg/core/sec/extraction_fast.pyx":44
- *     if not line:
+  /* "thesis_pkg/core/sec/extraction_fast.pyx":45
  *         return False
- *     return ("ITEM" in line) or ("Item" in line) or ("item" in line)             # <<<<<<<<<<<<<<
+ *     # Keep parity with case-insensitive regex patterns used by the Python path.
+ *     return "item" in line.lower()             # <<<<<<<<<<<<<<
  * 
  * 
 */
-  if (unlikely(__pyx_v_line == Py_None)) {
-    PyErr_SetString(PyExc_TypeError, "'NoneType' object is not iterable");
-    __PYX_ERR(0, 44, __pyx_L1_error)
-  }
-  __pyx_t_1 = (__Pyx_PyUnicode_ContainsTF(__pyx_mstate_global->__pyx_n_u_ITEM, __pyx_v_line, Py_EQ)); if (unlikely((__pyx_t_1 < 0))) __PYX_ERR(0, 44, __pyx_L1_error)
-  if (!__pyx_t_1) {
-  } else {
-    __pyx_t_2 = __pyx_t_1;
-    goto __pyx_L4_bool_binop_done;
-  }
-  if (unlikely(__pyx_v_line == Py_None)) {
-    PyErr_SetString(PyExc_TypeError, "'NoneType' object is not iterable");
-    __PYX_ERR(0, 44, __pyx_L1_error)
-  }
-  __pyx_t_1 = (__Pyx_PyUnicode_ContainsTF(__pyx_mstate_global->__pyx_n_u_Item, __pyx_v_line, Py_EQ)); if (unlikely((__pyx_t_1 < 0))) __PYX_ERR(0, 44, __pyx_L1_error)
-  if (!__pyx_t_1) {
-  } else {
-    __pyx_t_2 = __pyx_t_1;
-    goto __pyx_L4_bool_binop_done;
-  }
-  if (unlikely(__pyx_v_line == Py_None)) {
-    PyErr_SetString(PyExc_TypeError, "'NoneType' object is not iterable");
-    __PYX_ERR(0, 44, __pyx_L1_error)
-  }
-  __pyx_t_1 = (__Pyx_PyUnicode_ContainsTF(__pyx_mstate_global->__pyx_n_u_item, __pyx_v_line, Py_EQ)); if (unlikely((__pyx_t_1 < 0))) __PYX_ERR(0, 44, __pyx_L1_error)
-  __pyx_t_2 = __pyx_t_1;
-  __pyx_L4_bool_binop_done:;
+  __pyx_t_3 = __Pyx_CallUnboundCMethod0(&__pyx_mstate_global->__pyx_umethod_PyUnicode_Type__lower, __pyx_v_line); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 45, __pyx_L1_error)
+  __Pyx_GOTREF(__pyx_t_3);
+  __pyx_t_2 = (__Pyx_PyUnicode_ContainsTF(__pyx_mstate_global->__pyx_n_u_item, __pyx_t_3, Py_EQ)); if (unlikely((__pyx_t_2 < 0))) __PYX_ERR(0, 45, __pyx_L1_error)
+  __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
   __pyx_r = __pyx_t_2;
   goto __pyx_L0;
 
@@ -16846,13 +16822,15 @@ static CYTHON_INLINE int __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__cont
 
   /* function exit code */
   __pyx_L1_error:;
+  __Pyx_XDECREF(__pyx_t_3);
   __Pyx_AddTraceback("thesis_pkg.core.sec.extraction_fast._contains_item_hint", __pyx_clineno, __pyx_lineno, __pyx_filename);
   __pyx_r = -1;
   __pyx_L0:;
+  __Pyx_RefNannyFinishContext();
   return __pyx_r;
 }
 
-/* "thesis_pkg/core/sec/extraction_fast.pyx":47
+/* "thesis_pkg/core/sec/extraction_fast.pyx":48
  * 
  * 
  * cdef inline bint _contains_part_hint(str line):             # <<<<<<<<<<<<<<
@@ -16862,87 +16840,67 @@ static CYTHON_INLINE int __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__cont
 
 static CYTHON_INLINE int __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__contains_part_hint(PyObject *__pyx_v_line) {
   int __pyx_r;
+  __Pyx_RefNannyDeclarations
   int __pyx_t_1;
   int __pyx_t_2;
+  PyObject *__pyx_t_3 = NULL;
   int __pyx_lineno = 0;
   const char *__pyx_filename = NULL;
   int __pyx_clineno = 0;
+  __Pyx_RefNannySetupContext("_contains_part_hint", 0);
 
-  /* "thesis_pkg/core/sec/extraction_fast.pyx":48
+  /* "thesis_pkg/core/sec/extraction_fast.pyx":49
  * 
  * cdef inline bint _contains_part_hint(str line):
  *     if not line:             # <<<<<<<<<<<<<<
  *         return False
- *     return ("PART" in line) or ("Part" in line) or ("part" in line)
+ *     # Keep parity with case-insensitive regex patterns used by the Python path.
 */
   if (__pyx_v_line == Py_None) __pyx_t_1 = 0;
   else
   {
     Py_ssize_t __pyx_temp = __Pyx_PyUnicode_IS_TRUE(__pyx_v_line);
-    if (unlikely(((!CYTHON_ASSUME_SAFE_SIZE) && __pyx_temp < 0))) __PYX_ERR(0, 48, __pyx_L1_error)
+    if (unlikely(((!CYTHON_ASSUME_SAFE_SIZE) && __pyx_temp < 0))) __PYX_ERR(0, 49, __pyx_L1_error)
     __pyx_t_1 = (__pyx_temp != 0);
   }
 
   __pyx_t_2 = (!__pyx_t_1);
   if (__pyx_t_2) {
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":49
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":50
  * cdef inline bint _contains_part_hint(str line):
  *     if not line:
  *         return False             # <<<<<<<<<<<<<<
- *     return ("PART" in line) or ("Part" in line) or ("part" in line)
- * 
+ *     # Keep parity with case-insensitive regex patterns used by the Python path.
+ *     return "part" in line.lower()
 */
     __pyx_r = 0;
     goto __pyx_L0;
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":48
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":49
  * 
  * cdef inline bint _contains_part_hint(str line):
  *     if not line:             # <<<<<<<<<<<<<<
  *         return False
- *     return ("PART" in line) or ("Part" in line) or ("part" in line)
+ *     # Keep parity with case-insensitive regex patterns used by the Python path.
 */
   }
 
-  /* "thesis_pkg/core/sec/extraction_fast.pyx":50
- *     if not line:
+  /* "thesis_pkg/core/sec/extraction_fast.pyx":52
  *         return False
- *     return ("PART" in line) or ("Part" in line) or ("part" in line)             # <<<<<<<<<<<<<<
+ *     # Keep parity with case-insensitive regex patterns used by the Python path.
+ *     return "part" in line.lower()             # <<<<<<<<<<<<<<
  * 
  * 
 */
-  if (unlikely(__pyx_v_line == Py_None)) {
-    PyErr_SetString(PyExc_TypeError, "'NoneType' object is not iterable");
-    __PYX_ERR(0, 50, __pyx_L1_error)
-  }
-  __pyx_t_1 = (__Pyx_PyUnicode_ContainsTF(__pyx_mstate_global->__pyx_n_u_PART, __pyx_v_line, Py_EQ)); if (unlikely((__pyx_t_1 < 0))) __PYX_ERR(0, 50, __pyx_L1_error)
-  if (!__pyx_t_1) {
-  } else {
-    __pyx_t_2 = __pyx_t_1;
-    goto __pyx_L4_bool_binop_done;
-  }
-  if (unlikely(__pyx_v_line == Py_None)) {
-    PyErr_SetString(PyExc_TypeError, "'NoneType' object is not iterable");
-    __PYX_ERR(0, 50, __pyx_L1_error)
-  }
-  __pyx_t_1 = (__Pyx_PyUnicode_ContainsTF(__pyx_mstate_global->__pyx_n_u_Part, __pyx_v_line, Py_EQ)); if (unlikely((__pyx_t_1 < 0))) __PYX_ERR(0, 50, __pyx_L1_error)
-  if (!__pyx_t_1) {
-  } else {
-    __pyx_t_2 = __pyx_t_1;
-    goto __pyx_L4_bool_binop_done;
-  }
-  if (unlikely(__pyx_v_line == Py_None)) {
-    PyErr_SetString(PyExc_TypeError, "'NoneType' object is not iterable");
-    __PYX_ERR(0, 50, __pyx_L1_error)
-  }
-  __pyx_t_1 = (__Pyx_PyUnicode_ContainsTF(__pyx_mstate_global->__pyx_n_u_part, __pyx_v_line, Py_EQ)); if (unlikely((__pyx_t_1 < 0))) __PYX_ERR(0, 50, __pyx_L1_error)
-  __pyx_t_2 = __pyx_t_1;
-  __pyx_L4_bool_binop_done:;
+  __pyx_t_3 = __Pyx_CallUnboundCMethod0(&__pyx_mstate_global->__pyx_umethod_PyUnicode_Type__lower, __pyx_v_line); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 52, __pyx_L1_error)
+  __Pyx_GOTREF(__pyx_t_3);
+  __pyx_t_2 = (__Pyx_PyUnicode_ContainsTF(__pyx_mstate_global->__pyx_n_u_part, __pyx_t_3, Py_EQ)); if (unlikely((__pyx_t_2 < 0))) __PYX_ERR(0, 52, __pyx_L1_error)
+  __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
   __pyx_r = __pyx_t_2;
   goto __pyx_L0;
 
-  /* "thesis_pkg/core/sec/extraction_fast.pyx":47
+  /* "thesis_pkg/core/sec/extraction_fast.pyx":48
  * 
  * 
  * cdef inline bint _contains_part_hint(str line):             # <<<<<<<<<<<<<<
@@ -16952,13 +16910,15 @@ static CYTHON_INLINE int __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__cont
 
   /* function exit code */
   __pyx_L1_error:;
+  __Pyx_XDECREF(__pyx_t_3);
   __Pyx_AddTraceback("thesis_pkg.core.sec.extraction_fast._contains_part_hint", __pyx_clineno, __pyx_lineno, __pyx_filename);
   __pyx_r = -1;
   __pyx_L0:;
+  __Pyx_RefNannyFinishContext();
   return __pyx_r;
 }
 
-/* "thesis_pkg/core/sec/extraction_fast.pyx":53
+/* "thesis_pkg/core/sec/extraction_fast.pyx":55
  * 
  * 
  * cdef inline bint _prefix_is_bullet_fast(str prefix):             # <<<<<<<<<<<<<<
@@ -16986,7 +16946,7 @@ static CYTHON_INLINE int __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__pref
   int __pyx_clineno = 0;
   __Pyx_RefNannySetupContext("_prefix_is_bullet_fast", 0);
 
-  /* "thesis_pkg/core/sec/extraction_fast.pyx":56
+  /* "thesis_pkg/core/sec/extraction_fast.pyx":58
  *     cdef Py_ssize_t i, n
  *     cdef str ch
  *     if not prefix:             # <<<<<<<<<<<<<<
@@ -16997,14 +16957,14 @@ static CYTHON_INLINE int __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__pref
   else
   {
     Py_ssize_t __pyx_temp = __Pyx_PyUnicode_IS_TRUE(__pyx_v_prefix);
-    if (unlikely(((!CYTHON_ASSUME_SAFE_SIZE) && __pyx_temp < 0))) __PYX_ERR(0, 56, __pyx_L1_error)
+    if (unlikely(((!CYTHON_ASSUME_SAFE_SIZE) && __pyx_temp < 0))) __PYX_ERR(0, 58, __pyx_L1_error)
     __pyx_t_1 = (__pyx_temp != 0);
   }
 
   __pyx_t_2 = (!__pyx_t_1);
   if (__pyx_t_2) {
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":57
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":59
  *     cdef str ch
  *     if not prefix:
  *         return False             # <<<<<<<<<<<<<<
@@ -17014,7 +16974,7 @@ static CYTHON_INLINE int __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__pref
     __pyx_r = 0;
     goto __pyx_L0;
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":56
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":58
  *     cdef Py_ssize_t i, n
  *     cdef str ch
  *     if not prefix:             # <<<<<<<<<<<<<<
@@ -17023,7 +16983,7 @@ static CYTHON_INLINE int __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__pref
 */
   }
 
-  /* "thesis_pkg/core/sec/extraction_fast.pyx":58
+  /* "thesis_pkg/core/sec/extraction_fast.pyx":60
  *     if not prefix:
  *         return False
  *     n = len(prefix)             # <<<<<<<<<<<<<<
@@ -17032,12 +16992,12 @@ static CYTHON_INLINE int __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__pref
 */
   if (unlikely(__pyx_v_prefix == Py_None)) {
     PyErr_SetString(PyExc_TypeError, "object of type 'NoneType' has no len()");
-    __PYX_ERR(0, 58, __pyx_L1_error)
+    __PYX_ERR(0, 60, __pyx_L1_error)
   }
-  __pyx_t_3 = __Pyx_PyUnicode_GET_LENGTH(__pyx_v_prefix); if (unlikely(__pyx_t_3 == ((Py_ssize_t)-1))) __PYX_ERR(0, 58, __pyx_L1_error)
+  __pyx_t_3 = __Pyx_PyUnicode_GET_LENGTH(__pyx_v_prefix); if (unlikely(__pyx_t_3 == ((Py_ssize_t)-1))) __PYX_ERR(0, 60, __pyx_L1_error)
   __pyx_v_n = __pyx_t_3;
 
-  /* "thesis_pkg/core/sec/extraction_fast.pyx":59
+  /* "thesis_pkg/core/sec/extraction_fast.pyx":61
  *         return False
  *     n = len(prefix)
  *     for i in range(n):             # <<<<<<<<<<<<<<
@@ -17049,21 +17009,21 @@ static CYTHON_INLINE int __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__pref
   for (__pyx_t_5 = 0; __pyx_t_5 < __pyx_t_4; __pyx_t_5+=1) {
     __pyx_v_i = __pyx_t_5;
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":60
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":62
  *     n = len(prefix)
  *     for i in range(n):
  *         ch = prefix[i]             # <<<<<<<<<<<<<<
  *         if ch.isspace() or ch == "-" or ch == "*" or ch == "\u2022" or ch == "\u00b7" or ch == "\u2013" or ch == "\u2014":
  *             continue
 */
-    __pyx_t_6 = __Pyx_GetItemInt_Unicode(__pyx_v_prefix, __pyx_v_i, Py_ssize_t, 1, PyLong_FromSsize_t, 0, 0, 0, 1, __Pyx_ReferenceSharing_FunctionArgument); if (unlikely(__pyx_t_6 == (Py_UCS4)-1)) __PYX_ERR(0, 60, __pyx_L1_error)
-    __pyx_t_7 = __Pyx_PyUnicode_FromOrdinal(__pyx_t_6); if (unlikely(!__pyx_t_7)) __PYX_ERR(0, 60, __pyx_L1_error)
+    __pyx_t_6 = __Pyx_GetItemInt_Unicode(__pyx_v_prefix, __pyx_v_i, Py_ssize_t, 1, PyLong_FromSsize_t, 0, 0, 0, 1, __Pyx_ReferenceSharing_FunctionArgument); if (unlikely(__pyx_t_6 == (Py_UCS4)-1)) __PYX_ERR(0, 62, __pyx_L1_error)
+    __pyx_t_7 = __Pyx_PyUnicode_FromOrdinal(__pyx_t_6); if (unlikely(!__pyx_t_7)) __PYX_ERR(0, 62, __pyx_L1_error)
     __Pyx_GOTREF(__pyx_t_7);
-    if (!(likely(PyUnicode_CheckExact(__pyx_t_7)) || __Pyx_RaiseUnexpectedTypeError("str", __pyx_t_7))) __PYX_ERR(0, 60, __pyx_L1_error)
+    if (!(likely(PyUnicode_CheckExact(__pyx_t_7)) || __Pyx_RaiseUnexpectedTypeError("str", __pyx_t_7))) __PYX_ERR(0, 62, __pyx_L1_error)
     __Pyx_XDECREF_SET(__pyx_v_ch, ((PyObject*)__pyx_t_7));
     __pyx_t_7 = 0;
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":61
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":63
  *     for i in range(n):
  *         ch = prefix[i]
  *         if ch.isspace() or ch == "-" or ch == "*" or ch == "\u2022" or ch == "\u00b7" or ch == "\u2013" or ch == "\u2014":             # <<<<<<<<<<<<<<
@@ -17077,52 +17037,52 @@ static CYTHON_INLINE int __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__pref
       PyObject *__pyx_callargs[2] = {__pyx_t_8, NULL};
       __pyx_t_7 = __Pyx_PyObject_FastCallMethod((PyObject*)__pyx_mstate_global->__pyx_n_u_isspace, __pyx_callargs+__pyx_t_9, (1-__pyx_t_9) | (1*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
       __Pyx_XDECREF(__pyx_t_8); __pyx_t_8 = 0;
-      if (unlikely(!__pyx_t_7)) __PYX_ERR(0, 61, __pyx_L1_error)
+      if (unlikely(!__pyx_t_7)) __PYX_ERR(0, 63, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_7);
     }
-    __pyx_t_1 = __Pyx_PyObject_IsTrue(__pyx_t_7); if (unlikely((__pyx_t_1 < 0))) __PYX_ERR(0, 61, __pyx_L1_error)
+    __pyx_t_1 = __Pyx_PyObject_IsTrue(__pyx_t_7); if (unlikely((__pyx_t_1 < 0))) __PYX_ERR(0, 63, __pyx_L1_error)
     __Pyx_DECREF(__pyx_t_7); __pyx_t_7 = 0;
     if (!__pyx_t_1) {
     } else {
       __pyx_t_2 = __pyx_t_1;
       goto __pyx_L7_bool_binop_done;
     }
-    __pyx_t_1 = (__Pyx_PyUnicode_Equals(__pyx_v_ch, __pyx_mstate_global->__pyx_kp_u__6, Py_EQ)); if (unlikely((__pyx_t_1 < 0))) __PYX_ERR(0, 61, __pyx_L1_error)
+    __pyx_t_1 = (__Pyx_PyUnicode_Equals(__pyx_v_ch, __pyx_mstate_global->__pyx_kp_u__6, Py_EQ)); if (unlikely((__pyx_t_1 < 0))) __PYX_ERR(0, 63, __pyx_L1_error)
     if (!__pyx_t_1) {
     } else {
       __pyx_t_2 = __pyx_t_1;
       goto __pyx_L7_bool_binop_done;
     }
-    __pyx_t_1 = (__Pyx_PyUnicode_Equals(__pyx_v_ch, __pyx_mstate_global->__pyx_kp_u__7, Py_EQ)); if (unlikely((__pyx_t_1 < 0))) __PYX_ERR(0, 61, __pyx_L1_error)
+    __pyx_t_1 = (__Pyx_PyUnicode_Equals(__pyx_v_ch, __pyx_mstate_global->__pyx_kp_u__7, Py_EQ)); if (unlikely((__pyx_t_1 < 0))) __PYX_ERR(0, 63, __pyx_L1_error)
     if (!__pyx_t_1) {
     } else {
       __pyx_t_2 = __pyx_t_1;
       goto __pyx_L7_bool_binop_done;
     }
-    __pyx_t_1 = (__Pyx_PyUnicode_Equals(__pyx_v_ch, __pyx_mstate_global->__pyx_kp_u__8, Py_EQ)); if (unlikely((__pyx_t_1 < 0))) __PYX_ERR(0, 61, __pyx_L1_error)
+    __pyx_t_1 = (__Pyx_PyUnicode_Equals(__pyx_v_ch, __pyx_mstate_global->__pyx_kp_u__8, Py_EQ)); if (unlikely((__pyx_t_1 < 0))) __PYX_ERR(0, 63, __pyx_L1_error)
     if (!__pyx_t_1) {
     } else {
       __pyx_t_2 = __pyx_t_1;
       goto __pyx_L7_bool_binop_done;
     }
-    __pyx_t_1 = (__Pyx_PyUnicode_Equals(__pyx_v_ch, __pyx_mstate_global->__pyx_kp_u__9, Py_EQ)); if (unlikely((__pyx_t_1 < 0))) __PYX_ERR(0, 61, __pyx_L1_error)
+    __pyx_t_1 = (__Pyx_PyUnicode_Equals(__pyx_v_ch, __pyx_mstate_global->__pyx_kp_u__9, Py_EQ)); if (unlikely((__pyx_t_1 < 0))) __PYX_ERR(0, 63, __pyx_L1_error)
     if (!__pyx_t_1) {
     } else {
       __pyx_t_2 = __pyx_t_1;
       goto __pyx_L7_bool_binop_done;
     }
-    __pyx_t_1 = (__Pyx_PyUnicode_Equals(__pyx_v_ch, __pyx_mstate_global->__pyx_kp_u__10, Py_EQ)); if (unlikely((__pyx_t_1 < 0))) __PYX_ERR(0, 61, __pyx_L1_error)
+    __pyx_t_1 = (__Pyx_PyUnicode_Equals(__pyx_v_ch, __pyx_mstate_global->__pyx_kp_u__10, Py_EQ)); if (unlikely((__pyx_t_1 < 0))) __PYX_ERR(0, 63, __pyx_L1_error)
     if (!__pyx_t_1) {
     } else {
       __pyx_t_2 = __pyx_t_1;
       goto __pyx_L7_bool_binop_done;
     }
-    __pyx_t_1 = (__Pyx_PyUnicode_Equals(__pyx_v_ch, __pyx_mstate_global->__pyx_kp_u__11, Py_EQ)); if (unlikely((__pyx_t_1 < 0))) __PYX_ERR(0, 61, __pyx_L1_error)
+    __pyx_t_1 = (__Pyx_PyUnicode_Equals(__pyx_v_ch, __pyx_mstate_global->__pyx_kp_u__11, Py_EQ)); if (unlikely((__pyx_t_1 < 0))) __PYX_ERR(0, 63, __pyx_L1_error)
     __pyx_t_2 = __pyx_t_1;
     __pyx_L7_bool_binop_done:;
     if (__pyx_t_2) {
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":62
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":64
  *         ch = prefix[i]
  *         if ch.isspace() or ch == "-" or ch == "*" or ch == "\u2022" or ch == "\u00b7" or ch == "\u2013" or ch == "\u2014":
  *             continue             # <<<<<<<<<<<<<<
@@ -17131,7 +17091,7 @@ static CYTHON_INLINE int __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__pref
 */
       goto __pyx_L4_continue;
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":61
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":63
  *     for i in range(n):
  *         ch = prefix[i]
  *         if ch.isspace() or ch == "-" or ch == "*" or ch == "\u2022" or ch == "\u00b7" or ch == "\u2013" or ch == "\u2014":             # <<<<<<<<<<<<<<
@@ -17140,7 +17100,7 @@ static CYTHON_INLINE int __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__pref
 */
     }
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":63
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":65
  *         if ch.isspace() or ch == "-" or ch == "*" or ch == "\u2022" or ch == "\u00b7" or ch == "\u2013" or ch == "\u2014":
  *             continue
  *         return False             # <<<<<<<<<<<<<<
@@ -17152,7 +17112,7 @@ static CYTHON_INLINE int __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__pref
     __pyx_L4_continue:;
   }
 
-  /* "thesis_pkg/core/sec/extraction_fast.pyx":64
+  /* "thesis_pkg/core/sec/extraction_fast.pyx":66
  *             continue
  *         return False
  *     return True             # <<<<<<<<<<<<<<
@@ -17162,7 +17122,7 @@ static CYTHON_INLINE int __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__pref
   __pyx_r = 1;
   goto __pyx_L0;
 
-  /* "thesis_pkg/core/sec/extraction_fast.pyx":53
+  /* "thesis_pkg/core/sec/extraction_fast.pyx":55
  * 
  * 
  * cdef inline bint _prefix_is_bullet_fast(str prefix):             # <<<<<<<<<<<<<<
@@ -17182,7 +17142,7 @@ static CYTHON_INLINE int __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__pref
   return __pyx_r;
 }
 
-/* "thesis_pkg/core/sec/extraction_fast.pyx":67
+/* "thesis_pkg/core/sec/extraction_fast.pyx":69
  * 
  * 
  * cdef inline bint _prefix_is_part_only_fast(str prefix):             # <<<<<<<<<<<<<<
@@ -17205,7 +17165,7 @@ static CYTHON_INLINE int __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__pref
   int __pyx_clineno = 0;
   __Pyx_RefNannySetupContext("_prefix_is_part_only_fast", 0);
 
-  /* "thesis_pkg/core/sec/extraction_fast.pyx":68
+  /* "thesis_pkg/core/sec/extraction_fast.pyx":70
  * 
  * cdef inline bint _prefix_is_part_only_fast(str prefix):
  *     if not prefix:             # <<<<<<<<<<<<<<
@@ -17216,14 +17176,14 @@ static CYTHON_INLINE int __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__pref
   else
   {
     Py_ssize_t __pyx_temp = __Pyx_PyUnicode_IS_TRUE(__pyx_v_prefix);
-    if (unlikely(((!CYTHON_ASSUME_SAFE_SIZE) && __pyx_temp < 0))) __PYX_ERR(0, 68, __pyx_L1_error)
+    if (unlikely(((!CYTHON_ASSUME_SAFE_SIZE) && __pyx_temp < 0))) __PYX_ERR(0, 70, __pyx_L1_error)
     __pyx_t_1 = (__pyx_temp != 0);
   }
 
   __pyx_t_2 = (!__pyx_t_1);
   if (__pyx_t_2) {
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":69
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":71
  * cdef inline bint _prefix_is_part_only_fast(str prefix):
  *     if not prefix:
  *         return False             # <<<<<<<<<<<<<<
@@ -17233,7 +17193,7 @@ static CYTHON_INLINE int __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__pref
     __pyx_r = 0;
     goto __pyx_L0;
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":68
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":70
  * 
  * cdef inline bint _prefix_is_part_only_fast(str prefix):
  *     if not prefix:             # <<<<<<<<<<<<<<
@@ -17242,7 +17202,7 @@ static CYTHON_INLINE int __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__pref
 */
   }
 
-  /* "thesis_pkg/core/sec/extraction_fast.pyx":70
+  /* "thesis_pkg/core/sec/extraction_fast.pyx":72
  *     if not prefix:
  *         return False
  *     return PART_ONLY_PREFIX_PATTERN.match(prefix) is not None             # <<<<<<<<<<<<<<
@@ -17250,9 +17210,9 @@ static CYTHON_INLINE int __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__pref
  * 
 */
   __pyx_t_4 = NULL;
-  __Pyx_GetModuleGlobalName(__pyx_t_5, __pyx_mstate_global->__pyx_n_u_PART_ONLY_PREFIX_PATTERN); if (unlikely(!__pyx_t_5)) __PYX_ERR(0, 70, __pyx_L1_error)
+  __Pyx_GetModuleGlobalName(__pyx_t_5, __pyx_mstate_global->__pyx_n_u_PART_ONLY_PREFIX_PATTERN); if (unlikely(!__pyx_t_5)) __PYX_ERR(0, 72, __pyx_L1_error)
   __Pyx_GOTREF(__pyx_t_5);
-  __pyx_t_6 = __Pyx_PyObject_GetAttrStr(__pyx_t_5, __pyx_mstate_global->__pyx_n_u_match); if (unlikely(!__pyx_t_6)) __PYX_ERR(0, 70, __pyx_L1_error)
+  __pyx_t_6 = __Pyx_PyObject_GetAttrStr(__pyx_t_5, __pyx_mstate_global->__pyx_n_u_match); if (unlikely(!__pyx_t_6)) __PYX_ERR(0, 72, __pyx_L1_error)
   __Pyx_GOTREF(__pyx_t_6);
   __Pyx_DECREF(__pyx_t_5); __pyx_t_5 = 0;
   __pyx_t_7 = 1;
@@ -17272,7 +17232,7 @@ static CYTHON_INLINE int __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__pref
     __pyx_t_3 = __Pyx_PyObject_FastCall((PyObject*)__pyx_t_6, __pyx_callargs+__pyx_t_7, (2-__pyx_t_7) | (__pyx_t_7*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
     __Pyx_XDECREF(__pyx_t_4); __pyx_t_4 = 0;
     __Pyx_DECREF(__pyx_t_6); __pyx_t_6 = 0;
-    if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 70, __pyx_L1_error)
+    if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 72, __pyx_L1_error)
     __Pyx_GOTREF(__pyx_t_3);
   }
   __pyx_t_2 = (__pyx_t_3 != Py_None);
@@ -17280,7 +17240,7 @@ static CYTHON_INLINE int __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__pref
   __pyx_r = __pyx_t_2;
   goto __pyx_L0;
 
-  /* "thesis_pkg/core/sec/extraction_fast.pyx":67
+  /* "thesis_pkg/core/sec/extraction_fast.pyx":69
  * 
  * 
  * cdef inline bint _prefix_is_part_only_fast(str prefix):             # <<<<<<<<<<<<<<
@@ -17301,7 +17261,7 @@ static CYTHON_INLINE int __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__pref
   return __pyx_r;
 }
 
-/* "thesis_pkg/core/sec/extraction_fast.pyx":73
+/* "thesis_pkg/core/sec/extraction_fast.pyx":75
  * 
  * 
  * cdef inline object _prefix_part_tail_fast(str prefix):             # <<<<<<<<<<<<<<
@@ -17325,7 +17285,7 @@ static CYTHON_INLINE PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast
   int __pyx_clineno = 0;
   __Pyx_RefNannySetupContext("_prefix_part_tail_fast", 0);
 
-  /* "thesis_pkg/core/sec/extraction_fast.pyx":75
+  /* "thesis_pkg/core/sec/extraction_fast.pyx":77
  * cdef inline object _prefix_part_tail_fast(str prefix):
  *     cdef object m
  *     if not prefix:             # <<<<<<<<<<<<<<
@@ -17336,14 +17296,14 @@ static CYTHON_INLINE PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast
   else
   {
     Py_ssize_t __pyx_temp = __Pyx_PyUnicode_IS_TRUE(__pyx_v_prefix);
-    if (unlikely(((!CYTHON_ASSUME_SAFE_SIZE) && __pyx_temp < 0))) __PYX_ERR(0, 75, __pyx_L1_error)
+    if (unlikely(((!CYTHON_ASSUME_SAFE_SIZE) && __pyx_temp < 0))) __PYX_ERR(0, 77, __pyx_L1_error)
     __pyx_t_1 = (__pyx_temp != 0);
   }
 
   __pyx_t_2 = (!__pyx_t_1);
   if (__pyx_t_2) {
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":76
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":78
  *     cdef object m
  *     if not prefix:
  *         return None             # <<<<<<<<<<<<<<
@@ -17354,7 +17314,7 @@ static CYTHON_INLINE PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast
     __pyx_r = Py_None; __Pyx_INCREF(Py_None);
     goto __pyx_L0;
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":75
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":77
  * cdef inline object _prefix_part_tail_fast(str prefix):
  *     cdef object m
  *     if not prefix:             # <<<<<<<<<<<<<<
@@ -17363,7 +17323,7 @@ static CYTHON_INLINE PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast
 */
   }
 
-  /* "thesis_pkg/core/sec/extraction_fast.pyx":77
+  /* "thesis_pkg/core/sec/extraction_fast.pyx":79
  *     if not prefix:
  *         return None
  *     m = PART_PREFIX_TAIL_PATTERN.search(prefix)             # <<<<<<<<<<<<<<
@@ -17371,9 +17331,9 @@ static CYTHON_INLINE PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast
  *         return None
 */
   __pyx_t_4 = NULL;
-  __Pyx_GetModuleGlobalName(__pyx_t_5, __pyx_mstate_global->__pyx_n_u_PART_PREFIX_TAIL_PATTERN); if (unlikely(!__pyx_t_5)) __PYX_ERR(0, 77, __pyx_L1_error)
+  __Pyx_GetModuleGlobalName(__pyx_t_5, __pyx_mstate_global->__pyx_n_u_PART_PREFIX_TAIL_PATTERN); if (unlikely(!__pyx_t_5)) __PYX_ERR(0, 79, __pyx_L1_error)
   __Pyx_GOTREF(__pyx_t_5);
-  __pyx_t_6 = __Pyx_PyObject_GetAttrStr(__pyx_t_5, __pyx_mstate_global->__pyx_n_u_search); if (unlikely(!__pyx_t_6)) __PYX_ERR(0, 77, __pyx_L1_error)
+  __pyx_t_6 = __Pyx_PyObject_GetAttrStr(__pyx_t_5, __pyx_mstate_global->__pyx_n_u_search); if (unlikely(!__pyx_t_6)) __PYX_ERR(0, 79, __pyx_L1_error)
   __Pyx_GOTREF(__pyx_t_6);
   __Pyx_DECREF(__pyx_t_5); __pyx_t_5 = 0;
   __pyx_t_7 = 1;
@@ -17393,13 +17353,13 @@ static CYTHON_INLINE PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast
     __pyx_t_3 = __Pyx_PyObject_FastCall((PyObject*)__pyx_t_6, __pyx_callargs+__pyx_t_7, (2-__pyx_t_7) | (__pyx_t_7*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
     __Pyx_XDECREF(__pyx_t_4); __pyx_t_4 = 0;
     __Pyx_DECREF(__pyx_t_6); __pyx_t_6 = 0;
-    if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 77, __pyx_L1_error)
+    if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 79, __pyx_L1_error)
     __Pyx_GOTREF(__pyx_t_3);
   }
   __pyx_v_m = __pyx_t_3;
   __pyx_t_3 = 0;
 
-  /* "thesis_pkg/core/sec/extraction_fast.pyx":78
+  /* "thesis_pkg/core/sec/extraction_fast.pyx":80
  *         return None
  *     m = PART_PREFIX_TAIL_PATTERN.search(prefix)
  *     if m is None:             # <<<<<<<<<<<<<<
@@ -17409,7 +17369,7 @@ static CYTHON_INLINE PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast
   __pyx_t_2 = (__pyx_v_m == Py_None);
   if (__pyx_t_2) {
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":79
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":81
  *     m = PART_PREFIX_TAIL_PATTERN.search(prefix)
  *     if m is None:
  *         return None             # <<<<<<<<<<<<<<
@@ -17420,7 +17380,7 @@ static CYTHON_INLINE PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast
     __pyx_r = Py_None; __Pyx_INCREF(Py_None);
     goto __pyx_L0;
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":78
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":80
  *         return None
  *     m = PART_PREFIX_TAIL_PATTERN.search(prefix)
  *     if m is None:             # <<<<<<<<<<<<<<
@@ -17429,7 +17389,7 @@ static CYTHON_INLINE PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast
 */
   }
 
-  /* "thesis_pkg/core/sec/extraction_fast.pyx":80
+  /* "thesis_pkg/core/sec/extraction_fast.pyx":82
  *     if m is None:
  *         return None
  *     return m.group("part").upper()             # <<<<<<<<<<<<<<
@@ -17444,7 +17404,7 @@ static CYTHON_INLINE PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast
     PyObject *__pyx_callargs[2] = {__pyx_t_5, __pyx_mstate_global->__pyx_n_u_part};
     __pyx_t_4 = __Pyx_PyObject_FastCallMethod((PyObject*)__pyx_mstate_global->__pyx_n_u_group, __pyx_callargs+__pyx_t_7, (2-__pyx_t_7) | (1*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
     __Pyx_XDECREF(__pyx_t_5); __pyx_t_5 = 0;
-    if (unlikely(!__pyx_t_4)) __PYX_ERR(0, 80, __pyx_L1_error)
+    if (unlikely(!__pyx_t_4)) __PYX_ERR(0, 82, __pyx_L1_error)
     __Pyx_GOTREF(__pyx_t_4);
   }
   __pyx_t_6 = __pyx_t_4;
@@ -17455,14 +17415,14 @@ static CYTHON_INLINE PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast
     __pyx_t_3 = __Pyx_PyObject_FastCallMethod((PyObject*)__pyx_mstate_global->__pyx_n_u_upper, __pyx_callargs+__pyx_t_7, (1-__pyx_t_7) | (1*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
     __Pyx_XDECREF(__pyx_t_6); __pyx_t_6 = 0;
     __Pyx_DECREF(__pyx_t_4); __pyx_t_4 = 0;
-    if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 80, __pyx_L1_error)
+    if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 82, __pyx_L1_error)
     __Pyx_GOTREF(__pyx_t_3);
   }
   __pyx_r = __pyx_t_3;
   __pyx_t_3 = 0;
   goto __pyx_L0;
 
-  /* "thesis_pkg/core/sec/extraction_fast.pyx":73
+  /* "thesis_pkg/core/sec/extraction_fast.pyx":75
  * 
  * 
  * cdef inline object _prefix_part_tail_fast(str prefix):             # <<<<<<<<<<<<<<
@@ -17485,7 +17445,7 @@ static CYTHON_INLINE PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast
   return __pyx_r;
 }
 
-/* "thesis_pkg/core/sec/extraction_fast.pyx":83
+/* "thesis_pkg/core/sec/extraction_fast.pyx":85
  * 
  * 
  * cdef inline bint _prefix_looks_like_cross_ref_fast(str prefix):             # <<<<<<<<<<<<<<
@@ -17512,7 +17472,7 @@ static CYTHON_INLINE int __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__pref
   int __pyx_clineno = 0;
   __Pyx_RefNannySetupContext("_prefix_looks_like_cross_ref_fast", 0);
 
-  /* "thesis_pkg/core/sec/extraction_fast.pyx":86
+  /* "thesis_pkg/core/sec/extraction_fast.pyx":88
  *     cdef str tail
  *     cdef Py_ssize_t n
  *     if not prefix or not prefix.strip():             # <<<<<<<<<<<<<<
@@ -17523,7 +17483,7 @@ static CYTHON_INLINE int __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__pref
   else
   {
     Py_ssize_t __pyx_temp = __Pyx_PyUnicode_IS_TRUE(__pyx_v_prefix);
-    if (unlikely(((!CYTHON_ASSUME_SAFE_SIZE) && __pyx_temp < 0))) __PYX_ERR(0, 86, __pyx_L1_error)
+    if (unlikely(((!CYTHON_ASSUME_SAFE_SIZE) && __pyx_temp < 0))) __PYX_ERR(0, 88, __pyx_L1_error)
     __pyx_t_2 = (__pyx_temp != 0);
   }
 
@@ -17533,11 +17493,11 @@ static CYTHON_INLINE int __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__pref
     __pyx_t_1 = __pyx_t_3;
     goto __pyx_L4_bool_binop_done;
   }
-  __pyx_t_4 = __Pyx_CallUnboundCMethod0(&__pyx_mstate_global->__pyx_umethod_PyUnicode_Type__strip, __pyx_v_prefix); if (unlikely(!__pyx_t_4)) __PYX_ERR(0, 86, __pyx_L1_error)
+  __pyx_t_4 = __Pyx_CallUnboundCMethod0(&__pyx_mstate_global->__pyx_umethod_PyUnicode_Type__strip, __pyx_v_prefix); if (unlikely(!__pyx_t_4)) __PYX_ERR(0, 88, __pyx_L1_error)
   __Pyx_GOTREF(__pyx_t_4);
   {
     Py_ssize_t __pyx_temp = __Pyx_PyUnicode_IS_TRUE(__pyx_t_4);
-    if (unlikely(((!CYTHON_ASSUME_SAFE_SIZE) && __pyx_temp < 0))) __PYX_ERR(0, 86, __pyx_L1_error)
+    if (unlikely(((!CYTHON_ASSUME_SAFE_SIZE) && __pyx_temp < 0))) __PYX_ERR(0, 88, __pyx_L1_error)
     __pyx_t_3 = (__pyx_temp != 0);
   }
 
@@ -17547,7 +17507,7 @@ static CYTHON_INLINE int __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__pref
   __pyx_L4_bool_binop_done:;
   if (__pyx_t_1) {
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":87
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":89
  *     cdef Py_ssize_t n
  *     if not prefix or not prefix.strip():
  *         return False             # <<<<<<<<<<<<<<
@@ -17557,7 +17517,7 @@ static CYTHON_INLINE int __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__pref
     __pyx_r = 0;
     goto __pyx_L0;
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":86
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":88
  *     cdef str tail
  *     cdef Py_ssize_t n
  *     if not prefix or not prefix.strip():             # <<<<<<<<<<<<<<
@@ -17566,29 +17526,29 @@ static CYTHON_INLINE int __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__pref
 */
   }
 
-  /* "thesis_pkg/core/sec/extraction_fast.pyx":88
+  /* "thesis_pkg/core/sec/extraction_fast.pyx":90
  *     if not prefix or not prefix.strip():
  *         return False
  *     tail = prefix.strip()             # <<<<<<<<<<<<<<
  *     n = len(tail)
  *     if n > 80:
 */
-  __pyx_t_4 = __Pyx_CallUnboundCMethod0(&__pyx_mstate_global->__pyx_umethod_PyUnicode_Type__strip, __pyx_v_prefix); if (unlikely(!__pyx_t_4)) __PYX_ERR(0, 88, __pyx_L1_error)
+  __pyx_t_4 = __Pyx_CallUnboundCMethod0(&__pyx_mstate_global->__pyx_umethod_PyUnicode_Type__strip, __pyx_v_prefix); if (unlikely(!__pyx_t_4)) __PYX_ERR(0, 90, __pyx_L1_error)
   __Pyx_GOTREF(__pyx_t_4);
   __pyx_v_tail = ((PyObject*)__pyx_t_4);
   __pyx_t_4 = 0;
 
-  /* "thesis_pkg/core/sec/extraction_fast.pyx":89
+  /* "thesis_pkg/core/sec/extraction_fast.pyx":91
  *         return False
  *     tail = prefix.strip()
  *     n = len(tail)             # <<<<<<<<<<<<<<
  *     if n > 80:
  *         tail = tail[n - 80 :]
 */
-  __pyx_t_5 = __Pyx_PyUnicode_GET_LENGTH(__pyx_v_tail); if (unlikely(__pyx_t_5 == ((Py_ssize_t)-1))) __PYX_ERR(0, 89, __pyx_L1_error)
+  __pyx_t_5 = __Pyx_PyUnicode_GET_LENGTH(__pyx_v_tail); if (unlikely(__pyx_t_5 == ((Py_ssize_t)-1))) __PYX_ERR(0, 91, __pyx_L1_error)
   __pyx_v_n = __pyx_t_5;
 
-  /* "thesis_pkg/core/sec/extraction_fast.pyx":90
+  /* "thesis_pkg/core/sec/extraction_fast.pyx":92
  *     tail = prefix.strip()
  *     n = len(tail)
  *     if n > 80:             # <<<<<<<<<<<<<<
@@ -17598,19 +17558,19 @@ static CYTHON_INLINE int __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__pref
   __pyx_t_1 = (__pyx_v_n > 80);
   if (__pyx_t_1) {
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":91
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":93
  *     n = len(tail)
  *     if n > 80:
  *         tail = tail[n - 80 :]             # <<<<<<<<<<<<<<
  *     return (
  *         CROSS_REF_PREFIX_PATTERN.search(tail) is not None
 */
-    __pyx_t_4 = __Pyx_PyUnicode_Substring(__pyx_v_tail, (__pyx_v_n - 80), PY_SSIZE_T_MAX); if (unlikely(!__pyx_t_4)) __PYX_ERR(0, 91, __pyx_L1_error)
+    __pyx_t_4 = __Pyx_PyUnicode_Substring(__pyx_v_tail, (__pyx_v_n - 80), PY_SSIZE_T_MAX); if (unlikely(!__pyx_t_4)) __PYX_ERR(0, 93, __pyx_L1_error)
     __Pyx_GOTREF(__pyx_t_4);
     __Pyx_DECREF_SET(__pyx_v_tail, ((PyObject*)__pyx_t_4));
     __pyx_t_4 = 0;
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":90
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":92
  *     tail = prefix.strip()
  *     n = len(tail)
  *     if n > 80:             # <<<<<<<<<<<<<<
@@ -17619,7 +17579,7 @@ static CYTHON_INLINE int __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__pref
 */
   }
 
-  /* "thesis_pkg/core/sec/extraction_fast.pyx":93
+  /* "thesis_pkg/core/sec/extraction_fast.pyx":95
  *         tail = tail[n - 80 :]
  *     return (
  *         CROSS_REF_PREFIX_PATTERN.search(tail) is not None             # <<<<<<<<<<<<<<
@@ -17627,9 +17587,9 @@ static CYTHON_INLINE int __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__pref
  *     )
 */
   __pyx_t_6 = NULL;
-  __Pyx_GetModuleGlobalName(__pyx_t_7, __pyx_mstate_global->__pyx_n_u_CROSS_REF_PREFIX_PATTERN); if (unlikely(!__pyx_t_7)) __PYX_ERR(0, 93, __pyx_L1_error)
+  __Pyx_GetModuleGlobalName(__pyx_t_7, __pyx_mstate_global->__pyx_n_u_CROSS_REF_PREFIX_PATTERN); if (unlikely(!__pyx_t_7)) __PYX_ERR(0, 95, __pyx_L1_error)
   __Pyx_GOTREF(__pyx_t_7);
-  __pyx_t_8 = __Pyx_PyObject_GetAttrStr(__pyx_t_7, __pyx_mstate_global->__pyx_n_u_search); if (unlikely(!__pyx_t_8)) __PYX_ERR(0, 93, __pyx_L1_error)
+  __pyx_t_8 = __Pyx_PyObject_GetAttrStr(__pyx_t_7, __pyx_mstate_global->__pyx_n_u_search); if (unlikely(!__pyx_t_8)) __PYX_ERR(0, 95, __pyx_L1_error)
   __Pyx_GOTREF(__pyx_t_8);
   __Pyx_DECREF(__pyx_t_7); __pyx_t_7 = 0;
   __pyx_t_9 = 1;
@@ -17649,7 +17609,7 @@ static CYTHON_INLINE int __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__pref
     __pyx_t_4 = __Pyx_PyObject_FastCall((PyObject*)__pyx_t_8, __pyx_callargs+__pyx_t_9, (2-__pyx_t_9) | (__pyx_t_9*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
     __Pyx_XDECREF(__pyx_t_6); __pyx_t_6 = 0;
     __Pyx_DECREF(__pyx_t_8); __pyx_t_8 = 0;
-    if (unlikely(!__pyx_t_4)) __PYX_ERR(0, 93, __pyx_L1_error)
+    if (unlikely(!__pyx_t_4)) __PYX_ERR(0, 95, __pyx_L1_error)
     __Pyx_GOTREF(__pyx_t_4);
   }
   __pyx_t_2 = (__pyx_t_4 != Py_None);
@@ -17660,7 +17620,7 @@ static CYTHON_INLINE int __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__pref
     goto __pyx_L7_bool_binop_done;
   }
 
-  /* "thesis_pkg/core/sec/extraction_fast.pyx":94
+  /* "thesis_pkg/core/sec/extraction_fast.pyx":96
  *     return (
  *         CROSS_REF_PREFIX_PATTERN.search(tail) is not None
  *         or CROSS_REF_PART_PATTERN.search(tail) is not None             # <<<<<<<<<<<<<<
@@ -17668,9 +17628,9 @@ static CYTHON_INLINE int __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__pref
  * 
 */
   __pyx_t_8 = NULL;
-  __Pyx_GetModuleGlobalName(__pyx_t_6, __pyx_mstate_global->__pyx_n_u_CROSS_REF_PART_PATTERN); if (unlikely(!__pyx_t_6)) __PYX_ERR(0, 94, __pyx_L1_error)
+  __Pyx_GetModuleGlobalName(__pyx_t_6, __pyx_mstate_global->__pyx_n_u_CROSS_REF_PART_PATTERN); if (unlikely(!__pyx_t_6)) __PYX_ERR(0, 96, __pyx_L1_error)
   __Pyx_GOTREF(__pyx_t_6);
-  __pyx_t_7 = __Pyx_PyObject_GetAttrStr(__pyx_t_6, __pyx_mstate_global->__pyx_n_u_search); if (unlikely(!__pyx_t_7)) __PYX_ERR(0, 94, __pyx_L1_error)
+  __pyx_t_7 = __Pyx_PyObject_GetAttrStr(__pyx_t_6, __pyx_mstate_global->__pyx_n_u_search); if (unlikely(!__pyx_t_7)) __PYX_ERR(0, 96, __pyx_L1_error)
   __Pyx_GOTREF(__pyx_t_7);
   __Pyx_DECREF(__pyx_t_6); __pyx_t_6 = 0;
   __pyx_t_9 = 1;
@@ -17690,7 +17650,7 @@ static CYTHON_INLINE int __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__pref
     __pyx_t_4 = __Pyx_PyObject_FastCall((PyObject*)__pyx_t_7, __pyx_callargs+__pyx_t_9, (2-__pyx_t_9) | (__pyx_t_9*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
     __Pyx_XDECREF(__pyx_t_8); __pyx_t_8 = 0;
     __Pyx_DECREF(__pyx_t_7); __pyx_t_7 = 0;
-    if (unlikely(!__pyx_t_4)) __PYX_ERR(0, 94, __pyx_L1_error)
+    if (unlikely(!__pyx_t_4)) __PYX_ERR(0, 96, __pyx_L1_error)
     __Pyx_GOTREF(__pyx_t_4);
   }
   __pyx_t_2 = (__pyx_t_4 != Py_None);
@@ -17700,7 +17660,7 @@ static CYTHON_INLINE int __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__pref
   __pyx_r = __pyx_t_1;
   goto __pyx_L0;
 
-  /* "thesis_pkg/core/sec/extraction_fast.pyx":83
+  /* "thesis_pkg/core/sec/extraction_fast.pyx":85
  * 
  * 
  * cdef inline bint _prefix_looks_like_cross_ref_fast(str prefix):             # <<<<<<<<<<<<<<
@@ -17722,7 +17682,7 @@ static CYTHON_INLINE int __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__pref
   return __pyx_r;
 }
 
-/* "thesis_pkg/core/sec/extraction_fast.pyx":98
+/* "thesis_pkg/core/sec/extraction_fast.pyx":100
  * 
  * 
  * cdef inline bint _starts_with_lowercase_title_fast(str line, object match):             # <<<<<<<<<<<<<<
@@ -17753,7 +17713,7 @@ static CYTHON_INLINE int __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__star
   int __pyx_clineno = 0;
   __Pyx_RefNannySetupContext("_starts_with_lowercase_title_fast", 0);
 
-  /* "thesis_pkg/core/sec/extraction_fast.pyx":102
+  /* "thesis_pkg/core/sec/extraction_fast.pyx":104
  *     cdef Py_ssize_t i, n
  *     cdef str ch
  *     suffix = line[match.end() :]             # <<<<<<<<<<<<<<
@@ -17762,7 +17722,7 @@ static CYTHON_INLINE int __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__star
 */
   if (unlikely(__pyx_v_line == Py_None)) {
     PyErr_SetString(PyExc_TypeError, "'NoneType' object is not subscriptable");
-    __PYX_ERR(0, 102, __pyx_L1_error)
+    __PYX_ERR(0, 104, __pyx_L1_error)
   }
   __pyx_t_2 = __pyx_v_match;
   __Pyx_INCREF(__pyx_t_2);
@@ -17771,23 +17731,23 @@ static CYTHON_INLINE int __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__star
     PyObject *__pyx_callargs[2] = {__pyx_t_2, NULL};
     __pyx_t_1 = __Pyx_PyObject_FastCallMethod((PyObject*)__pyx_mstate_global->__pyx_n_u_end, __pyx_callargs+__pyx_t_3, (1-__pyx_t_3) | (1*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
     __Pyx_XDECREF(__pyx_t_2); __pyx_t_2 = 0;
-    if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 102, __pyx_L1_error)
+    if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 104, __pyx_L1_error)
     __Pyx_GOTREF(__pyx_t_1);
   }
   __pyx_t_5 = (__pyx_t_1 == Py_None);
   if (__pyx_t_5) {
     __pyx_t_4 = 0;
   } else {
-    __pyx_t_6 = __Pyx_PyIndex_AsSsize_t(__pyx_t_1); if (unlikely((__pyx_t_6 == (Py_ssize_t)-1) && PyErr_Occurred())) __PYX_ERR(0, 102, __pyx_L1_error)
+    __pyx_t_6 = __Pyx_PyIndex_AsSsize_t(__pyx_t_1); if (unlikely((__pyx_t_6 == (Py_ssize_t)-1) && PyErr_Occurred())) __PYX_ERR(0, 104, __pyx_L1_error)
     __pyx_t_4 = __pyx_t_6;
   }
   __Pyx_DECREF(__pyx_t_1); __pyx_t_1 = 0;
-  __pyx_t_1 = __Pyx_PyUnicode_Substring(__pyx_v_line, __pyx_t_4, PY_SSIZE_T_MAX); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 102, __pyx_L1_error)
+  __pyx_t_1 = __Pyx_PyUnicode_Substring(__pyx_v_line, __pyx_t_4, PY_SSIZE_T_MAX); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 104, __pyx_L1_error)
   __Pyx_GOTREF(__pyx_t_1);
   __pyx_v_suffix = ((PyObject*)__pyx_t_1);
   __pyx_t_1 = 0;
 
-  /* "thesis_pkg/core/sec/extraction_fast.pyx":103
+  /* "thesis_pkg/core/sec/extraction_fast.pyx":105
  *     cdef str ch
  *     suffix = line[match.end() :]
  *     if suffix and suffix[0].islower():             # <<<<<<<<<<<<<<
@@ -17796,7 +17756,7 @@ static CYTHON_INLINE int __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__star
 */
   {
     Py_ssize_t __pyx_temp = __Pyx_PyUnicode_IS_TRUE(__pyx_v_suffix);
-    if (unlikely(((!CYTHON_ASSUME_SAFE_SIZE) && __pyx_temp < 0))) __PYX_ERR(0, 103, __pyx_L1_error)
+    if (unlikely(((!CYTHON_ASSUME_SAFE_SIZE) && __pyx_temp < 0))) __PYX_ERR(0, 105, __pyx_L1_error)
     __pyx_t_7 = (__pyx_temp != 0);
   }
 
@@ -17805,13 +17765,13 @@ static CYTHON_INLINE int __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__star
     __pyx_t_5 = __pyx_t_7;
     goto __pyx_L4_bool_binop_done;
   }
-  __pyx_t_8 = __Pyx_GetItemInt_Unicode(__pyx_v_suffix, 0, long, 1, __Pyx_PyLong_From_long, 0, 0, 0, 1, __Pyx_ReferenceSharing_OwnStrongReference); if (unlikely(__pyx_t_8 == (Py_UCS4)-1)) __PYX_ERR(0, 103, __pyx_L1_error)
+  __pyx_t_8 = __Pyx_GetItemInt_Unicode(__pyx_v_suffix, 0, long, 1, __Pyx_PyLong_From_long, 0, 0, 0, 1, __Pyx_ReferenceSharing_OwnStrongReference); if (unlikely(__pyx_t_8 == (Py_UCS4)-1)) __PYX_ERR(0, 105, __pyx_L1_error)
   __pyx_t_7 = __Pyx_Py_UNICODE_ISLOWER(__pyx_t_8); 
   __pyx_t_5 = __pyx_t_7;
   __pyx_L4_bool_binop_done:;
   if (__pyx_t_5) {
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":104
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":106
  *     suffix = line[match.end() :]
  *     if suffix and suffix[0].islower():
  *         if match.end() > 0 and line[match.end() - 1].isspace():             # <<<<<<<<<<<<<<
@@ -17825,12 +17785,12 @@ static CYTHON_INLINE int __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__star
       PyObject *__pyx_callargs[2] = {__pyx_t_2, NULL};
       __pyx_t_1 = __Pyx_PyObject_FastCallMethod((PyObject*)__pyx_mstate_global->__pyx_n_u_end, __pyx_callargs+__pyx_t_3, (1-__pyx_t_3) | (1*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
       __Pyx_XDECREF(__pyx_t_2); __pyx_t_2 = 0;
-      if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 104, __pyx_L1_error)
+      if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 106, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_1);
     }
-    __pyx_t_2 = PyObject_RichCompare(__pyx_t_1, __pyx_mstate_global->__pyx_int_0, Py_GT); __Pyx_XGOTREF(__pyx_t_2); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 104, __pyx_L1_error)
+    __pyx_t_2 = PyObject_RichCompare(__pyx_t_1, __pyx_mstate_global->__pyx_int_0, Py_GT); __Pyx_XGOTREF(__pyx_t_2); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 106, __pyx_L1_error)
     __Pyx_DECREF(__pyx_t_1); __pyx_t_1 = 0;
-    __pyx_t_7 = __Pyx_PyObject_IsTrue(__pyx_t_2); if (unlikely((__pyx_t_7 < 0))) __PYX_ERR(0, 104, __pyx_L1_error)
+    __pyx_t_7 = __Pyx_PyObject_IsTrue(__pyx_t_2); if (unlikely((__pyx_t_7 < 0))) __PYX_ERR(0, 106, __pyx_L1_error)
     __Pyx_DECREF(__pyx_t_2); __pyx_t_2 = 0;
     if (__pyx_t_7) {
     } else {
@@ -17844,13 +17804,13 @@ static CYTHON_INLINE int __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__star
       PyObject *__pyx_callargs[2] = {__pyx_t_10, NULL};
       __pyx_t_9 = __Pyx_PyObject_FastCallMethod((PyObject*)__pyx_mstate_global->__pyx_n_u_end, __pyx_callargs+__pyx_t_3, (1-__pyx_t_3) | (1*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
       __Pyx_XDECREF(__pyx_t_10); __pyx_t_10 = 0;
-      if (unlikely(!__pyx_t_9)) __PYX_ERR(0, 104, __pyx_L1_error)
+      if (unlikely(!__pyx_t_9)) __PYX_ERR(0, 106, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_9);
     }
-    __pyx_t_10 = __Pyx_PyLong_SubtractObjC(__pyx_t_9, __pyx_mstate_global->__pyx_int_1, 1, 0, 0); if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 104, __pyx_L1_error)
+    __pyx_t_10 = __Pyx_PyLong_SubtractObjC(__pyx_t_9, __pyx_mstate_global->__pyx_int_1, 1, 0, 0); if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 106, __pyx_L1_error)
     __Pyx_GOTREF(__pyx_t_10);
     __Pyx_DECREF(__pyx_t_9); __pyx_t_9 = 0;
-    __pyx_t_9 = __Pyx_PyObject_GetItem(__pyx_v_line, __pyx_t_10); if (unlikely(!__pyx_t_9)) __PYX_ERR(0, 104, __pyx_L1_error)
+    __pyx_t_9 = __Pyx_PyObject_GetItem(__pyx_v_line, __pyx_t_10); if (unlikely(!__pyx_t_9)) __PYX_ERR(0, 106, __pyx_L1_error)
     __Pyx_GOTREF(__pyx_t_9);
     __Pyx_DECREF(__pyx_t_10); __pyx_t_10 = 0;
     __pyx_t_1 = __pyx_t_9;
@@ -17861,16 +17821,16 @@ static CYTHON_INLINE int __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__star
       __pyx_t_2 = __Pyx_PyObject_FastCallMethod((PyObject*)__pyx_mstate_global->__pyx_n_u_isspace, __pyx_callargs+__pyx_t_3, (1-__pyx_t_3) | (1*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
       __Pyx_XDECREF(__pyx_t_1); __pyx_t_1 = 0;
       __Pyx_DECREF(__pyx_t_9); __pyx_t_9 = 0;
-      if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 104, __pyx_L1_error)
+      if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 106, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_2);
     }
-    __pyx_t_7 = __Pyx_PyObject_IsTrue(__pyx_t_2); if (unlikely((__pyx_t_7 < 0))) __PYX_ERR(0, 104, __pyx_L1_error)
+    __pyx_t_7 = __Pyx_PyObject_IsTrue(__pyx_t_2); if (unlikely((__pyx_t_7 < 0))) __PYX_ERR(0, 106, __pyx_L1_error)
     __Pyx_DECREF(__pyx_t_2); __pyx_t_2 = 0;
     __pyx_t_5 = __pyx_t_7;
     __pyx_L7_bool_binop_done:;
     if (__pyx_t_5) {
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":105
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":107
  *     if suffix and suffix[0].islower():
  *         if match.end() > 0 and line[match.end() - 1].isspace():
  *             return True             # <<<<<<<<<<<<<<
@@ -17880,7 +17840,7 @@ static CYTHON_INLINE int __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__star
       __pyx_r = 1;
       goto __pyx_L0;
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":104
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":106
  *     suffix = line[match.end() :]
  *     if suffix and suffix[0].islower():
  *         if match.end() > 0 and line[match.end() - 1].isspace():             # <<<<<<<<<<<<<<
@@ -17889,7 +17849,7 @@ static CYTHON_INLINE int __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__star
 */
     }
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":106
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":108
  *         if match.end() > 0 and line[match.end() - 1].isspace():
  *             return True
  *         return False             # <<<<<<<<<<<<<<
@@ -17899,7 +17859,7 @@ static CYTHON_INLINE int __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__star
     __pyx_r = 0;
     goto __pyx_L0;
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":103
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":105
  *     cdef str ch
  *     suffix = line[match.end() :]
  *     if suffix and suffix[0].islower():             # <<<<<<<<<<<<<<
@@ -17908,17 +17868,17 @@ static CYTHON_INLINE int __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__star
 */
   }
 
-  /* "thesis_pkg/core/sec/extraction_fast.pyx":107
+  /* "thesis_pkg/core/sec/extraction_fast.pyx":109
  *             return True
  *         return False
  *     n = len(suffix)             # <<<<<<<<<<<<<<
  *     for i in range(n):
  *         ch = suffix[i]
 */
-  __pyx_t_4 = __Pyx_PyUnicode_GET_LENGTH(__pyx_v_suffix); if (unlikely(__pyx_t_4 == ((Py_ssize_t)-1))) __PYX_ERR(0, 107, __pyx_L1_error)
+  __pyx_t_4 = __Pyx_PyUnicode_GET_LENGTH(__pyx_v_suffix); if (unlikely(__pyx_t_4 == ((Py_ssize_t)-1))) __PYX_ERR(0, 109, __pyx_L1_error)
   __pyx_v_n = __pyx_t_4;
 
-  /* "thesis_pkg/core/sec/extraction_fast.pyx":108
+  /* "thesis_pkg/core/sec/extraction_fast.pyx":110
  *         return False
  *     n = len(suffix)
  *     for i in range(n):             # <<<<<<<<<<<<<<
@@ -17930,21 +17890,21 @@ static CYTHON_INLINE int __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__star
   for (__pyx_t_11 = 0; __pyx_t_11 < __pyx_t_6; __pyx_t_11+=1) {
     __pyx_v_i = __pyx_t_11;
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":109
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":111
  *     n = len(suffix)
  *     for i in range(n):
  *         ch = suffix[i]             # <<<<<<<<<<<<<<
  *         if ch.isalpha():
  *             return ch.islower()
 */
-    __pyx_t_8 = __Pyx_GetItemInt_Unicode(__pyx_v_suffix, __pyx_v_i, Py_ssize_t, 1, PyLong_FromSsize_t, 0, 0, 0, 1, __Pyx_ReferenceSharing_OwnStrongReference); if (unlikely(__pyx_t_8 == (Py_UCS4)-1)) __PYX_ERR(0, 109, __pyx_L1_error)
-    __pyx_t_2 = __Pyx_PyUnicode_FromOrdinal(__pyx_t_8); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 109, __pyx_L1_error)
+    __pyx_t_8 = __Pyx_GetItemInt_Unicode(__pyx_v_suffix, __pyx_v_i, Py_ssize_t, 1, PyLong_FromSsize_t, 0, 0, 0, 1, __Pyx_ReferenceSharing_OwnStrongReference); if (unlikely(__pyx_t_8 == (Py_UCS4)-1)) __PYX_ERR(0, 111, __pyx_L1_error)
+    __pyx_t_2 = __Pyx_PyUnicode_FromOrdinal(__pyx_t_8); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 111, __pyx_L1_error)
     __Pyx_GOTREF(__pyx_t_2);
-    if (!(likely(PyUnicode_CheckExact(__pyx_t_2)) || __Pyx_RaiseUnexpectedTypeError("str", __pyx_t_2))) __PYX_ERR(0, 109, __pyx_L1_error)
+    if (!(likely(PyUnicode_CheckExact(__pyx_t_2)) || __Pyx_RaiseUnexpectedTypeError("str", __pyx_t_2))) __PYX_ERR(0, 111, __pyx_L1_error)
     __Pyx_XDECREF_SET(__pyx_v_ch, ((PyObject*)__pyx_t_2));
     __pyx_t_2 = 0;
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":110
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":112
  *     for i in range(n):
  *         ch = suffix[i]
  *         if ch.isalpha():             # <<<<<<<<<<<<<<
@@ -17958,14 +17918,14 @@ static CYTHON_INLINE int __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__star
       PyObject *__pyx_callargs[2] = {__pyx_t_9, NULL};
       __pyx_t_2 = __Pyx_PyObject_FastCallMethod((PyObject*)__pyx_mstate_global->__pyx_n_u_isalpha, __pyx_callargs+__pyx_t_3, (1-__pyx_t_3) | (1*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
       __Pyx_XDECREF(__pyx_t_9); __pyx_t_9 = 0;
-      if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 110, __pyx_L1_error)
+      if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 112, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_2);
     }
-    __pyx_t_5 = __Pyx_PyObject_IsTrue(__pyx_t_2); if (unlikely((__pyx_t_5 < 0))) __PYX_ERR(0, 110, __pyx_L1_error)
+    __pyx_t_5 = __Pyx_PyObject_IsTrue(__pyx_t_2); if (unlikely((__pyx_t_5 < 0))) __PYX_ERR(0, 112, __pyx_L1_error)
     __Pyx_DECREF(__pyx_t_2); __pyx_t_2 = 0;
     if (__pyx_t_5) {
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":111
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":113
  *         ch = suffix[i]
  *         if ch.isalpha():
  *             return ch.islower()             # <<<<<<<<<<<<<<
@@ -17979,15 +17939,15 @@ static CYTHON_INLINE int __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__star
         PyObject *__pyx_callargs[2] = {__pyx_t_9, NULL};
         __pyx_t_2 = __Pyx_PyObject_FastCallMethod((PyObject*)__pyx_mstate_global->__pyx_n_u_islower, __pyx_callargs+__pyx_t_3, (1-__pyx_t_3) | (1*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
         __Pyx_XDECREF(__pyx_t_9); __pyx_t_9 = 0;
-        if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 111, __pyx_L1_error)
+        if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 113, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_2);
       }
-      __pyx_t_5 = __Pyx_PyObject_IsTrue(__pyx_t_2); if (unlikely((__pyx_t_5 == (int)-1) && PyErr_Occurred())) __PYX_ERR(0, 111, __pyx_L1_error)
+      __pyx_t_5 = __Pyx_PyObject_IsTrue(__pyx_t_2); if (unlikely((__pyx_t_5 == (int)-1) && PyErr_Occurred())) __PYX_ERR(0, 113, __pyx_L1_error)
       __Pyx_DECREF(__pyx_t_2); __pyx_t_2 = 0;
       __pyx_r = __pyx_t_5;
       goto __pyx_L0;
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":110
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":112
  *     for i in range(n):
  *         ch = suffix[i]
  *         if ch.isalpha():             # <<<<<<<<<<<<<<
@@ -17997,7 +17957,7 @@ static CYTHON_INLINE int __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__star
     }
   }
 
-  /* "thesis_pkg/core/sec/extraction_fast.pyx":112
+  /* "thesis_pkg/core/sec/extraction_fast.pyx":114
  *         if ch.isalpha():
  *             return ch.islower()
  *     return False             # <<<<<<<<<<<<<<
@@ -18007,7 +17967,7 @@ static CYTHON_INLINE int __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__star
   __pyx_r = 0;
   goto __pyx_L0;
 
-  /* "thesis_pkg/core/sec/extraction_fast.pyx":98
+  /* "thesis_pkg/core/sec/extraction_fast.pyx":100
  * 
  * 
  * cdef inline bint _starts_with_lowercase_title_fast(str line, object match):             # <<<<<<<<<<<<<<
@@ -18030,7 +17990,7 @@ static CYTHON_INLINE int __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__star
   return __pyx_r;
 }
 
-/* "thesis_pkg/core/sec/extraction_fast.pyx":115
+/* "thesis_pkg/core/sec/extraction_fast.pyx":117
  * 
  * 
  * cdef object _next_valid_part_match_sparse(object part_iter, str line, set allowed_parts):             # <<<<<<<<<<<<<<
@@ -18059,7 +18019,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__next_valid_p
   int __pyx_clineno = 0;
   __Pyx_RefNannySetupContext("_next_valid_part_match_sparse", 0);
 
-  /* "thesis_pkg/core/sec/extraction_fast.pyx":118
+  /* "thesis_pkg/core/sec/extraction_fast.pyx":120
  *     cdef object match
  *     cdef str part
  *     while True:             # <<<<<<<<<<<<<<
@@ -18068,7 +18028,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__next_valid_p
 */
   while (1) {
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":119
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":121
  *     cdef str part
  *     while True:
  *         try:             # <<<<<<<<<<<<<<
@@ -18084,19 +18044,19 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__next_valid_p
       __Pyx_XGOTREF(__pyx_t_3);
       /*try:*/ {
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":120
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":122
  *     while True:
  *         try:
  *             match = next(part_iter)             # <<<<<<<<<<<<<<
  *         except StopIteration:
  *             return None
 */
-        __pyx_t_4 = __Pyx_PyIter_Next(__pyx_v_part_iter); if (unlikely(!__pyx_t_4)) __PYX_ERR(0, 120, __pyx_L5_error)
+        __pyx_t_4 = __Pyx_PyIter_Next(__pyx_v_part_iter); if (unlikely(!__pyx_t_4)) __PYX_ERR(0, 122, __pyx_L5_error)
         __Pyx_GOTREF(__pyx_t_4);
         __Pyx_XDECREF_SET(__pyx_v_match, __pyx_t_4);
         __pyx_t_4 = 0;
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":119
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":121
  *     cdef str part
  *     while True:
  *         try:             # <<<<<<<<<<<<<<
@@ -18111,7 +18071,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__next_valid_p
       __pyx_L5_error:;
       __Pyx_XDECREF(__pyx_t_4); __pyx_t_4 = 0;
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":121
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":123
  *         try:
  *             match = next(part_iter)
  *         except StopIteration:             # <<<<<<<<<<<<<<
@@ -18122,7 +18082,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__next_valid_p
       if (__pyx_t_5) {
         __Pyx_ErrRestore(0,0,0);
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":122
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":124
  *             match = next(part_iter)
  *         except StopIteration:
  *             return None             # <<<<<<<<<<<<<<
@@ -18135,7 +18095,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__next_valid_p
       }
       goto __pyx_L7_except_error;
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":119
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":121
  *     cdef str part
  *     while True:
  *         try:             # <<<<<<<<<<<<<<
@@ -18157,7 +18117,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__next_valid_p
       __pyx_L12_try_end:;
     }
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":123
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":125
  *         except StopIteration:
  *             return None
  *         if not _part_marker_is_heading(line, match):             # <<<<<<<<<<<<<<
@@ -18165,7 +18125,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__next_valid_p
  *         part = match.group("part").upper()
 */
     __pyx_t_6 = NULL;
-    __Pyx_GetModuleGlobalName(__pyx_t_7, __pyx_mstate_global->__pyx_n_u_part_marker_is_heading); if (unlikely(!__pyx_t_7)) __PYX_ERR(0, 123, __pyx_L1_error)
+    __Pyx_GetModuleGlobalName(__pyx_t_7, __pyx_mstate_global->__pyx_n_u_part_marker_is_heading); if (unlikely(!__pyx_t_7)) __PYX_ERR(0, 125, __pyx_L1_error)
     __Pyx_GOTREF(__pyx_t_7);
     __pyx_t_8 = 1;
     #if CYTHON_UNPACK_METHODS
@@ -18184,15 +18144,15 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__next_valid_p
       __pyx_t_4 = __Pyx_PyObject_FastCall((PyObject*)__pyx_t_7, __pyx_callargs+__pyx_t_8, (3-__pyx_t_8) | (__pyx_t_8*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
       __Pyx_XDECREF(__pyx_t_6); __pyx_t_6 = 0;
       __Pyx_DECREF(__pyx_t_7); __pyx_t_7 = 0;
-      if (unlikely(!__pyx_t_4)) __PYX_ERR(0, 123, __pyx_L1_error)
+      if (unlikely(!__pyx_t_4)) __PYX_ERR(0, 125, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_4);
     }
-    __pyx_t_9 = __Pyx_PyObject_IsTrue(__pyx_t_4); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 123, __pyx_L1_error)
+    __pyx_t_9 = __Pyx_PyObject_IsTrue(__pyx_t_4); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 125, __pyx_L1_error)
     __Pyx_DECREF(__pyx_t_4); __pyx_t_4 = 0;
     __pyx_t_10 = (!__pyx_t_9);
     if (__pyx_t_10) {
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":124
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":126
  *             return None
  *         if not _part_marker_is_heading(line, match):
  *             continue             # <<<<<<<<<<<<<<
@@ -18201,7 +18161,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__next_valid_p
 */
       goto __pyx_L3_continue;
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":123
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":125
  *         except StopIteration:
  *             return None
  *         if not _part_marker_is_heading(line, match):             # <<<<<<<<<<<<<<
@@ -18210,7 +18170,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__next_valid_p
 */
     }
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":125
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":127
  *         if not _part_marker_is_heading(line, match):
  *             continue
  *         part = match.group("part").upper()             # <<<<<<<<<<<<<<
@@ -18224,7 +18184,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__next_valid_p
       PyObject *__pyx_callargs[2] = {__pyx_t_11, __pyx_mstate_global->__pyx_n_u_part};
       __pyx_t_6 = __Pyx_PyObject_FastCallMethod((PyObject*)__pyx_mstate_global->__pyx_n_u_group, __pyx_callargs+__pyx_t_8, (2-__pyx_t_8) | (1*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
       __Pyx_XDECREF(__pyx_t_11); __pyx_t_11 = 0;
-      if (unlikely(!__pyx_t_6)) __PYX_ERR(0, 125, __pyx_L1_error)
+      if (unlikely(!__pyx_t_6)) __PYX_ERR(0, 127, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_6);
     }
     __pyx_t_7 = __pyx_t_6;
@@ -18235,14 +18195,14 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__next_valid_p
       __pyx_t_4 = __Pyx_PyObject_FastCallMethod((PyObject*)__pyx_mstate_global->__pyx_n_u_upper, __pyx_callargs+__pyx_t_8, (1-__pyx_t_8) | (1*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
       __Pyx_XDECREF(__pyx_t_7); __pyx_t_7 = 0;
       __Pyx_DECREF(__pyx_t_6); __pyx_t_6 = 0;
-      if (unlikely(!__pyx_t_4)) __PYX_ERR(0, 125, __pyx_L1_error)
+      if (unlikely(!__pyx_t_4)) __PYX_ERR(0, 127, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_4);
     }
-    if (!(likely(PyUnicode_CheckExact(__pyx_t_4))||((__pyx_t_4) == Py_None) || __Pyx_RaiseUnexpectedTypeError("str", __pyx_t_4))) __PYX_ERR(0, 125, __pyx_L1_error)
+    if (!(likely(PyUnicode_CheckExact(__pyx_t_4))||((__pyx_t_4) == Py_None) || __Pyx_RaiseUnexpectedTypeError("str", __pyx_t_4))) __PYX_ERR(0, 127, __pyx_L1_error)
     __Pyx_XDECREF_SET(__pyx_v_part, ((PyObject*)__pyx_t_4));
     __pyx_t_4 = 0;
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":126
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":128
  *             continue
  *         part = match.group("part").upper()
  *         if part in allowed_parts:             # <<<<<<<<<<<<<<
@@ -18251,12 +18211,12 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__next_valid_p
 */
     if (unlikely(__pyx_v_allowed_parts == Py_None)) {
       PyErr_SetString(PyExc_TypeError, "'NoneType' object is not iterable");
-      __PYX_ERR(0, 126, __pyx_L1_error)
+      __PYX_ERR(0, 128, __pyx_L1_error)
     }
-    __pyx_t_10 = (__Pyx_PySet_ContainsTF(__pyx_v_part, __pyx_v_allowed_parts, Py_EQ)); if (unlikely((__pyx_t_10 < 0))) __PYX_ERR(0, 126, __pyx_L1_error)
+    __pyx_t_10 = (__Pyx_PySet_ContainsTF(__pyx_v_part, __pyx_v_allowed_parts, Py_EQ)); if (unlikely((__pyx_t_10 < 0))) __PYX_ERR(0, 128, __pyx_L1_error)
     if (__pyx_t_10) {
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":127
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":129
  *         part = match.group("part").upper()
  *         if part in allowed_parts:
  *             return match             # <<<<<<<<<<<<<<
@@ -18268,7 +18228,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__next_valid_p
       __pyx_r = __pyx_v_match;
       goto __pyx_L0;
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":126
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":128
  *             continue
  *         part = match.group("part").upper()
  *         if part in allowed_parts:             # <<<<<<<<<<<<<<
@@ -18279,7 +18239,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__next_valid_p
     __pyx_L3_continue:;
   }
 
-  /* "thesis_pkg/core/sec/extraction_fast.pyx":115
+  /* "thesis_pkg/core/sec/extraction_fast.pyx":117
  * 
  * 
  * cdef object _next_valid_part_match_sparse(object part_iter, str line, set allowed_parts):             # <<<<<<<<<<<<<<
@@ -18305,7 +18265,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__next_valid_p
   return __pyx_r;
 }
 
-/* "thesis_pkg/core/sec/extraction_fast.pyx":130
+/* "thesis_pkg/core/sec/extraction_fast.pyx":132
  * 
  * 
  * cpdef list scan_part_markers_v2_fast(             # <<<<<<<<<<<<<<
@@ -18322,7 +18282,7 @@ PyObject *__pyx_args, PyObject *__pyx_kwds
 ); /*proto*/
 static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_markers_v2_fast(PyObject *__pyx_v_lines, PyObject *__pyx_v_line_starts, PyObject *__pyx_v_allowed_parts, int __pyx_v_scan_sparse_layout, PyObject *__pyx_v_toc_mask, CYTHON_UNUSED int __pyx_skip_dispatch, struct __pyx_opt_args_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_markers_v2_fast *__pyx_optional_args) {
 
-  /* "thesis_pkg/core/sec/extraction_fast.pyx":136
+  /* "thesis_pkg/core/sec/extraction_fast.pyx":138
  *     bint scan_sparse_layout,
  *     set toc_mask,
  *     bint is_10q=False,             # <<<<<<<<<<<<<<
@@ -18380,19 +18340,19 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
     }
   }
 
-  /* "thesis_pkg/core/sec/extraction_fast.pyx":148
+  /* "thesis_pkg/core/sec/extraction_fast.pyx":150
  *     cdef str suffix
  *     cdef object match
  *     cdef object markers = []             # <<<<<<<<<<<<<<
  *     cdef object filtered
  *     cdef object marker
 */
-  __pyx_t_1 = PyList_New(0); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 148, __pyx_L1_error)
+  __pyx_t_1 = PyList_New(0); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 150, __pyx_L1_error)
   __Pyx_GOTREF(__pyx_t_1);
   __pyx_v_markers = __pyx_t_1;
   __pyx_t_1 = 0;
 
-  /* "thesis_pkg/core/sec/extraction_fast.pyx":151
+  /* "thesis_pkg/core/sec/extraction_fast.pyx":153
  *     cdef object filtered
  *     cdef object marker
  *     cdef object starts_arr = array("q", line_starts)             # <<<<<<<<<<<<<<
@@ -18400,7 +18360,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
  *     cdef bint seen_part_i = False
 */
   __pyx_t_2 = NULL;
-  __Pyx_GetModuleGlobalName(__pyx_t_3, __pyx_mstate_global->__pyx_n_u_array); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 151, __pyx_L1_error)
+  __Pyx_GetModuleGlobalName(__pyx_t_3, __pyx_mstate_global->__pyx_n_u_array); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 153, __pyx_L1_error)
   __Pyx_GOTREF(__pyx_t_3);
   __pyx_t_4 = 1;
   #if CYTHON_UNPACK_METHODS
@@ -18419,25 +18379,25 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
     __pyx_t_1 = __Pyx_PyObject_FastCall((PyObject*)__pyx_t_3, __pyx_callargs+__pyx_t_4, (3-__pyx_t_4) | (__pyx_t_4*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
     __Pyx_XDECREF(__pyx_t_2); __pyx_t_2 = 0;
     __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
-    if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 151, __pyx_L1_error)
+    if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 153, __pyx_L1_error)
     __Pyx_GOTREF(__pyx_t_1);
   }
   __pyx_v_starts_arr = __pyx_t_1;
   __pyx_t_1 = 0;
 
-  /* "thesis_pkg/core/sec/extraction_fast.pyx":152
+  /* "thesis_pkg/core/sec/extraction_fast.pyx":154
  *     cdef object marker
  *     cdef object starts_arr = array("q", line_starts)
  *     cdef long long[:] starts_mv = starts_arr             # <<<<<<<<<<<<<<
  *     cdef bint seen_part_i = False
  *     cdef bint seen_part_ii = False
 */
-  __pyx_t_5 = __Pyx_PyObject_to_MemoryviewSlice_ds_PY_LONG_LONG(__pyx_v_starts_arr, PyBUF_WRITABLE); if (unlikely(!__pyx_t_5.memview)) __PYX_ERR(0, 152, __pyx_L1_error)
+  __pyx_t_5 = __Pyx_PyObject_to_MemoryviewSlice_ds_PY_LONG_LONG(__pyx_v_starts_arr, PyBUF_WRITABLE); if (unlikely(!__pyx_t_5.memview)) __PYX_ERR(0, 154, __pyx_L1_error)
   __pyx_v_starts_mv = __pyx_t_5;
   __pyx_t_5.memview = NULL;
   __pyx_t_5.data = NULL;
 
-  /* "thesis_pkg/core/sec/extraction_fast.pyx":153
+  /* "thesis_pkg/core/sec/extraction_fast.pyx":155
  *     cdef object starts_arr = array("q", line_starts)
  *     cdef long long[:] starts_mv = starts_arr
  *     cdef bint seen_part_i = False             # <<<<<<<<<<<<<<
@@ -18446,7 +18406,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
 */
   __pyx_v_seen_part_i = 0;
 
-  /* "thesis_pkg/core/sec/extraction_fast.pyx":154
+  /* "thesis_pkg/core/sec/extraction_fast.pyx":156
  *     cdef long long[:] starts_mv = starts_arr
  *     cdef bint seen_part_i = False
  *     cdef bint seen_part_ii = False             # <<<<<<<<<<<<<<
@@ -18455,7 +18415,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
 */
   __pyx_v_seen_part_ii = 0;
 
-  /* "thesis_pkg/core/sec/extraction_fast.pyx":156
+  /* "thesis_pkg/core/sec/extraction_fast.pyx":158
  *     cdef bint seen_part_ii = False
  * 
  *     n_lines = len(lines)             # <<<<<<<<<<<<<<
@@ -18464,12 +18424,12 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
 */
   if (unlikely(__pyx_v_lines == Py_None)) {
     PyErr_SetString(PyExc_TypeError, "object of type 'NoneType' has no len()");
-    __PYX_ERR(0, 156, __pyx_L1_error)
+    __PYX_ERR(0, 158, __pyx_L1_error)
   }
-  __pyx_t_6 = __Pyx_PyList_GET_SIZE(__pyx_v_lines); if (unlikely(__pyx_t_6 == ((Py_ssize_t)-1))) __PYX_ERR(0, 156, __pyx_L1_error)
+  __pyx_t_6 = __Pyx_PyList_GET_SIZE(__pyx_v_lines); if (unlikely(__pyx_t_6 == ((Py_ssize_t)-1))) __PYX_ERR(0, 158, __pyx_L1_error)
   __pyx_v_n_lines = __pyx_t_6;
 
-  /* "thesis_pkg/core/sec/extraction_fast.pyx":157
+  /* "thesis_pkg/core/sec/extraction_fast.pyx":159
  * 
  *     n_lines = len(lines)
  *     for i in range(n_lines):             # <<<<<<<<<<<<<<
@@ -18481,7 +18441,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
   for (__pyx_t_8 = 0; __pyx_t_8 < __pyx_t_7; __pyx_t_8+=1) {
     __pyx_v_i = __pyx_t_8;
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":158
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":160
  *     n_lines = len(lines)
  *     for i in range(n_lines):
  *         line = lines[i]             # <<<<<<<<<<<<<<
@@ -18490,15 +18450,15 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
 */
     if (unlikely(__pyx_v_lines == Py_None)) {
       PyErr_SetString(PyExc_TypeError, "'NoneType' object is not subscriptable");
-      __PYX_ERR(0, 158, __pyx_L1_error)
+      __PYX_ERR(0, 160, __pyx_L1_error)
     }
     __pyx_t_1 = __Pyx_PyList_GET_ITEM(__pyx_v_lines, __pyx_v_i);
     __Pyx_INCREF(__pyx_t_1);
-    if (!(likely(PyUnicode_CheckExact(__pyx_t_1))||((__pyx_t_1) == Py_None) || __Pyx_RaiseUnexpectedTypeError("str", __pyx_t_1))) __PYX_ERR(0, 158, __pyx_L1_error)
+    if (!(likely(PyUnicode_CheckExact(__pyx_t_1))||((__pyx_t_1) == Py_None) || __Pyx_RaiseUnexpectedTypeError("str", __pyx_t_1))) __PYX_ERR(0, 160, __pyx_L1_error)
     __Pyx_XDECREF_SET(__pyx_v_line, ((PyObject*)__pyx_t_1));
     __pyx_t_1 = 0;
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":159
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":161
  *     for i in range(n_lines):
  *         line = lines[i]
  *         if not line:             # <<<<<<<<<<<<<<
@@ -18509,14 +18469,14 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
     else
     {
       Py_ssize_t __pyx_temp = __Pyx_PyUnicode_IS_TRUE(__pyx_v_line);
-      if (unlikely(((!CYTHON_ASSUME_SAFE_SIZE) && __pyx_temp < 0))) __PYX_ERR(0, 159, __pyx_L1_error)
+      if (unlikely(((!CYTHON_ASSUME_SAFE_SIZE) && __pyx_temp < 0))) __PYX_ERR(0, 161, __pyx_L1_error)
       __pyx_t_9 = (__pyx_temp != 0);
     }
 
     __pyx_t_10 = (!__pyx_t_9);
     if (__pyx_t_10) {
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":160
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":162
  *         line = lines[i]
  *         if not line:
  *             continue             # <<<<<<<<<<<<<<
@@ -18525,7 +18485,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
 */
       goto __pyx_L3_continue;
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":159
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":161
  *     for i in range(n_lines):
  *         line = lines[i]
  *         if not line:             # <<<<<<<<<<<<<<
@@ -18534,24 +18494,24 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
 */
     }
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":161
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":163
  *         if not line:
  *             continue
  *         if i in toc_mask:             # <<<<<<<<<<<<<<
  *             continue
  *         has_part_hint = _contains_part_hint(line)
 */
-    __pyx_t_1 = PyLong_FromSsize_t(__pyx_v_i); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 161, __pyx_L1_error)
+    __pyx_t_1 = PyLong_FromSsize_t(__pyx_v_i); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 163, __pyx_L1_error)
     __Pyx_GOTREF(__pyx_t_1);
     if (unlikely(__pyx_v_toc_mask == Py_None)) {
       PyErr_SetString(PyExc_TypeError, "'NoneType' object is not iterable");
-      __PYX_ERR(0, 161, __pyx_L1_error)
+      __PYX_ERR(0, 163, __pyx_L1_error)
     }
-    __pyx_t_10 = (__Pyx_PySet_ContainsTF(__pyx_t_1, __pyx_v_toc_mask, Py_EQ)); if (unlikely((__pyx_t_10 < 0))) __PYX_ERR(0, 161, __pyx_L1_error)
+    __pyx_t_10 = (__Pyx_PySet_ContainsTF(__pyx_t_1, __pyx_v_toc_mask, Py_EQ)); if (unlikely((__pyx_t_10 < 0))) __PYX_ERR(0, 163, __pyx_L1_error)
     __Pyx_DECREF(__pyx_t_1); __pyx_t_1 = 0;
     if (__pyx_t_10) {
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":162
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":164
  *             continue
  *         if i in toc_mask:
  *             continue             # <<<<<<<<<<<<<<
@@ -18560,7 +18520,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
 */
       goto __pyx_L3_continue;
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":161
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":163
  *         if not line:
  *             continue
  *         if i in toc_mask:             # <<<<<<<<<<<<<<
@@ -18569,17 +18529,17 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
 */
     }
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":163
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":165
  *         if i in toc_mask:
  *             continue
  *         has_part_hint = _contains_part_hint(line)             # <<<<<<<<<<<<<<
  *         if not has_part_hint:
  *             continue
 */
-    __pyx_t_10 = __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__contains_part_hint(__pyx_v_line); if (unlikely(__pyx_t_10 == ((int)-1) && PyErr_Occurred())) __PYX_ERR(0, 163, __pyx_L1_error)
+    __pyx_t_10 = __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__contains_part_hint(__pyx_v_line); if (unlikely(__pyx_t_10 == ((int)-1) && PyErr_Occurred())) __PYX_ERR(0, 165, __pyx_L1_error)
     __pyx_v_has_part_hint = __pyx_t_10;
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":164
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":166
  *             continue
  *         has_part_hint = _contains_part_hint(line)
  *         if not has_part_hint:             # <<<<<<<<<<<<<<
@@ -18589,7 +18549,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
     __pyx_t_10 = (!__pyx_v_has_part_hint);
     if (__pyx_t_10) {
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":165
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":167
  *         has_part_hint = _contains_part_hint(line)
  *         if not has_part_hint:
  *             continue             # <<<<<<<<<<<<<<
@@ -18598,7 +18558,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
 */
       goto __pyx_L3_continue;
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":164
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":166
  *             continue
  *         has_part_hint = _contains_part_hint(line)
  *         if not has_part_hint:             # <<<<<<<<<<<<<<
@@ -18607,7 +18567,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
 */
     }
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":167
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":169
  *             continue
  * 
  *         if scan_sparse_layout:             # <<<<<<<<<<<<<<
@@ -18616,7 +18576,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
 */
     if (__pyx_v_scan_sparse_layout) {
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":168
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":170
  * 
  *         if scan_sparse_layout:
  *             for match in PART_MARKER_PATTERN.finditer(line):             # <<<<<<<<<<<<<<
@@ -18624,9 +18584,9 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
  *                 if part not in allowed_parts:
 */
       __pyx_t_3 = NULL;
-      __Pyx_GetModuleGlobalName(__pyx_t_2, __pyx_mstate_global->__pyx_n_u_PART_MARKER_PATTERN); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 168, __pyx_L1_error)
+      __Pyx_GetModuleGlobalName(__pyx_t_2, __pyx_mstate_global->__pyx_n_u_PART_MARKER_PATTERN); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 170, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_2);
-      __pyx_t_11 = __Pyx_PyObject_GetAttrStr(__pyx_t_2, __pyx_mstate_global->__pyx_n_u_finditer); if (unlikely(!__pyx_t_11)) __PYX_ERR(0, 168, __pyx_L1_error)
+      __pyx_t_11 = __Pyx_PyObject_GetAttrStr(__pyx_t_2, __pyx_mstate_global->__pyx_n_u_finditer); if (unlikely(!__pyx_t_11)) __PYX_ERR(0, 170, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_11);
       __Pyx_DECREF(__pyx_t_2); __pyx_t_2 = 0;
       __pyx_t_4 = 1;
@@ -18646,7 +18606,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
         __pyx_t_1 = __Pyx_PyObject_FastCall((PyObject*)__pyx_t_11, __pyx_callargs+__pyx_t_4, (2-__pyx_t_4) | (__pyx_t_4*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
         __Pyx_XDECREF(__pyx_t_3); __pyx_t_3 = 0;
         __Pyx_DECREF(__pyx_t_11); __pyx_t_11 = 0;
-        if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 168, __pyx_L1_error)
+        if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 170, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_1);
       }
       if (likely(PyList_CheckExact(__pyx_t_1)) || PyTuple_CheckExact(__pyx_t_1)) {
@@ -18654,9 +18614,9 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
         __pyx_t_12 = 0;
         __pyx_t_13 = NULL;
       } else {
-        __pyx_t_12 = -1; __pyx_t_11 = PyObject_GetIter(__pyx_t_1); if (unlikely(!__pyx_t_11)) __PYX_ERR(0, 168, __pyx_L1_error)
+        __pyx_t_12 = -1; __pyx_t_11 = PyObject_GetIter(__pyx_t_1); if (unlikely(!__pyx_t_11)) __PYX_ERR(0, 170, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_11);
-        __pyx_t_13 = (CYTHON_COMPILING_IN_LIMITED_API) ? PyIter_Next : __Pyx_PyObject_GetIterNextFunc(__pyx_t_11); if (unlikely(!__pyx_t_13)) __PYX_ERR(0, 168, __pyx_L1_error)
+        __pyx_t_13 = (CYTHON_COMPILING_IN_LIMITED_API) ? PyIter_Next : __Pyx_PyObject_GetIterNextFunc(__pyx_t_11); if (unlikely(!__pyx_t_13)) __PYX_ERR(0, 170, __pyx_L1_error)
       }
       __Pyx_DECREF(__pyx_t_1); __pyx_t_1 = 0;
       for (;;) {
@@ -18665,7 +18625,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
             {
               Py_ssize_t __pyx_temp = __Pyx_PyList_GET_SIZE(__pyx_t_11);
               #if !CYTHON_ASSUME_SAFE_SIZE
-              if (unlikely((__pyx_temp < 0))) __PYX_ERR(0, 168, __pyx_L1_error)
+              if (unlikely((__pyx_temp < 0))) __PYX_ERR(0, 170, __pyx_L1_error)
               #endif
               if (__pyx_t_12 >= __pyx_temp) break;
             }
@@ -18675,7 +18635,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
             {
               Py_ssize_t __pyx_temp = __Pyx_PyTuple_GET_SIZE(__pyx_t_11);
               #if !CYTHON_ASSUME_SAFE_SIZE
-              if (unlikely((__pyx_temp < 0))) __PYX_ERR(0, 168, __pyx_L1_error)
+              if (unlikely((__pyx_temp < 0))) __PYX_ERR(0, 170, __pyx_L1_error)
               #endif
               if (__pyx_t_12 >= __pyx_temp) break;
             }
@@ -18686,13 +18646,13 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
             #endif
             ++__pyx_t_12;
           }
-          if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 168, __pyx_L1_error)
+          if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 170, __pyx_L1_error)
         } else {
           __pyx_t_1 = __pyx_t_13(__pyx_t_11);
           if (unlikely(!__pyx_t_1)) {
             PyObject* exc_type = PyErr_Occurred();
             if (exc_type) {
-              if (unlikely(!__Pyx_PyErr_GivenExceptionMatches(exc_type, PyExc_StopIteration))) __PYX_ERR(0, 168, __pyx_L1_error)
+              if (unlikely(!__Pyx_PyErr_GivenExceptionMatches(exc_type, PyExc_StopIteration))) __PYX_ERR(0, 170, __pyx_L1_error)
               PyErr_Clear();
             }
             break;
@@ -18702,7 +18662,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
         __Pyx_XDECREF_SET(__pyx_v_match, __pyx_t_1);
         __pyx_t_1 = 0;
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":169
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":171
  *         if scan_sparse_layout:
  *             for match in PART_MARKER_PATTERN.finditer(line):
  *                 part = match.group("part").upper()             # <<<<<<<<<<<<<<
@@ -18716,7 +18676,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
           PyObject *__pyx_callargs[2] = {__pyx_t_14, __pyx_mstate_global->__pyx_n_u_part};
           __pyx_t_2 = __Pyx_PyObject_FastCallMethod((PyObject*)__pyx_mstate_global->__pyx_n_u_group, __pyx_callargs+__pyx_t_4, (2-__pyx_t_4) | (1*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
           __Pyx_XDECREF(__pyx_t_14); __pyx_t_14 = 0;
-          if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 169, __pyx_L1_error)
+          if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 171, __pyx_L1_error)
           __Pyx_GOTREF(__pyx_t_2);
         }
         __pyx_t_3 = __pyx_t_2;
@@ -18727,14 +18687,14 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
           __pyx_t_1 = __Pyx_PyObject_FastCallMethod((PyObject*)__pyx_mstate_global->__pyx_n_u_upper, __pyx_callargs+__pyx_t_4, (1-__pyx_t_4) | (1*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
           __Pyx_XDECREF(__pyx_t_3); __pyx_t_3 = 0;
           __Pyx_DECREF(__pyx_t_2); __pyx_t_2 = 0;
-          if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 169, __pyx_L1_error)
+          if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 171, __pyx_L1_error)
           __Pyx_GOTREF(__pyx_t_1);
         }
-        if (!(likely(PyUnicode_CheckExact(__pyx_t_1))||((__pyx_t_1) == Py_None) || __Pyx_RaiseUnexpectedTypeError("str", __pyx_t_1))) __PYX_ERR(0, 169, __pyx_L1_error)
+        if (!(likely(PyUnicode_CheckExact(__pyx_t_1))||((__pyx_t_1) == Py_None) || __Pyx_RaiseUnexpectedTypeError("str", __pyx_t_1))) __PYX_ERR(0, 171, __pyx_L1_error)
         __Pyx_XDECREF_SET(__pyx_v_part, ((PyObject*)__pyx_t_1));
         __pyx_t_1 = 0;
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":170
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":172
  *             for match in PART_MARKER_PATTERN.finditer(line):
  *                 part = match.group("part").upper()
  *                 if part not in allowed_parts:             # <<<<<<<<<<<<<<
@@ -18743,12 +18703,12 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
 */
         if (unlikely(__pyx_v_allowed_parts == Py_None)) {
           PyErr_SetString(PyExc_TypeError, "'NoneType' object is not iterable");
-          __PYX_ERR(0, 170, __pyx_L1_error)
+          __PYX_ERR(0, 172, __pyx_L1_error)
         }
-        __pyx_t_10 = (__Pyx_PySet_ContainsTF(__pyx_v_part, __pyx_v_allowed_parts, Py_NE)); if (unlikely((__pyx_t_10 < 0))) __PYX_ERR(0, 170, __pyx_L1_error)
+        __pyx_t_10 = (__Pyx_PySet_ContainsTF(__pyx_v_part, __pyx_v_allowed_parts, Py_NE)); if (unlikely((__pyx_t_10 < 0))) __PYX_ERR(0, 172, __pyx_L1_error)
         if (__pyx_t_10) {
 
-          /* "thesis_pkg/core/sec/extraction_fast.pyx":171
+          /* "thesis_pkg/core/sec/extraction_fast.pyx":173
  *                 part = match.group("part").upper()
  *                 if part not in allowed_parts:
  *                     continue             # <<<<<<<<<<<<<<
@@ -18757,7 +18717,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
 */
           goto __pyx_L9_continue;
 
-          /* "thesis_pkg/core/sec/extraction_fast.pyx":170
+          /* "thesis_pkg/core/sec/extraction_fast.pyx":172
  *             for match in PART_MARKER_PATTERN.finditer(line):
  *                 part = match.group("part").upper()
  *                 if part not in allowed_parts:             # <<<<<<<<<<<<<<
@@ -18766,7 +18726,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
 */
         }
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":172
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":174
  *                 if part not in allowed_parts:
  *                     continue
  *                 prefix = line[: match.start()]             # <<<<<<<<<<<<<<
@@ -18775,7 +18735,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
 */
         if (unlikely(__pyx_v_line == Py_None)) {
           PyErr_SetString(PyExc_TypeError, "'NoneType' object is not subscriptable");
-          __PYX_ERR(0, 172, __pyx_L1_error)
+          __PYX_ERR(0, 174, __pyx_L1_error)
         }
         __pyx_t_2 = __pyx_v_match;
         __Pyx_INCREF(__pyx_t_2);
@@ -18784,23 +18744,23 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
           PyObject *__pyx_callargs[2] = {__pyx_t_2, NULL};
           __pyx_t_1 = __Pyx_PyObject_FastCallMethod((PyObject*)__pyx_mstate_global->__pyx_n_u_start, __pyx_callargs+__pyx_t_4, (1-__pyx_t_4) | (1*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
           __Pyx_XDECREF(__pyx_t_2); __pyx_t_2 = 0;
-          if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 172, __pyx_L1_error)
+          if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 174, __pyx_L1_error)
           __Pyx_GOTREF(__pyx_t_1);
         }
         __pyx_t_10 = (__pyx_t_1 == Py_None);
         if (__pyx_t_10) {
           __pyx_t_15 = PY_SSIZE_T_MAX;
         } else {
-          __pyx_t_16 = __Pyx_PyIndex_AsSsize_t(__pyx_t_1); if (unlikely((__pyx_t_16 == (Py_ssize_t)-1) && PyErr_Occurred())) __PYX_ERR(0, 172, __pyx_L1_error)
+          __pyx_t_16 = __Pyx_PyIndex_AsSsize_t(__pyx_t_1); if (unlikely((__pyx_t_16 == (Py_ssize_t)-1) && PyErr_Occurred())) __PYX_ERR(0, 174, __pyx_L1_error)
           __pyx_t_15 = __pyx_t_16;
         }
         __Pyx_DECREF(__pyx_t_1); __pyx_t_1 = 0;
-        __pyx_t_1 = __Pyx_PyUnicode_Substring(__pyx_v_line, 0, __pyx_t_15); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 172, __pyx_L1_error)
+        __pyx_t_1 = __Pyx_PyUnicode_Substring(__pyx_v_line, 0, __pyx_t_15); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 174, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_1);
         __Pyx_XDECREF_SET(__pyx_v_prefix, ((PyObject*)__pyx_t_1));
         __pyx_t_1 = 0;
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":173
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":175
  *                     continue
  *                 prefix = line[: match.start()]
  *                 allow_form_header = False             # <<<<<<<<<<<<<<
@@ -18809,18 +18769,18 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
 */
         __pyx_v_allow_form_header = 0;
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":174
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":176
  *                 prefix = line[: match.start()]
  *                 allow_form_header = False
  *                 if prefix.strip() and not _prefix_is_bullet_fast(prefix):             # <<<<<<<<<<<<<<
  *                     if is_10q and not _prefix_looks_like_cross_ref_fast(prefix):
  *                         if re.search(r"(?i)form\s+10-q|quarterly report", prefix):
 */
-        __pyx_t_1 = __Pyx_CallUnboundCMethod0(&__pyx_mstate_global->__pyx_umethod_PyUnicode_Type__strip, __pyx_v_prefix); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 174, __pyx_L1_error)
+        __pyx_t_1 = __Pyx_CallUnboundCMethod0(&__pyx_mstate_global->__pyx_umethod_PyUnicode_Type__strip, __pyx_v_prefix); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 176, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_1);
         {
           Py_ssize_t __pyx_temp = __Pyx_PyUnicode_IS_TRUE(__pyx_t_1);
-          if (unlikely(((!CYTHON_ASSUME_SAFE_SIZE) && __pyx_temp < 0))) __PYX_ERR(0, 174, __pyx_L1_error)
+          if (unlikely(((!CYTHON_ASSUME_SAFE_SIZE) && __pyx_temp < 0))) __PYX_ERR(0, 176, __pyx_L1_error)
           __pyx_t_9 = (__pyx_temp != 0);
         }
 
@@ -18830,13 +18790,13 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
           __pyx_t_10 = __pyx_t_9;
           goto __pyx_L13_bool_binop_done;
         }
-        __pyx_t_9 = __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__prefix_is_bullet_fast(__pyx_v_prefix); if (unlikely(__pyx_t_9 == ((int)-1) && PyErr_Occurred())) __PYX_ERR(0, 174, __pyx_L1_error)
+        __pyx_t_9 = __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__prefix_is_bullet_fast(__pyx_v_prefix); if (unlikely(__pyx_t_9 == ((int)-1) && PyErr_Occurred())) __PYX_ERR(0, 176, __pyx_L1_error)
         __pyx_t_17 = (!__pyx_t_9);
         __pyx_t_10 = __pyx_t_17;
         __pyx_L13_bool_binop_done:;
         if (__pyx_t_10) {
 
-          /* "thesis_pkg/core/sec/extraction_fast.pyx":175
+          /* "thesis_pkg/core/sec/extraction_fast.pyx":177
  *                 allow_form_header = False
  *                 if prefix.strip() and not _prefix_is_bullet_fast(prefix):
  *                     if is_10q and not _prefix_looks_like_cross_ref_fast(prefix):             # <<<<<<<<<<<<<<
@@ -18848,13 +18808,13 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
             __pyx_t_10 = __pyx_v_is_10q;
             goto __pyx_L16_bool_binop_done;
           }
-          __pyx_t_17 = __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__prefix_looks_like_cross_ref_fast(__pyx_v_prefix); if (unlikely(__pyx_t_17 == ((int)-1) && PyErr_Occurred())) __PYX_ERR(0, 175, __pyx_L1_error)
+          __pyx_t_17 = __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__prefix_looks_like_cross_ref_fast(__pyx_v_prefix); if (unlikely(__pyx_t_17 == ((int)-1) && PyErr_Occurred())) __PYX_ERR(0, 177, __pyx_L1_error)
           __pyx_t_9 = (!__pyx_t_17);
           __pyx_t_10 = __pyx_t_9;
           __pyx_L16_bool_binop_done:;
           if (__pyx_t_10) {
 
-            /* "thesis_pkg/core/sec/extraction_fast.pyx":176
+            /* "thesis_pkg/core/sec/extraction_fast.pyx":178
  *                 if prefix.strip() and not _prefix_is_bullet_fast(prefix):
  *                     if is_10q and not _prefix_looks_like_cross_ref_fast(prefix):
  *                         if re.search(r"(?i)form\s+10-q|quarterly report", prefix):             # <<<<<<<<<<<<<<
@@ -18862,9 +18822,9 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
  *                             if part == "I" and "financial" in suffix:
 */
             __pyx_t_2 = NULL;
-            __Pyx_GetModuleGlobalName(__pyx_t_3, __pyx_mstate_global->__pyx_n_u_re); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 176, __pyx_L1_error)
+            __Pyx_GetModuleGlobalName(__pyx_t_3, __pyx_mstate_global->__pyx_n_u_re); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 178, __pyx_L1_error)
             __Pyx_GOTREF(__pyx_t_3);
-            __pyx_t_14 = __Pyx_PyObject_GetAttrStr(__pyx_t_3, __pyx_mstate_global->__pyx_n_u_search); if (unlikely(!__pyx_t_14)) __PYX_ERR(0, 176, __pyx_L1_error)
+            __pyx_t_14 = __Pyx_PyObject_GetAttrStr(__pyx_t_3, __pyx_mstate_global->__pyx_n_u_search); if (unlikely(!__pyx_t_14)) __PYX_ERR(0, 178, __pyx_L1_error)
             __Pyx_GOTREF(__pyx_t_14);
             __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
             __pyx_t_4 = 1;
@@ -18884,14 +18844,14 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
               __pyx_t_1 = __Pyx_PyObject_FastCall((PyObject*)__pyx_t_14, __pyx_callargs+__pyx_t_4, (3-__pyx_t_4) | (__pyx_t_4*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
               __Pyx_XDECREF(__pyx_t_2); __pyx_t_2 = 0;
               __Pyx_DECREF(__pyx_t_14); __pyx_t_14 = 0;
-              if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 176, __pyx_L1_error)
+              if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 178, __pyx_L1_error)
               __Pyx_GOTREF(__pyx_t_1);
             }
-            __pyx_t_10 = __Pyx_PyObject_IsTrue(__pyx_t_1); if (unlikely((__pyx_t_10 < 0))) __PYX_ERR(0, 176, __pyx_L1_error)
+            __pyx_t_10 = __Pyx_PyObject_IsTrue(__pyx_t_1); if (unlikely((__pyx_t_10 < 0))) __PYX_ERR(0, 178, __pyx_L1_error)
             __Pyx_DECREF(__pyx_t_1); __pyx_t_1 = 0;
             if (__pyx_t_10) {
 
-              /* "thesis_pkg/core/sec/extraction_fast.pyx":177
+              /* "thesis_pkg/core/sec/extraction_fast.pyx":179
  *                     if is_10q and not _prefix_looks_like_cross_ref_fast(prefix):
  *                         if re.search(r"(?i)form\s+10-q|quarterly report", prefix):
  *                             suffix = line[match.end() :].lower()             # <<<<<<<<<<<<<<
@@ -18900,7 +18860,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
 */
               if (unlikely(__pyx_v_line == Py_None)) {
                 PyErr_SetString(PyExc_TypeError, "'NoneType' object is not subscriptable");
-                __PYX_ERR(0, 177, __pyx_L1_error)
+                __PYX_ERR(0, 179, __pyx_L1_error)
               }
               __pyx_t_3 = __pyx_v_match;
               __Pyx_INCREF(__pyx_t_3);
@@ -18909,18 +18869,18 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
                 PyObject *__pyx_callargs[2] = {__pyx_t_3, NULL};
                 __pyx_t_2 = __Pyx_PyObject_FastCallMethod((PyObject*)__pyx_mstate_global->__pyx_n_u_end, __pyx_callargs+__pyx_t_4, (1-__pyx_t_4) | (1*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
                 __Pyx_XDECREF(__pyx_t_3); __pyx_t_3 = 0;
-                if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 177, __pyx_L1_error)
+                if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 179, __pyx_L1_error)
                 __Pyx_GOTREF(__pyx_t_2);
               }
               __pyx_t_10 = (__pyx_t_2 == Py_None);
               if (__pyx_t_10) {
                 __pyx_t_15 = 0;
               } else {
-                __pyx_t_16 = __Pyx_PyIndex_AsSsize_t(__pyx_t_2); if (unlikely((__pyx_t_16 == (Py_ssize_t)-1) && PyErr_Occurred())) __PYX_ERR(0, 177, __pyx_L1_error)
+                __pyx_t_16 = __Pyx_PyIndex_AsSsize_t(__pyx_t_2); if (unlikely((__pyx_t_16 == (Py_ssize_t)-1) && PyErr_Occurred())) __PYX_ERR(0, 179, __pyx_L1_error)
                 __pyx_t_15 = __pyx_t_16;
               }
               __Pyx_DECREF(__pyx_t_2); __pyx_t_2 = 0;
-              __pyx_t_2 = __Pyx_PyUnicode_Substring(__pyx_v_line, __pyx_t_15, PY_SSIZE_T_MAX); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 177, __pyx_L1_error)
+              __pyx_t_2 = __Pyx_PyUnicode_Substring(__pyx_v_line, __pyx_t_15, PY_SSIZE_T_MAX); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 179, __pyx_L1_error)
               __Pyx_GOTREF(__pyx_t_2);
               __pyx_t_14 = __pyx_t_2;
               __Pyx_INCREF(__pyx_t_14);
@@ -18930,31 +18890,31 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
                 __pyx_t_1 = __Pyx_PyObject_FastCallMethod((PyObject*)__pyx_mstate_global->__pyx_n_u_lower, __pyx_callargs+__pyx_t_4, (1-__pyx_t_4) | (1*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
                 __Pyx_XDECREF(__pyx_t_14); __pyx_t_14 = 0;
                 __Pyx_DECREF(__pyx_t_2); __pyx_t_2 = 0;
-                if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 177, __pyx_L1_error)
+                if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 179, __pyx_L1_error)
                 __Pyx_GOTREF(__pyx_t_1);
               }
               __Pyx_XDECREF_SET(__pyx_v_suffix, ((PyObject*)__pyx_t_1));
               __pyx_t_1 = 0;
 
-              /* "thesis_pkg/core/sec/extraction_fast.pyx":178
+              /* "thesis_pkg/core/sec/extraction_fast.pyx":180
  *                         if re.search(r"(?i)form\s+10-q|quarterly report", prefix):
  *                             suffix = line[match.end() :].lower()
  *                             if part == "I" and "financial" in suffix:             # <<<<<<<<<<<<<<
  *                                 allow_form_header = True
  *                             elif part == "II" and "other" in suffix:
 */
-              __pyx_t_9 = (__Pyx_PyUnicode_Equals(__pyx_v_part, __pyx_mstate_global->__pyx_n_u_I, Py_EQ)); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 178, __pyx_L1_error)
+              __pyx_t_9 = (__Pyx_PyUnicode_Equals(__pyx_v_part, __pyx_mstate_global->__pyx_n_u_I, Py_EQ)); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 180, __pyx_L1_error)
               if (__pyx_t_9) {
               } else {
                 __pyx_t_10 = __pyx_t_9;
                 goto __pyx_L20_bool_binop_done;
               }
-              __pyx_t_9 = (__Pyx_PyUnicode_ContainsTF(__pyx_mstate_global->__pyx_n_u_financial, __pyx_v_suffix, Py_EQ)); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 178, __pyx_L1_error)
+              __pyx_t_9 = (__Pyx_PyUnicode_ContainsTF(__pyx_mstate_global->__pyx_n_u_financial, __pyx_v_suffix, Py_EQ)); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 180, __pyx_L1_error)
               __pyx_t_10 = __pyx_t_9;
               __pyx_L20_bool_binop_done:;
               if (__pyx_t_10) {
 
-                /* "thesis_pkg/core/sec/extraction_fast.pyx":179
+                /* "thesis_pkg/core/sec/extraction_fast.pyx":181
  *                             suffix = line[match.end() :].lower()
  *                             if part == "I" and "financial" in suffix:
  *                                 allow_form_header = True             # <<<<<<<<<<<<<<
@@ -18963,7 +18923,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
 */
                 __pyx_v_allow_form_header = 1;
 
-                /* "thesis_pkg/core/sec/extraction_fast.pyx":178
+                /* "thesis_pkg/core/sec/extraction_fast.pyx":180
  *                         if re.search(r"(?i)form\s+10-q|quarterly report", prefix):
  *                             suffix = line[match.end() :].lower()
  *                             if part == "I" and "financial" in suffix:             # <<<<<<<<<<<<<<
@@ -18973,25 +18933,25 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
                 goto __pyx_L19;
               }
 
-              /* "thesis_pkg/core/sec/extraction_fast.pyx":180
+              /* "thesis_pkg/core/sec/extraction_fast.pyx":182
  *                             if part == "I" and "financial" in suffix:
  *                                 allow_form_header = True
  *                             elif part == "II" and "other" in suffix:             # <<<<<<<<<<<<<<
  *                                 allow_form_header = True
  *                     if not allow_form_header:
 */
-              __pyx_t_9 = (__Pyx_PyUnicode_Equals(__pyx_v_part, __pyx_mstate_global->__pyx_n_u_II, Py_EQ)); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 180, __pyx_L1_error)
+              __pyx_t_9 = (__Pyx_PyUnicode_Equals(__pyx_v_part, __pyx_mstate_global->__pyx_n_u_II, Py_EQ)); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 182, __pyx_L1_error)
               if (__pyx_t_9) {
               } else {
                 __pyx_t_10 = __pyx_t_9;
                 goto __pyx_L22_bool_binop_done;
               }
-              __pyx_t_9 = (__Pyx_PyUnicode_ContainsTF(__pyx_mstate_global->__pyx_n_u_other, __pyx_v_suffix, Py_EQ)); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 180, __pyx_L1_error)
+              __pyx_t_9 = (__Pyx_PyUnicode_ContainsTF(__pyx_mstate_global->__pyx_n_u_other, __pyx_v_suffix, Py_EQ)); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 182, __pyx_L1_error)
               __pyx_t_10 = __pyx_t_9;
               __pyx_L22_bool_binop_done:;
               if (__pyx_t_10) {
 
-                /* "thesis_pkg/core/sec/extraction_fast.pyx":181
+                /* "thesis_pkg/core/sec/extraction_fast.pyx":183
  *                                 allow_form_header = True
  *                             elif part == "II" and "other" in suffix:
  *                                 allow_form_header = True             # <<<<<<<<<<<<<<
@@ -19000,7 +18960,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
 */
                 __pyx_v_allow_form_header = 1;
 
-                /* "thesis_pkg/core/sec/extraction_fast.pyx":180
+                /* "thesis_pkg/core/sec/extraction_fast.pyx":182
  *                             if part == "I" and "financial" in suffix:
  *                                 allow_form_header = True
  *                             elif part == "II" and "other" in suffix:             # <<<<<<<<<<<<<<
@@ -19010,7 +18970,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
               }
               __pyx_L19:;
 
-              /* "thesis_pkg/core/sec/extraction_fast.pyx":176
+              /* "thesis_pkg/core/sec/extraction_fast.pyx":178
  *                 if prefix.strip() and not _prefix_is_bullet_fast(prefix):
  *                     if is_10q and not _prefix_looks_like_cross_ref_fast(prefix):
  *                         if re.search(r"(?i)form\s+10-q|quarterly report", prefix):             # <<<<<<<<<<<<<<
@@ -19019,7 +18979,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
 */
             }
 
-            /* "thesis_pkg/core/sec/extraction_fast.pyx":175
+            /* "thesis_pkg/core/sec/extraction_fast.pyx":177
  *                 allow_form_header = False
  *                 if prefix.strip() and not _prefix_is_bullet_fast(prefix):
  *                     if is_10q and not _prefix_looks_like_cross_ref_fast(prefix):             # <<<<<<<<<<<<<<
@@ -19028,7 +18988,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
 */
           }
 
-          /* "thesis_pkg/core/sec/extraction_fast.pyx":182
+          /* "thesis_pkg/core/sec/extraction_fast.pyx":184
  *                             elif part == "II" and "other" in suffix:
  *                                 allow_form_header = True
  *                     if not allow_form_header:             # <<<<<<<<<<<<<<
@@ -19038,7 +18998,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
           __pyx_t_10 = (!__pyx_v_allow_form_header);
           if (__pyx_t_10) {
 
-            /* "thesis_pkg/core/sec/extraction_fast.pyx":183
+            /* "thesis_pkg/core/sec/extraction_fast.pyx":185
  *                                 allow_form_header = True
  *                     if not allow_form_header:
  *                         continue             # <<<<<<<<<<<<<<
@@ -19047,7 +19007,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
 */
             goto __pyx_L9_continue;
 
-            /* "thesis_pkg/core/sec/extraction_fast.pyx":182
+            /* "thesis_pkg/core/sec/extraction_fast.pyx":184
  *                             elif part == "II" and "other" in suffix:
  *                                 allow_form_header = True
  *                     if not allow_form_header:             # <<<<<<<<<<<<<<
@@ -19056,7 +19016,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
 */
           }
 
-          /* "thesis_pkg/core/sec/extraction_fast.pyx":174
+          /* "thesis_pkg/core/sec/extraction_fast.pyx":176
  *                 prefix = line[: match.start()]
  *                 allow_form_header = False
  *                 if prefix.strip() and not _prefix_is_bullet_fast(prefix):             # <<<<<<<<<<<<<<
@@ -19065,7 +19025,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
 */
         }
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":185
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":187
  *                         continue
  * 
  *                 high_confidence = _part_marker_is_heading(line, match)             # <<<<<<<<<<<<<<
@@ -19073,7 +19033,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
  *                     high_confidence = True
 */
         __pyx_t_2 = NULL;
-        __Pyx_GetModuleGlobalName(__pyx_t_14, __pyx_mstate_global->__pyx_n_u_part_marker_is_heading); if (unlikely(!__pyx_t_14)) __PYX_ERR(0, 185, __pyx_L1_error)
+        __Pyx_GetModuleGlobalName(__pyx_t_14, __pyx_mstate_global->__pyx_n_u_part_marker_is_heading); if (unlikely(!__pyx_t_14)) __PYX_ERR(0, 187, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_14);
         __pyx_t_4 = 1;
         #if CYTHON_UNPACK_METHODS
@@ -19092,14 +19052,14 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
           __pyx_t_1 = __Pyx_PyObject_FastCall((PyObject*)__pyx_t_14, __pyx_callargs+__pyx_t_4, (3-__pyx_t_4) | (__pyx_t_4*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
           __Pyx_XDECREF(__pyx_t_2); __pyx_t_2 = 0;
           __Pyx_DECREF(__pyx_t_14); __pyx_t_14 = 0;
-          if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 185, __pyx_L1_error)
+          if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 187, __pyx_L1_error)
           __Pyx_GOTREF(__pyx_t_1);
         }
-        __pyx_t_10 = __Pyx_PyObject_IsTrue(__pyx_t_1); if (unlikely((__pyx_t_10 == (int)-1) && PyErr_Occurred())) __PYX_ERR(0, 185, __pyx_L1_error)
+        __pyx_t_10 = __Pyx_PyObject_IsTrue(__pyx_t_1); if (unlikely((__pyx_t_10 == (int)-1) && PyErr_Occurred())) __PYX_ERR(0, 187, __pyx_L1_error)
         __Pyx_DECREF(__pyx_t_1); __pyx_t_1 = 0;
         __pyx_v_high_confidence = __pyx_t_10;
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":186
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":188
  * 
  *                 high_confidence = _part_marker_is_heading(line, match)
  *                 if allow_form_header:             # <<<<<<<<<<<<<<
@@ -19108,7 +19068,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
 */
         if (__pyx_v_allow_form_header) {
 
-          /* "thesis_pkg/core/sec/extraction_fast.pyx":187
+          /* "thesis_pkg/core/sec/extraction_fast.pyx":189
  *                 high_confidence = _part_marker_is_heading(line, match)
  *                 if allow_form_header:
  *                     high_confidence = True             # <<<<<<<<<<<<<<
@@ -19117,7 +19077,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
 */
           __pyx_v_high_confidence = 1;
 
-          /* "thesis_pkg/core/sec/extraction_fast.pyx":186
+          /* "thesis_pkg/core/sec/extraction_fast.pyx":188
  * 
  *                 high_confidence = _part_marker_is_heading(line, match)
  *                 if allow_form_header:             # <<<<<<<<<<<<<<
@@ -19126,7 +19086,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
 */
         }
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":188
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":190
  *                 if allow_form_header:
  *                     high_confidence = True
  *                 if not high_confidence and match.start() == 0:             # <<<<<<<<<<<<<<
@@ -19146,16 +19106,16 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
           PyObject *__pyx_callargs[2] = {__pyx_t_14, NULL};
           __pyx_t_1 = __Pyx_PyObject_FastCallMethod((PyObject*)__pyx_mstate_global->__pyx_n_u_start, __pyx_callargs+__pyx_t_4, (1-__pyx_t_4) | (1*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
           __Pyx_XDECREF(__pyx_t_14); __pyx_t_14 = 0;
-          if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 188, __pyx_L1_error)
+          if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 190, __pyx_L1_error)
           __Pyx_GOTREF(__pyx_t_1);
         }
-        __pyx_t_9 = (__Pyx_PyLong_BoolEqObjC(__pyx_t_1, __pyx_mstate_global->__pyx_int_0, 0, 0)); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 188, __pyx_L1_error)
+        __pyx_t_9 = (__Pyx_PyLong_BoolEqObjC(__pyx_t_1, __pyx_mstate_global->__pyx_int_0, 0, 0)); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 190, __pyx_L1_error)
         __Pyx_DECREF(__pyx_t_1); __pyx_t_1 = 0;
         __pyx_t_10 = __pyx_t_9;
         __pyx_L27_bool_binop_done:;
         if (__pyx_t_10) {
 
-          /* "thesis_pkg/core/sec/extraction_fast.pyx":189
+          /* "thesis_pkg/core/sec/extraction_fast.pyx":191
  *                     high_confidence = True
  *                 if not high_confidence and match.start() == 0:
  *                     if ITEM_WORD_PATTERN.search(line) and not _looks_like_toc_heading_line(             # <<<<<<<<<<<<<<
@@ -19163,9 +19123,9 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
  *                     ):
 */
           __pyx_t_14 = NULL;
-          __Pyx_GetModuleGlobalName(__pyx_t_2, __pyx_mstate_global->__pyx_n_u_ITEM_WORD_PATTERN); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 189, __pyx_L1_error)
+          __Pyx_GetModuleGlobalName(__pyx_t_2, __pyx_mstate_global->__pyx_n_u_ITEM_WORD_PATTERN); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 191, __pyx_L1_error)
           __Pyx_GOTREF(__pyx_t_2);
-          __pyx_t_3 = __Pyx_PyObject_GetAttrStr(__pyx_t_2, __pyx_mstate_global->__pyx_n_u_search); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 189, __pyx_L1_error)
+          __pyx_t_3 = __Pyx_PyObject_GetAttrStr(__pyx_t_2, __pyx_mstate_global->__pyx_n_u_search); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 191, __pyx_L1_error)
           __Pyx_GOTREF(__pyx_t_3);
           __Pyx_DECREF(__pyx_t_2); __pyx_t_2 = 0;
           __pyx_t_4 = 1;
@@ -19185,10 +19145,10 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
             __pyx_t_1 = __Pyx_PyObject_FastCall((PyObject*)__pyx_t_3, __pyx_callargs+__pyx_t_4, (2-__pyx_t_4) | (__pyx_t_4*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
             __Pyx_XDECREF(__pyx_t_14); __pyx_t_14 = 0;
             __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
-            if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 189, __pyx_L1_error)
+            if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 191, __pyx_L1_error)
             __Pyx_GOTREF(__pyx_t_1);
           }
-          __pyx_t_9 = __Pyx_PyObject_IsTrue(__pyx_t_1); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 189, __pyx_L1_error)
+          __pyx_t_9 = __Pyx_PyObject_IsTrue(__pyx_t_1); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 191, __pyx_L1_error)
           __Pyx_DECREF(__pyx_t_1); __pyx_t_1 = 0;
           if (__pyx_t_9) {
           } else {
@@ -19196,17 +19156,17 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
             goto __pyx_L30_bool_binop_done;
           }
           __pyx_t_3 = NULL;
-          __Pyx_GetModuleGlobalName(__pyx_t_14, __pyx_mstate_global->__pyx_n_u_looks_like_toc_heading_line); if (unlikely(!__pyx_t_14)) __PYX_ERR(0, 189, __pyx_L1_error)
+          __Pyx_GetModuleGlobalName(__pyx_t_14, __pyx_mstate_global->__pyx_n_u_looks_like_toc_heading_line); if (unlikely(!__pyx_t_14)) __PYX_ERR(0, 191, __pyx_L1_error)
           __Pyx_GOTREF(__pyx_t_14);
 
-          /* "thesis_pkg/core/sec/extraction_fast.pyx":190
+          /* "thesis_pkg/core/sec/extraction_fast.pyx":192
  *                 if not high_confidence and match.start() == 0:
  *                     if ITEM_WORD_PATTERN.search(line) and not _looks_like_toc_heading_line(
  *                         lines, i             # <<<<<<<<<<<<<<
  *                     ):
  *                         high_confidence = True
 */
-          __pyx_t_2 = PyLong_FromSsize_t(__pyx_v_i); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 190, __pyx_L1_error)
+          __pyx_t_2 = PyLong_FromSsize_t(__pyx_v_i); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 192, __pyx_L1_error)
           __Pyx_GOTREF(__pyx_t_2);
           __pyx_t_4 = 1;
           #if CYTHON_UNPACK_METHODS
@@ -19226,25 +19186,25 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
             __Pyx_XDECREF(__pyx_t_3); __pyx_t_3 = 0;
             __Pyx_DECREF(__pyx_t_2); __pyx_t_2 = 0;
             __Pyx_DECREF(__pyx_t_14); __pyx_t_14 = 0;
-            if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 189, __pyx_L1_error)
+            if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 191, __pyx_L1_error)
             __Pyx_GOTREF(__pyx_t_1);
           }
 
-          /* "thesis_pkg/core/sec/extraction_fast.pyx":189
+          /* "thesis_pkg/core/sec/extraction_fast.pyx":191
  *                     high_confidence = True
  *                 if not high_confidence and match.start() == 0:
  *                     if ITEM_WORD_PATTERN.search(line) and not _looks_like_toc_heading_line(             # <<<<<<<<<<<<<<
  *                         lines, i
  *                     ):
 */
-          __pyx_t_9 = __Pyx_PyObject_IsTrue(__pyx_t_1); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 189, __pyx_L1_error)
+          __pyx_t_9 = __Pyx_PyObject_IsTrue(__pyx_t_1); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 191, __pyx_L1_error)
           __Pyx_DECREF(__pyx_t_1); __pyx_t_1 = 0;
           __pyx_t_17 = (!__pyx_t_9);
           __pyx_t_10 = __pyx_t_17;
           __pyx_L30_bool_binop_done:;
           if (__pyx_t_10) {
 
-            /* "thesis_pkg/core/sec/extraction_fast.pyx":192
+            /* "thesis_pkg/core/sec/extraction_fast.pyx":194
  *                         lines, i
  *                     ):
  *                         high_confidence = True             # <<<<<<<<<<<<<<
@@ -19253,7 +19213,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
 */
             __pyx_v_high_confidence = 1;
 
-            /* "thesis_pkg/core/sec/extraction_fast.pyx":189
+            /* "thesis_pkg/core/sec/extraction_fast.pyx":191
  *                     high_confidence = True
  *                 if not high_confidence and match.start() == 0:
  *                     if ITEM_WORD_PATTERN.search(line) and not _looks_like_toc_heading_line(             # <<<<<<<<<<<<<<
@@ -19262,7 +19222,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
 */
           }
 
-          /* "thesis_pkg/core/sec/extraction_fast.pyx":188
+          /* "thesis_pkg/core/sec/extraction_fast.pyx":190
  *                 if allow_form_header:
  *                     high_confidence = True
  *                 if not high_confidence and match.start() == 0:             # <<<<<<<<<<<<<<
@@ -19271,7 +19231,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
 */
         }
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":193
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":195
  *                     ):
  *                         high_confidence = True
  *                 if not high_confidence:             # <<<<<<<<<<<<<<
@@ -19281,7 +19241,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
         __pyx_t_10 = (!__pyx_v_high_confidence);
         if (__pyx_t_10) {
 
-          /* "thesis_pkg/core/sec/extraction_fast.pyx":194
+          /* "thesis_pkg/core/sec/extraction_fast.pyx":196
  *                         high_confidence = True
  *                 if not high_confidence:
  *                     continue             # <<<<<<<<<<<<<<
@@ -19290,7 +19250,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
 */
           goto __pyx_L9_continue;
 
-          /* "thesis_pkg/core/sec/extraction_fast.pyx":193
+          /* "thesis_pkg/core/sec/extraction_fast.pyx":195
  *                     ):
  *                         high_confidence = True
  *                 if not high_confidence:             # <<<<<<<<<<<<<<
@@ -19299,7 +19259,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
 */
         }
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":196
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":198
  *                     continue
  * 
  *                 match_start = <Py_ssize_t>match.start()             # <<<<<<<<<<<<<<
@@ -19313,14 +19273,14 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
           PyObject *__pyx_callargs[2] = {__pyx_t_14, NULL};
           __pyx_t_1 = __Pyx_PyObject_FastCallMethod((PyObject*)__pyx_mstate_global->__pyx_n_u_start, __pyx_callargs+__pyx_t_4, (1-__pyx_t_4) | (1*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
           __Pyx_XDECREF(__pyx_t_14); __pyx_t_14 = 0;
-          if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 196, __pyx_L1_error)
+          if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 198, __pyx_L1_error)
           __Pyx_GOTREF(__pyx_t_1);
         }
-        __pyx_t_15 = __Pyx_PyIndex_AsSsize_t(__pyx_t_1); if (unlikely((__pyx_t_15 == (Py_ssize_t)-1) && PyErr_Occurred())) __PYX_ERR(0, 196, __pyx_L1_error)
+        __pyx_t_15 = __Pyx_PyIndex_AsSsize_t(__pyx_t_1); if (unlikely((__pyx_t_15 == (Py_ssize_t)-1) && PyErr_Occurred())) __PYX_ERR(0, 198, __pyx_L1_error)
         __Pyx_DECREF(__pyx_t_1); __pyx_t_1 = 0;
         __pyx_v_match_start = ((Py_ssize_t)__pyx_t_15);
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":197
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":199
  * 
  *                 match_start = <Py_ssize_t>match.start()
  *                 start_abs = starts_mv[i] + match_start             # <<<<<<<<<<<<<<
@@ -19330,37 +19290,37 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
         __pyx_t_18 = __pyx_v_i;
         __pyx_v_start_abs = ((*((PY_LONG_LONG *) ( /* dim=0 */ (__pyx_v_starts_mv.data + __pyx_t_18 * __pyx_v_starts_mv.strides[0]) ))) + __pyx_v_match_start);
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":198
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":200
  *                 match_start = <Py_ssize_t>match.start()
  *                 start_abs = starts_mv[i] + match_start
  *                 markers.append((start_abs, part, i, high_confidence))             # <<<<<<<<<<<<<<
  *         else:
  *             match = PART_LINESTART_PATTERN.match(line)
 */
-        __pyx_t_1 = __Pyx_PyLong_From_PY_LONG_LONG(__pyx_v_start_abs); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 198, __pyx_L1_error)
+        __pyx_t_1 = __Pyx_PyLong_From_PY_LONG_LONG(__pyx_v_start_abs); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 200, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_1);
-        __pyx_t_14 = PyLong_FromSsize_t(__pyx_v_i); if (unlikely(!__pyx_t_14)) __PYX_ERR(0, 198, __pyx_L1_error)
+        __pyx_t_14 = PyLong_FromSsize_t(__pyx_v_i); if (unlikely(!__pyx_t_14)) __PYX_ERR(0, 200, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_14);
-        __pyx_t_2 = __Pyx_PyBool_FromLong(__pyx_v_high_confidence); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 198, __pyx_L1_error)
+        __pyx_t_2 = __Pyx_PyBool_FromLong(__pyx_v_high_confidence); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 200, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_2);
-        __pyx_t_3 = PyTuple_New(4); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 198, __pyx_L1_error)
+        __pyx_t_3 = PyTuple_New(4); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 200, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_3);
         __Pyx_GIVEREF(__pyx_t_1);
-        if (__Pyx_PyTuple_SET_ITEM(__pyx_t_3, 0, __pyx_t_1) != (0)) __PYX_ERR(0, 198, __pyx_L1_error);
+        if (__Pyx_PyTuple_SET_ITEM(__pyx_t_3, 0, __pyx_t_1) != (0)) __PYX_ERR(0, 200, __pyx_L1_error);
         __Pyx_INCREF(__pyx_v_part);
         __Pyx_GIVEREF(__pyx_v_part);
-        if (__Pyx_PyTuple_SET_ITEM(__pyx_t_3, 1, __pyx_v_part) != (0)) __PYX_ERR(0, 198, __pyx_L1_error);
+        if (__Pyx_PyTuple_SET_ITEM(__pyx_t_3, 1, __pyx_v_part) != (0)) __PYX_ERR(0, 200, __pyx_L1_error);
         __Pyx_GIVEREF(__pyx_t_14);
-        if (__Pyx_PyTuple_SET_ITEM(__pyx_t_3, 2, __pyx_t_14) != (0)) __PYX_ERR(0, 198, __pyx_L1_error);
+        if (__Pyx_PyTuple_SET_ITEM(__pyx_t_3, 2, __pyx_t_14) != (0)) __PYX_ERR(0, 200, __pyx_L1_error);
         __Pyx_GIVEREF(__pyx_t_2);
-        if (__Pyx_PyTuple_SET_ITEM(__pyx_t_3, 3, __pyx_t_2) != (0)) __PYX_ERR(0, 198, __pyx_L1_error);
+        if (__Pyx_PyTuple_SET_ITEM(__pyx_t_3, 3, __pyx_t_2) != (0)) __PYX_ERR(0, 200, __pyx_L1_error);
         __pyx_t_1 = 0;
         __pyx_t_14 = 0;
         __pyx_t_2 = 0;
-        __pyx_t_19 = __Pyx_PyObject_Append(__pyx_v_markers, __pyx_t_3); if (unlikely(__pyx_t_19 == ((int)-1))) __PYX_ERR(0, 198, __pyx_L1_error)
+        __pyx_t_19 = __Pyx_PyObject_Append(__pyx_v_markers, __pyx_t_3); if (unlikely(__pyx_t_19 == ((int)-1))) __PYX_ERR(0, 200, __pyx_L1_error)
         __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":168
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":170
  * 
  *         if scan_sparse_layout:
  *             for match in PART_MARKER_PATTERN.finditer(line):             # <<<<<<<<<<<<<<
@@ -19371,7 +19331,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
       }
       __Pyx_DECREF(__pyx_t_11); __pyx_t_11 = 0;
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":167
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":169
  *             continue
  * 
  *         if scan_sparse_layout:             # <<<<<<<<<<<<<<
@@ -19381,7 +19341,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
       goto __pyx_L8;
     }
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":200
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":202
  *                 markers.append((start_abs, part, i, high_confidence))
  *         else:
  *             match = PART_LINESTART_PATTERN.match(line)             # <<<<<<<<<<<<<<
@@ -19390,9 +19350,9 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
 */
     /*else*/ {
       __pyx_t_3 = NULL;
-      __Pyx_GetModuleGlobalName(__pyx_t_2, __pyx_mstate_global->__pyx_n_u_PART_LINESTART_PATTERN); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 200, __pyx_L1_error)
+      __Pyx_GetModuleGlobalName(__pyx_t_2, __pyx_mstate_global->__pyx_n_u_PART_LINESTART_PATTERN); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 202, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_2);
-      __pyx_t_14 = __Pyx_PyObject_GetAttrStr(__pyx_t_2, __pyx_mstate_global->__pyx_n_u_match); if (unlikely(!__pyx_t_14)) __PYX_ERR(0, 200, __pyx_L1_error)
+      __pyx_t_14 = __Pyx_PyObject_GetAttrStr(__pyx_t_2, __pyx_mstate_global->__pyx_n_u_match); if (unlikely(!__pyx_t_14)) __PYX_ERR(0, 202, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_14);
       __Pyx_DECREF(__pyx_t_2); __pyx_t_2 = 0;
       __pyx_t_4 = 1;
@@ -19412,13 +19372,13 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
         __pyx_t_11 = __Pyx_PyObject_FastCall((PyObject*)__pyx_t_14, __pyx_callargs+__pyx_t_4, (2-__pyx_t_4) | (__pyx_t_4*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
         __Pyx_XDECREF(__pyx_t_3); __pyx_t_3 = 0;
         __Pyx_DECREF(__pyx_t_14); __pyx_t_14 = 0;
-        if (unlikely(!__pyx_t_11)) __PYX_ERR(0, 200, __pyx_L1_error)
+        if (unlikely(!__pyx_t_11)) __PYX_ERR(0, 202, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_11);
       }
       __Pyx_XDECREF_SET(__pyx_v_match, __pyx_t_11);
       __pyx_t_11 = 0;
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":201
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":203
  *         else:
  *             match = PART_LINESTART_PATTERN.match(line)
  *             if match is None:             # <<<<<<<<<<<<<<
@@ -19428,7 +19388,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
       __pyx_t_10 = (__pyx_v_match == Py_None);
       if (__pyx_t_10) {
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":202
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":204
  *             match = PART_LINESTART_PATTERN.match(line)
  *             if match is None:
  *                 continue             # <<<<<<<<<<<<<<
@@ -19437,7 +19397,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
 */
         goto __pyx_L3_continue;
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":201
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":203
  *         else:
  *             match = PART_LINESTART_PATTERN.match(line)
  *             if match is None:             # <<<<<<<<<<<<<<
@@ -19446,7 +19406,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
 */
       }
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":203
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":205
  *             if match is None:
  *                 continue
  *             part = match.group("part").upper()             # <<<<<<<<<<<<<<
@@ -19460,7 +19420,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
         PyObject *__pyx_callargs[2] = {__pyx_t_2, __pyx_mstate_global->__pyx_n_u_part};
         __pyx_t_3 = __Pyx_PyObject_FastCallMethod((PyObject*)__pyx_mstate_global->__pyx_n_u_group, __pyx_callargs+__pyx_t_4, (2-__pyx_t_4) | (1*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
         __Pyx_XDECREF(__pyx_t_2); __pyx_t_2 = 0;
-        if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 203, __pyx_L1_error)
+        if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 205, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_3);
       }
       __pyx_t_14 = __pyx_t_3;
@@ -19471,14 +19431,14 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
         __pyx_t_11 = __Pyx_PyObject_FastCallMethod((PyObject*)__pyx_mstate_global->__pyx_n_u_upper, __pyx_callargs+__pyx_t_4, (1-__pyx_t_4) | (1*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
         __Pyx_XDECREF(__pyx_t_14); __pyx_t_14 = 0;
         __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
-        if (unlikely(!__pyx_t_11)) __PYX_ERR(0, 203, __pyx_L1_error)
+        if (unlikely(!__pyx_t_11)) __PYX_ERR(0, 205, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_11);
       }
-      if (!(likely(PyUnicode_CheckExact(__pyx_t_11))||((__pyx_t_11) == Py_None) || __Pyx_RaiseUnexpectedTypeError("str", __pyx_t_11))) __PYX_ERR(0, 203, __pyx_L1_error)
+      if (!(likely(PyUnicode_CheckExact(__pyx_t_11))||((__pyx_t_11) == Py_None) || __Pyx_RaiseUnexpectedTypeError("str", __pyx_t_11))) __PYX_ERR(0, 205, __pyx_L1_error)
       __Pyx_XDECREF_SET(__pyx_v_part, ((PyObject*)__pyx_t_11));
       __pyx_t_11 = 0;
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":204
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":206
  *                 continue
  *             part = match.group("part").upper()
  *             if part not in allowed_parts:             # <<<<<<<<<<<<<<
@@ -19487,12 +19447,12 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
 */
       if (unlikely(__pyx_v_allowed_parts == Py_None)) {
         PyErr_SetString(PyExc_TypeError, "'NoneType' object is not iterable");
-        __PYX_ERR(0, 204, __pyx_L1_error)
+        __PYX_ERR(0, 206, __pyx_L1_error)
       }
-      __pyx_t_10 = (__Pyx_PySet_ContainsTF(__pyx_v_part, __pyx_v_allowed_parts, Py_NE)); if (unlikely((__pyx_t_10 < 0))) __PYX_ERR(0, 204, __pyx_L1_error)
+      __pyx_t_10 = (__Pyx_PySet_ContainsTF(__pyx_v_part, __pyx_v_allowed_parts, Py_NE)); if (unlikely((__pyx_t_10 < 0))) __PYX_ERR(0, 206, __pyx_L1_error)
       if (__pyx_t_10) {
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":205
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":207
  *             part = match.group("part").upper()
  *             if part not in allowed_parts:
  *                 continue             # <<<<<<<<<<<<<<
@@ -19501,7 +19461,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
 */
         goto __pyx_L3_continue;
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":204
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":206
  *                 continue
  *             part = match.group("part").upper()
  *             if part not in allowed_parts:             # <<<<<<<<<<<<<<
@@ -19510,7 +19470,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
 */
       }
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":206
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":208
  *             if part not in allowed_parts:
  *                 continue
  *             prefix = line[: match.start()]             # <<<<<<<<<<<<<<
@@ -19519,7 +19479,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
 */
       if (unlikely(__pyx_v_line == Py_None)) {
         PyErr_SetString(PyExc_TypeError, "'NoneType' object is not subscriptable");
-        __PYX_ERR(0, 206, __pyx_L1_error)
+        __PYX_ERR(0, 208, __pyx_L1_error)
       }
       __pyx_t_3 = __pyx_v_match;
       __Pyx_INCREF(__pyx_t_3);
@@ -19528,23 +19488,23 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
         PyObject *__pyx_callargs[2] = {__pyx_t_3, NULL};
         __pyx_t_11 = __Pyx_PyObject_FastCallMethod((PyObject*)__pyx_mstate_global->__pyx_n_u_start, __pyx_callargs+__pyx_t_4, (1-__pyx_t_4) | (1*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
         __Pyx_XDECREF(__pyx_t_3); __pyx_t_3 = 0;
-        if (unlikely(!__pyx_t_11)) __PYX_ERR(0, 206, __pyx_L1_error)
+        if (unlikely(!__pyx_t_11)) __PYX_ERR(0, 208, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_11);
       }
       __pyx_t_10 = (__pyx_t_11 == Py_None);
       if (__pyx_t_10) {
         __pyx_t_12 = PY_SSIZE_T_MAX;
       } else {
-        __pyx_t_15 = __Pyx_PyIndex_AsSsize_t(__pyx_t_11); if (unlikely((__pyx_t_15 == (Py_ssize_t)-1) && PyErr_Occurred())) __PYX_ERR(0, 206, __pyx_L1_error)
+        __pyx_t_15 = __Pyx_PyIndex_AsSsize_t(__pyx_t_11); if (unlikely((__pyx_t_15 == (Py_ssize_t)-1) && PyErr_Occurred())) __PYX_ERR(0, 208, __pyx_L1_error)
         __pyx_t_12 = __pyx_t_15;
       }
       __Pyx_DECREF(__pyx_t_11); __pyx_t_11 = 0;
-      __pyx_t_11 = __Pyx_PyUnicode_Substring(__pyx_v_line, 0, __pyx_t_12); if (unlikely(!__pyx_t_11)) __PYX_ERR(0, 206, __pyx_L1_error)
+      __pyx_t_11 = __Pyx_PyUnicode_Substring(__pyx_v_line, 0, __pyx_t_12); if (unlikely(!__pyx_t_11)) __PYX_ERR(0, 208, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_11);
       __Pyx_XDECREF_SET(__pyx_v_prefix, ((PyObject*)__pyx_t_11));
       __pyx_t_11 = 0;
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":207
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":209
  *                 continue
  *             prefix = line[: match.start()]
  *             allow_form_header = False             # <<<<<<<<<<<<<<
@@ -19553,18 +19513,18 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
 */
       __pyx_v_allow_form_header = 0;
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":208
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":210
  *             prefix = line[: match.start()]
  *             allow_form_header = False
  *             if prefix.strip() and not _prefix_is_bullet_fast(prefix):             # <<<<<<<<<<<<<<
  *                 if is_10q and not _prefix_looks_like_cross_ref_fast(prefix):
  *                     if re.search(r"(?i)form\s+10-q|quarterly report", prefix):
 */
-      __pyx_t_11 = __Pyx_CallUnboundCMethod0(&__pyx_mstate_global->__pyx_umethod_PyUnicode_Type__strip, __pyx_v_prefix); if (unlikely(!__pyx_t_11)) __PYX_ERR(0, 208, __pyx_L1_error)
+      __pyx_t_11 = __Pyx_CallUnboundCMethod0(&__pyx_mstate_global->__pyx_umethod_PyUnicode_Type__strip, __pyx_v_prefix); if (unlikely(!__pyx_t_11)) __PYX_ERR(0, 210, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_11);
       {
         Py_ssize_t __pyx_temp = __Pyx_PyUnicode_IS_TRUE(__pyx_t_11);
-        if (unlikely(((!CYTHON_ASSUME_SAFE_SIZE) && __pyx_temp < 0))) __PYX_ERR(0, 208, __pyx_L1_error)
+        if (unlikely(((!CYTHON_ASSUME_SAFE_SIZE) && __pyx_temp < 0))) __PYX_ERR(0, 210, __pyx_L1_error)
         __pyx_t_17 = (__pyx_temp != 0);
       }
 
@@ -19574,13 +19534,13 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
         __pyx_t_10 = __pyx_t_17;
         goto __pyx_L37_bool_binop_done;
       }
-      __pyx_t_17 = __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__prefix_is_bullet_fast(__pyx_v_prefix); if (unlikely(__pyx_t_17 == ((int)-1) && PyErr_Occurred())) __PYX_ERR(0, 208, __pyx_L1_error)
+      __pyx_t_17 = __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__prefix_is_bullet_fast(__pyx_v_prefix); if (unlikely(__pyx_t_17 == ((int)-1) && PyErr_Occurred())) __PYX_ERR(0, 210, __pyx_L1_error)
       __pyx_t_9 = (!__pyx_t_17);
       __pyx_t_10 = __pyx_t_9;
       __pyx_L37_bool_binop_done:;
       if (__pyx_t_10) {
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":209
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":211
  *             allow_form_header = False
  *             if prefix.strip() and not _prefix_is_bullet_fast(prefix):
  *                 if is_10q and not _prefix_looks_like_cross_ref_fast(prefix):             # <<<<<<<<<<<<<<
@@ -19592,13 +19552,13 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
           __pyx_t_10 = __pyx_v_is_10q;
           goto __pyx_L40_bool_binop_done;
         }
-        __pyx_t_9 = __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__prefix_looks_like_cross_ref_fast(__pyx_v_prefix); if (unlikely(__pyx_t_9 == ((int)-1) && PyErr_Occurred())) __PYX_ERR(0, 209, __pyx_L1_error)
+        __pyx_t_9 = __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__prefix_looks_like_cross_ref_fast(__pyx_v_prefix); if (unlikely(__pyx_t_9 == ((int)-1) && PyErr_Occurred())) __PYX_ERR(0, 211, __pyx_L1_error)
         __pyx_t_17 = (!__pyx_t_9);
         __pyx_t_10 = __pyx_t_17;
         __pyx_L40_bool_binop_done:;
         if (__pyx_t_10) {
 
-          /* "thesis_pkg/core/sec/extraction_fast.pyx":210
+          /* "thesis_pkg/core/sec/extraction_fast.pyx":212
  *             if prefix.strip() and not _prefix_is_bullet_fast(prefix):
  *                 if is_10q and not _prefix_looks_like_cross_ref_fast(prefix):
  *                     if re.search(r"(?i)form\s+10-q|quarterly report", prefix):             # <<<<<<<<<<<<<<
@@ -19606,9 +19566,9 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
  *                         if part == "I" and "financial" in suffix:
 */
           __pyx_t_3 = NULL;
-          __Pyx_GetModuleGlobalName(__pyx_t_14, __pyx_mstate_global->__pyx_n_u_re); if (unlikely(!__pyx_t_14)) __PYX_ERR(0, 210, __pyx_L1_error)
+          __Pyx_GetModuleGlobalName(__pyx_t_14, __pyx_mstate_global->__pyx_n_u_re); if (unlikely(!__pyx_t_14)) __PYX_ERR(0, 212, __pyx_L1_error)
           __Pyx_GOTREF(__pyx_t_14);
-          __pyx_t_2 = __Pyx_PyObject_GetAttrStr(__pyx_t_14, __pyx_mstate_global->__pyx_n_u_search); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 210, __pyx_L1_error)
+          __pyx_t_2 = __Pyx_PyObject_GetAttrStr(__pyx_t_14, __pyx_mstate_global->__pyx_n_u_search); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 212, __pyx_L1_error)
           __Pyx_GOTREF(__pyx_t_2);
           __Pyx_DECREF(__pyx_t_14); __pyx_t_14 = 0;
           __pyx_t_4 = 1;
@@ -19628,14 +19588,14 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
             __pyx_t_11 = __Pyx_PyObject_FastCall((PyObject*)__pyx_t_2, __pyx_callargs+__pyx_t_4, (3-__pyx_t_4) | (__pyx_t_4*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
             __Pyx_XDECREF(__pyx_t_3); __pyx_t_3 = 0;
             __Pyx_DECREF(__pyx_t_2); __pyx_t_2 = 0;
-            if (unlikely(!__pyx_t_11)) __PYX_ERR(0, 210, __pyx_L1_error)
+            if (unlikely(!__pyx_t_11)) __PYX_ERR(0, 212, __pyx_L1_error)
             __Pyx_GOTREF(__pyx_t_11);
           }
-          __pyx_t_10 = __Pyx_PyObject_IsTrue(__pyx_t_11); if (unlikely((__pyx_t_10 < 0))) __PYX_ERR(0, 210, __pyx_L1_error)
+          __pyx_t_10 = __Pyx_PyObject_IsTrue(__pyx_t_11); if (unlikely((__pyx_t_10 < 0))) __PYX_ERR(0, 212, __pyx_L1_error)
           __Pyx_DECREF(__pyx_t_11); __pyx_t_11 = 0;
           if (__pyx_t_10) {
 
-            /* "thesis_pkg/core/sec/extraction_fast.pyx":211
+            /* "thesis_pkg/core/sec/extraction_fast.pyx":213
  *                 if is_10q and not _prefix_looks_like_cross_ref_fast(prefix):
  *                     if re.search(r"(?i)form\s+10-q|quarterly report", prefix):
  *                         suffix = line[match.end() :].lower()             # <<<<<<<<<<<<<<
@@ -19644,7 +19604,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
 */
             if (unlikely(__pyx_v_line == Py_None)) {
               PyErr_SetString(PyExc_TypeError, "'NoneType' object is not subscriptable");
-              __PYX_ERR(0, 211, __pyx_L1_error)
+              __PYX_ERR(0, 213, __pyx_L1_error)
             }
             __pyx_t_14 = __pyx_v_match;
             __Pyx_INCREF(__pyx_t_14);
@@ -19653,18 +19613,18 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
               PyObject *__pyx_callargs[2] = {__pyx_t_14, NULL};
               __pyx_t_3 = __Pyx_PyObject_FastCallMethod((PyObject*)__pyx_mstate_global->__pyx_n_u_end, __pyx_callargs+__pyx_t_4, (1-__pyx_t_4) | (1*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
               __Pyx_XDECREF(__pyx_t_14); __pyx_t_14 = 0;
-              if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 211, __pyx_L1_error)
+              if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 213, __pyx_L1_error)
               __Pyx_GOTREF(__pyx_t_3);
             }
             __pyx_t_10 = (__pyx_t_3 == Py_None);
             if (__pyx_t_10) {
               __pyx_t_12 = 0;
             } else {
-              __pyx_t_15 = __Pyx_PyIndex_AsSsize_t(__pyx_t_3); if (unlikely((__pyx_t_15 == (Py_ssize_t)-1) && PyErr_Occurred())) __PYX_ERR(0, 211, __pyx_L1_error)
+              __pyx_t_15 = __Pyx_PyIndex_AsSsize_t(__pyx_t_3); if (unlikely((__pyx_t_15 == (Py_ssize_t)-1) && PyErr_Occurred())) __PYX_ERR(0, 213, __pyx_L1_error)
               __pyx_t_12 = __pyx_t_15;
             }
             __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
-            __pyx_t_3 = __Pyx_PyUnicode_Substring(__pyx_v_line, __pyx_t_12, PY_SSIZE_T_MAX); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 211, __pyx_L1_error)
+            __pyx_t_3 = __Pyx_PyUnicode_Substring(__pyx_v_line, __pyx_t_12, PY_SSIZE_T_MAX); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 213, __pyx_L1_error)
             __Pyx_GOTREF(__pyx_t_3);
             __pyx_t_2 = __pyx_t_3;
             __Pyx_INCREF(__pyx_t_2);
@@ -19674,31 +19634,31 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
               __pyx_t_11 = __Pyx_PyObject_FastCallMethod((PyObject*)__pyx_mstate_global->__pyx_n_u_lower, __pyx_callargs+__pyx_t_4, (1-__pyx_t_4) | (1*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
               __Pyx_XDECREF(__pyx_t_2); __pyx_t_2 = 0;
               __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
-              if (unlikely(!__pyx_t_11)) __PYX_ERR(0, 211, __pyx_L1_error)
+              if (unlikely(!__pyx_t_11)) __PYX_ERR(0, 213, __pyx_L1_error)
               __Pyx_GOTREF(__pyx_t_11);
             }
             __Pyx_XDECREF_SET(__pyx_v_suffix, ((PyObject*)__pyx_t_11));
             __pyx_t_11 = 0;
 
-            /* "thesis_pkg/core/sec/extraction_fast.pyx":212
+            /* "thesis_pkg/core/sec/extraction_fast.pyx":214
  *                     if re.search(r"(?i)form\s+10-q|quarterly report", prefix):
  *                         suffix = line[match.end() :].lower()
  *                         if part == "I" and "financial" in suffix:             # <<<<<<<<<<<<<<
  *                             allow_form_header = True
  *                         elif part == "II" and "other" in suffix:
 */
-            __pyx_t_17 = (__Pyx_PyUnicode_Equals(__pyx_v_part, __pyx_mstate_global->__pyx_n_u_I, Py_EQ)); if (unlikely((__pyx_t_17 < 0))) __PYX_ERR(0, 212, __pyx_L1_error)
+            __pyx_t_17 = (__Pyx_PyUnicode_Equals(__pyx_v_part, __pyx_mstate_global->__pyx_n_u_I, Py_EQ)); if (unlikely((__pyx_t_17 < 0))) __PYX_ERR(0, 214, __pyx_L1_error)
             if (__pyx_t_17) {
             } else {
               __pyx_t_10 = __pyx_t_17;
               goto __pyx_L44_bool_binop_done;
             }
-            __pyx_t_17 = (__Pyx_PyUnicode_ContainsTF(__pyx_mstate_global->__pyx_n_u_financial, __pyx_v_suffix, Py_EQ)); if (unlikely((__pyx_t_17 < 0))) __PYX_ERR(0, 212, __pyx_L1_error)
+            __pyx_t_17 = (__Pyx_PyUnicode_ContainsTF(__pyx_mstate_global->__pyx_n_u_financial, __pyx_v_suffix, Py_EQ)); if (unlikely((__pyx_t_17 < 0))) __PYX_ERR(0, 214, __pyx_L1_error)
             __pyx_t_10 = __pyx_t_17;
             __pyx_L44_bool_binop_done:;
             if (__pyx_t_10) {
 
-              /* "thesis_pkg/core/sec/extraction_fast.pyx":213
+              /* "thesis_pkg/core/sec/extraction_fast.pyx":215
  *                         suffix = line[match.end() :].lower()
  *                         if part == "I" and "financial" in suffix:
  *                             allow_form_header = True             # <<<<<<<<<<<<<<
@@ -19707,7 +19667,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
 */
               __pyx_v_allow_form_header = 1;
 
-              /* "thesis_pkg/core/sec/extraction_fast.pyx":212
+              /* "thesis_pkg/core/sec/extraction_fast.pyx":214
  *                     if re.search(r"(?i)form\s+10-q|quarterly report", prefix):
  *                         suffix = line[match.end() :].lower()
  *                         if part == "I" and "financial" in suffix:             # <<<<<<<<<<<<<<
@@ -19717,25 +19677,25 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
               goto __pyx_L43;
             }
 
-            /* "thesis_pkg/core/sec/extraction_fast.pyx":214
+            /* "thesis_pkg/core/sec/extraction_fast.pyx":216
  *                         if part == "I" and "financial" in suffix:
  *                             allow_form_header = True
  *                         elif part == "II" and "other" in suffix:             # <<<<<<<<<<<<<<
  *                             allow_form_header = True
  *                 if not allow_form_header:
 */
-            __pyx_t_17 = (__Pyx_PyUnicode_Equals(__pyx_v_part, __pyx_mstate_global->__pyx_n_u_II, Py_EQ)); if (unlikely((__pyx_t_17 < 0))) __PYX_ERR(0, 214, __pyx_L1_error)
+            __pyx_t_17 = (__Pyx_PyUnicode_Equals(__pyx_v_part, __pyx_mstate_global->__pyx_n_u_II, Py_EQ)); if (unlikely((__pyx_t_17 < 0))) __PYX_ERR(0, 216, __pyx_L1_error)
             if (__pyx_t_17) {
             } else {
               __pyx_t_10 = __pyx_t_17;
               goto __pyx_L46_bool_binop_done;
             }
-            __pyx_t_17 = (__Pyx_PyUnicode_ContainsTF(__pyx_mstate_global->__pyx_n_u_other, __pyx_v_suffix, Py_EQ)); if (unlikely((__pyx_t_17 < 0))) __PYX_ERR(0, 214, __pyx_L1_error)
+            __pyx_t_17 = (__Pyx_PyUnicode_ContainsTF(__pyx_mstate_global->__pyx_n_u_other, __pyx_v_suffix, Py_EQ)); if (unlikely((__pyx_t_17 < 0))) __PYX_ERR(0, 216, __pyx_L1_error)
             __pyx_t_10 = __pyx_t_17;
             __pyx_L46_bool_binop_done:;
             if (__pyx_t_10) {
 
-              /* "thesis_pkg/core/sec/extraction_fast.pyx":215
+              /* "thesis_pkg/core/sec/extraction_fast.pyx":217
  *                             allow_form_header = True
  *                         elif part == "II" and "other" in suffix:
  *                             allow_form_header = True             # <<<<<<<<<<<<<<
@@ -19744,7 +19704,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
 */
               __pyx_v_allow_form_header = 1;
 
-              /* "thesis_pkg/core/sec/extraction_fast.pyx":214
+              /* "thesis_pkg/core/sec/extraction_fast.pyx":216
  *                         if part == "I" and "financial" in suffix:
  *                             allow_form_header = True
  *                         elif part == "II" and "other" in suffix:             # <<<<<<<<<<<<<<
@@ -19754,7 +19714,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
             }
             __pyx_L43:;
 
-            /* "thesis_pkg/core/sec/extraction_fast.pyx":210
+            /* "thesis_pkg/core/sec/extraction_fast.pyx":212
  *             if prefix.strip() and not _prefix_is_bullet_fast(prefix):
  *                 if is_10q and not _prefix_looks_like_cross_ref_fast(prefix):
  *                     if re.search(r"(?i)form\s+10-q|quarterly report", prefix):             # <<<<<<<<<<<<<<
@@ -19763,7 +19723,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
 */
           }
 
-          /* "thesis_pkg/core/sec/extraction_fast.pyx":209
+          /* "thesis_pkg/core/sec/extraction_fast.pyx":211
  *             allow_form_header = False
  *             if prefix.strip() and not _prefix_is_bullet_fast(prefix):
  *                 if is_10q and not _prefix_looks_like_cross_ref_fast(prefix):             # <<<<<<<<<<<<<<
@@ -19772,7 +19732,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
 */
         }
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":216
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":218
  *                         elif part == "II" and "other" in suffix:
  *                             allow_form_header = True
  *                 if not allow_form_header:             # <<<<<<<<<<<<<<
@@ -19782,7 +19742,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
         __pyx_t_10 = (!__pyx_v_allow_form_header);
         if (__pyx_t_10) {
 
-          /* "thesis_pkg/core/sec/extraction_fast.pyx":217
+          /* "thesis_pkg/core/sec/extraction_fast.pyx":219
  *                             allow_form_header = True
  *                 if not allow_form_header:
  *                     continue             # <<<<<<<<<<<<<<
@@ -19791,7 +19751,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
 */
           goto __pyx_L3_continue;
 
-          /* "thesis_pkg/core/sec/extraction_fast.pyx":216
+          /* "thesis_pkg/core/sec/extraction_fast.pyx":218
  *                         elif part == "II" and "other" in suffix:
  *                             allow_form_header = True
  *                 if not allow_form_header:             # <<<<<<<<<<<<<<
@@ -19800,7 +19760,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
 */
         }
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":208
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":210
  *             prefix = line[: match.start()]
  *             allow_form_header = False
  *             if prefix.strip() and not _prefix_is_bullet_fast(prefix):             # <<<<<<<<<<<<<<
@@ -19809,7 +19769,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
 */
       }
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":219
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":221
  *                     continue
  * 
  *             high_confidence = _part_marker_is_heading(line, match)             # <<<<<<<<<<<<<<
@@ -19817,7 +19777,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
  *                 high_confidence = True
 */
       __pyx_t_3 = NULL;
-      __Pyx_GetModuleGlobalName(__pyx_t_2, __pyx_mstate_global->__pyx_n_u_part_marker_is_heading); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 219, __pyx_L1_error)
+      __Pyx_GetModuleGlobalName(__pyx_t_2, __pyx_mstate_global->__pyx_n_u_part_marker_is_heading); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 221, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_2);
       __pyx_t_4 = 1;
       #if CYTHON_UNPACK_METHODS
@@ -19836,44 +19796,44 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
         __pyx_t_11 = __Pyx_PyObject_FastCall((PyObject*)__pyx_t_2, __pyx_callargs+__pyx_t_4, (3-__pyx_t_4) | (__pyx_t_4*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
         __Pyx_XDECREF(__pyx_t_3); __pyx_t_3 = 0;
         __Pyx_DECREF(__pyx_t_2); __pyx_t_2 = 0;
-        if (unlikely(!__pyx_t_11)) __PYX_ERR(0, 219, __pyx_L1_error)
+        if (unlikely(!__pyx_t_11)) __PYX_ERR(0, 221, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_11);
       }
-      __pyx_t_10 = __Pyx_PyObject_IsTrue(__pyx_t_11); if (unlikely((__pyx_t_10 == (int)-1) && PyErr_Occurred())) __PYX_ERR(0, 219, __pyx_L1_error)
+      __pyx_t_10 = __Pyx_PyObject_IsTrue(__pyx_t_11); if (unlikely((__pyx_t_10 == (int)-1) && PyErr_Occurred())) __PYX_ERR(0, 221, __pyx_L1_error)
       __Pyx_DECREF(__pyx_t_11); __pyx_t_11 = 0;
       __pyx_v_high_confidence = __pyx_t_10;
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":220
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":222
  * 
  *             high_confidence = _part_marker_is_heading(line, match)
  *             if allow_form_header:             # <<<<<<<<<<<<<<
  *                 high_confidence = True
- *             if not high_confidence and match.start() == 0:
+ *             if not high_confidence and scan_sparse_layout and match.start() == 0:
 */
       if (__pyx_v_allow_form_header) {
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":221
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":223
  *             high_confidence = _part_marker_is_heading(line, match)
  *             if allow_form_header:
  *                 high_confidence = True             # <<<<<<<<<<<<<<
- *             if not high_confidence and match.start() == 0:
+ *             if not high_confidence and scan_sparse_layout and match.start() == 0:
  *                 if ITEM_WORD_PATTERN.search(line) and not _looks_like_toc_heading_line(
 */
         __pyx_v_high_confidence = 1;
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":220
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":222
  * 
  *             high_confidence = _part_marker_is_heading(line, match)
  *             if allow_form_header:             # <<<<<<<<<<<<<<
  *                 high_confidence = True
- *             if not high_confidence and match.start() == 0:
+ *             if not high_confidence and scan_sparse_layout and match.start() == 0:
 */
       }
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":222
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":224
  *             if allow_form_header:
  *                 high_confidence = True
- *             if not high_confidence and match.start() == 0:             # <<<<<<<<<<<<<<
+ *             if not high_confidence and scan_sparse_layout and match.start() == 0:             # <<<<<<<<<<<<<<
  *                 if ITEM_WORD_PATTERN.search(line) and not _looks_like_toc_heading_line(
  *                     lines, i
 */
@@ -19883,6 +19843,11 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
         __pyx_t_10 = __pyx_t_17;
         goto __pyx_L51_bool_binop_done;
       }
+      if (__pyx_v_scan_sparse_layout) {
+      } else {
+        __pyx_t_10 = __pyx_v_scan_sparse_layout;
+        goto __pyx_L51_bool_binop_done;
+      }
       __pyx_t_2 = __pyx_v_match;
       __Pyx_INCREF(__pyx_t_2);
       __pyx_t_4 = 0;
@@ -19890,26 +19855,26 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
         PyObject *__pyx_callargs[2] = {__pyx_t_2, NULL};
         __pyx_t_11 = __Pyx_PyObject_FastCallMethod((PyObject*)__pyx_mstate_global->__pyx_n_u_start, __pyx_callargs+__pyx_t_4, (1-__pyx_t_4) | (1*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
         __Pyx_XDECREF(__pyx_t_2); __pyx_t_2 = 0;
-        if (unlikely(!__pyx_t_11)) __PYX_ERR(0, 222, __pyx_L1_error)
+        if (unlikely(!__pyx_t_11)) __PYX_ERR(0, 224, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_11);
       }
-      __pyx_t_17 = (__Pyx_PyLong_BoolEqObjC(__pyx_t_11, __pyx_mstate_global->__pyx_int_0, 0, 0)); if (unlikely((__pyx_t_17 < 0))) __PYX_ERR(0, 222, __pyx_L1_error)
+      __pyx_t_17 = (__Pyx_PyLong_BoolEqObjC(__pyx_t_11, __pyx_mstate_global->__pyx_int_0, 0, 0)); if (unlikely((__pyx_t_17 < 0))) __PYX_ERR(0, 224, __pyx_L1_error)
       __Pyx_DECREF(__pyx_t_11); __pyx_t_11 = 0;
       __pyx_t_10 = __pyx_t_17;
       __pyx_L51_bool_binop_done:;
       if (__pyx_t_10) {
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":223
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":225
  *                 high_confidence = True
- *             if not high_confidence and match.start() == 0:
+ *             if not high_confidence and scan_sparse_layout and match.start() == 0:
  *                 if ITEM_WORD_PATTERN.search(line) and not _looks_like_toc_heading_line(             # <<<<<<<<<<<<<<
  *                     lines, i
  *                 ):
 */
         __pyx_t_2 = NULL;
-        __Pyx_GetModuleGlobalName(__pyx_t_3, __pyx_mstate_global->__pyx_n_u_ITEM_WORD_PATTERN); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 223, __pyx_L1_error)
+        __Pyx_GetModuleGlobalName(__pyx_t_3, __pyx_mstate_global->__pyx_n_u_ITEM_WORD_PATTERN); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 225, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_3);
-        __pyx_t_14 = __Pyx_PyObject_GetAttrStr(__pyx_t_3, __pyx_mstate_global->__pyx_n_u_search); if (unlikely(!__pyx_t_14)) __PYX_ERR(0, 223, __pyx_L1_error)
+        __pyx_t_14 = __Pyx_PyObject_GetAttrStr(__pyx_t_3, __pyx_mstate_global->__pyx_n_u_search); if (unlikely(!__pyx_t_14)) __PYX_ERR(0, 225, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_14);
         __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
         __pyx_t_4 = 1;
@@ -19929,28 +19894,28 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
           __pyx_t_11 = __Pyx_PyObject_FastCall((PyObject*)__pyx_t_14, __pyx_callargs+__pyx_t_4, (2-__pyx_t_4) | (__pyx_t_4*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
           __Pyx_XDECREF(__pyx_t_2); __pyx_t_2 = 0;
           __Pyx_DECREF(__pyx_t_14); __pyx_t_14 = 0;
-          if (unlikely(!__pyx_t_11)) __PYX_ERR(0, 223, __pyx_L1_error)
+          if (unlikely(!__pyx_t_11)) __PYX_ERR(0, 225, __pyx_L1_error)
           __Pyx_GOTREF(__pyx_t_11);
         }
-        __pyx_t_17 = __Pyx_PyObject_IsTrue(__pyx_t_11); if (unlikely((__pyx_t_17 < 0))) __PYX_ERR(0, 223, __pyx_L1_error)
+        __pyx_t_17 = __Pyx_PyObject_IsTrue(__pyx_t_11); if (unlikely((__pyx_t_17 < 0))) __PYX_ERR(0, 225, __pyx_L1_error)
         __Pyx_DECREF(__pyx_t_11); __pyx_t_11 = 0;
         if (__pyx_t_17) {
         } else {
           __pyx_t_10 = __pyx_t_17;
-          goto __pyx_L54_bool_binop_done;
+          goto __pyx_L55_bool_binop_done;
         }
         __pyx_t_14 = NULL;
-        __Pyx_GetModuleGlobalName(__pyx_t_2, __pyx_mstate_global->__pyx_n_u_looks_like_toc_heading_line); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 223, __pyx_L1_error)
+        __Pyx_GetModuleGlobalName(__pyx_t_2, __pyx_mstate_global->__pyx_n_u_looks_like_toc_heading_line); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 225, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_2);
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":224
- *             if not high_confidence and match.start() == 0:
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":226
+ *             if not high_confidence and scan_sparse_layout and match.start() == 0:
  *                 if ITEM_WORD_PATTERN.search(line) and not _looks_like_toc_heading_line(
  *                     lines, i             # <<<<<<<<<<<<<<
  *                 ):
  *                     high_confidence = True
 */
-        __pyx_t_3 = PyLong_FromSsize_t(__pyx_v_i); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 224, __pyx_L1_error)
+        __pyx_t_3 = PyLong_FromSsize_t(__pyx_v_i); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 226, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_3);
         __pyx_t_4 = 1;
         #if CYTHON_UNPACK_METHODS
@@ -19970,25 +19935,25 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
           __Pyx_XDECREF(__pyx_t_14); __pyx_t_14 = 0;
           __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
           __Pyx_DECREF(__pyx_t_2); __pyx_t_2 = 0;
-          if (unlikely(!__pyx_t_11)) __PYX_ERR(0, 223, __pyx_L1_error)
+          if (unlikely(!__pyx_t_11)) __PYX_ERR(0, 225, __pyx_L1_error)
           __Pyx_GOTREF(__pyx_t_11);
         }
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":223
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":225
  *                 high_confidence = True
- *             if not high_confidence and match.start() == 0:
+ *             if not high_confidence and scan_sparse_layout and match.start() == 0:
  *                 if ITEM_WORD_PATTERN.search(line) and not _looks_like_toc_heading_line(             # <<<<<<<<<<<<<<
  *                     lines, i
  *                 ):
 */
-        __pyx_t_17 = __Pyx_PyObject_IsTrue(__pyx_t_11); if (unlikely((__pyx_t_17 < 0))) __PYX_ERR(0, 223, __pyx_L1_error)
+        __pyx_t_17 = __Pyx_PyObject_IsTrue(__pyx_t_11); if (unlikely((__pyx_t_17 < 0))) __PYX_ERR(0, 225, __pyx_L1_error)
         __Pyx_DECREF(__pyx_t_11); __pyx_t_11 = 0;
         __pyx_t_9 = (!__pyx_t_17);
         __pyx_t_10 = __pyx_t_9;
-        __pyx_L54_bool_binop_done:;
+        __pyx_L55_bool_binop_done:;
         if (__pyx_t_10) {
 
-          /* "thesis_pkg/core/sec/extraction_fast.pyx":226
+          /* "thesis_pkg/core/sec/extraction_fast.pyx":228
  *                     lines, i
  *                 ):
  *                     high_confidence = True             # <<<<<<<<<<<<<<
@@ -19997,25 +19962,25 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
 */
           __pyx_v_high_confidence = 1;
 
-          /* "thesis_pkg/core/sec/extraction_fast.pyx":223
+          /* "thesis_pkg/core/sec/extraction_fast.pyx":225
  *                 high_confidence = True
- *             if not high_confidence and match.start() == 0:
+ *             if not high_confidence and scan_sparse_layout and match.start() == 0:
  *                 if ITEM_WORD_PATTERN.search(line) and not _looks_like_toc_heading_line(             # <<<<<<<<<<<<<<
  *                     lines, i
  *                 ):
 */
         }
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":222
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":224
  *             if allow_form_header:
  *                 high_confidence = True
- *             if not high_confidence and match.start() == 0:             # <<<<<<<<<<<<<<
+ *             if not high_confidence and scan_sparse_layout and match.start() == 0:             # <<<<<<<<<<<<<<
  *                 if ITEM_WORD_PATTERN.search(line) and not _looks_like_toc_heading_line(
  *                     lines, i
 */
       }
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":227
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":229
  *                 ):
  *                     high_confidence = True
  *             if not high_confidence:             # <<<<<<<<<<<<<<
@@ -20025,7 +19990,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
       __pyx_t_10 = (!__pyx_v_high_confidence);
       if (__pyx_t_10) {
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":228
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":230
  *                     high_confidence = True
  *             if not high_confidence:
  *                 continue             # <<<<<<<<<<<<<<
@@ -20034,7 +19999,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
 */
         goto __pyx_L3_continue;
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":227
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":229
  *                 ):
  *                     high_confidence = True
  *             if not high_confidence:             # <<<<<<<<<<<<<<
@@ -20043,7 +20008,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
 */
       }
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":230
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":232
  *                 continue
  * 
  *             match_start = <Py_ssize_t>match.start()             # <<<<<<<<<<<<<<
@@ -20057,14 +20022,14 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
         PyObject *__pyx_callargs[2] = {__pyx_t_2, NULL};
         __pyx_t_11 = __Pyx_PyObject_FastCallMethod((PyObject*)__pyx_mstate_global->__pyx_n_u_start, __pyx_callargs+__pyx_t_4, (1-__pyx_t_4) | (1*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
         __Pyx_XDECREF(__pyx_t_2); __pyx_t_2 = 0;
-        if (unlikely(!__pyx_t_11)) __PYX_ERR(0, 230, __pyx_L1_error)
+        if (unlikely(!__pyx_t_11)) __PYX_ERR(0, 232, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_11);
       }
-      __pyx_t_12 = __Pyx_PyIndex_AsSsize_t(__pyx_t_11); if (unlikely((__pyx_t_12 == (Py_ssize_t)-1) && PyErr_Occurred())) __PYX_ERR(0, 230, __pyx_L1_error)
+      __pyx_t_12 = __Pyx_PyIndex_AsSsize_t(__pyx_t_11); if (unlikely((__pyx_t_12 == (Py_ssize_t)-1) && PyErr_Occurred())) __PYX_ERR(0, 232, __pyx_L1_error)
       __Pyx_DECREF(__pyx_t_11); __pyx_t_11 = 0;
       __pyx_v_match_start = ((Py_ssize_t)__pyx_t_12);
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":231
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":233
  * 
  *             match_start = <Py_ssize_t>match.start()
  *             start_abs = starts_mv[i] + match_start             # <<<<<<<<<<<<<<
@@ -20074,41 +20039,41 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
       __pyx_t_18 = __pyx_v_i;
       __pyx_v_start_abs = ((*((PY_LONG_LONG *) ( /* dim=0 */ (__pyx_v_starts_mv.data + __pyx_t_18 * __pyx_v_starts_mv.strides[0]) ))) + __pyx_v_match_start);
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":232
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":234
  *             match_start = <Py_ssize_t>match.start()
  *             start_abs = starts_mv[i] + match_start
  *             markers.append((start_abs, part, i, high_confidence))             # <<<<<<<<<<<<<<
  * 
  *     if not is_10q or not markers:
 */
-      __pyx_t_11 = __Pyx_PyLong_From_PY_LONG_LONG(__pyx_v_start_abs); if (unlikely(!__pyx_t_11)) __PYX_ERR(0, 232, __pyx_L1_error)
+      __pyx_t_11 = __Pyx_PyLong_From_PY_LONG_LONG(__pyx_v_start_abs); if (unlikely(!__pyx_t_11)) __PYX_ERR(0, 234, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_11);
-      __pyx_t_2 = PyLong_FromSsize_t(__pyx_v_i); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 232, __pyx_L1_error)
+      __pyx_t_2 = PyLong_FromSsize_t(__pyx_v_i); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 234, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_2);
-      __pyx_t_3 = __Pyx_PyBool_FromLong(__pyx_v_high_confidence); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 232, __pyx_L1_error)
+      __pyx_t_3 = __Pyx_PyBool_FromLong(__pyx_v_high_confidence); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 234, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_3);
-      __pyx_t_14 = PyTuple_New(4); if (unlikely(!__pyx_t_14)) __PYX_ERR(0, 232, __pyx_L1_error)
+      __pyx_t_14 = PyTuple_New(4); if (unlikely(!__pyx_t_14)) __PYX_ERR(0, 234, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_14);
       __Pyx_GIVEREF(__pyx_t_11);
-      if (__Pyx_PyTuple_SET_ITEM(__pyx_t_14, 0, __pyx_t_11) != (0)) __PYX_ERR(0, 232, __pyx_L1_error);
+      if (__Pyx_PyTuple_SET_ITEM(__pyx_t_14, 0, __pyx_t_11) != (0)) __PYX_ERR(0, 234, __pyx_L1_error);
       __Pyx_INCREF(__pyx_v_part);
       __Pyx_GIVEREF(__pyx_v_part);
-      if (__Pyx_PyTuple_SET_ITEM(__pyx_t_14, 1, __pyx_v_part) != (0)) __PYX_ERR(0, 232, __pyx_L1_error);
+      if (__Pyx_PyTuple_SET_ITEM(__pyx_t_14, 1, __pyx_v_part) != (0)) __PYX_ERR(0, 234, __pyx_L1_error);
       __Pyx_GIVEREF(__pyx_t_2);
-      if (__Pyx_PyTuple_SET_ITEM(__pyx_t_14, 2, __pyx_t_2) != (0)) __PYX_ERR(0, 232, __pyx_L1_error);
+      if (__Pyx_PyTuple_SET_ITEM(__pyx_t_14, 2, __pyx_t_2) != (0)) __PYX_ERR(0, 234, __pyx_L1_error);
       __Pyx_GIVEREF(__pyx_t_3);
-      if (__Pyx_PyTuple_SET_ITEM(__pyx_t_14, 3, __pyx_t_3) != (0)) __PYX_ERR(0, 232, __pyx_L1_error);
+      if (__Pyx_PyTuple_SET_ITEM(__pyx_t_14, 3, __pyx_t_3) != (0)) __PYX_ERR(0, 234, __pyx_L1_error);
       __pyx_t_11 = 0;
       __pyx_t_2 = 0;
       __pyx_t_3 = 0;
-      __pyx_t_19 = __Pyx_PyObject_Append(__pyx_v_markers, __pyx_t_14); if (unlikely(__pyx_t_19 == ((int)-1))) __PYX_ERR(0, 232, __pyx_L1_error)
+      __pyx_t_19 = __Pyx_PyObject_Append(__pyx_v_markers, __pyx_t_14); if (unlikely(__pyx_t_19 == ((int)-1))) __PYX_ERR(0, 234, __pyx_L1_error)
       __Pyx_DECREF(__pyx_t_14); __pyx_t_14 = 0;
     }
     __pyx_L8:;
     __pyx_L3_continue:;
   }
 
-  /* "thesis_pkg/core/sec/extraction_fast.pyx":234
+  /* "thesis_pkg/core/sec/extraction_fast.pyx":236
  *             markers.append((start_abs, part, i, high_confidence))
  * 
  *     if not is_10q or not markers:             # <<<<<<<<<<<<<<
@@ -20119,15 +20084,15 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
   if (!__pyx_t_9) {
   } else {
     __pyx_t_10 = __pyx_t_9;
-    goto __pyx_L58_bool_binop_done;
+    goto __pyx_L59_bool_binop_done;
   }
-  __pyx_t_9 = __Pyx_PyObject_IsTrue(__pyx_v_markers); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 234, __pyx_L1_error)
+  __pyx_t_9 = __Pyx_PyObject_IsTrue(__pyx_v_markers); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 236, __pyx_L1_error)
   __pyx_t_17 = (!__pyx_t_9);
   __pyx_t_10 = __pyx_t_17;
-  __pyx_L58_bool_binop_done:;
+  __pyx_L59_bool_binop_done:;
   if (__pyx_t_10) {
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":235
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":237
  * 
  *     if not is_10q or not markers:
  *         return markers             # <<<<<<<<<<<<<<
@@ -20137,12 +20102,12 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
     __Pyx_XDECREF(__pyx_r);
     __pyx_t_14 = __pyx_v_markers;
     __Pyx_INCREF(__pyx_t_14);
-    if (!(likely(PyList_CheckExact(__pyx_t_14)) || __Pyx_RaiseUnexpectedTypeError("list", __pyx_t_14))) __PYX_ERR(0, 235, __pyx_L1_error)
+    if (!(likely(PyList_CheckExact(__pyx_t_14)) || __Pyx_RaiseUnexpectedTypeError("list", __pyx_t_14))) __PYX_ERR(0, 237, __pyx_L1_error)
     __pyx_r = ((PyObject*)__pyx_t_14);
     __pyx_t_14 = 0;
     goto __pyx_L0;
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":234
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":236
  *             markers.append((start_abs, part, i, high_confidence))
  * 
  *     if not is_10q or not markers:             # <<<<<<<<<<<<<<
@@ -20151,19 +20116,19 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
 */
   }
 
-  /* "thesis_pkg/core/sec/extraction_fast.pyx":237
+  /* "thesis_pkg/core/sec/extraction_fast.pyx":239
  *         return markers
  * 
  *     filtered = []             # <<<<<<<<<<<<<<
  *     for marker in markers:
  *         part = marker[1]
 */
-  __pyx_t_14 = PyList_New(0); if (unlikely(!__pyx_t_14)) __PYX_ERR(0, 237, __pyx_L1_error)
+  __pyx_t_14 = PyList_New(0); if (unlikely(!__pyx_t_14)) __PYX_ERR(0, 239, __pyx_L1_error)
   __Pyx_GOTREF(__pyx_t_14);
   __pyx_v_filtered = __pyx_t_14;
   __pyx_t_14 = 0;
 
-  /* "thesis_pkg/core/sec/extraction_fast.pyx":238
+  /* "thesis_pkg/core/sec/extraction_fast.pyx":240
  * 
  *     filtered = []
  *     for marker in markers:             # <<<<<<<<<<<<<<
@@ -20175,9 +20140,9 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
     __pyx_t_6 = 0;
     __pyx_t_13 = NULL;
   } else {
-    __pyx_t_6 = -1; __pyx_t_14 = PyObject_GetIter(__pyx_v_markers); if (unlikely(!__pyx_t_14)) __PYX_ERR(0, 238, __pyx_L1_error)
+    __pyx_t_6 = -1; __pyx_t_14 = PyObject_GetIter(__pyx_v_markers); if (unlikely(!__pyx_t_14)) __PYX_ERR(0, 240, __pyx_L1_error)
     __Pyx_GOTREF(__pyx_t_14);
-    __pyx_t_13 = (CYTHON_COMPILING_IN_LIMITED_API) ? PyIter_Next : __Pyx_PyObject_GetIterNextFunc(__pyx_t_14); if (unlikely(!__pyx_t_13)) __PYX_ERR(0, 238, __pyx_L1_error)
+    __pyx_t_13 = (CYTHON_COMPILING_IN_LIMITED_API) ? PyIter_Next : __Pyx_PyObject_GetIterNextFunc(__pyx_t_14); if (unlikely(!__pyx_t_13)) __PYX_ERR(0, 240, __pyx_L1_error)
   }
   for (;;) {
     if (likely(!__pyx_t_13)) {
@@ -20185,7 +20150,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
         {
           Py_ssize_t __pyx_temp = __Pyx_PyList_GET_SIZE(__pyx_t_14);
           #if !CYTHON_ASSUME_SAFE_SIZE
-          if (unlikely((__pyx_temp < 0))) __PYX_ERR(0, 238, __pyx_L1_error)
+          if (unlikely((__pyx_temp < 0))) __PYX_ERR(0, 240, __pyx_L1_error)
           #endif
           if (__pyx_t_6 >= __pyx_temp) break;
         }
@@ -20195,7 +20160,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
         {
           Py_ssize_t __pyx_temp = __Pyx_PyTuple_GET_SIZE(__pyx_t_14);
           #if !CYTHON_ASSUME_SAFE_SIZE
-          if (unlikely((__pyx_temp < 0))) __PYX_ERR(0, 238, __pyx_L1_error)
+          if (unlikely((__pyx_temp < 0))) __PYX_ERR(0, 240, __pyx_L1_error)
           #endif
           if (__pyx_t_6 >= __pyx_temp) break;
         }
@@ -20206,13 +20171,13 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
         #endif
         ++__pyx_t_6;
       }
-      if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 238, __pyx_L1_error)
+      if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 240, __pyx_L1_error)
     } else {
       __pyx_t_3 = __pyx_t_13(__pyx_t_14);
       if (unlikely(!__pyx_t_3)) {
         PyObject* exc_type = PyErr_Occurred();
         if (exc_type) {
-          if (unlikely(!__Pyx_PyErr_GivenExceptionMatches(exc_type, PyExc_StopIteration))) __PYX_ERR(0, 238, __pyx_L1_error)
+          if (unlikely(!__Pyx_PyErr_GivenExceptionMatches(exc_type, PyExc_StopIteration))) __PYX_ERR(0, 240, __pyx_L1_error)
           PyErr_Clear();
         }
         break;
@@ -20222,30 +20187,30 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
     __Pyx_XDECREF_SET(__pyx_v_marker, __pyx_t_3);
     __pyx_t_3 = 0;
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":239
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":241
  *     filtered = []
  *     for marker in markers:
  *         part = marker[1]             # <<<<<<<<<<<<<<
  *         if part == "I":
  *             if not seen_part_i and not seen_part_ii:
 */
-    __pyx_t_3 = __Pyx_GetItemInt(__pyx_v_marker, 1, long, 1, __Pyx_PyLong_From_long, 0, 0, 0, 1, __Pyx_ReferenceSharing_OwnStrongReference); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 239, __pyx_L1_error)
+    __pyx_t_3 = __Pyx_GetItemInt(__pyx_v_marker, 1, long, 1, __Pyx_PyLong_From_long, 0, 0, 0, 1, __Pyx_ReferenceSharing_OwnStrongReference); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 241, __pyx_L1_error)
     __Pyx_GOTREF(__pyx_t_3);
-    if (!(likely(PyUnicode_CheckExact(__pyx_t_3))||((__pyx_t_3) == Py_None) || __Pyx_RaiseUnexpectedTypeError("str", __pyx_t_3))) __PYX_ERR(0, 239, __pyx_L1_error)
+    if (!(likely(PyUnicode_CheckExact(__pyx_t_3))||((__pyx_t_3) == Py_None) || __Pyx_RaiseUnexpectedTypeError("str", __pyx_t_3))) __PYX_ERR(0, 241, __pyx_L1_error)
     __Pyx_XDECREF_SET(__pyx_v_part, ((PyObject*)__pyx_t_3));
     __pyx_t_3 = 0;
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":240
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":242
  *     for marker in markers:
  *         part = marker[1]
  *         if part == "I":             # <<<<<<<<<<<<<<
  *             if not seen_part_i and not seen_part_ii:
  *                 filtered.append(marker)
 */
-    __pyx_t_10 = (__Pyx_PyUnicode_Equals(__pyx_v_part, __pyx_mstate_global->__pyx_n_u_I, Py_EQ)); if (unlikely((__pyx_t_10 < 0))) __PYX_ERR(0, 240, __pyx_L1_error)
+    __pyx_t_10 = (__Pyx_PyUnicode_Equals(__pyx_v_part, __pyx_mstate_global->__pyx_n_u_I, Py_EQ)); if (unlikely((__pyx_t_10 < 0))) __PYX_ERR(0, 242, __pyx_L1_error)
     if (__pyx_t_10) {
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":241
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":243
  *         part = marker[1]
  *         if part == "I":
  *             if not seen_part_i and not seen_part_ii:             # <<<<<<<<<<<<<<
@@ -20256,23 +20221,23 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
       if (__pyx_t_17) {
       } else {
         __pyx_t_10 = __pyx_t_17;
-        goto __pyx_L64_bool_binop_done;
+        goto __pyx_L65_bool_binop_done;
       }
       __pyx_t_17 = (!__pyx_v_seen_part_ii);
       __pyx_t_10 = __pyx_t_17;
-      __pyx_L64_bool_binop_done:;
+      __pyx_L65_bool_binop_done:;
       if (__pyx_t_10) {
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":242
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":244
  *         if part == "I":
  *             if not seen_part_i and not seen_part_ii:
  *                 filtered.append(marker)             # <<<<<<<<<<<<<<
  *                 seen_part_i = True
  *             continue
 */
-        __pyx_t_19 = __Pyx_PyObject_Append(__pyx_v_filtered, __pyx_v_marker); if (unlikely(__pyx_t_19 == ((int)-1))) __PYX_ERR(0, 242, __pyx_L1_error)
+        __pyx_t_19 = __Pyx_PyObject_Append(__pyx_v_filtered, __pyx_v_marker); if (unlikely(__pyx_t_19 == ((int)-1))) __PYX_ERR(0, 244, __pyx_L1_error)
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":243
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":245
  *             if not seen_part_i and not seen_part_ii:
  *                 filtered.append(marker)
  *                 seen_part_i = True             # <<<<<<<<<<<<<<
@@ -20281,7 +20246,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
 */
         __pyx_v_seen_part_i = 1;
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":241
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":243
  *         part = marker[1]
  *         if part == "I":
  *             if not seen_part_i and not seen_part_ii:             # <<<<<<<<<<<<<<
@@ -20290,16 +20255,16 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
 */
       }
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":244
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":246
  *                 filtered.append(marker)
  *                 seen_part_i = True
  *             continue             # <<<<<<<<<<<<<<
  *         if part == "II":
  *             if seen_part_i and not seen_part_ii:
 */
-      goto __pyx_L60_continue;
+      goto __pyx_L61_continue;
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":240
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":242
  *     for marker in markers:
  *         part = marker[1]
  *         if part == "I":             # <<<<<<<<<<<<<<
@@ -20308,17 +20273,17 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
 */
     }
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":245
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":247
  *                 seen_part_i = True
  *             continue
  *         if part == "II":             # <<<<<<<<<<<<<<
  *             if seen_part_i and not seen_part_ii:
  *                 filtered.append(marker)
 */
-    __pyx_t_10 = (__Pyx_PyUnicode_Equals(__pyx_v_part, __pyx_mstate_global->__pyx_n_u_II, Py_EQ)); if (unlikely((__pyx_t_10 < 0))) __PYX_ERR(0, 245, __pyx_L1_error)
+    __pyx_t_10 = (__Pyx_PyUnicode_Equals(__pyx_v_part, __pyx_mstate_global->__pyx_n_u_II, Py_EQ)); if (unlikely((__pyx_t_10 < 0))) __PYX_ERR(0, 247, __pyx_L1_error)
     if (__pyx_t_10) {
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":246
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":248
  *             continue
  *         if part == "II":
  *             if seen_part_i and not seen_part_ii:             # <<<<<<<<<<<<<<
@@ -20328,23 +20293,23 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
       if (__pyx_v_seen_part_i) {
       } else {
         __pyx_t_10 = __pyx_v_seen_part_i;
-        goto __pyx_L68_bool_binop_done;
+        goto __pyx_L69_bool_binop_done;
       }
       __pyx_t_17 = (!__pyx_v_seen_part_ii);
       __pyx_t_10 = __pyx_t_17;
-      __pyx_L68_bool_binop_done:;
+      __pyx_L69_bool_binop_done:;
       if (__pyx_t_10) {
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":247
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":249
  *         if part == "II":
  *             if seen_part_i and not seen_part_ii:
  *                 filtered.append(marker)             # <<<<<<<<<<<<<<
  *                 seen_part_ii = True
  *             continue
 */
-        __pyx_t_19 = __Pyx_PyObject_Append(__pyx_v_filtered, __pyx_v_marker); if (unlikely(__pyx_t_19 == ((int)-1))) __PYX_ERR(0, 247, __pyx_L1_error)
+        __pyx_t_19 = __Pyx_PyObject_Append(__pyx_v_filtered, __pyx_v_marker); if (unlikely(__pyx_t_19 == ((int)-1))) __PYX_ERR(0, 249, __pyx_L1_error)
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":248
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":250
  *             if seen_part_i and not seen_part_ii:
  *                 filtered.append(marker)
  *                 seen_part_ii = True             # <<<<<<<<<<<<<<
@@ -20353,7 +20318,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
 */
         __pyx_v_seen_part_ii = 1;
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":246
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":248
  *             continue
  *         if part == "II":
  *             if seen_part_i and not seen_part_ii:             # <<<<<<<<<<<<<<
@@ -20362,16 +20327,16 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
 */
       }
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":249
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":251
  *                 filtered.append(marker)
  *                 seen_part_ii = True
  *             continue             # <<<<<<<<<<<<<<
  *     return filtered
  * 
 */
-      goto __pyx_L60_continue;
+      goto __pyx_L61_continue;
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":245
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":247
  *                 seen_part_i = True
  *             continue
  *         if part == "II":             # <<<<<<<<<<<<<<
@@ -20380,18 +20345,18 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
 */
     }
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":238
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":240
  * 
  *     filtered = []
  *     for marker in markers:             # <<<<<<<<<<<<<<
  *         part = marker[1]
  *         if part == "I":
 */
-    __pyx_L60_continue:;
+    __pyx_L61_continue:;
   }
   __Pyx_DECREF(__pyx_t_14); __pyx_t_14 = 0;
 
-  /* "thesis_pkg/core/sec/extraction_fast.pyx":250
+  /* "thesis_pkg/core/sec/extraction_fast.pyx":252
  *                 seen_part_ii = True
  *             continue
  *     return filtered             # <<<<<<<<<<<<<<
@@ -20401,12 +20366,12 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_mar
   __Pyx_XDECREF(__pyx_r);
   __pyx_t_14 = __pyx_v_filtered;
   __Pyx_INCREF(__pyx_t_14);
-  if (!(likely(PyList_CheckExact(__pyx_t_14)) || __Pyx_RaiseUnexpectedTypeError("list", __pyx_t_14))) __PYX_ERR(0, 250, __pyx_L1_error)
+  if (!(likely(PyList_CheckExact(__pyx_t_14)) || __Pyx_RaiseUnexpectedTypeError("list", __pyx_t_14))) __PYX_ERR(0, 252, __pyx_L1_error)
   __pyx_r = ((PyObject*)__pyx_t_14);
   __pyx_t_14 = 0;
   goto __pyx_L0;
 
-  /* "thesis_pkg/core/sec/extraction_fast.pyx":130
+  /* "thesis_pkg/core/sec/extraction_fast.pyx":132
  * 
  * 
  * cpdef list scan_part_markers_v2_fast(             # <<<<<<<<<<<<<<
@@ -20484,58 +20449,58 @@ PyObject *__pyx_args, PyObject *__pyx_kwds
   {
     PyObject ** const __pyx_pyargnames[] = {&__pyx_mstate_global->__pyx_n_u_lines,&__pyx_mstate_global->__pyx_n_u_line_starts,&__pyx_mstate_global->__pyx_n_u_allowed_parts,&__pyx_mstate_global->__pyx_n_u_scan_sparse_layout,&__pyx_mstate_global->__pyx_n_u_toc_mask,&__pyx_mstate_global->__pyx_n_u_is_10q,0};
     const Py_ssize_t __pyx_kwds_len = (__pyx_kwds) ? __Pyx_NumKwargs_FASTCALL(__pyx_kwds) : 0;
-    if (unlikely(__pyx_kwds_len) < 0) __PYX_ERR(0, 130, __pyx_L3_error)
+    if (unlikely(__pyx_kwds_len) < 0) __PYX_ERR(0, 132, __pyx_L3_error)
     if (__pyx_kwds_len > 0) {
       switch (__pyx_nargs) {
         case  6:
         values[5] = __Pyx_ArgRef_FASTCALL(__pyx_args, 5);
-        if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[5])) __PYX_ERR(0, 130, __pyx_L3_error)
+        if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[5])) __PYX_ERR(0, 132, __pyx_L3_error)
         CYTHON_FALLTHROUGH;
         case  5:
         values[4] = __Pyx_ArgRef_FASTCALL(__pyx_args, 4);
-        if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[4])) __PYX_ERR(0, 130, __pyx_L3_error)
+        if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[4])) __PYX_ERR(0, 132, __pyx_L3_error)
         CYTHON_FALLTHROUGH;
         case  4:
         values[3] = __Pyx_ArgRef_FASTCALL(__pyx_args, 3);
-        if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[3])) __PYX_ERR(0, 130, __pyx_L3_error)
+        if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[3])) __PYX_ERR(0, 132, __pyx_L3_error)
         CYTHON_FALLTHROUGH;
         case  3:
         values[2] = __Pyx_ArgRef_FASTCALL(__pyx_args, 2);
-        if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[2])) __PYX_ERR(0, 130, __pyx_L3_error)
+        if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[2])) __PYX_ERR(0, 132, __pyx_L3_error)
         CYTHON_FALLTHROUGH;
         case  2:
         values[1] = __Pyx_ArgRef_FASTCALL(__pyx_args, 1);
-        if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[1])) __PYX_ERR(0, 130, __pyx_L3_error)
+        if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[1])) __PYX_ERR(0, 132, __pyx_L3_error)
         CYTHON_FALLTHROUGH;
         case  1:
         values[0] = __Pyx_ArgRef_FASTCALL(__pyx_args, 0);
-        if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[0])) __PYX_ERR(0, 130, __pyx_L3_error)
+        if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[0])) __PYX_ERR(0, 132, __pyx_L3_error)
         CYTHON_FALLTHROUGH;
         case  0: break;
         default: goto __pyx_L5_argtuple_error;
       }
       const Py_ssize_t kwd_pos_args = __pyx_nargs;
-      if (__Pyx_ParseKeywords(__pyx_kwds, __pyx_kwvalues, __pyx_pyargnames, 0, values, kwd_pos_args, __pyx_kwds_len, "scan_part_markers_v2_fast", 0) < (0)) __PYX_ERR(0, 130, __pyx_L3_error)
+      if (__Pyx_ParseKeywords(__pyx_kwds, __pyx_kwvalues, __pyx_pyargnames, 0, values, kwd_pos_args, __pyx_kwds_len, "scan_part_markers_v2_fast", 0) < (0)) __PYX_ERR(0, 132, __pyx_L3_error)
       for (Py_ssize_t i = __pyx_nargs; i < 5; i++) {
-        if (unlikely(!values[i])) { __Pyx_RaiseArgtupleInvalid("scan_part_markers_v2_fast", 0, 5, 6, i); __PYX_ERR(0, 130, __pyx_L3_error) }
+        if (unlikely(!values[i])) { __Pyx_RaiseArgtupleInvalid("scan_part_markers_v2_fast", 0, 5, 6, i); __PYX_ERR(0, 132, __pyx_L3_error) }
       }
     } else {
       switch (__pyx_nargs) {
         case  6:
         values[5] = __Pyx_ArgRef_FASTCALL(__pyx_args, 5);
-        if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[5])) __PYX_ERR(0, 130, __pyx_L3_error)
+        if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[5])) __PYX_ERR(0, 132, __pyx_L3_error)
         CYTHON_FALLTHROUGH;
         case  5:
         values[4] = __Pyx_ArgRef_FASTCALL(__pyx_args, 4);
-        if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[4])) __PYX_ERR(0, 130, __pyx_L3_error)
+        if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[4])) __PYX_ERR(0, 132, __pyx_L3_error)
         values[3] = __Pyx_ArgRef_FASTCALL(__pyx_args, 3);
-        if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[3])) __PYX_ERR(0, 130, __pyx_L3_error)
+        if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[3])) __PYX_ERR(0, 132, __pyx_L3_error)
         values[2] = __Pyx_ArgRef_FASTCALL(__pyx_args, 2);
-        if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[2])) __PYX_ERR(0, 130, __pyx_L3_error)
+        if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[2])) __PYX_ERR(0, 132, __pyx_L3_error)
         values[1] = __Pyx_ArgRef_FASTCALL(__pyx_args, 1);
-        if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[1])) __PYX_ERR(0, 130, __pyx_L3_error)
+        if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[1])) __PYX_ERR(0, 132, __pyx_L3_error)
         values[0] = __Pyx_ArgRef_FASTCALL(__pyx_args, 0);
-        if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[0])) __PYX_ERR(0, 130, __pyx_L3_error)
+        if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[0])) __PYX_ERR(0, 132, __pyx_L3_error)
         break;
         default: goto __pyx_L5_argtuple_error;
       }
@@ -20543,13 +20508,13 @@ PyObject *__pyx_args, PyObject *__pyx_kwds
     __pyx_v_lines = ((PyObject*)values[0]);
     __pyx_v_line_starts = values[1];
     __pyx_v_allowed_parts = ((PyObject*)values[2]);
-    __pyx_v_scan_sparse_layout = __Pyx_PyObject_IsTrue(values[3]); if (unlikely((__pyx_v_scan_sparse_layout == (int)-1) && PyErr_Occurred())) __PYX_ERR(0, 134, __pyx_L3_error)
+    __pyx_v_scan_sparse_layout = __Pyx_PyObject_IsTrue(values[3]); if (unlikely((__pyx_v_scan_sparse_layout == (int)-1) && PyErr_Occurred())) __PYX_ERR(0, 136, __pyx_L3_error)
     __pyx_v_toc_mask = ((PyObject*)values[4]);
     if (values[5]) {
-      __pyx_v_is_10q = __Pyx_PyObject_IsTrue(values[5]); if (unlikely((__pyx_v_is_10q == (int)-1) && PyErr_Occurred())) __PYX_ERR(0, 136, __pyx_L3_error)
+      __pyx_v_is_10q = __Pyx_PyObject_IsTrue(values[5]); if (unlikely((__pyx_v_is_10q == (int)-1) && PyErr_Occurred())) __PYX_ERR(0, 138, __pyx_L3_error)
     } else {
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":136
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":138
  *     bint scan_sparse_layout,
  *     set toc_mask,
  *     bint is_10q=False,             # <<<<<<<<<<<<<<
@@ -20561,7 +20526,7 @@ PyObject *__pyx_args, PyObject *__pyx_kwds
   }
   goto __pyx_L6_skip;
   __pyx_L5_argtuple_error:;
-  __Pyx_RaiseArgtupleInvalid("scan_part_markers_v2_fast", 0, 5, 6, __pyx_nargs); __PYX_ERR(0, 130, __pyx_L3_error)
+  __Pyx_RaiseArgtupleInvalid("scan_part_markers_v2_fast", 0, 5, 6, __pyx_nargs); __PYX_ERR(0, 132, __pyx_L3_error)
   __pyx_L6_skip:;
   goto __pyx_L4_argument_unpacking_done;
   __pyx_L3_error:;
@@ -20572,12 +20537,12 @@ PyObject *__pyx_args, PyObject *__pyx_kwds
   __Pyx_RefNannyFinishContext();
   return NULL;
   __pyx_L4_argument_unpacking_done:;
-  if (unlikely(!__Pyx_ArgTypeTest(((PyObject *)__pyx_v_lines), (&PyList_Type), 1, "lines", 1))) __PYX_ERR(0, 131, __pyx_L1_error)
-  if (unlikely(!__Pyx_ArgTypeTest(((PyObject *)__pyx_v_allowed_parts), (&PySet_Type), 1, "allowed_parts", 1))) __PYX_ERR(0, 133, __pyx_L1_error)
-  if (unlikely(!__Pyx_ArgTypeTest(((PyObject *)__pyx_v_toc_mask), (&PySet_Type), 1, "toc_mask", 1))) __PYX_ERR(0, 135, __pyx_L1_error)
+  if (unlikely(!__Pyx_ArgTypeTest(((PyObject *)__pyx_v_lines), (&PyList_Type), 1, "lines", 1))) __PYX_ERR(0, 133, __pyx_L1_error)
+  if (unlikely(!__Pyx_ArgTypeTest(((PyObject *)__pyx_v_allowed_parts), (&PySet_Type), 1, "allowed_parts", 1))) __PYX_ERR(0, 135, __pyx_L1_error)
+  if (unlikely(!__Pyx_ArgTypeTest(((PyObject *)__pyx_v_toc_mask), (&PySet_Type), 1, "toc_mask", 1))) __PYX_ERR(0, 137, __pyx_L1_error)
   __pyx_r = __pyx_pf_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_markers_v2_fast(__pyx_self, __pyx_v_lines, __pyx_v_line_starts, __pyx_v_allowed_parts, __pyx_v_scan_sparse_layout, __pyx_v_toc_mask, __pyx_v_is_10q);
 
-  /* "thesis_pkg/core/sec/extraction_fast.pyx":130
+  /* "thesis_pkg/core/sec/extraction_fast.pyx":132
  * 
  * 
  * cpdef list scan_part_markers_v2_fast(             # <<<<<<<<<<<<<<
@@ -20614,7 +20579,7 @@ static PyObject *__pyx_pf_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_ma
   __Pyx_XDECREF(__pyx_r);
   __pyx_t_2.__pyx_n = 1;
   __pyx_t_2.is_10q = __pyx_v_is_10q;
-  __pyx_t_1 = __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_markers_v2_fast(__pyx_v_lines, __pyx_v_line_starts, __pyx_v_allowed_parts, __pyx_v_scan_sparse_layout, __pyx_v_toc_mask, 1, &__pyx_t_2); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 130, __pyx_L1_error)
+  __pyx_t_1 = __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_markers_v2_fast(__pyx_v_lines, __pyx_v_line_starts, __pyx_v_allowed_parts, __pyx_v_scan_sparse_layout, __pyx_v_toc_mask, 1, &__pyx_t_2); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 132, __pyx_L1_error)
   __Pyx_GOTREF(__pyx_t_1);
   __pyx_r = __pyx_t_1;
   __pyx_t_1 = 0;
@@ -20631,7 +20596,7 @@ static PyObject *__pyx_pf_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_ma
   return __pyx_r;
 }
 
-/* "thesis_pkg/core/sec/extraction_fast.pyx":253
+/* "thesis_pkg/core/sec/extraction_fast.pyx":255
  * 
  * 
  * cpdef list scan_item_boundaries_fast(             # <<<<<<<<<<<<<<
@@ -20729,19 +20694,19 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
   int __pyx_clineno = 0;
   __Pyx_RefNannySetupContext("scan_item_boundaries_fast", 0);
 
-  /* "thesis_pkg/core/sec/extraction_fast.pyx":288
+  /* "thesis_pkg/core/sec/extraction_fast.pyx":290
  *     cdef long long content_start_abs
  *     cdef long long abs_start
  *     cdef object boundaries = []             # <<<<<<<<<<<<<<
  *     cdef object starts_arr = array("q", line_starts)
  *     cdef long long[:] starts_mv = starts_arr
 */
-  __pyx_t_1 = PyList_New(0); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 288, __pyx_L1_error)
+  __pyx_t_1 = PyList_New(0); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 290, __pyx_L1_error)
   __Pyx_GOTREF(__pyx_t_1);
   __pyx_v_boundaries = __pyx_t_1;
   __pyx_t_1 = 0;
 
-  /* "thesis_pkg/core/sec/extraction_fast.pyx":289
+  /* "thesis_pkg/core/sec/extraction_fast.pyx":291
  *     cdef long long abs_start
  *     cdef object boundaries = []
  *     cdef object starts_arr = array("q", line_starts)             # <<<<<<<<<<<<<<
@@ -20749,7 +20714,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
  *     cdef object current_part = None
 */
   __pyx_t_2 = NULL;
-  __Pyx_GetModuleGlobalName(__pyx_t_3, __pyx_mstate_global->__pyx_n_u_array); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 289, __pyx_L1_error)
+  __Pyx_GetModuleGlobalName(__pyx_t_3, __pyx_mstate_global->__pyx_n_u_array); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 291, __pyx_L1_error)
   __Pyx_GOTREF(__pyx_t_3);
   __pyx_t_4 = 1;
   #if CYTHON_UNPACK_METHODS
@@ -20768,25 +20733,25 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
     __pyx_t_1 = __Pyx_PyObject_FastCall((PyObject*)__pyx_t_3, __pyx_callargs+__pyx_t_4, (3-__pyx_t_4) | (__pyx_t_4*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
     __Pyx_XDECREF(__pyx_t_2); __pyx_t_2 = 0;
     __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
-    if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 289, __pyx_L1_error)
+    if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 291, __pyx_L1_error)
     __Pyx_GOTREF(__pyx_t_1);
   }
   __pyx_v_starts_arr = __pyx_t_1;
   __pyx_t_1 = 0;
 
-  /* "thesis_pkg/core/sec/extraction_fast.pyx":290
+  /* "thesis_pkg/core/sec/extraction_fast.pyx":292
  *     cdef object boundaries = []
  *     cdef object starts_arr = array("q", line_starts)
  *     cdef long long[:] starts_mv = starts_arr             # <<<<<<<<<<<<<<
  *     cdef object current_part = None
  *     cdef object toc_part = None
 */
-  __pyx_t_5 = __Pyx_PyObject_to_MemoryviewSlice_ds_PY_LONG_LONG(__pyx_v_starts_arr, PyBUF_WRITABLE); if (unlikely(!__pyx_t_5.memview)) __PYX_ERR(0, 290, __pyx_L1_error)
+  __pyx_t_5 = __Pyx_PyObject_to_MemoryviewSlice_ds_PY_LONG_LONG(__pyx_v_starts_arr, PyBUF_WRITABLE); if (unlikely(!__pyx_t_5.memview)) __PYX_ERR(0, 292, __pyx_L1_error)
   __pyx_v_starts_mv = __pyx_t_5;
   __pyx_t_5.memview = NULL;
   __pyx_t_5.data = NULL;
 
-  /* "thesis_pkg/core/sec/extraction_fast.pyx":291
+  /* "thesis_pkg/core/sec/extraction_fast.pyx":293
  *     cdef object starts_arr = array("q", line_starts)
  *     cdef long long[:] starts_mv = starts_arr
  *     cdef object current_part = None             # <<<<<<<<<<<<<<
@@ -20796,7 +20761,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
   __Pyx_INCREF(Py_None);
   __pyx_v_current_part = Py_None;
 
-  /* "thesis_pkg/core/sec/extraction_fast.pyx":292
+  /* "thesis_pkg/core/sec/extraction_fast.pyx":294
  *     cdef long long[:] starts_mv = starts_arr
  *     cdef object current_part = None
  *     cdef object toc_part = None             # <<<<<<<<<<<<<<
@@ -20806,7 +20771,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
   __Pyx_INCREF(Py_None);
   __pyx_v_toc_part = Py_None;
 
-  /* "thesis_pkg/core/sec/extraction_fast.pyx":313
+  /* "thesis_pkg/core/sec/extraction_fast.pyx":315
  *     cdef object part_hint
  * 
  *     n_lines = len(lines)             # <<<<<<<<<<<<<<
@@ -20815,12 +20780,12 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
   if (unlikely(__pyx_v_lines == Py_None)) {
     PyErr_SetString(PyExc_TypeError, "object of type 'NoneType' has no len()");
-    __PYX_ERR(0, 313, __pyx_L1_error)
+    __PYX_ERR(0, 315, __pyx_L1_error)
   }
-  __pyx_t_6 = __Pyx_PyList_GET_SIZE(__pyx_v_lines); if (unlikely(__pyx_t_6 == ((Py_ssize_t)-1))) __PYX_ERR(0, 313, __pyx_L1_error)
+  __pyx_t_6 = __Pyx_PyList_GET_SIZE(__pyx_v_lines); if (unlikely(__pyx_t_6 == ((Py_ssize_t)-1))) __PYX_ERR(0, 315, __pyx_L1_error)
   __pyx_v_n_lines = __pyx_t_6;
 
-  /* "thesis_pkg/core/sec/extraction_fast.pyx":314
+  /* "thesis_pkg/core/sec/extraction_fast.pyx":316
  * 
  *     n_lines = len(lines)
  *     for i in range(n_lines):             # <<<<<<<<<<<<<<
@@ -20832,7 +20797,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
   for (__pyx_t_8 = 0; __pyx_t_8 < __pyx_t_7; __pyx_t_8+=1) {
     __pyx_v_i = __pyx_t_8;
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":315
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":317
  *     n_lines = len(lines)
  *     for i in range(n_lines):
  *         line = lines[i]             # <<<<<<<<<<<<<<
@@ -20841,32 +20806,32 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
     if (unlikely(__pyx_v_lines == Py_None)) {
       PyErr_SetString(PyExc_TypeError, "'NoneType' object is not subscriptable");
-      __PYX_ERR(0, 315, __pyx_L1_error)
+      __PYX_ERR(0, 317, __pyx_L1_error)
     }
     __pyx_t_1 = __Pyx_PyList_GET_ITEM(__pyx_v_lines, __pyx_v_i);
     __Pyx_INCREF(__pyx_t_1);
-    if (!(likely(PyUnicode_CheckExact(__pyx_t_1))||((__pyx_t_1) == Py_None) || __Pyx_RaiseUnexpectedTypeError("str", __pyx_t_1))) __PYX_ERR(0, 315, __pyx_L1_error)
+    if (!(likely(PyUnicode_CheckExact(__pyx_t_1))||((__pyx_t_1) == Py_None) || __Pyx_RaiseUnexpectedTypeError("str", __pyx_t_1))) __PYX_ERR(0, 317, __pyx_L1_error)
     __Pyx_XDECREF_SET(__pyx_v_line, ((PyObject*)__pyx_t_1));
     __pyx_t_1 = 0;
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":316
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":318
  *     for i in range(n_lines):
  *         line = lines[i]
  *         line_in_toc_range = i in toc_mask             # <<<<<<<<<<<<<<
  *         if not line_in_toc_range:
  *             toc_part = None
 */
-    __pyx_t_1 = PyLong_FromSsize_t(__pyx_v_i); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 316, __pyx_L1_error)
+    __pyx_t_1 = PyLong_FromSsize_t(__pyx_v_i); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 318, __pyx_L1_error)
     __Pyx_GOTREF(__pyx_t_1);
     if (unlikely(__pyx_v_toc_mask == Py_None)) {
       PyErr_SetString(PyExc_TypeError, "'NoneType' object is not iterable");
-      __PYX_ERR(0, 316, __pyx_L1_error)
+      __PYX_ERR(0, 318, __pyx_L1_error)
     }
-    __pyx_t_9 = (__Pyx_PySet_ContainsTF(__pyx_t_1, __pyx_v_toc_mask, Py_EQ)); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 316, __pyx_L1_error)
+    __pyx_t_9 = (__Pyx_PySet_ContainsTF(__pyx_t_1, __pyx_v_toc_mask, Py_EQ)); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 318, __pyx_L1_error)
     __Pyx_DECREF(__pyx_t_1); __pyx_t_1 = 0;
     __pyx_v_line_in_toc_range = __pyx_t_9;
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":317
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":319
  *         line = lines[i]
  *         line_in_toc_range = i in toc_mask
  *         if not line_in_toc_range:             # <<<<<<<<<<<<<<
@@ -20876,7 +20841,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
     __pyx_t_9 = (!__pyx_v_line_in_toc_range);
     if (__pyx_t_9) {
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":318
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":320
  *         line_in_toc_range = i in toc_mask
  *         if not line_in_toc_range:
  *             toc_part = None             # <<<<<<<<<<<<<<
@@ -20886,7 +20851,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
       __Pyx_INCREF(Py_None);
       __Pyx_DECREF_SET(__pyx_v_toc_part, Py_None);
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":317
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":319
  *         line = lines[i]
  *         line_in_toc_range = i in toc_mask
  *         if not line_in_toc_range:             # <<<<<<<<<<<<<<
@@ -20895,7 +20860,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
     }
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":320
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":322
  *             toc_part = None
  * 
  *         if TOC_HEADER_LINE_PATTERN.match(line):             # <<<<<<<<<<<<<<
@@ -20903,9 +20868,9 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
  * 
 */
     __pyx_t_3 = NULL;
-    __Pyx_GetModuleGlobalName(__pyx_t_2, __pyx_mstate_global->__pyx_n_u_TOC_HEADER_LINE_PATTERN); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 320, __pyx_L1_error)
+    __Pyx_GetModuleGlobalName(__pyx_t_2, __pyx_mstate_global->__pyx_n_u_TOC_HEADER_LINE_PATTERN); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 322, __pyx_L1_error)
     __Pyx_GOTREF(__pyx_t_2);
-    __pyx_t_10 = __Pyx_PyObject_GetAttrStr(__pyx_t_2, __pyx_mstate_global->__pyx_n_u_match); if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 320, __pyx_L1_error)
+    __pyx_t_10 = __Pyx_PyObject_GetAttrStr(__pyx_t_2, __pyx_mstate_global->__pyx_n_u_match); if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 322, __pyx_L1_error)
     __Pyx_GOTREF(__pyx_t_10);
     __Pyx_DECREF(__pyx_t_2); __pyx_t_2 = 0;
     __pyx_t_4 = 1;
@@ -20925,14 +20890,14 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
       __pyx_t_1 = __Pyx_PyObject_FastCall((PyObject*)__pyx_t_10, __pyx_callargs+__pyx_t_4, (2-__pyx_t_4) | (__pyx_t_4*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
       __Pyx_XDECREF(__pyx_t_3); __pyx_t_3 = 0;
       __Pyx_DECREF(__pyx_t_10); __pyx_t_10 = 0;
-      if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 320, __pyx_L1_error)
+      if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 322, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_1);
     }
-    __pyx_t_9 = __Pyx_PyObject_IsTrue(__pyx_t_1); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 320, __pyx_L1_error)
+    __pyx_t_9 = __Pyx_PyObject_IsTrue(__pyx_t_1); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 322, __pyx_L1_error)
     __Pyx_DECREF(__pyx_t_1); __pyx_t_1 = 0;
     if (__pyx_t_9) {
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":321
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":323
  * 
  *         if TOC_HEADER_LINE_PATTERN.match(line):
  *             continue             # <<<<<<<<<<<<<<
@@ -20941,7 +20906,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
       goto __pyx_L3_continue;
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":320
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":322
  *             toc_part = None
  * 
  *         if TOC_HEADER_LINE_PATTERN.match(line):             # <<<<<<<<<<<<<<
@@ -20950,27 +20915,27 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
     }
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":323
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":325
  *             continue
  * 
  *         has_item_hint = _contains_item_hint(line)             # <<<<<<<<<<<<<<
  *         has_part_hint = _contains_part_hint(line)
  *         if not has_item_hint and not has_part_hint:
 */
-    __pyx_t_9 = __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__contains_item_hint(__pyx_v_line); if (unlikely(__pyx_t_9 == ((int)-1) && PyErr_Occurred())) __PYX_ERR(0, 323, __pyx_L1_error)
+    __pyx_t_9 = __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__contains_item_hint(__pyx_v_line); if (unlikely(__pyx_t_9 == ((int)-1) && PyErr_Occurred())) __PYX_ERR(0, 325, __pyx_L1_error)
     __pyx_v_has_item_hint = __pyx_t_9;
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":324
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":326
  * 
  *         has_item_hint = _contains_item_hint(line)
  *         has_part_hint = _contains_part_hint(line)             # <<<<<<<<<<<<<<
  *         if not has_item_hint and not has_part_hint:
  *             continue
 */
-    __pyx_t_9 = __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__contains_part_hint(__pyx_v_line); if (unlikely(__pyx_t_9 == ((int)-1) && PyErr_Occurred())) __PYX_ERR(0, 324, __pyx_L1_error)
+    __pyx_t_9 = __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__contains_part_hint(__pyx_v_line); if (unlikely(__pyx_t_9 == ((int)-1) && PyErr_Occurred())) __PYX_ERR(0, 326, __pyx_L1_error)
     __pyx_v_has_part_hint = __pyx_t_9;
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":325
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":327
  *         has_item_hint = _contains_item_hint(line)
  *         has_part_hint = _contains_part_hint(line)
  *         if not has_item_hint and not has_part_hint:             # <<<<<<<<<<<<<<
@@ -20988,7 +20953,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
     __pyx_L8_bool_binop_done:;
     if (__pyx_t_9) {
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":326
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":328
  *         has_part_hint = _contains_part_hint(line)
  *         if not has_item_hint and not has_part_hint:
  *             continue             # <<<<<<<<<<<<<<
@@ -20997,7 +20962,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
       goto __pyx_L3_continue;
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":325
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":327
  *         has_item_hint = _contains_item_hint(line)
  *         has_part_hint = _contains_part_hint(line)
  *         if not has_item_hint and not has_part_hint:             # <<<<<<<<<<<<<<
@@ -21006,7 +20971,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
     }
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":328
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":330
  *             continue
  * 
  *         line_has_item_word = has_item_hint and (ITEM_WORD_PATTERN.search(line) is not None)             # <<<<<<<<<<<<<<
@@ -21019,9 +20984,9 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
       goto __pyx_L10_bool_binop_done;
     }
     __pyx_t_10 = NULL;
-    __Pyx_GetModuleGlobalName(__pyx_t_3, __pyx_mstate_global->__pyx_n_u_ITEM_WORD_PATTERN); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 328, __pyx_L1_error)
+    __Pyx_GetModuleGlobalName(__pyx_t_3, __pyx_mstate_global->__pyx_n_u_ITEM_WORD_PATTERN); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 330, __pyx_L1_error)
     __Pyx_GOTREF(__pyx_t_3);
-    __pyx_t_2 = __Pyx_PyObject_GetAttrStr(__pyx_t_3, __pyx_mstate_global->__pyx_n_u_search); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 328, __pyx_L1_error)
+    __pyx_t_2 = __Pyx_PyObject_GetAttrStr(__pyx_t_3, __pyx_mstate_global->__pyx_n_u_search); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 330, __pyx_L1_error)
     __Pyx_GOTREF(__pyx_t_2);
     __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
     __pyx_t_4 = 1;
@@ -21041,7 +21006,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
       __pyx_t_1 = __Pyx_PyObject_FastCall((PyObject*)__pyx_t_2, __pyx_callargs+__pyx_t_4, (2-__pyx_t_4) | (__pyx_t_4*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
       __Pyx_XDECREF(__pyx_t_10); __pyx_t_10 = 0;
       __Pyx_DECREF(__pyx_t_2); __pyx_t_2 = 0;
-      if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 328, __pyx_L1_error)
+      if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 330, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_1);
     }
     __pyx_t_11 = (__pyx_t_1 != Py_None);
@@ -21050,7 +21015,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
     __pyx_L10_bool_binop_done:;
     __pyx_v_line_has_item_word = __pyx_t_9;
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":332
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":334
  *         combined_match = (
  *             COMBINED_PART_ITEM_PATTERN.match(line)
  *             if (extraction_regime_v2 and has_item_hint and has_part_hint)             # <<<<<<<<<<<<<<
@@ -21071,7 +21036,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
     __pyx_L12_bool_binop_done:;
     if (__pyx_t_9) {
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":331
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":333
  * 
  *         combined_match = (
  *             COMBINED_PART_ITEM_PATTERN.match(line)             # <<<<<<<<<<<<<<
@@ -21079,9 +21044,9 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
  *             else None
 */
       __pyx_t_10 = NULL;
-      __Pyx_GetModuleGlobalName(__pyx_t_3, __pyx_mstate_global->__pyx_n_u_COMBINED_PART_ITEM_PATTERN); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 331, __pyx_L1_error)
+      __Pyx_GetModuleGlobalName(__pyx_t_3, __pyx_mstate_global->__pyx_n_u_COMBINED_PART_ITEM_PATTERN); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 333, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_3);
-      __pyx_t_12 = __Pyx_PyObject_GetAttrStr(__pyx_t_3, __pyx_mstate_global->__pyx_n_u_match); if (unlikely(!__pyx_t_12)) __PYX_ERR(0, 331, __pyx_L1_error)
+      __pyx_t_12 = __Pyx_PyObject_GetAttrStr(__pyx_t_3, __pyx_mstate_global->__pyx_n_u_match); if (unlikely(!__pyx_t_12)) __PYX_ERR(0, 333, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_12);
       __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
       __pyx_t_4 = 1;
@@ -21101,14 +21066,14 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
         __pyx_t_2 = __Pyx_PyObject_FastCall((PyObject*)__pyx_t_12, __pyx_callargs+__pyx_t_4, (2-__pyx_t_4) | (__pyx_t_4*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
         __Pyx_XDECREF(__pyx_t_10); __pyx_t_10 = 0;
         __Pyx_DECREF(__pyx_t_12); __pyx_t_12 = 0;
-        if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 331, __pyx_L1_error)
+        if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 333, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_2);
       }
       __pyx_t_1 = __pyx_t_2;
       __pyx_t_2 = 0;
     } else {
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":333
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":335
  *             COMBINED_PART_ITEM_PATTERN.match(line)
  *             if (extraction_regime_v2 and has_item_hint and has_part_hint)
  *             else None             # <<<<<<<<<<<<<<
@@ -21121,17 +21086,17 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
     __Pyx_XDECREF_SET(__pyx_v_combined_match, __pyx_t_1);
     __pyx_t_1 = 0;
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":335
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":337
  *             else None
  *         )
  *         if combined_match:             # <<<<<<<<<<<<<<
  *             part = combined_match.group("part").upper()
  *             if part in allowed_parts:
 */
-    __pyx_t_9 = __Pyx_PyObject_IsTrue(__pyx_v_combined_match); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 335, __pyx_L1_error)
+    __pyx_t_9 = __Pyx_PyObject_IsTrue(__pyx_v_combined_match); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 337, __pyx_L1_error)
     if (__pyx_t_9) {
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":336
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":338
  *         )
  *         if combined_match:
  *             part = combined_match.group("part").upper()             # <<<<<<<<<<<<<<
@@ -21145,7 +21110,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
         PyObject *__pyx_callargs[2] = {__pyx_t_10, __pyx_mstate_global->__pyx_n_u_part};
         __pyx_t_12 = __Pyx_PyObject_FastCallMethod((PyObject*)__pyx_mstate_global->__pyx_n_u_group, __pyx_callargs+__pyx_t_4, (2-__pyx_t_4) | (1*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
         __Pyx_XDECREF(__pyx_t_10); __pyx_t_10 = 0;
-        if (unlikely(!__pyx_t_12)) __PYX_ERR(0, 336, __pyx_L1_error)
+        if (unlikely(!__pyx_t_12)) __PYX_ERR(0, 338, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_12);
       }
       __pyx_t_2 = __pyx_t_12;
@@ -21156,14 +21121,14 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
         __pyx_t_1 = __Pyx_PyObject_FastCallMethod((PyObject*)__pyx_mstate_global->__pyx_n_u_upper, __pyx_callargs+__pyx_t_4, (1-__pyx_t_4) | (1*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
         __Pyx_XDECREF(__pyx_t_2); __pyx_t_2 = 0;
         __Pyx_DECREF(__pyx_t_12); __pyx_t_12 = 0;
-        if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 336, __pyx_L1_error)
+        if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 338, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_1);
       }
-      if (!(likely(PyUnicode_CheckExact(__pyx_t_1))||((__pyx_t_1) == Py_None) || __Pyx_RaiseUnexpectedTypeError("str", __pyx_t_1))) __PYX_ERR(0, 336, __pyx_L1_error)
+      if (!(likely(PyUnicode_CheckExact(__pyx_t_1))||((__pyx_t_1) == Py_None) || __Pyx_RaiseUnexpectedTypeError("str", __pyx_t_1))) __PYX_ERR(0, 338, __pyx_L1_error)
       __Pyx_XDECREF_SET(__pyx_v_part, ((PyObject*)__pyx_t_1));
       __pyx_t_1 = 0;
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":337
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":339
  *         if combined_match:
  *             part = combined_match.group("part").upper()
  *             if part in allowed_parts:             # <<<<<<<<<<<<<<
@@ -21172,12 +21137,12 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
       if (unlikely(__pyx_v_allowed_parts == Py_None)) {
         PyErr_SetString(PyExc_TypeError, "'NoneType' object is not iterable");
-        __PYX_ERR(0, 337, __pyx_L1_error)
+        __PYX_ERR(0, 339, __pyx_L1_error)
       }
-      __pyx_t_9 = (__Pyx_PySet_ContainsTF(__pyx_v_part, __pyx_v_allowed_parts, Py_EQ)); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 337, __pyx_L1_error)
+      __pyx_t_9 = (__Pyx_PySet_ContainsTF(__pyx_v_part, __pyx_v_allowed_parts, Py_EQ)); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 339, __pyx_L1_error)
       if (__pyx_t_9) {
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":338
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":340
  *             part = combined_match.group("part").upper()
  *             if part in allowed_parts:
  *                 item_match = ITEM_CANDIDATE_PATTERN.search(             # <<<<<<<<<<<<<<
@@ -21185,13 +21150,13 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
  *                     combined_match.start("item"),
 */
         __pyx_t_12 = NULL;
-        __Pyx_GetModuleGlobalName(__pyx_t_2, __pyx_mstate_global->__pyx_n_u_ITEM_CANDIDATE_PATTERN); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 338, __pyx_L1_error)
+        __Pyx_GetModuleGlobalName(__pyx_t_2, __pyx_mstate_global->__pyx_n_u_ITEM_CANDIDATE_PATTERN); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 340, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_2);
-        __pyx_t_10 = __Pyx_PyObject_GetAttrStr(__pyx_t_2, __pyx_mstate_global->__pyx_n_u_search); if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 338, __pyx_L1_error)
+        __pyx_t_10 = __Pyx_PyObject_GetAttrStr(__pyx_t_2, __pyx_mstate_global->__pyx_n_u_search); if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 340, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_10);
         __Pyx_DECREF(__pyx_t_2); __pyx_t_2 = 0;
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":340
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":342
  *                 item_match = ITEM_CANDIDATE_PATTERN.search(
  *                     line,
  *                     combined_match.start("item"),             # <<<<<<<<<<<<<<
@@ -21205,7 +21170,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
           PyObject *__pyx_callargs[2] = {__pyx_t_3, __pyx_mstate_global->__pyx_n_u_item};
           __pyx_t_2 = __Pyx_PyObject_FastCallMethod((PyObject*)__pyx_mstate_global->__pyx_n_u_start, __pyx_callargs+__pyx_t_4, (2-__pyx_t_4) | (1*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
           __Pyx_XDECREF(__pyx_t_3); __pyx_t_3 = 0;
-          if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 340, __pyx_L1_error)
+          if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 342, __pyx_L1_error)
           __Pyx_GOTREF(__pyx_t_2);
         }
         __pyx_t_4 = 1;
@@ -21226,20 +21191,20 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
           __Pyx_XDECREF(__pyx_t_12); __pyx_t_12 = 0;
           __Pyx_DECREF(__pyx_t_2); __pyx_t_2 = 0;
           __Pyx_DECREF(__pyx_t_10); __pyx_t_10 = 0;
-          if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 338, __pyx_L1_error)
+          if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 340, __pyx_L1_error)
           __Pyx_GOTREF(__pyx_t_1);
         }
         __Pyx_XDECREF_SET(__pyx_v_item_match, __pyx_t_1);
         __pyx_t_1 = 0;
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":342
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":344
  *                     combined_match.start("item"),
  *                 )
  *                 if item_match and item_match.start() == combined_match.start("item"):             # <<<<<<<<<<<<<<
  *                     item_id, content_adjust = _normalize_item_match(
  *                         line,
 */
-        __pyx_t_11 = __Pyx_PyObject_IsTrue(__pyx_v_item_match); if (unlikely((__pyx_t_11 < 0))) __PYX_ERR(0, 342, __pyx_L1_error)
+        __pyx_t_11 = __Pyx_PyObject_IsTrue(__pyx_v_item_match); if (unlikely((__pyx_t_11 < 0))) __PYX_ERR(0, 344, __pyx_L1_error)
         if (__pyx_t_11) {
         } else {
           __pyx_t_9 = __pyx_t_11;
@@ -21252,7 +21217,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
           PyObject *__pyx_callargs[2] = {__pyx_t_10, NULL};
           __pyx_t_1 = __Pyx_PyObject_FastCallMethod((PyObject*)__pyx_mstate_global->__pyx_n_u_start, __pyx_callargs+__pyx_t_4, (1-__pyx_t_4) | (1*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
           __Pyx_XDECREF(__pyx_t_10); __pyx_t_10 = 0;
-          if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 342, __pyx_L1_error)
+          if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 344, __pyx_L1_error)
           __Pyx_GOTREF(__pyx_t_1);
         }
         __pyx_t_2 = __pyx_v_combined_match;
@@ -21262,19 +21227,19 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
           PyObject *__pyx_callargs[2] = {__pyx_t_2, __pyx_mstate_global->__pyx_n_u_item};
           __pyx_t_10 = __Pyx_PyObject_FastCallMethod((PyObject*)__pyx_mstate_global->__pyx_n_u_start, __pyx_callargs+__pyx_t_4, (2-__pyx_t_4) | (1*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
           __Pyx_XDECREF(__pyx_t_2); __pyx_t_2 = 0;
-          if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 342, __pyx_L1_error)
+          if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 344, __pyx_L1_error)
           __Pyx_GOTREF(__pyx_t_10);
         }
-        __pyx_t_2 = PyObject_RichCompare(__pyx_t_1, __pyx_t_10, Py_EQ); __Pyx_XGOTREF(__pyx_t_2); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 342, __pyx_L1_error)
+        __pyx_t_2 = PyObject_RichCompare(__pyx_t_1, __pyx_t_10, Py_EQ); __Pyx_XGOTREF(__pyx_t_2); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 344, __pyx_L1_error)
         __Pyx_DECREF(__pyx_t_1); __pyx_t_1 = 0;
         __Pyx_DECREF(__pyx_t_10); __pyx_t_10 = 0;
-        __pyx_t_11 = __Pyx_PyObject_IsTrue(__pyx_t_2); if (unlikely((__pyx_t_11 < 0))) __PYX_ERR(0, 342, __pyx_L1_error)
+        __pyx_t_11 = __Pyx_PyObject_IsTrue(__pyx_t_2); if (unlikely((__pyx_t_11 < 0))) __PYX_ERR(0, 344, __pyx_L1_error)
         __Pyx_DECREF(__pyx_t_2); __pyx_t_2 = 0;
         __pyx_t_9 = __pyx_t_11;
         __pyx_L18_bool_binop_done:;
         if (__pyx_t_9) {
 
-          /* "thesis_pkg/core/sec/extraction_fast.pyx":343
+          /* "thesis_pkg/core/sec/extraction_fast.pyx":345
  *                 )
  *                 if item_match and item_match.start() == combined_match.start("item"):
  *                     item_id, content_adjust = _normalize_item_match(             # <<<<<<<<<<<<<<
@@ -21282,27 +21247,27 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
  *                         item_match,
 */
           __pyx_t_10 = NULL;
-          __Pyx_GetModuleGlobalName(__pyx_t_1, __pyx_mstate_global->__pyx_n_u_normalize_item_match); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 343, __pyx_L1_error)
+          __Pyx_GetModuleGlobalName(__pyx_t_1, __pyx_mstate_global->__pyx_n_u_normalize_item_match); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 345, __pyx_L1_error)
           __Pyx_GOTREF(__pyx_t_1);
 
-          /* "thesis_pkg/core/sec/extraction_fast.pyx":346
+          /* "thesis_pkg/core/sec/extraction_fast.pyx":348
  *                         line,
  *                         item_match,
  *                         is_10k=is_10k,             # <<<<<<<<<<<<<<
  *                         max_item=max_item_number,
  *                     )
 */
-          __pyx_t_12 = __Pyx_PyBool_FromLong(__pyx_v_is_10k); if (unlikely(!__pyx_t_12)) __PYX_ERR(0, 346, __pyx_L1_error)
+          __pyx_t_12 = __Pyx_PyBool_FromLong(__pyx_v_is_10k); if (unlikely(!__pyx_t_12)) __PYX_ERR(0, 348, __pyx_L1_error)
           __Pyx_GOTREF(__pyx_t_12);
 
-          /* "thesis_pkg/core/sec/extraction_fast.pyx":347
+          /* "thesis_pkg/core/sec/extraction_fast.pyx":349
  *                         item_match,
  *                         is_10k=is_10k,
  *                         max_item=max_item_number,             # <<<<<<<<<<<<<<
  *                     )
  *                     if item_id is not None and item_id != "16":
 */
-          __pyx_t_3 = __Pyx_PyLong_From_int(__pyx_v_max_item_number); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 347, __pyx_L1_error)
+          __pyx_t_3 = __Pyx_PyLong_From_int(__pyx_v_max_item_number); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 349, __pyx_L1_error)
           __Pyx_GOTREF(__pyx_t_3);
           __pyx_t_4 = 1;
           #if CYTHON_UNPACK_METHODS
@@ -21318,17 +21283,17 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
           #endif
           {
             PyObject *__pyx_callargs[3 + ((CYTHON_VECTORCALL) ? 2 : 0)] = {__pyx_t_10, __pyx_v_line, __pyx_v_item_match};
-            __pyx_t_13 = __Pyx_MakeVectorcallBuilderKwds(2); if (unlikely(!__pyx_t_13)) __PYX_ERR(0, 343, __pyx_L1_error)
+            __pyx_t_13 = __Pyx_MakeVectorcallBuilderKwds(2); if (unlikely(!__pyx_t_13)) __PYX_ERR(0, 345, __pyx_L1_error)
             __Pyx_GOTREF(__pyx_t_13);
-            if (__Pyx_VectorcallBuilder_AddArg(__pyx_mstate_global->__pyx_n_u_is_10k, __pyx_t_12, __pyx_t_13, __pyx_callargs+3, 0) < (0)) __PYX_ERR(0, 343, __pyx_L1_error)
-            if (__Pyx_VectorcallBuilder_AddArg(__pyx_mstate_global->__pyx_n_u_max_item, __pyx_t_3, __pyx_t_13, __pyx_callargs+3, 1) < (0)) __PYX_ERR(0, 343, __pyx_L1_error)
+            if (__Pyx_VectorcallBuilder_AddArg(__pyx_mstate_global->__pyx_n_u_is_10k, __pyx_t_12, __pyx_t_13, __pyx_callargs+3, 0) < (0)) __PYX_ERR(0, 345, __pyx_L1_error)
+            if (__Pyx_VectorcallBuilder_AddArg(__pyx_mstate_global->__pyx_n_u_max_item, __pyx_t_3, __pyx_t_13, __pyx_callargs+3, 1) < (0)) __PYX_ERR(0, 345, __pyx_L1_error)
             __pyx_t_2 = __Pyx_Object_Vectorcall_CallFromBuilder((PyObject*)__pyx_t_1, __pyx_callargs+__pyx_t_4, (3-__pyx_t_4) | (__pyx_t_4*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET), __pyx_t_13);
             __Pyx_XDECREF(__pyx_t_10); __pyx_t_10 = 0;
             __Pyx_DECREF(__pyx_t_12); __pyx_t_12 = 0;
             __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
             __Pyx_DECREF(__pyx_t_13); __pyx_t_13 = 0;
             __Pyx_DECREF(__pyx_t_1); __pyx_t_1 = 0;
-            if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 343, __pyx_L1_error)
+            if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 345, __pyx_L1_error)
             __Pyx_GOTREF(__pyx_t_2);
           }
           if ((likely(PyTuple_CheckExact(__pyx_t_2))) || (PyList_CheckExact(__pyx_t_2))) {
@@ -21337,7 +21302,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
             if (unlikely(size != 2)) {
               if (size > 2) __Pyx_RaiseTooManyValuesError(2);
               else if (size >= 0) __Pyx_RaiseNeedMoreValuesError(size);
-              __PYX_ERR(0, 343, __pyx_L1_error)
+              __PYX_ERR(0, 345, __pyx_L1_error)
             }
             #if CYTHON_ASSUME_SAFE_MACROS && !CYTHON_AVOID_BORROWED_REFS
             if (likely(PyTuple_CheckExact(sequence))) {
@@ -21347,22 +21312,22 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
               __Pyx_INCREF(__pyx_t_13);
             } else {
               __pyx_t_1 = __Pyx_PyList_GetItemRefFast(sequence, 0, __Pyx_ReferenceSharing_SharedReference);
-              if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 343, __pyx_L1_error)
+              if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 345, __pyx_L1_error)
               __Pyx_XGOTREF(__pyx_t_1);
               __pyx_t_13 = __Pyx_PyList_GetItemRefFast(sequence, 1, __Pyx_ReferenceSharing_SharedReference);
-              if (unlikely(!__pyx_t_13)) __PYX_ERR(0, 343, __pyx_L1_error)
+              if (unlikely(!__pyx_t_13)) __PYX_ERR(0, 345, __pyx_L1_error)
               __Pyx_XGOTREF(__pyx_t_13);
             }
             #else
-            __pyx_t_1 = __Pyx_PySequence_ITEM(sequence, 0); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 343, __pyx_L1_error)
+            __pyx_t_1 = __Pyx_PySequence_ITEM(sequence, 0); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 345, __pyx_L1_error)
             __Pyx_GOTREF(__pyx_t_1);
-            __pyx_t_13 = __Pyx_PySequence_ITEM(sequence, 1); if (unlikely(!__pyx_t_13)) __PYX_ERR(0, 343, __pyx_L1_error)
+            __pyx_t_13 = __Pyx_PySequence_ITEM(sequence, 1); if (unlikely(!__pyx_t_13)) __PYX_ERR(0, 345, __pyx_L1_error)
             __Pyx_GOTREF(__pyx_t_13);
             #endif
             __Pyx_DECREF(__pyx_t_2); __pyx_t_2 = 0;
           } else {
             Py_ssize_t index = -1;
-            __pyx_t_3 = PyObject_GetIter(__pyx_t_2); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 343, __pyx_L1_error)
+            __pyx_t_3 = PyObject_GetIter(__pyx_t_2); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 345, __pyx_L1_error)
             __Pyx_GOTREF(__pyx_t_3);
             __Pyx_DECREF(__pyx_t_2); __pyx_t_2 = 0;
             __pyx_t_14 = (CYTHON_COMPILING_IN_LIMITED_API) ? PyIter_Next : __Pyx_PyObject_GetIterNextFunc(__pyx_t_3);
@@ -21370,7 +21335,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
             __Pyx_GOTREF(__pyx_t_1);
             index = 1; __pyx_t_13 = __pyx_t_14(__pyx_t_3); if (unlikely(!__pyx_t_13)) goto __pyx_L20_unpacking_failed;
             __Pyx_GOTREF(__pyx_t_13);
-            if (__Pyx_IternextUnpackEndCheck(__pyx_t_14(__pyx_t_3), 2) < (0)) __PYX_ERR(0, 343, __pyx_L1_error)
+            if (__Pyx_IternextUnpackEndCheck(__pyx_t_14(__pyx_t_3), 2) < (0)) __PYX_ERR(0, 345, __pyx_L1_error)
             __pyx_t_14 = NULL;
             __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
             goto __pyx_L21_unpacking_done;
@@ -21378,24 +21343,24 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
             __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
             __pyx_t_14 = NULL;
             if (__Pyx_IterFinish() == 0) __Pyx_RaiseNeedMoreValuesError(index);
-            __PYX_ERR(0, 343, __pyx_L1_error)
+            __PYX_ERR(0, 345, __pyx_L1_error)
             __pyx_L21_unpacking_done:;
           }
 
-          /* "thesis_pkg/core/sec/extraction_fast.pyx":343
+          /* "thesis_pkg/core/sec/extraction_fast.pyx":345
  *                 )
  *                 if item_match and item_match.start() == combined_match.start("item"):
  *                     item_id, content_adjust = _normalize_item_match(             # <<<<<<<<<<<<<<
  *                         line,
  *                         item_match,
 */
-          __pyx_t_15 = __Pyx_PyLong_As_int(__pyx_t_13); if (unlikely((__pyx_t_15 == (int)-1) && PyErr_Occurred())) __PYX_ERR(0, 343, __pyx_L1_error)
+          __pyx_t_15 = __Pyx_PyLong_As_int(__pyx_t_13); if (unlikely((__pyx_t_15 == (int)-1) && PyErr_Occurred())) __PYX_ERR(0, 345, __pyx_L1_error)
           __Pyx_DECREF(__pyx_t_13); __pyx_t_13 = 0;
           __Pyx_XDECREF_SET(__pyx_v_item_id, __pyx_t_1);
           __pyx_t_1 = 0;
           __pyx_v_content_adjust = __pyx_t_15;
 
-          /* "thesis_pkg/core/sec/extraction_fast.pyx":349
+          /* "thesis_pkg/core/sec/extraction_fast.pyx":351
  *                         max_item=max_item_number,
  *                     )
  *                     if item_id is not None and item_id != "16":             # <<<<<<<<<<<<<<
@@ -21408,12 +21373,12 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
             __pyx_t_9 = __pyx_t_11;
             goto __pyx_L23_bool_binop_done;
           }
-          __pyx_t_11 = (__Pyx_PyUnicode_Equals(__pyx_v_item_id, __pyx_mstate_global->__pyx_kp_u_16, Py_NE)); if (unlikely((__pyx_t_11 < 0))) __PYX_ERR(0, 349, __pyx_L1_error)
+          __pyx_t_11 = (__Pyx_PyUnicode_Equals(__pyx_v_item_id, __pyx_mstate_global->__pyx_kp_u_16, Py_NE)); if (unlikely((__pyx_t_11 < 0))) __PYX_ERR(0, 351, __pyx_L1_error)
           __pyx_t_9 = __pyx_t_11;
           __pyx_L23_bool_binop_done:;
           if (__pyx_t_9) {
 
-            /* "thesis_pkg/core/sec/extraction_fast.pyx":350
+            /* "thesis_pkg/core/sec/extraction_fast.pyx":352
  *                     )
  *                     if item_id is not None and item_id != "16":
  *                         prefix = line[: item_match.start()]             # <<<<<<<<<<<<<<
@@ -21422,7 +21387,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
             if (unlikely(__pyx_v_line == Py_None)) {
               PyErr_SetString(PyExc_TypeError, "'NoneType' object is not subscriptable");
-              __PYX_ERR(0, 350, __pyx_L1_error)
+              __PYX_ERR(0, 352, __pyx_L1_error)
             }
             __pyx_t_13 = __pyx_v_item_match;
             __Pyx_INCREF(__pyx_t_13);
@@ -21431,34 +21396,34 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
               PyObject *__pyx_callargs[2] = {__pyx_t_13, NULL};
               __pyx_t_2 = __Pyx_PyObject_FastCallMethod((PyObject*)__pyx_mstate_global->__pyx_n_u_start, __pyx_callargs+__pyx_t_4, (1-__pyx_t_4) | (1*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
               __Pyx_XDECREF(__pyx_t_13); __pyx_t_13 = 0;
-              if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 350, __pyx_L1_error)
+              if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 352, __pyx_L1_error)
               __Pyx_GOTREF(__pyx_t_2);
             }
             __pyx_t_9 = (__pyx_t_2 == Py_None);
             if (__pyx_t_9) {
               __pyx_t_16 = PY_SSIZE_T_MAX;
             } else {
-              __pyx_t_17 = __Pyx_PyIndex_AsSsize_t(__pyx_t_2); if (unlikely((__pyx_t_17 == (Py_ssize_t)-1) && PyErr_Occurred())) __PYX_ERR(0, 350, __pyx_L1_error)
+              __pyx_t_17 = __Pyx_PyIndex_AsSsize_t(__pyx_t_2); if (unlikely((__pyx_t_17 == (Py_ssize_t)-1) && PyErr_Occurred())) __PYX_ERR(0, 352, __pyx_L1_error)
               __pyx_t_16 = __pyx_t_17;
             }
             __Pyx_DECREF(__pyx_t_2); __pyx_t_2 = 0;
-            __pyx_t_2 = __Pyx_PyUnicode_Substring(__pyx_v_line, 0, __pyx_t_16); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 350, __pyx_L1_error)
+            __pyx_t_2 = __Pyx_PyUnicode_Substring(__pyx_v_line, 0, __pyx_t_16); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 352, __pyx_L1_error)
             __Pyx_GOTREF(__pyx_t_2);
             __Pyx_XDECREF_SET(__pyx_v_prefix, ((PyObject*)__pyx_t_2));
             __pyx_t_2 = 0;
 
-            /* "thesis_pkg/core/sec/extraction_fast.pyx":351
+            /* "thesis_pkg/core/sec/extraction_fast.pyx":353
  *                     if item_id is not None and item_id != "16":
  *                         prefix = line[: item_match.start()]
  *                         if not _prefix_looks_like_cross_ref_fast(prefix):             # <<<<<<<<<<<<<<
  *                             suffix = line[item_match.end() : item_match.end() + 64]
  *                             if not re.search(r"(?i)^\s*[\(\[]?\s*continued\b", suffix):
 */
-            __pyx_t_9 = __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__prefix_looks_like_cross_ref_fast(__pyx_v_prefix); if (unlikely(__pyx_t_9 == ((int)-1) && PyErr_Occurred())) __PYX_ERR(0, 351, __pyx_L1_error)
+            __pyx_t_9 = __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__prefix_looks_like_cross_ref_fast(__pyx_v_prefix); if (unlikely(__pyx_t_9 == ((int)-1) && PyErr_Occurred())) __PYX_ERR(0, 353, __pyx_L1_error)
             __pyx_t_11 = (!__pyx_t_9);
             if (__pyx_t_11) {
 
-              /* "thesis_pkg/core/sec/extraction_fast.pyx":352
+              /* "thesis_pkg/core/sec/extraction_fast.pyx":354
  *                         prefix = line[: item_match.start()]
  *                         if not _prefix_looks_like_cross_ref_fast(prefix):
  *                             suffix = line[item_match.end() : item_match.end() + 64]             # <<<<<<<<<<<<<<
@@ -21467,7 +21432,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
               if (unlikely(__pyx_v_line == Py_None)) {
                 PyErr_SetString(PyExc_TypeError, "'NoneType' object is not subscriptable");
-                __PYX_ERR(0, 352, __pyx_L1_error)
+                __PYX_ERR(0, 354, __pyx_L1_error)
               }
               __pyx_t_13 = __pyx_v_item_match;
               __Pyx_INCREF(__pyx_t_13);
@@ -21476,14 +21441,14 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
                 PyObject *__pyx_callargs[2] = {__pyx_t_13, NULL};
                 __pyx_t_2 = __Pyx_PyObject_FastCallMethod((PyObject*)__pyx_mstate_global->__pyx_n_u_end, __pyx_callargs+__pyx_t_4, (1-__pyx_t_4) | (1*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
                 __Pyx_XDECREF(__pyx_t_13); __pyx_t_13 = 0;
-                if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 352, __pyx_L1_error)
+                if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 354, __pyx_L1_error)
                 __Pyx_GOTREF(__pyx_t_2);
               }
               __pyx_t_11 = (__pyx_t_2 == Py_None);
               if (__pyx_t_11) {
                 __pyx_t_16 = 0;
               } else {
-                __pyx_t_17 = __Pyx_PyIndex_AsSsize_t(__pyx_t_2); if (unlikely((__pyx_t_17 == (Py_ssize_t)-1) && PyErr_Occurred())) __PYX_ERR(0, 352, __pyx_L1_error)
+                __pyx_t_17 = __Pyx_PyIndex_AsSsize_t(__pyx_t_2); if (unlikely((__pyx_t_17 == (Py_ssize_t)-1) && PyErr_Occurred())) __PYX_ERR(0, 354, __pyx_L1_error)
                 __pyx_t_16 = __pyx_t_17;
               }
               __Pyx_DECREF(__pyx_t_2); __pyx_t_2 = 0;
@@ -21494,26 +21459,26 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
                 PyObject *__pyx_callargs[2] = {__pyx_t_13, NULL};
                 __pyx_t_2 = __Pyx_PyObject_FastCallMethod((PyObject*)__pyx_mstate_global->__pyx_n_u_end, __pyx_callargs+__pyx_t_4, (1-__pyx_t_4) | (1*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
                 __Pyx_XDECREF(__pyx_t_13); __pyx_t_13 = 0;
-                if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 352, __pyx_L1_error)
+                if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 354, __pyx_L1_error)
                 __Pyx_GOTREF(__pyx_t_2);
               }
-              __pyx_t_13 = __Pyx_PyLong_AddObjC(__pyx_t_2, __pyx_mstate_global->__pyx_int_64, 64, 0, 0); if (unlikely(!__pyx_t_13)) __PYX_ERR(0, 352, __pyx_L1_error)
+              __pyx_t_13 = __Pyx_PyLong_AddObjC(__pyx_t_2, __pyx_mstate_global->__pyx_int_64, 64, 0, 0); if (unlikely(!__pyx_t_13)) __PYX_ERR(0, 354, __pyx_L1_error)
               __Pyx_GOTREF(__pyx_t_13);
               __Pyx_DECREF(__pyx_t_2); __pyx_t_2 = 0;
               __pyx_t_11 = (__pyx_t_13 == Py_None);
               if (__pyx_t_11) {
                 __pyx_t_17 = PY_SSIZE_T_MAX;
               } else {
-                __pyx_t_18 = __Pyx_PyIndex_AsSsize_t(__pyx_t_13); if (unlikely((__pyx_t_18 == (Py_ssize_t)-1) && PyErr_Occurred())) __PYX_ERR(0, 352, __pyx_L1_error)
+                __pyx_t_18 = __Pyx_PyIndex_AsSsize_t(__pyx_t_13); if (unlikely((__pyx_t_18 == (Py_ssize_t)-1) && PyErr_Occurred())) __PYX_ERR(0, 354, __pyx_L1_error)
                 __pyx_t_17 = __pyx_t_18;
               }
               __Pyx_DECREF(__pyx_t_13); __pyx_t_13 = 0;
-              __pyx_t_13 = __Pyx_PyUnicode_Substring(__pyx_v_line, __pyx_t_16, __pyx_t_17); if (unlikely(!__pyx_t_13)) __PYX_ERR(0, 352, __pyx_L1_error)
+              __pyx_t_13 = __Pyx_PyUnicode_Substring(__pyx_v_line, __pyx_t_16, __pyx_t_17); if (unlikely(!__pyx_t_13)) __PYX_ERR(0, 354, __pyx_L1_error)
               __Pyx_GOTREF(__pyx_t_13);
               __Pyx_XDECREF_SET(__pyx_v_suffix, ((PyObject*)__pyx_t_13));
               __pyx_t_13 = 0;
 
-              /* "thesis_pkg/core/sec/extraction_fast.pyx":353
+              /* "thesis_pkg/core/sec/extraction_fast.pyx":355
  *                         if not _prefix_looks_like_cross_ref_fast(prefix):
  *                             suffix = line[item_match.end() : item_match.end() + 64]
  *                             if not re.search(r"(?i)^\s*[\(\[]?\s*continued\b", suffix):             # <<<<<<<<<<<<<<
@@ -21521,9 +21486,9 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
  *                                     r"(?i)^\s*[\(\[]\s*[a-z0-9]",
 */
               __pyx_t_2 = NULL;
-              __Pyx_GetModuleGlobalName(__pyx_t_1, __pyx_mstate_global->__pyx_n_u_re); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 353, __pyx_L1_error)
+              __Pyx_GetModuleGlobalName(__pyx_t_1, __pyx_mstate_global->__pyx_n_u_re); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 355, __pyx_L1_error)
               __Pyx_GOTREF(__pyx_t_1);
-              __pyx_t_3 = __Pyx_PyObject_GetAttrStr(__pyx_t_1, __pyx_mstate_global->__pyx_n_u_search); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 353, __pyx_L1_error)
+              __pyx_t_3 = __Pyx_PyObject_GetAttrStr(__pyx_t_1, __pyx_mstate_global->__pyx_n_u_search); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 355, __pyx_L1_error)
               __Pyx_GOTREF(__pyx_t_3);
               __Pyx_DECREF(__pyx_t_1); __pyx_t_1 = 0;
               __pyx_t_4 = 1;
@@ -21543,15 +21508,15 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
                 __pyx_t_13 = __Pyx_PyObject_FastCall((PyObject*)__pyx_t_3, __pyx_callargs+__pyx_t_4, (3-__pyx_t_4) | (__pyx_t_4*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
                 __Pyx_XDECREF(__pyx_t_2); __pyx_t_2 = 0;
                 __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
-                if (unlikely(!__pyx_t_13)) __PYX_ERR(0, 353, __pyx_L1_error)
+                if (unlikely(!__pyx_t_13)) __PYX_ERR(0, 355, __pyx_L1_error)
                 __Pyx_GOTREF(__pyx_t_13);
               }
-              __pyx_t_11 = __Pyx_PyObject_IsTrue(__pyx_t_13); if (unlikely((__pyx_t_11 < 0))) __PYX_ERR(0, 353, __pyx_L1_error)
+              __pyx_t_11 = __Pyx_PyObject_IsTrue(__pyx_t_13); if (unlikely((__pyx_t_11 < 0))) __PYX_ERR(0, 355, __pyx_L1_error)
               __Pyx_DECREF(__pyx_t_13); __pyx_t_13 = 0;
               __pyx_t_9 = (!__pyx_t_11);
               if (__pyx_t_9) {
 
-                /* "thesis_pkg/core/sec/extraction_fast.pyx":354
+                /* "thesis_pkg/core/sec/extraction_fast.pyx":356
  *                             suffix = line[item_match.end() : item_match.end() + 64]
  *                             if not re.search(r"(?i)^\s*[\(\[]?\s*continued\b", suffix):
  *                                 if not re.match(             # <<<<<<<<<<<<<<
@@ -21559,13 +21524,13 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
  *                                     suffix,
 */
                 __pyx_t_3 = NULL;
-                __Pyx_GetModuleGlobalName(__pyx_t_2, __pyx_mstate_global->__pyx_n_u_re); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 354, __pyx_L1_error)
+                __Pyx_GetModuleGlobalName(__pyx_t_2, __pyx_mstate_global->__pyx_n_u_re); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 356, __pyx_L1_error)
                 __Pyx_GOTREF(__pyx_t_2);
-                __pyx_t_1 = __Pyx_PyObject_GetAttrStr(__pyx_t_2, __pyx_mstate_global->__pyx_n_u_match); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 354, __pyx_L1_error)
+                __pyx_t_1 = __Pyx_PyObject_GetAttrStr(__pyx_t_2, __pyx_mstate_global->__pyx_n_u_match); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 356, __pyx_L1_error)
                 __Pyx_GOTREF(__pyx_t_1);
                 __Pyx_DECREF(__pyx_t_2); __pyx_t_2 = 0;
 
-                /* "thesis_pkg/core/sec/extraction_fast.pyx":356
+                /* "thesis_pkg/core/sec/extraction_fast.pyx":358
  *                                 if not re.match(
  *                                     r"(?i)^\s*[\(\[]\s*[a-z0-9]",
  *                                     suffix,             # <<<<<<<<<<<<<<
@@ -21589,23 +21554,23 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
                   __pyx_t_13 = __Pyx_PyObject_FastCall((PyObject*)__pyx_t_1, __pyx_callargs+__pyx_t_4, (3-__pyx_t_4) | (__pyx_t_4*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
                   __Pyx_XDECREF(__pyx_t_3); __pyx_t_3 = 0;
                   __Pyx_DECREF(__pyx_t_1); __pyx_t_1 = 0;
-                  if (unlikely(!__pyx_t_13)) __PYX_ERR(0, 354, __pyx_L1_error)
+                  if (unlikely(!__pyx_t_13)) __PYX_ERR(0, 356, __pyx_L1_error)
                   __Pyx_GOTREF(__pyx_t_13);
                 }
 
-                /* "thesis_pkg/core/sec/extraction_fast.pyx":354
+                /* "thesis_pkg/core/sec/extraction_fast.pyx":356
  *                             suffix = line[item_match.end() : item_match.end() + 64]
  *                             if not re.search(r"(?i)^\s*[\(\[]?\s*continued\b", suffix):
  *                                 if not re.match(             # <<<<<<<<<<<<<<
  *                                     r"(?i)^\s*[\(\[]\s*[a-z0-9]",
  *                                     suffix,
 */
-                __pyx_t_9 = __Pyx_PyObject_IsTrue(__pyx_t_13); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 354, __pyx_L1_error)
+                __pyx_t_9 = __Pyx_PyObject_IsTrue(__pyx_t_13); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 356, __pyx_L1_error)
                 __Pyx_DECREF(__pyx_t_13); __pyx_t_13 = 0;
                 __pyx_t_11 = (!__pyx_t_9);
                 if (__pyx_t_11) {
 
-                  /* "thesis_pkg/core/sec/extraction_fast.pyx":358
+                  /* "thesis_pkg/core/sec/extraction_fast.pyx":360
  *                                     suffix,
  *                                 ):
  *                                     is_toc_marker = TOC_MARKER_PATTERN.search(line) is not None             # <<<<<<<<<<<<<<
@@ -21613,9 +21578,9 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
  *                                     if has_item_hint and (i < 800 or is_toc_marker or line_in_toc_range):
 */
                   __pyx_t_1 = NULL;
-                  __Pyx_GetModuleGlobalName(__pyx_t_3, __pyx_mstate_global->__pyx_n_u_TOC_MARKER_PATTERN); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 358, __pyx_L1_error)
+                  __Pyx_GetModuleGlobalName(__pyx_t_3, __pyx_mstate_global->__pyx_n_u_TOC_MARKER_PATTERN); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 360, __pyx_L1_error)
                   __Pyx_GOTREF(__pyx_t_3);
-                  __pyx_t_2 = __Pyx_PyObject_GetAttrStr(__pyx_t_3, __pyx_mstate_global->__pyx_n_u_search); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 358, __pyx_L1_error)
+                  __pyx_t_2 = __Pyx_PyObject_GetAttrStr(__pyx_t_3, __pyx_mstate_global->__pyx_n_u_search); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 360, __pyx_L1_error)
                   __Pyx_GOTREF(__pyx_t_2);
                   __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
                   __pyx_t_4 = 1;
@@ -21635,14 +21600,14 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
                     __pyx_t_13 = __Pyx_PyObject_FastCall((PyObject*)__pyx_t_2, __pyx_callargs+__pyx_t_4, (2-__pyx_t_4) | (__pyx_t_4*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
                     __Pyx_XDECREF(__pyx_t_1); __pyx_t_1 = 0;
                     __Pyx_DECREF(__pyx_t_2); __pyx_t_2 = 0;
-                    if (unlikely(!__pyx_t_13)) __PYX_ERR(0, 358, __pyx_L1_error)
+                    if (unlikely(!__pyx_t_13)) __PYX_ERR(0, 360, __pyx_L1_error)
                     __Pyx_GOTREF(__pyx_t_13);
                   }
                   __pyx_t_11 = (__pyx_t_13 != Py_None);
                   __Pyx_DECREF(__pyx_t_13); __pyx_t_13 = 0;
                   __pyx_v_is_toc_marker = __pyx_t_11;
 
-                  /* "thesis_pkg/core/sec/extraction_fast.pyx":359
+                  /* "thesis_pkg/core/sec/extraction_fast.pyx":361
  *                                 ):
  *                                     is_toc_marker = TOC_MARKER_PATTERN.search(line) is not None
  *                                     item_word_count = 0             # <<<<<<<<<<<<<<
@@ -21651,7 +21616,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
                   __pyx_v_item_word_count = 0;
 
-                  /* "thesis_pkg/core/sec/extraction_fast.pyx":360
+                  /* "thesis_pkg/core/sec/extraction_fast.pyx":362
  *                                     is_toc_marker = TOC_MARKER_PATTERN.search(line) is not None
  *                                     item_word_count = 0
  *                                     if has_item_hint and (i < 800 or is_toc_marker or line_in_toc_range):             # <<<<<<<<<<<<<<
@@ -21678,7 +21643,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
                   __pyx_L29_bool_binop_done:;
                   if (__pyx_t_11) {
 
-                    /* "thesis_pkg/core/sec/extraction_fast.pyx":362
+                    /* "thesis_pkg/core/sec/extraction_fast.pyx":364
  *                                     if has_item_hint and (i < 800 or is_toc_marker or line_in_toc_range):
  *                                         item_word_count = len(
  *                                             ITEM_WORD_PATTERN.findall(line)             # <<<<<<<<<<<<<<
@@ -21686,9 +21651,9 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
  *                                     line_toc_like = _looks_like_toc_heading_line(lines, i)
 */
                     __pyx_t_2 = NULL;
-                    __Pyx_GetModuleGlobalName(__pyx_t_1, __pyx_mstate_global->__pyx_n_u_ITEM_WORD_PATTERN); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 362, __pyx_L1_error)
+                    __Pyx_GetModuleGlobalName(__pyx_t_1, __pyx_mstate_global->__pyx_n_u_ITEM_WORD_PATTERN); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 364, __pyx_L1_error)
                     __Pyx_GOTREF(__pyx_t_1);
-                    __pyx_t_3 = __Pyx_PyObject_GetAttrStr(__pyx_t_1, __pyx_mstate_global->__pyx_n_u_findall); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 362, __pyx_L1_error)
+                    __pyx_t_3 = __Pyx_PyObject_GetAttrStr(__pyx_t_1, __pyx_mstate_global->__pyx_n_u_findall); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 364, __pyx_L1_error)
                     __Pyx_GOTREF(__pyx_t_3);
                     __Pyx_DECREF(__pyx_t_1); __pyx_t_1 = 0;
                     __pyx_t_4 = 1;
@@ -21708,22 +21673,22 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
                       __pyx_t_13 = __Pyx_PyObject_FastCall((PyObject*)__pyx_t_3, __pyx_callargs+__pyx_t_4, (2-__pyx_t_4) | (__pyx_t_4*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
                       __Pyx_XDECREF(__pyx_t_2); __pyx_t_2 = 0;
                       __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
-                      if (unlikely(!__pyx_t_13)) __PYX_ERR(0, 362, __pyx_L1_error)
+                      if (unlikely(!__pyx_t_13)) __PYX_ERR(0, 364, __pyx_L1_error)
                       __Pyx_GOTREF(__pyx_t_13);
                     }
 
-                    /* "thesis_pkg/core/sec/extraction_fast.pyx":361
+                    /* "thesis_pkg/core/sec/extraction_fast.pyx":363
  *                                     item_word_count = 0
  *                                     if has_item_hint and (i < 800 or is_toc_marker or line_in_toc_range):
  *                                         item_word_count = len(             # <<<<<<<<<<<<<<
  *                                             ITEM_WORD_PATTERN.findall(line)
  *                                         )
 */
-                    __pyx_t_17 = PyObject_Length(__pyx_t_13); if (unlikely(__pyx_t_17 == ((Py_ssize_t)-1))) __PYX_ERR(0, 361, __pyx_L1_error)
+                    __pyx_t_17 = PyObject_Length(__pyx_t_13); if (unlikely(__pyx_t_17 == ((Py_ssize_t)-1))) __PYX_ERR(0, 363, __pyx_L1_error)
                     __Pyx_DECREF(__pyx_t_13); __pyx_t_13 = 0;
                     __pyx_v_item_word_count = __pyx_t_17;
 
-                    /* "thesis_pkg/core/sec/extraction_fast.pyx":360
+                    /* "thesis_pkg/core/sec/extraction_fast.pyx":362
  *                                     is_toc_marker = TOC_MARKER_PATTERN.search(line) is not None
  *                                     item_word_count = 0
  *                                     if has_item_hint and (i < 800 or is_toc_marker or line_in_toc_range):             # <<<<<<<<<<<<<<
@@ -21732,7 +21697,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
                   }
 
-                  /* "thesis_pkg/core/sec/extraction_fast.pyx":364
+                  /* "thesis_pkg/core/sec/extraction_fast.pyx":366
  *                                             ITEM_WORD_PATTERN.findall(line)
  *                                         )
  *                                     line_toc_like = _looks_like_toc_heading_line(lines, i)             # <<<<<<<<<<<<<<
@@ -21740,9 +21705,9 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
  *                                         item_word_count >= 3
 */
                   __pyx_t_3 = NULL;
-                  __Pyx_GetModuleGlobalName(__pyx_t_2, __pyx_mstate_global->__pyx_n_u_looks_like_toc_heading_line); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 364, __pyx_L1_error)
+                  __Pyx_GetModuleGlobalName(__pyx_t_2, __pyx_mstate_global->__pyx_n_u_looks_like_toc_heading_line); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 366, __pyx_L1_error)
                   __Pyx_GOTREF(__pyx_t_2);
-                  __pyx_t_1 = PyLong_FromSsize_t(__pyx_v_i); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 364, __pyx_L1_error)
+                  __pyx_t_1 = PyLong_FromSsize_t(__pyx_v_i); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 366, __pyx_L1_error)
                   __Pyx_GOTREF(__pyx_t_1);
                   __pyx_t_4 = 1;
                   #if CYTHON_UNPACK_METHODS
@@ -21762,14 +21727,14 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
                     __Pyx_XDECREF(__pyx_t_3); __pyx_t_3 = 0;
                     __Pyx_DECREF(__pyx_t_1); __pyx_t_1 = 0;
                     __Pyx_DECREF(__pyx_t_2); __pyx_t_2 = 0;
-                    if (unlikely(!__pyx_t_13)) __PYX_ERR(0, 364, __pyx_L1_error)
+                    if (unlikely(!__pyx_t_13)) __PYX_ERR(0, 366, __pyx_L1_error)
                     __Pyx_GOTREF(__pyx_t_13);
                   }
-                  __pyx_t_11 = __Pyx_PyObject_IsTrue(__pyx_t_13); if (unlikely((__pyx_t_11 == (int)-1) && PyErr_Occurred())) __PYX_ERR(0, 364, __pyx_L1_error)
+                  __pyx_t_11 = __Pyx_PyObject_IsTrue(__pyx_t_13); if (unlikely((__pyx_t_11 == (int)-1) && PyErr_Occurred())) __PYX_ERR(0, 366, __pyx_L1_error)
                   __Pyx_DECREF(__pyx_t_13); __pyx_t_13 = 0;
                   __pyx_v_line_toc_like = __pyx_t_11;
 
-                  /* "thesis_pkg/core/sec/extraction_fast.pyx":366
+                  /* "thesis_pkg/core/sec/extraction_fast.pyx":368
  *                                     line_toc_like = _looks_like_toc_heading_line(lines, i)
  *                                     if (
  *                                         item_word_count >= 3             # <<<<<<<<<<<<<<
@@ -21783,7 +21748,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
                     goto __pyx_L34_bool_binop_done;
                   }
 
-                  /* "thesis_pkg/core/sec/extraction_fast.pyx":367
+                  /* "thesis_pkg/core/sec/extraction_fast.pyx":369
  *                                     if (
  *                                         item_word_count >= 3
  *                                         and len(line) <= 5000             # <<<<<<<<<<<<<<
@@ -21792,9 +21757,9 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
                   if (unlikely(__pyx_v_line == Py_None)) {
                     PyErr_SetString(PyExc_TypeError, "object of type 'NoneType' has no len()");
-                    __PYX_ERR(0, 367, __pyx_L1_error)
+                    __PYX_ERR(0, 369, __pyx_L1_error)
                   }
-                  __pyx_t_17 = __Pyx_PyUnicode_GET_LENGTH(__pyx_v_line); if (unlikely(__pyx_t_17 == ((Py_ssize_t)-1))) __PYX_ERR(0, 367, __pyx_L1_error)
+                  __pyx_t_17 = __Pyx_PyUnicode_GET_LENGTH(__pyx_v_line); if (unlikely(__pyx_t_17 == ((Py_ssize_t)-1))) __PYX_ERR(0, 369, __pyx_L1_error)
                   __pyx_t_9 = (__pyx_t_17 <= 0x1388);
                   if (__pyx_t_9) {
                   } else {
@@ -21802,7 +21767,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
                     goto __pyx_L34_bool_binop_done;
                   }
 
-                  /* "thesis_pkg/core/sec/extraction_fast.pyx":368
+                  /* "thesis_pkg/core/sec/extraction_fast.pyx":370
  *                                         item_word_count >= 3
  *                                         and len(line) <= 5000
  *                                         and (i < 800 or is_toc_marker or line_in_toc_range)             # <<<<<<<<<<<<<<
@@ -21823,7 +21788,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
                   __pyx_t_11 = __pyx_v_line_in_toc_range;
                   __pyx_L34_bool_binop_done:;
 
-                  /* "thesis_pkg/core/sec/extraction_fast.pyx":365
+                  /* "thesis_pkg/core/sec/extraction_fast.pyx":367
  *                                         )
  *                                     line_toc_like = _looks_like_toc_heading_line(lines, i)
  *                                     if (             # <<<<<<<<<<<<<<
@@ -21832,7 +21797,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
                   if (__pyx_t_11) {
 
-                    /* "thesis_pkg/core/sec/extraction_fast.pyx":370
+                    /* "thesis_pkg/core/sec/extraction_fast.pyx":372
  *                                         and (i < 800 or is_toc_marker or line_in_toc_range)
  *                                     ):
  *                                         line_toc_like = True             # <<<<<<<<<<<<<<
@@ -21841,7 +21806,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
                     __pyx_v_line_toc_like = 1;
 
-                    /* "thesis_pkg/core/sec/extraction_fast.pyx":365
+                    /* "thesis_pkg/core/sec/extraction_fast.pyx":367
  *                                         )
  *                                     line_toc_like = _looks_like_toc_heading_line(lines, i)
  *                                     if (             # <<<<<<<<<<<<<<
@@ -21850,7 +21815,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
                   }
 
-                  /* "thesis_pkg/core/sec/extraction_fast.pyx":372
+                  /* "thesis_pkg/core/sec/extraction_fast.pyx":374
  *                                         line_toc_like = True
  *                                     if (
  *                                         is_toc_marker             # <<<<<<<<<<<<<<
@@ -21863,7 +21828,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
                     goto __pyx_L40_bool_binop_done;
                   }
 
-                  /* "thesis_pkg/core/sec/extraction_fast.pyx":373
+                  /* "thesis_pkg/core/sec/extraction_fast.pyx":375
  *                                     if (
  *                                         is_toc_marker
  *                                         and item_word_count >= 1             # <<<<<<<<<<<<<<
@@ -21877,7 +21842,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
                     goto __pyx_L40_bool_binop_done;
                   }
 
-                  /* "thesis_pkg/core/sec/extraction_fast.pyx":374
+                  /* "thesis_pkg/core/sec/extraction_fast.pyx":376
  *                                         is_toc_marker
  *                                         and item_word_count >= 1
  *                                         and len(line) <= 8000             # <<<<<<<<<<<<<<
@@ -21886,14 +21851,14 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
                   if (unlikely(__pyx_v_line == Py_None)) {
                     PyErr_SetString(PyExc_TypeError, "object of type 'NoneType' has no len()");
-                    __PYX_ERR(0, 374, __pyx_L1_error)
+                    __PYX_ERR(0, 376, __pyx_L1_error)
                   }
-                  __pyx_t_17 = __Pyx_PyUnicode_GET_LENGTH(__pyx_v_line); if (unlikely(__pyx_t_17 == ((Py_ssize_t)-1))) __PYX_ERR(0, 374, __pyx_L1_error)
+                  __pyx_t_17 = __Pyx_PyUnicode_GET_LENGTH(__pyx_v_line); if (unlikely(__pyx_t_17 == ((Py_ssize_t)-1))) __PYX_ERR(0, 376, __pyx_L1_error)
                   __pyx_t_9 = (__pyx_t_17 <= 0x1F40);
                   __pyx_t_11 = __pyx_t_9;
                   __pyx_L40_bool_binop_done:;
 
-                  /* "thesis_pkg/core/sec/extraction_fast.pyx":371
+                  /* "thesis_pkg/core/sec/extraction_fast.pyx":373
  *                                     ):
  *                                         line_toc_like = True
  *                                     if (             # <<<<<<<<<<<<<<
@@ -21902,7 +21867,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
                   if (__pyx_t_11) {
 
-                    /* "thesis_pkg/core/sec/extraction_fast.pyx":376
+                    /* "thesis_pkg/core/sec/extraction_fast.pyx":378
  *                                         and len(line) <= 8000
  *                                     ):
  *                                         line_toc_like = True             # <<<<<<<<<<<<<<
@@ -21911,7 +21876,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
                     __pyx_v_line_toc_like = 1;
 
-                    /* "thesis_pkg/core/sec/extraction_fast.pyx":371
+                    /* "thesis_pkg/core/sec/extraction_fast.pyx":373
  *                                     ):
  *                                         line_toc_like = True
  *                                     if (             # <<<<<<<<<<<<<<
@@ -21920,7 +21885,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
                   }
 
-                  /* "thesis_pkg/core/sec/extraction_fast.pyx":377
+                  /* "thesis_pkg/core/sec/extraction_fast.pyx":379
  *                                     ):
  *                                         line_toc_like = True
  *                                     content_after = False             # <<<<<<<<<<<<<<
@@ -21929,7 +21894,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
                   __pyx_v_content_after = 0;
 
-                  /* "thesis_pkg/core/sec/extraction_fast.pyx":378
+                  /* "thesis_pkg/core/sec/extraction_fast.pyx":380
  *                                         line_toc_like = True
  *                                     content_after = False
  *                                     if line_in_toc_range or toc_window_flags[i]:             # <<<<<<<<<<<<<<
@@ -21943,14 +21908,14 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
                   }
                   if (unlikely(__pyx_v_toc_window_flags == Py_None)) {
                     PyErr_SetString(PyExc_TypeError, "'NoneType' object is not subscriptable");
-                    __PYX_ERR(0, 378, __pyx_L1_error)
+                    __PYX_ERR(0, 380, __pyx_L1_error)
                   }
-                  __pyx_t_9 = __Pyx_PyObject_IsTrue(__Pyx_PyList_GET_ITEM(__pyx_v_toc_window_flags, __pyx_v_i)); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 378, __pyx_L1_error)
+                  __pyx_t_9 = __Pyx_PyObject_IsTrue(__Pyx_PyList_GET_ITEM(__pyx_v_toc_window_flags, __pyx_v_i)); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 380, __pyx_L1_error)
                   __pyx_t_11 = __pyx_t_9;
                   __pyx_L44_bool_binop_done:;
                   if (__pyx_t_11) {
 
-                    /* "thesis_pkg/core/sec/extraction_fast.pyx":379
+                    /* "thesis_pkg/core/sec/extraction_fast.pyx":381
  *                                     content_after = False
  *                                     if line_in_toc_range or toc_window_flags[i]:
  *                                         content_after = _has_content_after(             # <<<<<<<<<<<<<<
@@ -21958,20 +21923,20 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
  *                                             i,
 */
                     __pyx_t_2 = NULL;
-                    __Pyx_GetModuleGlobalName(__pyx_t_1, __pyx_mstate_global->__pyx_n_u_has_content_after); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 379, __pyx_L1_error)
+                    __Pyx_GetModuleGlobalName(__pyx_t_1, __pyx_mstate_global->__pyx_n_u_has_content_after); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 381, __pyx_L1_error)
                     __Pyx_GOTREF(__pyx_t_1);
 
-                    /* "thesis_pkg/core/sec/extraction_fast.pyx":381
+                    /* "thesis_pkg/core/sec/extraction_fast.pyx":383
  *                                         content_after = _has_content_after(
  *                                             lines,
  *                                             i,             # <<<<<<<<<<<<<<
  *                                             toc_cache=toc_cache,
  *                                             toc_window_flags=toc_window_flags,
 */
-                    __pyx_t_3 = PyLong_FromSsize_t(__pyx_v_i); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 381, __pyx_L1_error)
+                    __pyx_t_3 = PyLong_FromSsize_t(__pyx_v_i); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 383, __pyx_L1_error)
                     __Pyx_GOTREF(__pyx_t_3);
 
-                    /* "thesis_pkg/core/sec/extraction_fast.pyx":383
+                    /* "thesis_pkg/core/sec/extraction_fast.pyx":385
  *                                             i,
  *                                             toc_cache=toc_cache,
  *                                             toc_window_flags=toc_window_flags,             # <<<<<<<<<<<<<<
@@ -21992,31 +21957,31 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
                     #endif
                     {
                       PyObject *__pyx_callargs[3 + ((CYTHON_VECTORCALL) ? 2 : 0)] = {__pyx_t_2, __pyx_v_lines, __pyx_t_3};
-                      __pyx_t_12 = __Pyx_MakeVectorcallBuilderKwds(2); if (unlikely(!__pyx_t_12)) __PYX_ERR(0, 379, __pyx_L1_error)
+                      __pyx_t_12 = __Pyx_MakeVectorcallBuilderKwds(2); if (unlikely(!__pyx_t_12)) __PYX_ERR(0, 381, __pyx_L1_error)
                       __Pyx_GOTREF(__pyx_t_12);
-                      if (__Pyx_VectorcallBuilder_AddArg(__pyx_mstate_global->__pyx_n_u_toc_cache, __pyx_v_toc_cache, __pyx_t_12, __pyx_callargs+3, 0) < (0)) __PYX_ERR(0, 379, __pyx_L1_error)
-                      if (__Pyx_VectorcallBuilder_AddArg(__pyx_mstate_global->__pyx_n_u_toc_window_flags, __pyx_v_toc_window_flags, __pyx_t_12, __pyx_callargs+3, 1) < (0)) __PYX_ERR(0, 379, __pyx_L1_error)
+                      if (__Pyx_VectorcallBuilder_AddArg(__pyx_mstate_global->__pyx_n_u_toc_cache, __pyx_v_toc_cache, __pyx_t_12, __pyx_callargs+3, 0) < (0)) __PYX_ERR(0, 381, __pyx_L1_error)
+                      if (__Pyx_VectorcallBuilder_AddArg(__pyx_mstate_global->__pyx_n_u_toc_window_flags, __pyx_v_toc_window_flags, __pyx_t_12, __pyx_callargs+3, 1) < (0)) __PYX_ERR(0, 381, __pyx_L1_error)
                       __pyx_t_13 = __Pyx_Object_Vectorcall_CallFromBuilder((PyObject*)__pyx_t_1, __pyx_callargs+__pyx_t_4, (3-__pyx_t_4) | (__pyx_t_4*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET), __pyx_t_12);
                       __Pyx_XDECREF(__pyx_t_2); __pyx_t_2 = 0;
                       __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
                       __Pyx_DECREF(__pyx_t_12); __pyx_t_12 = 0;
                       __Pyx_DECREF(__pyx_t_1); __pyx_t_1 = 0;
-                      if (unlikely(!__pyx_t_13)) __PYX_ERR(0, 379, __pyx_L1_error)
+                      if (unlikely(!__pyx_t_13)) __PYX_ERR(0, 381, __pyx_L1_error)
                       __Pyx_GOTREF(__pyx_t_13);
                     }
 
-                    /* "thesis_pkg/core/sec/extraction_fast.pyx":379
+                    /* "thesis_pkg/core/sec/extraction_fast.pyx":381
  *                                     content_after = False
  *                                     if line_in_toc_range or toc_window_flags[i]:
  *                                         content_after = _has_content_after(             # <<<<<<<<<<<<<<
  *                                             lines,
  *                                             i,
 */
-                    __pyx_t_11 = __Pyx_PyObject_IsTrue(__pyx_t_13); if (unlikely((__pyx_t_11 == (int)-1) && PyErr_Occurred())) __PYX_ERR(0, 379, __pyx_L1_error)
+                    __pyx_t_11 = __Pyx_PyObject_IsTrue(__pyx_t_13); if (unlikely((__pyx_t_11 == (int)-1) && PyErr_Occurred())) __PYX_ERR(0, 381, __pyx_L1_error)
                     __Pyx_DECREF(__pyx_t_13); __pyx_t_13 = 0;
                     __pyx_v_content_after = __pyx_t_11;
 
-                    /* "thesis_pkg/core/sec/extraction_fast.pyx":378
+                    /* "thesis_pkg/core/sec/extraction_fast.pyx":380
  *                                         line_toc_like = True
  *                                     content_after = False
  *                                     if line_in_toc_range or toc_window_flags[i]:             # <<<<<<<<<<<<<<
@@ -22025,7 +21990,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
                   }
 
-                  /* "thesis_pkg/core/sec/extraction_fast.pyx":385
+                  /* "thesis_pkg/core/sec/extraction_fast.pyx":387
  *                                             toc_window_flags=toc_window_flags,
  *                                         )
  *                                     toc_window_like = False             # <<<<<<<<<<<<<<
@@ -22034,7 +21999,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
                   __pyx_v_toc_window_like = 0;
 
-                  /* "thesis_pkg/core/sec/extraction_fast.pyx":386
+                  /* "thesis_pkg/core/sec/extraction_fast.pyx":388
  *                                         )
  *                                     toc_window_like = False
  *                                     if not line_toc_like:             # <<<<<<<<<<<<<<
@@ -22044,7 +22009,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
                   __pyx_t_11 = (!__pyx_v_line_toc_like);
                   if (__pyx_t_11) {
 
-                    /* "thesis_pkg/core/sec/extraction_fast.pyx":387
+                    /* "thesis_pkg/core/sec/extraction_fast.pyx":389
  *                                     toc_window_like = False
  *                                     if not line_toc_like:
  *                                         if embedded_headings._toc_candidate_line(line):             # <<<<<<<<<<<<<<
@@ -22052,9 +22017,9 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
  *                                         elif toc_window_flags[i] and not content_after:
 */
                     __pyx_t_1 = NULL;
-                    __Pyx_GetModuleGlobalName(__pyx_t_12, __pyx_mstate_global->__pyx_n_u_embedded_headings); if (unlikely(!__pyx_t_12)) __PYX_ERR(0, 387, __pyx_L1_error)
+                    __Pyx_GetModuleGlobalName(__pyx_t_12, __pyx_mstate_global->__pyx_n_u_embedded_headings); if (unlikely(!__pyx_t_12)) __PYX_ERR(0, 389, __pyx_L1_error)
                     __Pyx_GOTREF(__pyx_t_12);
-                    __pyx_t_3 = __Pyx_PyObject_GetAttrStr(__pyx_t_12, __pyx_mstate_global->__pyx_n_u_toc_candidate_line); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 387, __pyx_L1_error)
+                    __pyx_t_3 = __Pyx_PyObject_GetAttrStr(__pyx_t_12, __pyx_mstate_global->__pyx_n_u_toc_candidate_line); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 389, __pyx_L1_error)
                     __Pyx_GOTREF(__pyx_t_3);
                     __Pyx_DECREF(__pyx_t_12); __pyx_t_12 = 0;
                     __pyx_t_4 = 1;
@@ -22074,14 +22039,14 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
                       __pyx_t_13 = __Pyx_PyObject_FastCall((PyObject*)__pyx_t_3, __pyx_callargs+__pyx_t_4, (2-__pyx_t_4) | (__pyx_t_4*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
                       __Pyx_XDECREF(__pyx_t_1); __pyx_t_1 = 0;
                       __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
-                      if (unlikely(!__pyx_t_13)) __PYX_ERR(0, 387, __pyx_L1_error)
+                      if (unlikely(!__pyx_t_13)) __PYX_ERR(0, 389, __pyx_L1_error)
                       __Pyx_GOTREF(__pyx_t_13);
                     }
-                    __pyx_t_11 = __Pyx_PyObject_IsTrue(__pyx_t_13); if (unlikely((__pyx_t_11 < 0))) __PYX_ERR(0, 387, __pyx_L1_error)
+                    __pyx_t_11 = __Pyx_PyObject_IsTrue(__pyx_t_13); if (unlikely((__pyx_t_11 < 0))) __PYX_ERR(0, 389, __pyx_L1_error)
                     __Pyx_DECREF(__pyx_t_13); __pyx_t_13 = 0;
                     if (__pyx_t_11) {
 
-                      /* "thesis_pkg/core/sec/extraction_fast.pyx":388
+                      /* "thesis_pkg/core/sec/extraction_fast.pyx":390
  *                                     if not line_toc_like:
  *                                         if embedded_headings._toc_candidate_line(line):
  *                                             line_toc_like = True             # <<<<<<<<<<<<<<
@@ -22090,7 +22055,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
                       __pyx_v_line_toc_like = 1;
 
-                      /* "thesis_pkg/core/sec/extraction_fast.pyx":387
+                      /* "thesis_pkg/core/sec/extraction_fast.pyx":389
  *                                     toc_window_like = False
  *                                     if not line_toc_like:
  *                                         if embedded_headings._toc_candidate_line(line):             # <<<<<<<<<<<<<<
@@ -22100,7 +22065,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
                       goto __pyx_L47;
                     }
 
-                    /* "thesis_pkg/core/sec/extraction_fast.pyx":389
+                    /* "thesis_pkg/core/sec/extraction_fast.pyx":391
  *                                         if embedded_headings._toc_candidate_line(line):
  *                                             line_toc_like = True
  *                                         elif toc_window_flags[i] and not content_after:             # <<<<<<<<<<<<<<
@@ -22109,9 +22074,9 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
                     if (unlikely(__pyx_v_toc_window_flags == Py_None)) {
                       PyErr_SetString(PyExc_TypeError, "'NoneType' object is not subscriptable");
-                      __PYX_ERR(0, 389, __pyx_L1_error)
+                      __PYX_ERR(0, 391, __pyx_L1_error)
                     }
-                    __pyx_t_9 = __Pyx_PyObject_IsTrue(__Pyx_PyList_GET_ITEM(__pyx_v_toc_window_flags, __pyx_v_i)); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 389, __pyx_L1_error)
+                    __pyx_t_9 = __Pyx_PyObject_IsTrue(__Pyx_PyList_GET_ITEM(__pyx_v_toc_window_flags, __pyx_v_i)); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 391, __pyx_L1_error)
                     if (__pyx_t_9) {
                     } else {
                       __pyx_t_11 = __pyx_t_9;
@@ -22122,7 +22087,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
                     __pyx_L48_bool_binop_done:;
                     if (__pyx_t_11) {
 
-                      /* "thesis_pkg/core/sec/extraction_fast.pyx":391
+                      /* "thesis_pkg/core/sec/extraction_fast.pyx":393
  *                                         elif toc_window_flags[i] and not content_after:
  *                                             if not (
  *                                                 scan_sparse_layout and len(line) > 2000             # <<<<<<<<<<<<<<
@@ -22136,14 +22101,14 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
                       }
                       if (unlikely(__pyx_v_line == Py_None)) {
                         PyErr_SetString(PyExc_TypeError, "object of type 'NoneType' has no len()");
-                        __PYX_ERR(0, 391, __pyx_L1_error)
+                        __PYX_ERR(0, 393, __pyx_L1_error)
                       }
-                      __pyx_t_17 = __Pyx_PyUnicode_GET_LENGTH(__pyx_v_line); if (unlikely(__pyx_t_17 == ((Py_ssize_t)-1))) __PYX_ERR(0, 391, __pyx_L1_error)
+                      __pyx_t_17 = __Pyx_PyUnicode_GET_LENGTH(__pyx_v_line); if (unlikely(__pyx_t_17 == ((Py_ssize_t)-1))) __PYX_ERR(0, 393, __pyx_L1_error)
                       __pyx_t_9 = (__pyx_t_17 > 0x7D0);
                       __pyx_t_11 = __pyx_t_9;
                       __pyx_L51_bool_binop_done:;
 
-                      /* "thesis_pkg/core/sec/extraction_fast.pyx":390
+                      /* "thesis_pkg/core/sec/extraction_fast.pyx":392
  *                                             line_toc_like = True
  *                                         elif toc_window_flags[i] and not content_after:
  *                                             if not (             # <<<<<<<<<<<<<<
@@ -22153,7 +22118,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
                       __pyx_t_9 = (!__pyx_t_11);
                       if (__pyx_t_9) {
 
-                        /* "thesis_pkg/core/sec/extraction_fast.pyx":393
+                        /* "thesis_pkg/core/sec/extraction_fast.pyx":395
  *                                                 scan_sparse_layout and len(line) > 2000
  *                                             ):
  *                                                 line_toc_like = True             # <<<<<<<<<<<<<<
@@ -22162,7 +22127,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
                         __pyx_v_line_toc_like = 1;
 
-                        /* "thesis_pkg/core/sec/extraction_fast.pyx":394
+                        /* "thesis_pkg/core/sec/extraction_fast.pyx":396
  *                                             ):
  *                                                 line_toc_like = True
  *                                                 toc_window_like = True             # <<<<<<<<<<<<<<
@@ -22171,7 +22136,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
                         __pyx_v_toc_window_like = 1;
 
-                        /* "thesis_pkg/core/sec/extraction_fast.pyx":390
+                        /* "thesis_pkg/core/sec/extraction_fast.pyx":392
  *                                             line_toc_like = True
  *                                         elif toc_window_flags[i] and not content_after:
  *                                             if not (             # <<<<<<<<<<<<<<
@@ -22180,7 +22145,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
                       }
 
-                      /* "thesis_pkg/core/sec/extraction_fast.pyx":389
+                      /* "thesis_pkg/core/sec/extraction_fast.pyx":391
  *                                         if embedded_headings._toc_candidate_line(line):
  *                                             line_toc_like = True
  *                                         elif toc_window_flags[i] and not content_after:             # <<<<<<<<<<<<<<
@@ -22190,7 +22155,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
                     }
                     __pyx_L47:;
 
-                    /* "thesis_pkg/core/sec/extraction_fast.pyx":386
+                    /* "thesis_pkg/core/sec/extraction_fast.pyx":388
  *                                         )
  *                                     toc_window_like = False
  *                                     if not line_toc_like:             # <<<<<<<<<<<<<<
@@ -22199,7 +22164,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
                   }
 
-                  /* "thesis_pkg/core/sec/extraction_fast.pyx":395
+                  /* "thesis_pkg/core/sec/extraction_fast.pyx":397
  *                                                 line_toc_like = True
  *                                                 toc_window_like = True
  *                                     compound_line = _line_has_compound_items(line)             # <<<<<<<<<<<<<<
@@ -22207,7 +22172,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
  *                                         item_id, line, item_match
 */
                   __pyx_t_3 = NULL;
-                  __Pyx_GetModuleGlobalName(__pyx_t_1, __pyx_mstate_global->__pyx_n_u_line_has_compound_items); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 395, __pyx_L1_error)
+                  __Pyx_GetModuleGlobalName(__pyx_t_1, __pyx_mstate_global->__pyx_n_u_line_has_compound_items); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 397, __pyx_L1_error)
                   __Pyx_GOTREF(__pyx_t_1);
                   __pyx_t_4 = 1;
                   #if CYTHON_UNPACK_METHODS
@@ -22226,14 +22191,14 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
                     __pyx_t_13 = __Pyx_PyObject_FastCall((PyObject*)__pyx_t_1, __pyx_callargs+__pyx_t_4, (2-__pyx_t_4) | (__pyx_t_4*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
                     __Pyx_XDECREF(__pyx_t_3); __pyx_t_3 = 0;
                     __Pyx_DECREF(__pyx_t_1); __pyx_t_1 = 0;
-                    if (unlikely(!__pyx_t_13)) __PYX_ERR(0, 395, __pyx_L1_error)
+                    if (unlikely(!__pyx_t_13)) __PYX_ERR(0, 397, __pyx_L1_error)
                     __Pyx_GOTREF(__pyx_t_13);
                   }
-                  __pyx_t_9 = __Pyx_PyObject_IsTrue(__pyx_t_13); if (unlikely((__pyx_t_9 == (int)-1) && PyErr_Occurred())) __PYX_ERR(0, 395, __pyx_L1_error)
+                  __pyx_t_9 = __Pyx_PyObject_IsTrue(__pyx_t_13); if (unlikely((__pyx_t_9 == (int)-1) && PyErr_Occurred())) __PYX_ERR(0, 397, __pyx_L1_error)
                   __Pyx_DECREF(__pyx_t_13); __pyx_t_13 = 0;
                   __pyx_v_compound_line = __pyx_t_9;
 
-                  /* "thesis_pkg/core/sec/extraction_fast.pyx":396
+                  /* "thesis_pkg/core/sec/extraction_fast.pyx":398
  *                                                 toc_window_like = True
  *                                     compound_line = _line_has_compound_items(line)
  *                                     title_match = is_10k and _heading_title_matches_item(             # <<<<<<<<<<<<<<
@@ -22246,10 +22211,10 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
                     goto __pyx_L53_bool_binop_done;
                   }
                   __pyx_t_1 = NULL;
-                  __Pyx_GetModuleGlobalName(__pyx_t_3, __pyx_mstate_global->__pyx_n_u_heading_title_matches_item); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 396, __pyx_L1_error)
+                  __Pyx_GetModuleGlobalName(__pyx_t_3, __pyx_mstate_global->__pyx_n_u_heading_title_matches_item); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 398, __pyx_L1_error)
                   __Pyx_GOTREF(__pyx_t_3);
 
-                  /* "thesis_pkg/core/sec/extraction_fast.pyx":397
+                  /* "thesis_pkg/core/sec/extraction_fast.pyx":399
  *                                     compound_line = _line_has_compound_items(line)
  *                                     title_match = is_10k and _heading_title_matches_item(
  *                                         item_id, line, item_match             # <<<<<<<<<<<<<<
@@ -22273,37 +22238,37 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
                     __pyx_t_13 = __Pyx_PyObject_FastCall((PyObject*)__pyx_t_3, __pyx_callargs+__pyx_t_4, (4-__pyx_t_4) | (__pyx_t_4*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
                     __Pyx_XDECREF(__pyx_t_1); __pyx_t_1 = 0;
                     __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
-                    if (unlikely(!__pyx_t_13)) __PYX_ERR(0, 396, __pyx_L1_error)
+                    if (unlikely(!__pyx_t_13)) __PYX_ERR(0, 398, __pyx_L1_error)
                     __Pyx_GOTREF(__pyx_t_13);
                   }
 
-                  /* "thesis_pkg/core/sec/extraction_fast.pyx":396
+                  /* "thesis_pkg/core/sec/extraction_fast.pyx":398
  *                                                 toc_window_like = True
  *                                     compound_line = _line_has_compound_items(line)
  *                                     title_match = is_10k and _heading_title_matches_item(             # <<<<<<<<<<<<<<
  *                                         item_id, line, item_match
  *                                     )
 */
-                  __pyx_t_11 = __Pyx_PyObject_IsTrue(__pyx_t_13); if (unlikely((__pyx_t_11 < 0))) __PYX_ERR(0, 396, __pyx_L1_error)
+                  __pyx_t_11 = __Pyx_PyObject_IsTrue(__pyx_t_13); if (unlikely((__pyx_t_11 < 0))) __PYX_ERR(0, 398, __pyx_L1_error)
                   __Pyx_DECREF(__pyx_t_13); __pyx_t_13 = 0;
                   __pyx_t_9 = __pyx_t_11;
                   __pyx_L53_bool_binop_done:;
                   __pyx_v_title_match = __pyx_t_9;
 
-                  /* "thesis_pkg/core/sec/extraction_fast.pyx":399
+                  /* "thesis_pkg/core/sec/extraction_fast.pyx":401
  *                                         item_id, line, item_match
  *                                     )
  *                                     confidence = HEADING_CONF_HIGH             # <<<<<<<<<<<<<<
  *                                     if (
  *                                         is_10k
 */
-                  __Pyx_GetModuleGlobalName(__pyx_t_13, __pyx_mstate_global->__pyx_n_u_HEADING_CONF_HIGH); if (unlikely(!__pyx_t_13)) __PYX_ERR(0, 399, __pyx_L1_error)
+                  __Pyx_GetModuleGlobalName(__pyx_t_13, __pyx_mstate_global->__pyx_n_u_HEADING_CONF_HIGH); if (unlikely(!__pyx_t_13)) __PYX_ERR(0, 401, __pyx_L1_error)
                   __Pyx_GOTREF(__pyx_t_13);
-                  __pyx_t_15 = __Pyx_PyLong_As_int(__pyx_t_13); if (unlikely((__pyx_t_15 == (int)-1) && PyErr_Occurred())) __PYX_ERR(0, 399, __pyx_L1_error)
+                  __pyx_t_15 = __Pyx_PyLong_As_int(__pyx_t_13); if (unlikely((__pyx_t_15 == (int)-1) && PyErr_Occurred())) __PYX_ERR(0, 401, __pyx_L1_error)
                   __Pyx_DECREF(__pyx_t_13); __pyx_t_13 = 0;
                   __pyx_v_confidence = __pyx_t_15;
 
-                  /* "thesis_pkg/core/sec/extraction_fast.pyx":401
+                  /* "thesis_pkg/core/sec/extraction_fast.pyx":403
  *                                     confidence = HEADING_CONF_HIGH
  *                                     if (
  *                                         is_10k             # <<<<<<<<<<<<<<
@@ -22316,7 +22281,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
                     goto __pyx_L56_bool_binop_done;
                   }
 
-                  /* "thesis_pkg/core/sec/extraction_fast.pyx":402
+                  /* "thesis_pkg/core/sec/extraction_fast.pyx":404
  *                                     if (
  *                                         is_10k
  *                                         and not title_match             # <<<<<<<<<<<<<<
@@ -22330,7 +22295,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
                     goto __pyx_L56_bool_binop_done;
                   }
 
-                  /* "thesis_pkg/core/sec/extraction_fast.pyx":403
+                  /* "thesis_pkg/core/sec/extraction_fast.pyx":405
  *                                         is_10k
  *                                         and not title_match
  *                                         and _heading_suffix_looks_like_prose(             # <<<<<<<<<<<<<<
@@ -22338,10 +22303,10 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
  *                                         )
 */
                   __pyx_t_3 = NULL;
-                  __Pyx_GetModuleGlobalName(__pyx_t_1, __pyx_mstate_global->__pyx_n_u_heading_suffix_looks_like_prose); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 403, __pyx_L1_error)
+                  __Pyx_GetModuleGlobalName(__pyx_t_1, __pyx_mstate_global->__pyx_n_u_heading_suffix_looks_like_prose); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 405, __pyx_L1_error)
                   __Pyx_GOTREF(__pyx_t_1);
 
-                  /* "thesis_pkg/core/sec/extraction_fast.pyx":404
+                  /* "thesis_pkg/core/sec/extraction_fast.pyx":406
  *                                         and not title_match
  *                                         and _heading_suffix_looks_like_prose(
  *                                             line[item_match.end() :]             # <<<<<<<<<<<<<<
@@ -22350,7 +22315,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
                   if (unlikely(__pyx_v_line == Py_None)) {
                     PyErr_SetString(PyExc_TypeError, "'NoneType' object is not subscriptable");
-                    __PYX_ERR(0, 404, __pyx_L1_error)
+                    __PYX_ERR(0, 406, __pyx_L1_error)
                   }
                   __pyx_t_2 = __pyx_v_item_match;
                   __Pyx_INCREF(__pyx_t_2);
@@ -22359,18 +22324,18 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
                     PyObject *__pyx_callargs[2] = {__pyx_t_2, NULL};
                     __pyx_t_12 = __Pyx_PyObject_FastCallMethod((PyObject*)__pyx_mstate_global->__pyx_n_u_end, __pyx_callargs+__pyx_t_4, (1-__pyx_t_4) | (1*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
                     __Pyx_XDECREF(__pyx_t_2); __pyx_t_2 = 0;
-                    if (unlikely(!__pyx_t_12)) __PYX_ERR(0, 404, __pyx_L1_error)
+                    if (unlikely(!__pyx_t_12)) __PYX_ERR(0, 406, __pyx_L1_error)
                     __Pyx_GOTREF(__pyx_t_12);
                   }
                   __pyx_t_11 = (__pyx_t_12 == Py_None);
                   if (__pyx_t_11) {
                     __pyx_t_17 = 0;
                   } else {
-                    __pyx_t_16 = __Pyx_PyIndex_AsSsize_t(__pyx_t_12); if (unlikely((__pyx_t_16 == (Py_ssize_t)-1) && PyErr_Occurred())) __PYX_ERR(0, 404, __pyx_L1_error)
+                    __pyx_t_16 = __Pyx_PyIndex_AsSsize_t(__pyx_t_12); if (unlikely((__pyx_t_16 == (Py_ssize_t)-1) && PyErr_Occurred())) __PYX_ERR(0, 406, __pyx_L1_error)
                     __pyx_t_17 = __pyx_t_16;
                   }
                   __Pyx_DECREF(__pyx_t_12); __pyx_t_12 = 0;
-                  __pyx_t_12 = __Pyx_PyUnicode_Substring(__pyx_v_line, __pyx_t_17, PY_SSIZE_T_MAX); if (unlikely(!__pyx_t_12)) __PYX_ERR(0, 404, __pyx_L1_error)
+                  __pyx_t_12 = __Pyx_PyUnicode_Substring(__pyx_v_line, __pyx_t_17, PY_SSIZE_T_MAX); if (unlikely(!__pyx_t_12)) __PYX_ERR(0, 406, __pyx_L1_error)
                   __Pyx_GOTREF(__pyx_t_12);
                   __pyx_t_4 = 1;
                   #if CYTHON_UNPACK_METHODS
@@ -22390,23 +22355,23 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
                     __Pyx_XDECREF(__pyx_t_3); __pyx_t_3 = 0;
                     __Pyx_DECREF(__pyx_t_12); __pyx_t_12 = 0;
                     __Pyx_DECREF(__pyx_t_1); __pyx_t_1 = 0;
-                    if (unlikely(!__pyx_t_13)) __PYX_ERR(0, 403, __pyx_L1_error)
+                    if (unlikely(!__pyx_t_13)) __PYX_ERR(0, 405, __pyx_L1_error)
                     __Pyx_GOTREF(__pyx_t_13);
                   }
 
-                  /* "thesis_pkg/core/sec/extraction_fast.pyx":403
+                  /* "thesis_pkg/core/sec/extraction_fast.pyx":405
  *                                         is_10k
  *                                         and not title_match
  *                                         and _heading_suffix_looks_like_prose(             # <<<<<<<<<<<<<<
  *                                             line[item_match.end() :]
  *                                         )
 */
-                  __pyx_t_11 = __Pyx_PyObject_IsTrue(__pyx_t_13); if (unlikely((__pyx_t_11 < 0))) __PYX_ERR(0, 403, __pyx_L1_error)
+                  __pyx_t_11 = __Pyx_PyObject_IsTrue(__pyx_t_13); if (unlikely((__pyx_t_11 < 0))) __PYX_ERR(0, 405, __pyx_L1_error)
                   __Pyx_DECREF(__pyx_t_13); __pyx_t_13 = 0;
                   __pyx_t_9 = __pyx_t_11;
                   __pyx_L56_bool_binop_done:;
 
-                  /* "thesis_pkg/core/sec/extraction_fast.pyx":400
+                  /* "thesis_pkg/core/sec/extraction_fast.pyx":402
  *                                     )
  *                                     confidence = HEADING_CONF_HIGH
  *                                     if (             # <<<<<<<<<<<<<<
@@ -22415,37 +22380,37 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
                   if (__pyx_t_9) {
 
-                    /* "thesis_pkg/core/sec/extraction_fast.pyx":407
+                    /* "thesis_pkg/core/sec/extraction_fast.pyx":409
  *                                         )
  *                                     ):
  *                                         confidence = min(confidence, HEADING_CONF_MED)             # <<<<<<<<<<<<<<
  *                                     if compound_line:
  *                                         confidence = min(confidence, HEADING_CONF_LOW)
 */
-                    __Pyx_GetModuleGlobalName(__pyx_t_13, __pyx_mstate_global->__pyx_n_u_HEADING_CONF_MED); if (unlikely(!__pyx_t_13)) __PYX_ERR(0, 407, __pyx_L1_error)
+                    __Pyx_GetModuleGlobalName(__pyx_t_13, __pyx_mstate_global->__pyx_n_u_HEADING_CONF_MED); if (unlikely(!__pyx_t_13)) __PYX_ERR(0, 409, __pyx_L1_error)
                     __Pyx_GOTREF(__pyx_t_13);
                     __pyx_t_15 = __pyx_v_confidence;
-                    __pyx_t_12 = __Pyx_PyLong_From_int(__pyx_t_15); if (unlikely(!__pyx_t_12)) __PYX_ERR(0, 407, __pyx_L1_error)
+                    __pyx_t_12 = __Pyx_PyLong_From_int(__pyx_t_15); if (unlikely(!__pyx_t_12)) __PYX_ERR(0, 409, __pyx_L1_error)
                     __Pyx_GOTREF(__pyx_t_12);
-                    __pyx_t_3 = PyObject_RichCompare(__pyx_t_13, __pyx_t_12, Py_LT); __Pyx_XGOTREF(__pyx_t_3); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 407, __pyx_L1_error)
+                    __pyx_t_3 = PyObject_RichCompare(__pyx_t_13, __pyx_t_12, Py_LT); __Pyx_XGOTREF(__pyx_t_3); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 409, __pyx_L1_error)
                     __Pyx_DECREF(__pyx_t_12); __pyx_t_12 = 0;
-                    __pyx_t_9 = __Pyx_PyObject_IsTrue(__pyx_t_3); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 407, __pyx_L1_error)
+                    __pyx_t_9 = __Pyx_PyObject_IsTrue(__pyx_t_3); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 409, __pyx_L1_error)
                     __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
                     if (__pyx_t_9) {
                       __Pyx_INCREF(__pyx_t_13);
                       __pyx_t_1 = __pyx_t_13;
                     } else {
-                      __pyx_t_3 = __Pyx_PyLong_From_int(__pyx_t_15); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 407, __pyx_L1_error)
+                      __pyx_t_3 = __Pyx_PyLong_From_int(__pyx_t_15); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 409, __pyx_L1_error)
                       __Pyx_GOTREF(__pyx_t_3);
                       __pyx_t_1 = __pyx_t_3;
                       __pyx_t_3 = 0;
                     }
                     __Pyx_DECREF(__pyx_t_13); __pyx_t_13 = 0;
-                    __pyx_t_15 = __Pyx_PyLong_As_int(__pyx_t_1); if (unlikely((__pyx_t_15 == (int)-1) && PyErr_Occurred())) __PYX_ERR(0, 407, __pyx_L1_error)
+                    __pyx_t_15 = __Pyx_PyLong_As_int(__pyx_t_1); if (unlikely((__pyx_t_15 == (int)-1) && PyErr_Occurred())) __PYX_ERR(0, 409, __pyx_L1_error)
                     __Pyx_DECREF(__pyx_t_1); __pyx_t_1 = 0;
                     __pyx_v_confidence = __pyx_t_15;
 
-                    /* "thesis_pkg/core/sec/extraction_fast.pyx":400
+                    /* "thesis_pkg/core/sec/extraction_fast.pyx":402
  *                                     )
  *                                     confidence = HEADING_CONF_HIGH
  *                                     if (             # <<<<<<<<<<<<<<
@@ -22454,7 +22419,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
                   }
 
-                  /* "thesis_pkg/core/sec/extraction_fast.pyx":408
+                  /* "thesis_pkg/core/sec/extraction_fast.pyx":410
  *                                     ):
  *                                         confidence = min(confidence, HEADING_CONF_MED)
  *                                     if compound_line:             # <<<<<<<<<<<<<<
@@ -22463,37 +22428,37 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
                   if (__pyx_v_compound_line) {
 
-                    /* "thesis_pkg/core/sec/extraction_fast.pyx":409
+                    /* "thesis_pkg/core/sec/extraction_fast.pyx":411
  *                                         confidence = min(confidence, HEADING_CONF_MED)
  *                                     if compound_line:
  *                                         confidence = min(confidence, HEADING_CONF_LOW)             # <<<<<<<<<<<<<<
  *                                     if _pageish_line(line):
  *                                         confidence = min(confidence, HEADING_CONF_LOW)
 */
-                    __Pyx_GetModuleGlobalName(__pyx_t_1, __pyx_mstate_global->__pyx_n_u_HEADING_CONF_LOW); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 409, __pyx_L1_error)
+                    __Pyx_GetModuleGlobalName(__pyx_t_1, __pyx_mstate_global->__pyx_n_u_HEADING_CONF_LOW); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 411, __pyx_L1_error)
                     __Pyx_GOTREF(__pyx_t_1);
                     __pyx_t_15 = __pyx_v_confidence;
-                    __pyx_t_3 = __Pyx_PyLong_From_int(__pyx_t_15); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 409, __pyx_L1_error)
+                    __pyx_t_3 = __Pyx_PyLong_From_int(__pyx_t_15); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 411, __pyx_L1_error)
                     __Pyx_GOTREF(__pyx_t_3);
-                    __pyx_t_12 = PyObject_RichCompare(__pyx_t_1, __pyx_t_3, Py_LT); __Pyx_XGOTREF(__pyx_t_12); if (unlikely(!__pyx_t_12)) __PYX_ERR(0, 409, __pyx_L1_error)
+                    __pyx_t_12 = PyObject_RichCompare(__pyx_t_1, __pyx_t_3, Py_LT); __Pyx_XGOTREF(__pyx_t_12); if (unlikely(!__pyx_t_12)) __PYX_ERR(0, 411, __pyx_L1_error)
                     __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
-                    __pyx_t_9 = __Pyx_PyObject_IsTrue(__pyx_t_12); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 409, __pyx_L1_error)
+                    __pyx_t_9 = __Pyx_PyObject_IsTrue(__pyx_t_12); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 411, __pyx_L1_error)
                     __Pyx_DECREF(__pyx_t_12); __pyx_t_12 = 0;
                     if (__pyx_t_9) {
                       __Pyx_INCREF(__pyx_t_1);
                       __pyx_t_13 = __pyx_t_1;
                     } else {
-                      __pyx_t_12 = __Pyx_PyLong_From_int(__pyx_t_15); if (unlikely(!__pyx_t_12)) __PYX_ERR(0, 409, __pyx_L1_error)
+                      __pyx_t_12 = __Pyx_PyLong_From_int(__pyx_t_15); if (unlikely(!__pyx_t_12)) __PYX_ERR(0, 411, __pyx_L1_error)
                       __Pyx_GOTREF(__pyx_t_12);
                       __pyx_t_13 = __pyx_t_12;
                       __pyx_t_12 = 0;
                     }
                     __Pyx_DECREF(__pyx_t_1); __pyx_t_1 = 0;
-                    __pyx_t_15 = __Pyx_PyLong_As_int(__pyx_t_13); if (unlikely((__pyx_t_15 == (int)-1) && PyErr_Occurred())) __PYX_ERR(0, 409, __pyx_L1_error)
+                    __pyx_t_15 = __Pyx_PyLong_As_int(__pyx_t_13); if (unlikely((__pyx_t_15 == (int)-1) && PyErr_Occurred())) __PYX_ERR(0, 411, __pyx_L1_error)
                     __Pyx_DECREF(__pyx_t_13); __pyx_t_13 = 0;
                     __pyx_v_confidence = __pyx_t_15;
 
-                    /* "thesis_pkg/core/sec/extraction_fast.pyx":408
+                    /* "thesis_pkg/core/sec/extraction_fast.pyx":410
  *                                     ):
  *                                         confidence = min(confidence, HEADING_CONF_MED)
  *                                     if compound_line:             # <<<<<<<<<<<<<<
@@ -22502,7 +22467,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
                   }
 
-                  /* "thesis_pkg/core/sec/extraction_fast.pyx":410
+                  /* "thesis_pkg/core/sec/extraction_fast.pyx":412
  *                                     if compound_line:
  *                                         confidence = min(confidence, HEADING_CONF_LOW)
  *                                     if _pageish_line(line):             # <<<<<<<<<<<<<<
@@ -22510,7 +22475,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
  *                                     candidate_toc_like = line_toc_like
 */
                   __pyx_t_1 = NULL;
-                  __Pyx_GetModuleGlobalName(__pyx_t_12, __pyx_mstate_global->__pyx_n_u_pageish_line); if (unlikely(!__pyx_t_12)) __PYX_ERR(0, 410, __pyx_L1_error)
+                  __Pyx_GetModuleGlobalName(__pyx_t_12, __pyx_mstate_global->__pyx_n_u_pageish_line); if (unlikely(!__pyx_t_12)) __PYX_ERR(0, 412, __pyx_L1_error)
                   __Pyx_GOTREF(__pyx_t_12);
                   __pyx_t_4 = 1;
                   #if CYTHON_UNPACK_METHODS
@@ -22529,44 +22494,44 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
                     __pyx_t_13 = __Pyx_PyObject_FastCall((PyObject*)__pyx_t_12, __pyx_callargs+__pyx_t_4, (2-__pyx_t_4) | (__pyx_t_4*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
                     __Pyx_XDECREF(__pyx_t_1); __pyx_t_1 = 0;
                     __Pyx_DECREF(__pyx_t_12); __pyx_t_12 = 0;
-                    if (unlikely(!__pyx_t_13)) __PYX_ERR(0, 410, __pyx_L1_error)
+                    if (unlikely(!__pyx_t_13)) __PYX_ERR(0, 412, __pyx_L1_error)
                     __Pyx_GOTREF(__pyx_t_13);
                   }
-                  __pyx_t_9 = __Pyx_PyObject_IsTrue(__pyx_t_13); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 410, __pyx_L1_error)
+                  __pyx_t_9 = __Pyx_PyObject_IsTrue(__pyx_t_13); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 412, __pyx_L1_error)
                   __Pyx_DECREF(__pyx_t_13); __pyx_t_13 = 0;
                   if (__pyx_t_9) {
 
-                    /* "thesis_pkg/core/sec/extraction_fast.pyx":411
+                    /* "thesis_pkg/core/sec/extraction_fast.pyx":413
  *                                         confidence = min(confidence, HEADING_CONF_LOW)
  *                                     if _pageish_line(line):
  *                                         confidence = min(confidence, HEADING_CONF_LOW)             # <<<<<<<<<<<<<<
  *                                     candidate_toc_like = line_toc_like
  *                                     if (
 */
-                    __Pyx_GetModuleGlobalName(__pyx_t_13, __pyx_mstate_global->__pyx_n_u_HEADING_CONF_LOW); if (unlikely(!__pyx_t_13)) __PYX_ERR(0, 411, __pyx_L1_error)
+                    __Pyx_GetModuleGlobalName(__pyx_t_13, __pyx_mstate_global->__pyx_n_u_HEADING_CONF_LOW); if (unlikely(!__pyx_t_13)) __PYX_ERR(0, 413, __pyx_L1_error)
                     __Pyx_GOTREF(__pyx_t_13);
                     __pyx_t_15 = __pyx_v_confidence;
-                    __pyx_t_1 = __Pyx_PyLong_From_int(__pyx_t_15); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 411, __pyx_L1_error)
+                    __pyx_t_1 = __Pyx_PyLong_From_int(__pyx_t_15); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 413, __pyx_L1_error)
                     __Pyx_GOTREF(__pyx_t_1);
-                    __pyx_t_3 = PyObject_RichCompare(__pyx_t_13, __pyx_t_1, Py_LT); __Pyx_XGOTREF(__pyx_t_3); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 411, __pyx_L1_error)
+                    __pyx_t_3 = PyObject_RichCompare(__pyx_t_13, __pyx_t_1, Py_LT); __Pyx_XGOTREF(__pyx_t_3); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 413, __pyx_L1_error)
                     __Pyx_DECREF(__pyx_t_1); __pyx_t_1 = 0;
-                    __pyx_t_9 = __Pyx_PyObject_IsTrue(__pyx_t_3); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 411, __pyx_L1_error)
+                    __pyx_t_9 = __Pyx_PyObject_IsTrue(__pyx_t_3); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 413, __pyx_L1_error)
                     __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
                     if (__pyx_t_9) {
                       __Pyx_INCREF(__pyx_t_13);
                       __pyx_t_12 = __pyx_t_13;
                     } else {
-                      __pyx_t_3 = __Pyx_PyLong_From_int(__pyx_t_15); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 411, __pyx_L1_error)
+                      __pyx_t_3 = __Pyx_PyLong_From_int(__pyx_t_15); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 413, __pyx_L1_error)
                       __Pyx_GOTREF(__pyx_t_3);
                       __pyx_t_12 = __pyx_t_3;
                       __pyx_t_3 = 0;
                     }
                     __Pyx_DECREF(__pyx_t_13); __pyx_t_13 = 0;
-                    __pyx_t_15 = __Pyx_PyLong_As_int(__pyx_t_12); if (unlikely((__pyx_t_15 == (int)-1) && PyErr_Occurred())) __PYX_ERR(0, 411, __pyx_L1_error)
+                    __pyx_t_15 = __Pyx_PyLong_As_int(__pyx_t_12); if (unlikely((__pyx_t_15 == (int)-1) && PyErr_Occurred())) __PYX_ERR(0, 413, __pyx_L1_error)
                     __Pyx_DECREF(__pyx_t_12); __pyx_t_12 = 0;
                     __pyx_v_confidence = __pyx_t_15;
 
-                    /* "thesis_pkg/core/sec/extraction_fast.pyx":410
+                    /* "thesis_pkg/core/sec/extraction_fast.pyx":412
  *                                     if compound_line:
  *                                         confidence = min(confidence, HEADING_CONF_LOW)
  *                                     if _pageish_line(line):             # <<<<<<<<<<<<<<
@@ -22575,7 +22540,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
                   }
 
-                  /* "thesis_pkg/core/sec/extraction_fast.pyx":412
+                  /* "thesis_pkg/core/sec/extraction_fast.pyx":414
  *                                     if _pageish_line(line):
  *                                         confidence = min(confidence, HEADING_CONF_LOW)
  *                                     candidate_toc_like = line_toc_like             # <<<<<<<<<<<<<<
@@ -22584,7 +22549,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
                   __pyx_v_candidate_toc_like = __pyx_v_line_toc_like;
 
-                  /* "thesis_pkg/core/sec/extraction_fast.pyx":414
+                  /* "thesis_pkg/core/sec/extraction_fast.pyx":416
  *                                     candidate_toc_like = line_toc_like
  *                                     if (
  *                                         candidate_toc_like             # <<<<<<<<<<<<<<
@@ -22597,7 +22562,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
                     goto __pyx_L62_bool_binop_done;
                   }
 
-                  /* "thesis_pkg/core/sec/extraction_fast.pyx":415
+                  /* "thesis_pkg/core/sec/extraction_fast.pyx":417
  *                                     if (
  *                                         candidate_toc_like
  *                                         and toc_window_like             # <<<<<<<<<<<<<<
@@ -22610,7 +22575,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
                     goto __pyx_L62_bool_binop_done;
                   }
 
-                  /* "thesis_pkg/core/sec/extraction_fast.pyx":416
+                  /* "thesis_pkg/core/sec/extraction_fast.pyx":418
  *                                         candidate_toc_like
  *                                         and toc_window_like
  *                                         and scan_sparse_layout             # <<<<<<<<<<<<<<
@@ -22623,7 +22588,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
                     goto __pyx_L62_bool_binop_done;
                   }
 
-                  /* "thesis_pkg/core/sec/extraction_fast.pyx":417
+                  /* "thesis_pkg/core/sec/extraction_fast.pyx":419
  *                                         and toc_window_like
  *                                         and scan_sparse_layout
  *                                         and item_match.start()             # <<<<<<<<<<<<<<
@@ -22637,31 +22602,31 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
                     PyObject *__pyx_callargs[2] = {__pyx_t_13, NULL};
                     __pyx_t_12 = __Pyx_PyObject_FastCallMethod((PyObject*)__pyx_mstate_global->__pyx_n_u_start, __pyx_callargs+__pyx_t_4, (1-__pyx_t_4) | (1*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
                     __Pyx_XDECREF(__pyx_t_13); __pyx_t_13 = 0;
-                    if (unlikely(!__pyx_t_12)) __PYX_ERR(0, 417, __pyx_L1_error)
+                    if (unlikely(!__pyx_t_12)) __PYX_ERR(0, 419, __pyx_L1_error)
                     __Pyx_GOTREF(__pyx_t_12);
                   }
 
-                  /* "thesis_pkg/core/sec/extraction_fast.pyx":418
+                  /* "thesis_pkg/core/sec/extraction_fast.pyx":420
  *                                         and scan_sparse_layout
  *                                         and item_match.start()
  *                                         > embedded_headings.EMBEDDED_TOC_START_EARLY_MAX_CHAR             # <<<<<<<<<<<<<<
  *                                     ):
  *                                         candidate_toc_like = False
 */
-                  __Pyx_GetModuleGlobalName(__pyx_t_13, __pyx_mstate_global->__pyx_n_u_embedded_headings); if (unlikely(!__pyx_t_13)) __PYX_ERR(0, 418, __pyx_L1_error)
+                  __Pyx_GetModuleGlobalName(__pyx_t_13, __pyx_mstate_global->__pyx_n_u_embedded_headings); if (unlikely(!__pyx_t_13)) __PYX_ERR(0, 420, __pyx_L1_error)
                   __Pyx_GOTREF(__pyx_t_13);
-                  __pyx_t_3 = __Pyx_PyObject_GetAttrStr(__pyx_t_13, __pyx_mstate_global->__pyx_n_u_EMBEDDED_TOC_START_EARLY_MAX_CHA); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 418, __pyx_L1_error)
+                  __pyx_t_3 = __Pyx_PyObject_GetAttrStr(__pyx_t_13, __pyx_mstate_global->__pyx_n_u_EMBEDDED_TOC_START_EARLY_MAX_CHA); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 420, __pyx_L1_error)
                   __Pyx_GOTREF(__pyx_t_3);
                   __Pyx_DECREF(__pyx_t_13); __pyx_t_13 = 0;
-                  __pyx_t_13 = PyObject_RichCompare(__pyx_t_12, __pyx_t_3, Py_GT); __Pyx_XGOTREF(__pyx_t_13); if (unlikely(!__pyx_t_13)) __PYX_ERR(0, 418, __pyx_L1_error)
+                  __pyx_t_13 = PyObject_RichCompare(__pyx_t_12, __pyx_t_3, Py_GT); __Pyx_XGOTREF(__pyx_t_13); if (unlikely(!__pyx_t_13)) __PYX_ERR(0, 420, __pyx_L1_error)
                   __Pyx_DECREF(__pyx_t_12); __pyx_t_12 = 0;
                   __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
-                  __pyx_t_11 = __Pyx_PyObject_IsTrue(__pyx_t_13); if (unlikely((__pyx_t_11 < 0))) __PYX_ERR(0, 418, __pyx_L1_error)
+                  __pyx_t_11 = __Pyx_PyObject_IsTrue(__pyx_t_13); if (unlikely((__pyx_t_11 < 0))) __PYX_ERR(0, 420, __pyx_L1_error)
                   __Pyx_DECREF(__pyx_t_13); __pyx_t_13 = 0;
                   __pyx_t_9 = __pyx_t_11;
                   __pyx_L62_bool_binop_done:;
 
-                  /* "thesis_pkg/core/sec/extraction_fast.pyx":413
+                  /* "thesis_pkg/core/sec/extraction_fast.pyx":415
  *                                         confidence = min(confidence, HEADING_CONF_LOW)
  *                                     candidate_toc_like = line_toc_like
  *                                     if (             # <<<<<<<<<<<<<<
@@ -22670,7 +22635,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
                   if (__pyx_t_9) {
 
-                    /* "thesis_pkg/core/sec/extraction_fast.pyx":420
+                    /* "thesis_pkg/core/sec/extraction_fast.pyx":422
  *                                         > embedded_headings.EMBEDDED_TOC_START_EARLY_MAX_CHAR
  *                                     ):
  *                                         candidate_toc_like = False             # <<<<<<<<<<<<<<
@@ -22679,7 +22644,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
                     __pyx_v_candidate_toc_like = 0;
 
-                    /* "thesis_pkg/core/sec/extraction_fast.pyx":413
+                    /* "thesis_pkg/core/sec/extraction_fast.pyx":415
  *                                         confidence = min(confidence, HEADING_CONF_LOW)
  *                                     candidate_toc_like = line_toc_like
  *                                     if (             # <<<<<<<<<<<<<<
@@ -22688,7 +22653,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
                   }
 
-                  /* "thesis_pkg/core/sec/extraction_fast.pyx":421
+                  /* "thesis_pkg/core/sec/extraction_fast.pyx":423
  *                                     ):
  *                                         candidate_toc_like = False
  *                                     start_abs = starts_mv[i] + item_match.start()             # <<<<<<<<<<<<<<
@@ -22696,7 +22661,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
  *                                         starts_mv[i]
 */
                   __pyx_t_19 = __pyx_v_i;
-                  __pyx_t_13 = __Pyx_PyLong_From_PY_LONG_LONG((*((PY_LONG_LONG *) ( /* dim=0 */ (__pyx_v_starts_mv.data + __pyx_t_19 * __pyx_v_starts_mv.strides[0]) )))); if (unlikely(!__pyx_t_13)) __PYX_ERR(0, 421, __pyx_L1_error)
+                  __pyx_t_13 = __Pyx_PyLong_From_PY_LONG_LONG((*((PY_LONG_LONG *) ( /* dim=0 */ (__pyx_v_starts_mv.data + __pyx_t_19 * __pyx_v_starts_mv.strides[0]) )))); if (unlikely(!__pyx_t_13)) __PYX_ERR(0, 423, __pyx_L1_error)
                   __Pyx_GOTREF(__pyx_t_13);
                   __pyx_t_12 = __pyx_v_item_match;
                   __Pyx_INCREF(__pyx_t_12);
@@ -22705,18 +22670,18 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
                     PyObject *__pyx_callargs[2] = {__pyx_t_12, NULL};
                     __pyx_t_3 = __Pyx_PyObject_FastCallMethod((PyObject*)__pyx_mstate_global->__pyx_n_u_start, __pyx_callargs+__pyx_t_4, (1-__pyx_t_4) | (1*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
                     __Pyx_XDECREF(__pyx_t_12); __pyx_t_12 = 0;
-                    if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 421, __pyx_L1_error)
+                    if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 423, __pyx_L1_error)
                     __Pyx_GOTREF(__pyx_t_3);
                   }
-                  __pyx_t_12 = PyNumber_Add(__pyx_t_13, __pyx_t_3); if (unlikely(!__pyx_t_12)) __PYX_ERR(0, 421, __pyx_L1_error)
+                  __pyx_t_12 = PyNumber_Add(__pyx_t_13, __pyx_t_3); if (unlikely(!__pyx_t_12)) __PYX_ERR(0, 423, __pyx_L1_error)
                   __Pyx_GOTREF(__pyx_t_12);
                   __Pyx_DECREF(__pyx_t_13); __pyx_t_13 = 0;
                   __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
-                  __pyx_t_20 = __Pyx_PyLong_As_PY_LONG_LONG(__pyx_t_12); if (unlikely((__pyx_t_20 == (PY_LONG_LONG)-1) && PyErr_Occurred())) __PYX_ERR(0, 421, __pyx_L1_error)
+                  __pyx_t_20 = __Pyx_PyLong_As_PY_LONG_LONG(__pyx_t_12); if (unlikely((__pyx_t_20 == (PY_LONG_LONG)-1) && PyErr_Occurred())) __PYX_ERR(0, 423, __pyx_L1_error)
                   __Pyx_DECREF(__pyx_t_12); __pyx_t_12 = 0;
                   __pyx_v_start_abs = __pyx_t_20;
 
-                  /* "thesis_pkg/core/sec/extraction_fast.pyx":423
+                  /* "thesis_pkg/core/sec/extraction_fast.pyx":425
  *                                     start_abs = starts_mv[i] + item_match.start()
  *                                     content_start_abs = (
  *                                         starts_mv[i]             # <<<<<<<<<<<<<<
@@ -22724,10 +22689,10 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
  *                                         + content_adjust
 */
                   __pyx_t_19 = __pyx_v_i;
-                  __pyx_t_12 = __Pyx_PyLong_From_PY_LONG_LONG((*((PY_LONG_LONG *) ( /* dim=0 */ (__pyx_v_starts_mv.data + __pyx_t_19 * __pyx_v_starts_mv.strides[0]) )))); if (unlikely(!__pyx_t_12)) __PYX_ERR(0, 423, __pyx_L1_error)
+                  __pyx_t_12 = __Pyx_PyLong_From_PY_LONG_LONG((*((PY_LONG_LONG *) ( /* dim=0 */ (__pyx_v_starts_mv.data + __pyx_t_19 * __pyx_v_starts_mv.strides[0]) )))); if (unlikely(!__pyx_t_12)) __PYX_ERR(0, 425, __pyx_L1_error)
                   __Pyx_GOTREF(__pyx_t_12);
 
-                  /* "thesis_pkg/core/sec/extraction_fast.pyx":424
+                  /* "thesis_pkg/core/sec/extraction_fast.pyx":426
  *                                     content_start_abs = (
  *                                         starts_mv[i]
  *                                         + item_match.end()             # <<<<<<<<<<<<<<
@@ -22741,72 +22706,72 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
                     PyObject *__pyx_callargs[2] = {__pyx_t_13, NULL};
                     __pyx_t_3 = __Pyx_PyObject_FastCallMethod((PyObject*)__pyx_mstate_global->__pyx_n_u_end, __pyx_callargs+__pyx_t_4, (1-__pyx_t_4) | (1*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
                     __Pyx_XDECREF(__pyx_t_13); __pyx_t_13 = 0;
-                    if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 424, __pyx_L1_error)
+                    if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 426, __pyx_L1_error)
                     __Pyx_GOTREF(__pyx_t_3);
                   }
-                  __pyx_t_13 = PyNumber_Add(__pyx_t_12, __pyx_t_3); if (unlikely(!__pyx_t_13)) __PYX_ERR(0, 424, __pyx_L1_error)
+                  __pyx_t_13 = PyNumber_Add(__pyx_t_12, __pyx_t_3); if (unlikely(!__pyx_t_13)) __PYX_ERR(0, 426, __pyx_L1_error)
                   __Pyx_GOTREF(__pyx_t_13);
                   __Pyx_DECREF(__pyx_t_12); __pyx_t_12 = 0;
                   __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
 
-                  /* "thesis_pkg/core/sec/extraction_fast.pyx":425
+                  /* "thesis_pkg/core/sec/extraction_fast.pyx":427
  *                                         starts_mv[i]
  *                                         + item_match.end()
  *                                         + content_adjust             # <<<<<<<<<<<<<<
  *                                     )
  *                                     boundaries.append(
 */
-                  __pyx_t_3 = __Pyx_PyLong_From_int(__pyx_v_content_adjust); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 425, __pyx_L1_error)
+                  __pyx_t_3 = __Pyx_PyLong_From_int(__pyx_v_content_adjust); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 427, __pyx_L1_error)
                   __Pyx_GOTREF(__pyx_t_3);
-                  __pyx_t_12 = PyNumber_Add(__pyx_t_13, __pyx_t_3); if (unlikely(!__pyx_t_12)) __PYX_ERR(0, 425, __pyx_L1_error)
+                  __pyx_t_12 = PyNumber_Add(__pyx_t_13, __pyx_t_3); if (unlikely(!__pyx_t_12)) __PYX_ERR(0, 427, __pyx_L1_error)
                   __Pyx_GOTREF(__pyx_t_12);
                   __Pyx_DECREF(__pyx_t_13); __pyx_t_13 = 0;
                   __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
-                  __pyx_t_20 = __Pyx_PyLong_As_PY_LONG_LONG(__pyx_t_12); if (unlikely((__pyx_t_20 == (PY_LONG_LONG)-1) && PyErr_Occurred())) __PYX_ERR(0, 425, __pyx_L1_error)
+                  __pyx_t_20 = __Pyx_PyLong_As_PY_LONG_LONG(__pyx_t_12); if (unlikely((__pyx_t_20 == (PY_LONG_LONG)-1) && PyErr_Occurred())) __PYX_ERR(0, 427, __pyx_L1_error)
                   __Pyx_DECREF(__pyx_t_12); __pyx_t_12 = 0;
                   __pyx_v_content_start_abs = __pyx_t_20;
 
-                  /* "thesis_pkg/core/sec/extraction_fast.pyx":429
+                  /* "thesis_pkg/core/sec/extraction_fast.pyx":431
  *                                     boundaries.append(
  *                                         (
  *                                             start_abs,             # <<<<<<<<<<<<<<
  *                                             content_start_abs,
  *                                             part,
 */
-                  __pyx_t_12 = __Pyx_PyLong_From_PY_LONG_LONG(__pyx_v_start_abs); if (unlikely(!__pyx_t_12)) __PYX_ERR(0, 429, __pyx_L1_error)
+                  __pyx_t_12 = __Pyx_PyLong_From_PY_LONG_LONG(__pyx_v_start_abs); if (unlikely(!__pyx_t_12)) __PYX_ERR(0, 431, __pyx_L1_error)
                   __Pyx_GOTREF(__pyx_t_12);
 
-                  /* "thesis_pkg/core/sec/extraction_fast.pyx":430
+                  /* "thesis_pkg/core/sec/extraction_fast.pyx":432
  *                                         (
  *                                             start_abs,
  *                                             content_start_abs,             # <<<<<<<<<<<<<<
  *                                             part,
  *                                             item_id,
 */
-                  __pyx_t_3 = __Pyx_PyLong_From_PY_LONG_LONG(__pyx_v_content_start_abs); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 430, __pyx_L1_error)
+                  __pyx_t_3 = __Pyx_PyLong_From_PY_LONG_LONG(__pyx_v_content_start_abs); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 432, __pyx_L1_error)
                   __Pyx_GOTREF(__pyx_t_3);
 
-                  /* "thesis_pkg/core/sec/extraction_fast.pyx":433
+                  /* "thesis_pkg/core/sec/extraction_fast.pyx":435
  *                                             part,
  *                                             item_id,
  *                                             i,             # <<<<<<<<<<<<<<
  *                                             confidence,
  *                                             line_in_toc_range and not content_after,
 */
-                  __pyx_t_13 = PyLong_FromSsize_t(__pyx_v_i); if (unlikely(!__pyx_t_13)) __PYX_ERR(0, 433, __pyx_L1_error)
+                  __pyx_t_13 = PyLong_FromSsize_t(__pyx_v_i); if (unlikely(!__pyx_t_13)) __PYX_ERR(0, 435, __pyx_L1_error)
                   __Pyx_GOTREF(__pyx_t_13);
 
-                  /* "thesis_pkg/core/sec/extraction_fast.pyx":434
+                  /* "thesis_pkg/core/sec/extraction_fast.pyx":436
  *                                             item_id,
  *                                             i,
  *                                             confidence,             # <<<<<<<<<<<<<<
  *                                             line_in_toc_range and not content_after,
  *                                             candidate_toc_like,
 */
-                  __pyx_t_1 = __Pyx_PyLong_From_int(__pyx_v_confidence); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 434, __pyx_L1_error)
+                  __pyx_t_1 = __Pyx_PyLong_From_int(__pyx_v_confidence); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 436, __pyx_L1_error)
                   __Pyx_GOTREF(__pyx_t_1);
 
-                  /* "thesis_pkg/core/sec/extraction_fast.pyx":435
+                  /* "thesis_pkg/core/sec/extraction_fast.pyx":437
  *                                             i,
  *                                             confidence,
  *                                             line_in_toc_range and not content_after,             # <<<<<<<<<<<<<<
@@ -22815,56 +22780,56 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
                   if (__pyx_v_line_in_toc_range) {
                   } else {
-                    __pyx_t_10 = __Pyx_PyBool_FromLong(__pyx_v_line_in_toc_range); if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 435, __pyx_L1_error)
+                    __pyx_t_10 = __Pyx_PyBool_FromLong(__pyx_v_line_in_toc_range); if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 437, __pyx_L1_error)
                     __Pyx_GOTREF(__pyx_t_10);
                     __pyx_t_2 = __pyx_t_10;
                     __pyx_t_10 = 0;
                     goto __pyx_L66_bool_binop_done;
                   }
                   __pyx_t_9 = (!__pyx_v_content_after);
-                  __pyx_t_10 = __Pyx_PyBool_FromLong(__pyx_t_9); if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 435, __pyx_L1_error)
+                  __pyx_t_10 = __Pyx_PyBool_FromLong(__pyx_t_9); if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 437, __pyx_L1_error)
                   __Pyx_GOTREF(__pyx_t_10);
                   __pyx_t_2 = __pyx_t_10;
                   __pyx_t_10 = 0;
                   __pyx_L66_bool_binop_done:;
 
-                  /* "thesis_pkg/core/sec/extraction_fast.pyx":436
+                  /* "thesis_pkg/core/sec/extraction_fast.pyx":438
  *                                             confidence,
  *                                             line_in_toc_range and not content_after,
  *                                             candidate_toc_like,             # <<<<<<<<<<<<<<
  *                                         )
  *                                     )
 */
-                  __pyx_t_10 = __Pyx_PyBool_FromLong(__pyx_v_candidate_toc_like); if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 436, __pyx_L1_error)
+                  __pyx_t_10 = __Pyx_PyBool_FromLong(__pyx_v_candidate_toc_like); if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 438, __pyx_L1_error)
                   __Pyx_GOTREF(__pyx_t_10);
 
-                  /* "thesis_pkg/core/sec/extraction_fast.pyx":429
+                  /* "thesis_pkg/core/sec/extraction_fast.pyx":431
  *                                     boundaries.append(
  *                                         (
  *                                             start_abs,             # <<<<<<<<<<<<<<
  *                                             content_start_abs,
  *                                             part,
 */
-                  __pyx_t_21 = PyTuple_New(8); if (unlikely(!__pyx_t_21)) __PYX_ERR(0, 429, __pyx_L1_error)
+                  __pyx_t_21 = PyTuple_New(8); if (unlikely(!__pyx_t_21)) __PYX_ERR(0, 431, __pyx_L1_error)
                   __Pyx_GOTREF(__pyx_t_21);
                   __Pyx_GIVEREF(__pyx_t_12);
-                  if (__Pyx_PyTuple_SET_ITEM(__pyx_t_21, 0, __pyx_t_12) != (0)) __PYX_ERR(0, 429, __pyx_L1_error);
+                  if (__Pyx_PyTuple_SET_ITEM(__pyx_t_21, 0, __pyx_t_12) != (0)) __PYX_ERR(0, 431, __pyx_L1_error);
                   __Pyx_GIVEREF(__pyx_t_3);
-                  if (__Pyx_PyTuple_SET_ITEM(__pyx_t_21, 1, __pyx_t_3) != (0)) __PYX_ERR(0, 429, __pyx_L1_error);
+                  if (__Pyx_PyTuple_SET_ITEM(__pyx_t_21, 1, __pyx_t_3) != (0)) __PYX_ERR(0, 431, __pyx_L1_error);
                   __Pyx_INCREF(__pyx_v_part);
                   __Pyx_GIVEREF(__pyx_v_part);
-                  if (__Pyx_PyTuple_SET_ITEM(__pyx_t_21, 2, __pyx_v_part) != (0)) __PYX_ERR(0, 429, __pyx_L1_error);
+                  if (__Pyx_PyTuple_SET_ITEM(__pyx_t_21, 2, __pyx_v_part) != (0)) __PYX_ERR(0, 431, __pyx_L1_error);
                   __Pyx_INCREF(__pyx_v_item_id);
                   __Pyx_GIVEREF(__pyx_v_item_id);
-                  if (__Pyx_PyTuple_SET_ITEM(__pyx_t_21, 3, __pyx_v_item_id) != (0)) __PYX_ERR(0, 429, __pyx_L1_error);
+                  if (__Pyx_PyTuple_SET_ITEM(__pyx_t_21, 3, __pyx_v_item_id) != (0)) __PYX_ERR(0, 431, __pyx_L1_error);
                   __Pyx_GIVEREF(__pyx_t_13);
-                  if (__Pyx_PyTuple_SET_ITEM(__pyx_t_21, 4, __pyx_t_13) != (0)) __PYX_ERR(0, 429, __pyx_L1_error);
+                  if (__Pyx_PyTuple_SET_ITEM(__pyx_t_21, 4, __pyx_t_13) != (0)) __PYX_ERR(0, 431, __pyx_L1_error);
                   __Pyx_GIVEREF(__pyx_t_1);
-                  if (__Pyx_PyTuple_SET_ITEM(__pyx_t_21, 5, __pyx_t_1) != (0)) __PYX_ERR(0, 429, __pyx_L1_error);
+                  if (__Pyx_PyTuple_SET_ITEM(__pyx_t_21, 5, __pyx_t_1) != (0)) __PYX_ERR(0, 431, __pyx_L1_error);
                   __Pyx_GIVEREF(__pyx_t_2);
-                  if (__Pyx_PyTuple_SET_ITEM(__pyx_t_21, 6, __pyx_t_2) != (0)) __PYX_ERR(0, 429, __pyx_L1_error);
+                  if (__Pyx_PyTuple_SET_ITEM(__pyx_t_21, 6, __pyx_t_2) != (0)) __PYX_ERR(0, 431, __pyx_L1_error);
                   __Pyx_GIVEREF(__pyx_t_10);
-                  if (__Pyx_PyTuple_SET_ITEM(__pyx_t_21, 7, __pyx_t_10) != (0)) __PYX_ERR(0, 429, __pyx_L1_error);
+                  if (__Pyx_PyTuple_SET_ITEM(__pyx_t_21, 7, __pyx_t_10) != (0)) __PYX_ERR(0, 431, __pyx_L1_error);
                   __pyx_t_12 = 0;
                   __pyx_t_3 = 0;
                   __pyx_t_13 = 0;
@@ -22872,17 +22837,17 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
                   __pyx_t_2 = 0;
                   __pyx_t_10 = 0;
 
-                  /* "thesis_pkg/core/sec/extraction_fast.pyx":427
+                  /* "thesis_pkg/core/sec/extraction_fast.pyx":429
  *                                         + content_adjust
  *                                     )
  *                                     boundaries.append(             # <<<<<<<<<<<<<<
  *                                         (
  *                                             start_abs,
 */
-                  __pyx_t_22 = __Pyx_PyObject_Append(__pyx_v_boundaries, __pyx_t_21); if (unlikely(__pyx_t_22 == ((int)-1))) __PYX_ERR(0, 427, __pyx_L1_error)
+                  __pyx_t_22 = __Pyx_PyObject_Append(__pyx_v_boundaries, __pyx_t_21); if (unlikely(__pyx_t_22 == ((int)-1))) __PYX_ERR(0, 429, __pyx_L1_error)
                   __Pyx_DECREF(__pyx_t_21); __pyx_t_21 = 0;
 
-                  /* "thesis_pkg/core/sec/extraction_fast.pyx":439
+                  /* "thesis_pkg/core/sec/extraction_fast.pyx":441
  *                                         )
  *                                     )
  *                                     if not line_in_toc_range:             # <<<<<<<<<<<<<<
@@ -22892,7 +22857,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
                   __pyx_t_9 = (!__pyx_v_line_in_toc_range);
                   if (__pyx_t_9) {
 
-                    /* "thesis_pkg/core/sec/extraction_fast.pyx":440
+                    /* "thesis_pkg/core/sec/extraction_fast.pyx":442
  *                                     )
  *                                     if not line_in_toc_range:
  *                                         current_part = part             # <<<<<<<<<<<<<<
@@ -22902,7 +22867,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
                     __Pyx_INCREF(__pyx_v_part);
                     __Pyx_DECREF_SET(__pyx_v_current_part, __pyx_v_part);
 
-                    /* "thesis_pkg/core/sec/extraction_fast.pyx":439
+                    /* "thesis_pkg/core/sec/extraction_fast.pyx":441
  *                                         )
  *                                     )
  *                                     if not line_in_toc_range:             # <<<<<<<<<<<<<<
@@ -22911,7 +22876,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
                   }
 
-                  /* "thesis_pkg/core/sec/extraction_fast.pyx":441
+                  /* "thesis_pkg/core/sec/extraction_fast.pyx":443
  *                                     if not line_in_toc_range:
  *                                         current_part = part
  *                                     continue             # <<<<<<<<<<<<<<
@@ -22920,7 +22885,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
                   goto __pyx_L3_continue;
 
-                  /* "thesis_pkg/core/sec/extraction_fast.pyx":354
+                  /* "thesis_pkg/core/sec/extraction_fast.pyx":356
  *                             suffix = line[item_match.end() : item_match.end() + 64]
  *                             if not re.search(r"(?i)^\s*[\(\[]?\s*continued\b", suffix):
  *                                 if not re.match(             # <<<<<<<<<<<<<<
@@ -22929,7 +22894,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
                 }
 
-                /* "thesis_pkg/core/sec/extraction_fast.pyx":353
+                /* "thesis_pkg/core/sec/extraction_fast.pyx":355
  *                         if not _prefix_looks_like_cross_ref_fast(prefix):
  *                             suffix = line[item_match.end() : item_match.end() + 64]
  *                             if not re.search(r"(?i)^\s*[\(\[]?\s*continued\b", suffix):             # <<<<<<<<<<<<<<
@@ -22938,7 +22903,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
               }
 
-              /* "thesis_pkg/core/sec/extraction_fast.pyx":351
+              /* "thesis_pkg/core/sec/extraction_fast.pyx":353
  *                     if item_id is not None and item_id != "16":
  *                         prefix = line[: item_match.start()]
  *                         if not _prefix_looks_like_cross_ref_fast(prefix):             # <<<<<<<<<<<<<<
@@ -22947,7 +22912,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
             }
 
-            /* "thesis_pkg/core/sec/extraction_fast.pyx":349
+            /* "thesis_pkg/core/sec/extraction_fast.pyx":351
  *                         max_item=max_item_number,
  *                     )
  *                     if item_id is not None and item_id != "16":             # <<<<<<<<<<<<<<
@@ -22956,7 +22921,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
           }
 
-          /* "thesis_pkg/core/sec/extraction_fast.pyx":342
+          /* "thesis_pkg/core/sec/extraction_fast.pyx":344
  *                     combined_match.start("item"),
  *                 )
  *                 if item_match and item_match.start() == combined_match.start("item"):             # <<<<<<<<<<<<<<
@@ -22965,7 +22930,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
         }
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":337
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":339
  *         if combined_match:
  *             part = combined_match.group("part").upper()
  *             if part in allowed_parts:             # <<<<<<<<<<<<<<
@@ -22974,7 +22939,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
       }
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":335
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":337
  *             else None
  *         )
  *         if combined_match:             # <<<<<<<<<<<<<<
@@ -22983,7 +22948,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
     }
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":443
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":445
  *                                     continue
  * 
  *         next_part = None             # <<<<<<<<<<<<<<
@@ -22993,7 +22958,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
     __Pyx_INCREF(Py_None);
     __Pyx_XDECREF_SET(__pyx_v_next_part, Py_None);
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":444
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":446
  * 
  *         next_part = None
  *         part_iter = None             # <<<<<<<<<<<<<<
@@ -23003,7 +22968,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
     __Pyx_INCREF(Py_None);
     __Pyx_XDECREF_SET(__pyx_v_part_iter, Py_None);
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":445
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":447
  *         next_part = None
  *         part_iter = None
  *         if has_part_hint:             # <<<<<<<<<<<<<<
@@ -23012,7 +22977,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
     if (__pyx_v_has_part_hint) {
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":446
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":448
  *         part_iter = None
  *         if has_part_hint:
  *             if scan_sparse_layout:             # <<<<<<<<<<<<<<
@@ -23021,7 +22986,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
       if (__pyx_v_scan_sparse_layout) {
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":447
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":449
  *         if has_part_hint:
  *             if scan_sparse_layout:
  *                 part_iter = PART_MARKER_PATTERN.finditer(line)             # <<<<<<<<<<<<<<
@@ -23029,9 +22994,9 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
  *             else:
 */
         __pyx_t_10 = NULL;
-        __Pyx_GetModuleGlobalName(__pyx_t_2, __pyx_mstate_global->__pyx_n_u_PART_MARKER_PATTERN); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 447, __pyx_L1_error)
+        __Pyx_GetModuleGlobalName(__pyx_t_2, __pyx_mstate_global->__pyx_n_u_PART_MARKER_PATTERN); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 449, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_2);
-        __pyx_t_1 = __Pyx_PyObject_GetAttrStr(__pyx_t_2, __pyx_mstate_global->__pyx_n_u_finditer); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 447, __pyx_L1_error)
+        __pyx_t_1 = __Pyx_PyObject_GetAttrStr(__pyx_t_2, __pyx_mstate_global->__pyx_n_u_finditer); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 449, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_1);
         __Pyx_DECREF(__pyx_t_2); __pyx_t_2 = 0;
         __pyx_t_4 = 1;
@@ -23051,25 +23016,25 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
           __pyx_t_21 = __Pyx_PyObject_FastCall((PyObject*)__pyx_t_1, __pyx_callargs+__pyx_t_4, (2-__pyx_t_4) | (__pyx_t_4*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
           __Pyx_XDECREF(__pyx_t_10); __pyx_t_10 = 0;
           __Pyx_DECREF(__pyx_t_1); __pyx_t_1 = 0;
-          if (unlikely(!__pyx_t_21)) __PYX_ERR(0, 447, __pyx_L1_error)
+          if (unlikely(!__pyx_t_21)) __PYX_ERR(0, 449, __pyx_L1_error)
           __Pyx_GOTREF(__pyx_t_21);
         }
         __Pyx_DECREF_SET(__pyx_v_part_iter, __pyx_t_21);
         __pyx_t_21 = 0;
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":448
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":450
  *             if scan_sparse_layout:
  *                 part_iter = PART_MARKER_PATTERN.finditer(line)
  *                 next_part = _next_valid_part_match_sparse(part_iter, line, allowed_parts)             # <<<<<<<<<<<<<<
  *             else:
  *                 m = PART_LINESTART_PATTERN.match(line)
 */
-        __pyx_t_21 = __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__next_valid_part_match_sparse(__pyx_v_part_iter, __pyx_v_line, __pyx_v_allowed_parts); if (unlikely(!__pyx_t_21)) __PYX_ERR(0, 448, __pyx_L1_error)
+        __pyx_t_21 = __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__next_valid_part_match_sparse(__pyx_v_part_iter, __pyx_v_line, __pyx_v_allowed_parts); if (unlikely(!__pyx_t_21)) __PYX_ERR(0, 450, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_21);
         __Pyx_DECREF_SET(__pyx_v_next_part, __pyx_t_21);
         __pyx_t_21 = 0;
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":446
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":448
  *         part_iter = None
  *         if has_part_hint:
  *             if scan_sparse_layout:             # <<<<<<<<<<<<<<
@@ -23079,7 +23044,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
         goto __pyx_L70;
       }
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":450
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":452
  *                 next_part = _next_valid_part_match_sparse(part_iter, line, allowed_parts)
  *             else:
  *                 m = PART_LINESTART_PATTERN.match(line)             # <<<<<<<<<<<<<<
@@ -23088,9 +23053,9 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
       /*else*/ {
         __pyx_t_1 = NULL;
-        __Pyx_GetModuleGlobalName(__pyx_t_10, __pyx_mstate_global->__pyx_n_u_PART_LINESTART_PATTERN); if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 450, __pyx_L1_error)
+        __Pyx_GetModuleGlobalName(__pyx_t_10, __pyx_mstate_global->__pyx_n_u_PART_LINESTART_PATTERN); if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 452, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_10);
-        __pyx_t_2 = __Pyx_PyObject_GetAttrStr(__pyx_t_10, __pyx_mstate_global->__pyx_n_u_match); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 450, __pyx_L1_error)
+        __pyx_t_2 = __Pyx_PyObject_GetAttrStr(__pyx_t_10, __pyx_mstate_global->__pyx_n_u_match); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 452, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_2);
         __Pyx_DECREF(__pyx_t_10); __pyx_t_10 = 0;
         __pyx_t_4 = 1;
@@ -23110,13 +23075,13 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
           __pyx_t_21 = __Pyx_PyObject_FastCall((PyObject*)__pyx_t_2, __pyx_callargs+__pyx_t_4, (2-__pyx_t_4) | (__pyx_t_4*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
           __Pyx_XDECREF(__pyx_t_1); __pyx_t_1 = 0;
           __Pyx_DECREF(__pyx_t_2); __pyx_t_2 = 0;
-          if (unlikely(!__pyx_t_21)) __PYX_ERR(0, 450, __pyx_L1_error)
+          if (unlikely(!__pyx_t_21)) __PYX_ERR(0, 452, __pyx_L1_error)
           __Pyx_GOTREF(__pyx_t_21);
         }
         __Pyx_XDECREF_SET(__pyx_v_m, __pyx_t_21);
         __pyx_t_21 = 0;
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":451
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":453
  *             else:
  *                 m = PART_LINESTART_PATTERN.match(line)
  *                 if m is not None:             # <<<<<<<<<<<<<<
@@ -23126,7 +23091,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
         __pyx_t_9 = (__pyx_v_m != Py_None);
         if (__pyx_t_9) {
 
-          /* "thesis_pkg/core/sec/extraction_fast.pyx":452
+          /* "thesis_pkg/core/sec/extraction_fast.pyx":454
  *                 m = PART_LINESTART_PATTERN.match(line)
  *                 if m is not None:
  *                     if not _part_marker_is_heading(line, m):             # <<<<<<<<<<<<<<
@@ -23134,7 +23099,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
  *                         continue
 */
           __pyx_t_2 = NULL;
-          __Pyx_GetModuleGlobalName(__pyx_t_1, __pyx_mstate_global->__pyx_n_u_part_marker_is_heading); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 452, __pyx_L1_error)
+          __Pyx_GetModuleGlobalName(__pyx_t_1, __pyx_mstate_global->__pyx_n_u_part_marker_is_heading); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 454, __pyx_L1_error)
           __Pyx_GOTREF(__pyx_t_1);
           __pyx_t_4 = 1;
           #if CYTHON_UNPACK_METHODS
@@ -23153,15 +23118,15 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
             __pyx_t_21 = __Pyx_PyObject_FastCall((PyObject*)__pyx_t_1, __pyx_callargs+__pyx_t_4, (3-__pyx_t_4) | (__pyx_t_4*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
             __Pyx_XDECREF(__pyx_t_2); __pyx_t_2 = 0;
             __Pyx_DECREF(__pyx_t_1); __pyx_t_1 = 0;
-            if (unlikely(!__pyx_t_21)) __PYX_ERR(0, 452, __pyx_L1_error)
+            if (unlikely(!__pyx_t_21)) __PYX_ERR(0, 454, __pyx_L1_error)
             __Pyx_GOTREF(__pyx_t_21);
           }
-          __pyx_t_9 = __Pyx_PyObject_IsTrue(__pyx_t_21); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 452, __pyx_L1_error)
+          __pyx_t_9 = __Pyx_PyObject_IsTrue(__pyx_t_21); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 454, __pyx_L1_error)
           __Pyx_DECREF(__pyx_t_21); __pyx_t_21 = 0;
           __pyx_t_11 = (!__pyx_t_9);
           if (__pyx_t_11) {
 
-            /* "thesis_pkg/core/sec/extraction_fast.pyx":454
+            /* "thesis_pkg/core/sec/extraction_fast.pyx":456
  *                     if not _part_marker_is_heading(line, m):
  *                         # Preserve Python-path semantics: invalid line-start PART suppresses this line.
  *                         continue             # <<<<<<<<<<<<<<
@@ -23170,7 +23135,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
             goto __pyx_L3_continue;
 
-            /* "thesis_pkg/core/sec/extraction_fast.pyx":452
+            /* "thesis_pkg/core/sec/extraction_fast.pyx":454
  *                 m = PART_LINESTART_PATTERN.match(line)
  *                 if m is not None:
  *                     if not _part_marker_is_heading(line, m):             # <<<<<<<<<<<<<<
@@ -23179,7 +23144,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
           }
 
-          /* "thesis_pkg/core/sec/extraction_fast.pyx":455
+          /* "thesis_pkg/core/sec/extraction_fast.pyx":457
  *                         # Preserve Python-path semantics: invalid line-start PART suppresses this line.
  *                         continue
  *                     part = m.group("part").upper()             # <<<<<<<<<<<<<<
@@ -23193,7 +23158,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
             PyObject *__pyx_callargs[2] = {__pyx_t_10, __pyx_mstate_global->__pyx_n_u_part};
             __pyx_t_2 = __Pyx_PyObject_FastCallMethod((PyObject*)__pyx_mstate_global->__pyx_n_u_group, __pyx_callargs+__pyx_t_4, (2-__pyx_t_4) | (1*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
             __Pyx_XDECREF(__pyx_t_10); __pyx_t_10 = 0;
-            if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 455, __pyx_L1_error)
+            if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 457, __pyx_L1_error)
             __Pyx_GOTREF(__pyx_t_2);
           }
           __pyx_t_1 = __pyx_t_2;
@@ -23204,14 +23169,14 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
             __pyx_t_21 = __Pyx_PyObject_FastCallMethod((PyObject*)__pyx_mstate_global->__pyx_n_u_upper, __pyx_callargs+__pyx_t_4, (1-__pyx_t_4) | (1*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
             __Pyx_XDECREF(__pyx_t_1); __pyx_t_1 = 0;
             __Pyx_DECREF(__pyx_t_2); __pyx_t_2 = 0;
-            if (unlikely(!__pyx_t_21)) __PYX_ERR(0, 455, __pyx_L1_error)
+            if (unlikely(!__pyx_t_21)) __PYX_ERR(0, 457, __pyx_L1_error)
             __Pyx_GOTREF(__pyx_t_21);
           }
-          if (!(likely(PyUnicode_CheckExact(__pyx_t_21))||((__pyx_t_21) == Py_None) || __Pyx_RaiseUnexpectedTypeError("str", __pyx_t_21))) __PYX_ERR(0, 455, __pyx_L1_error)
+          if (!(likely(PyUnicode_CheckExact(__pyx_t_21))||((__pyx_t_21) == Py_None) || __Pyx_RaiseUnexpectedTypeError("str", __pyx_t_21))) __PYX_ERR(0, 457, __pyx_L1_error)
           __Pyx_XDECREF_SET(__pyx_v_part, ((PyObject*)__pyx_t_21));
           __pyx_t_21 = 0;
 
-          /* "thesis_pkg/core/sec/extraction_fast.pyx":456
+          /* "thesis_pkg/core/sec/extraction_fast.pyx":458
  *                         continue
  *                     part = m.group("part").upper()
  *                     if part in allowed_parts:             # <<<<<<<<<<<<<<
@@ -23220,12 +23185,12 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
           if (unlikely(__pyx_v_allowed_parts == Py_None)) {
             PyErr_SetString(PyExc_TypeError, "'NoneType' object is not iterable");
-            __PYX_ERR(0, 456, __pyx_L1_error)
+            __PYX_ERR(0, 458, __pyx_L1_error)
           }
-          __pyx_t_11 = (__Pyx_PySet_ContainsTF(__pyx_v_part, __pyx_v_allowed_parts, Py_EQ)); if (unlikely((__pyx_t_11 < 0))) __PYX_ERR(0, 456, __pyx_L1_error)
+          __pyx_t_11 = (__Pyx_PySet_ContainsTF(__pyx_v_part, __pyx_v_allowed_parts, Py_EQ)); if (unlikely((__pyx_t_11 < 0))) __PYX_ERR(0, 458, __pyx_L1_error)
           if (__pyx_t_11) {
 
-            /* "thesis_pkg/core/sec/extraction_fast.pyx":457
+            /* "thesis_pkg/core/sec/extraction_fast.pyx":459
  *                     part = m.group("part").upper()
  *                     if part in allowed_parts:
  *                         next_part = m             # <<<<<<<<<<<<<<
@@ -23235,7 +23200,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
             __Pyx_INCREF(__pyx_v_m);
             __Pyx_DECREF_SET(__pyx_v_next_part, __pyx_v_m);
 
-            /* "thesis_pkg/core/sec/extraction_fast.pyx":456
+            /* "thesis_pkg/core/sec/extraction_fast.pyx":458
  *                         continue
  *                     part = m.group("part").upper()
  *                     if part in allowed_parts:             # <<<<<<<<<<<<<<
@@ -23244,7 +23209,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
           }
 
-          /* "thesis_pkg/core/sec/extraction_fast.pyx":451
+          /* "thesis_pkg/core/sec/extraction_fast.pyx":453
  *             else:
  *                 m = PART_LINESTART_PATTERN.match(line)
  *                 if m is not None:             # <<<<<<<<<<<<<<
@@ -23255,7 +23220,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
       }
       __pyx_L70:;
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":445
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":447
  *         next_part = None
  *         part_iter = None
  *         if has_part_hint:             # <<<<<<<<<<<<<<
@@ -23264,7 +23229,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
     }
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":459
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":461
  *                         next_part = m
  * 
  *         next_item = None             # <<<<<<<<<<<<<<
@@ -23274,7 +23239,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
     __Pyx_INCREF(Py_None);
     __Pyx_XDECREF_SET(__pyx_v_next_item, Py_None);
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":460
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":462
  * 
  *         next_item = None
  *         item_iter = None             # <<<<<<<<<<<<<<
@@ -23284,7 +23249,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
     __Pyx_INCREF(Py_None);
     __Pyx_XDECREF_SET(__pyx_v_item_iter, Py_None);
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":461
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":463
  *         next_item = None
  *         item_iter = None
  *         if has_item_hint:             # <<<<<<<<<<<<<<
@@ -23293,7 +23258,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
     if (__pyx_v_has_item_hint) {
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":462
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":464
  *         item_iter = None
  *         if has_item_hint:
  *             item_iter = ITEM_CANDIDATE_PATTERN.finditer(line)             # <<<<<<<<<<<<<<
@@ -23301,9 +23266,9 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
  *                 next_item = next(item_iter)
 */
       __pyx_t_2 = NULL;
-      __Pyx_GetModuleGlobalName(__pyx_t_1, __pyx_mstate_global->__pyx_n_u_ITEM_CANDIDATE_PATTERN); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 462, __pyx_L1_error)
+      __Pyx_GetModuleGlobalName(__pyx_t_1, __pyx_mstate_global->__pyx_n_u_ITEM_CANDIDATE_PATTERN); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 464, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_1);
-      __pyx_t_10 = __Pyx_PyObject_GetAttrStr(__pyx_t_1, __pyx_mstate_global->__pyx_n_u_finditer); if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 462, __pyx_L1_error)
+      __pyx_t_10 = __Pyx_PyObject_GetAttrStr(__pyx_t_1, __pyx_mstate_global->__pyx_n_u_finditer); if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 464, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_10);
       __Pyx_DECREF(__pyx_t_1); __pyx_t_1 = 0;
       __pyx_t_4 = 1;
@@ -23323,13 +23288,13 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
         __pyx_t_21 = __Pyx_PyObject_FastCall((PyObject*)__pyx_t_10, __pyx_callargs+__pyx_t_4, (2-__pyx_t_4) | (__pyx_t_4*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
         __Pyx_XDECREF(__pyx_t_2); __pyx_t_2 = 0;
         __Pyx_DECREF(__pyx_t_10); __pyx_t_10 = 0;
-        if (unlikely(!__pyx_t_21)) __PYX_ERR(0, 462, __pyx_L1_error)
+        if (unlikely(!__pyx_t_21)) __PYX_ERR(0, 464, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_21);
       }
       __Pyx_DECREF_SET(__pyx_v_item_iter, __pyx_t_21);
       __pyx_t_21 = 0;
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":463
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":465
  *         if has_item_hint:
  *             item_iter = ITEM_CANDIDATE_PATTERN.finditer(line)
  *             try:             # <<<<<<<<<<<<<<
@@ -23345,19 +23310,19 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
         __Pyx_XGOTREF(__pyx_t_25);
         /*try:*/ {
 
-          /* "thesis_pkg/core/sec/extraction_fast.pyx":464
+          /* "thesis_pkg/core/sec/extraction_fast.pyx":466
  *             item_iter = ITEM_CANDIDATE_PATTERN.finditer(line)
  *             try:
  *                 next_item = next(item_iter)             # <<<<<<<<<<<<<<
  *             except StopIteration:
  *                 next_item = None
 */
-          __pyx_t_21 = __Pyx_PyIter_Next(__pyx_v_item_iter); if (unlikely(!__pyx_t_21)) __PYX_ERR(0, 464, __pyx_L75_error)
+          __pyx_t_21 = __Pyx_PyIter_Next(__pyx_v_item_iter); if (unlikely(!__pyx_t_21)) __PYX_ERR(0, 466, __pyx_L75_error)
           __Pyx_GOTREF(__pyx_t_21);
           __Pyx_DECREF_SET(__pyx_v_next_item, __pyx_t_21);
           __pyx_t_21 = 0;
 
-          /* "thesis_pkg/core/sec/extraction_fast.pyx":463
+          /* "thesis_pkg/core/sec/extraction_fast.pyx":465
  *         if has_item_hint:
  *             item_iter = ITEM_CANDIDATE_PATTERN.finditer(line)
  *             try:             # <<<<<<<<<<<<<<
@@ -23380,7 +23345,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
         __PYX_XCLEAR_MEMVIEW(&__pyx_t_5, 1);
         __pyx_t_5.memview = NULL; __pyx_t_5.data = NULL;
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":465
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":467
  *             try:
  *                 next_item = next(item_iter)
  *             except StopIteration:             # <<<<<<<<<<<<<<
@@ -23391,7 +23356,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
         if (__pyx_t_15) {
           __Pyx_ErrRestore(0,0,0);
 
-          /* "thesis_pkg/core/sec/extraction_fast.pyx":466
+          /* "thesis_pkg/core/sec/extraction_fast.pyx":468
  *                 next_item = next(item_iter)
  *             except StopIteration:
  *                 next_item = None             # <<<<<<<<<<<<<<
@@ -23404,7 +23369,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
         }
         goto __pyx_L77_except_error;
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":463
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":465
  *         if has_item_hint:
  *             item_iter = ITEM_CANDIDATE_PATTERN.finditer(line)
  *             try:             # <<<<<<<<<<<<<<
@@ -23425,7 +23390,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
         __pyx_L82_try_end:;
       }
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":461
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":463
  *         next_item = None
  *         item_iter = None
  *         if has_item_hint:             # <<<<<<<<<<<<<<
@@ -23434,7 +23399,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
     }
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":468
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":470
  *                 next_item = None
  * 
  *         if next_part is None and next_item is None:             # <<<<<<<<<<<<<<
@@ -23452,7 +23417,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
     __pyx_L86_bool_binop_done:;
     if (__pyx_t_11) {
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":469
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":471
  * 
  *         if next_part is None and next_item is None:
  *             continue             # <<<<<<<<<<<<<<
@@ -23461,7 +23426,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
       goto __pyx_L3_continue;
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":468
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":470
  *                 next_item = None
  * 
  *         if next_part is None and next_item is None:             # <<<<<<<<<<<<<<
@@ -23470,7 +23435,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
     }
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":470
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":472
  *         if next_part is None and next_item is None:
  *             continue
  *         line_part = None             # <<<<<<<<<<<<<<
@@ -23480,7 +23445,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
     __Pyx_INCREF(Py_None);
     __Pyx_XDECREF_SET(__pyx_v_line_part, Py_None);
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":471
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":473
  *             continue
  *         line_part = None
  *         line_part_end = None             # <<<<<<<<<<<<<<
@@ -23490,7 +23455,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
     __Pyx_INCREF(Py_None);
     __Pyx_XDECREF_SET(__pyx_v_line_part_end, Py_None);
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":472
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":474
  *         line_part = None
  *         line_part_end = None
  *         is_toc_marker = TOC_MARKER_PATTERN.search(line) is not None             # <<<<<<<<<<<<<<
@@ -23498,9 +23463,9 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
  *         if has_item_hint and (i < 800 or is_toc_marker or line_in_toc_range):
 */
     __pyx_t_10 = NULL;
-    __Pyx_GetModuleGlobalName(__pyx_t_2, __pyx_mstate_global->__pyx_n_u_TOC_MARKER_PATTERN); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 472, __pyx_L1_error)
+    __Pyx_GetModuleGlobalName(__pyx_t_2, __pyx_mstate_global->__pyx_n_u_TOC_MARKER_PATTERN); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 474, __pyx_L1_error)
     __Pyx_GOTREF(__pyx_t_2);
-    __pyx_t_1 = __Pyx_PyObject_GetAttrStr(__pyx_t_2, __pyx_mstate_global->__pyx_n_u_search); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 472, __pyx_L1_error)
+    __pyx_t_1 = __Pyx_PyObject_GetAttrStr(__pyx_t_2, __pyx_mstate_global->__pyx_n_u_search); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 474, __pyx_L1_error)
     __Pyx_GOTREF(__pyx_t_1);
     __Pyx_DECREF(__pyx_t_2); __pyx_t_2 = 0;
     __pyx_t_4 = 1;
@@ -23520,14 +23485,14 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
       __pyx_t_21 = __Pyx_PyObject_FastCall((PyObject*)__pyx_t_1, __pyx_callargs+__pyx_t_4, (2-__pyx_t_4) | (__pyx_t_4*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
       __Pyx_XDECREF(__pyx_t_10); __pyx_t_10 = 0;
       __Pyx_DECREF(__pyx_t_1); __pyx_t_1 = 0;
-      if (unlikely(!__pyx_t_21)) __PYX_ERR(0, 472, __pyx_L1_error)
+      if (unlikely(!__pyx_t_21)) __PYX_ERR(0, 474, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_21);
     }
     __pyx_t_11 = (__pyx_t_21 != Py_None);
     __Pyx_DECREF(__pyx_t_21); __pyx_t_21 = 0;
     __pyx_v_is_toc_marker = __pyx_t_11;
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":473
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":475
  *         line_part_end = None
  *         is_toc_marker = TOC_MARKER_PATTERN.search(line) is not None
  *         item_word_count = 0             # <<<<<<<<<<<<<<
@@ -23536,7 +23501,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
     __pyx_v_item_word_count = 0;
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":474
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":476
  *         is_toc_marker = TOC_MARKER_PATTERN.search(line) is not None
  *         item_word_count = 0
  *         if has_item_hint and (i < 800 or is_toc_marker or line_in_toc_range):             # <<<<<<<<<<<<<<
@@ -23563,7 +23528,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
     __pyx_L89_bool_binop_done:;
     if (__pyx_t_11) {
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":475
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":477
  *         item_word_count = 0
  *         if has_item_hint and (i < 800 or is_toc_marker or line_in_toc_range):
  *             item_word_count = len(ITEM_WORD_PATTERN.findall(line))             # <<<<<<<<<<<<<<
@@ -23571,9 +23536,9 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
  *         if (
 */
       __pyx_t_1 = NULL;
-      __Pyx_GetModuleGlobalName(__pyx_t_10, __pyx_mstate_global->__pyx_n_u_ITEM_WORD_PATTERN); if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 475, __pyx_L1_error)
+      __Pyx_GetModuleGlobalName(__pyx_t_10, __pyx_mstate_global->__pyx_n_u_ITEM_WORD_PATTERN); if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 477, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_10);
-      __pyx_t_2 = __Pyx_PyObject_GetAttrStr(__pyx_t_10, __pyx_mstate_global->__pyx_n_u_findall); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 475, __pyx_L1_error)
+      __pyx_t_2 = __Pyx_PyObject_GetAttrStr(__pyx_t_10, __pyx_mstate_global->__pyx_n_u_findall); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 477, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_2);
       __Pyx_DECREF(__pyx_t_10); __pyx_t_10 = 0;
       __pyx_t_4 = 1;
@@ -23593,14 +23558,14 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
         __pyx_t_21 = __Pyx_PyObject_FastCall((PyObject*)__pyx_t_2, __pyx_callargs+__pyx_t_4, (2-__pyx_t_4) | (__pyx_t_4*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
         __Pyx_XDECREF(__pyx_t_1); __pyx_t_1 = 0;
         __Pyx_DECREF(__pyx_t_2); __pyx_t_2 = 0;
-        if (unlikely(!__pyx_t_21)) __PYX_ERR(0, 475, __pyx_L1_error)
+        if (unlikely(!__pyx_t_21)) __PYX_ERR(0, 477, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_21);
       }
-      __pyx_t_17 = PyObject_Length(__pyx_t_21); if (unlikely(__pyx_t_17 == ((Py_ssize_t)-1))) __PYX_ERR(0, 475, __pyx_L1_error)
+      __pyx_t_17 = PyObject_Length(__pyx_t_21); if (unlikely(__pyx_t_17 == ((Py_ssize_t)-1))) __PYX_ERR(0, 477, __pyx_L1_error)
       __Pyx_DECREF(__pyx_t_21); __pyx_t_21 = 0;
       __pyx_v_item_word_count = __pyx_t_17;
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":474
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":476
  *         is_toc_marker = TOC_MARKER_PATTERN.search(line) is not None
  *         item_word_count = 0
  *         if has_item_hint and (i < 800 or is_toc_marker or line_in_toc_range):             # <<<<<<<<<<<<<<
@@ -23609,7 +23574,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
     }
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":476
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":478
  *         if has_item_hint and (i < 800 or is_toc_marker or line_in_toc_range):
  *             item_word_count = len(ITEM_WORD_PATTERN.findall(line))
  *         line_toc_like = _looks_like_toc_heading_line(lines, i)             # <<<<<<<<<<<<<<
@@ -23617,9 +23582,9 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
  *             item_word_count >= 3
 */
     __pyx_t_2 = NULL;
-    __Pyx_GetModuleGlobalName(__pyx_t_1, __pyx_mstate_global->__pyx_n_u_looks_like_toc_heading_line); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 476, __pyx_L1_error)
+    __Pyx_GetModuleGlobalName(__pyx_t_1, __pyx_mstate_global->__pyx_n_u_looks_like_toc_heading_line); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 478, __pyx_L1_error)
     __Pyx_GOTREF(__pyx_t_1);
-    __pyx_t_10 = PyLong_FromSsize_t(__pyx_v_i); if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 476, __pyx_L1_error)
+    __pyx_t_10 = PyLong_FromSsize_t(__pyx_v_i); if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 478, __pyx_L1_error)
     __Pyx_GOTREF(__pyx_t_10);
     __pyx_t_4 = 1;
     #if CYTHON_UNPACK_METHODS
@@ -23639,14 +23604,14 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
       __Pyx_XDECREF(__pyx_t_2); __pyx_t_2 = 0;
       __Pyx_DECREF(__pyx_t_10); __pyx_t_10 = 0;
       __Pyx_DECREF(__pyx_t_1); __pyx_t_1 = 0;
-      if (unlikely(!__pyx_t_21)) __PYX_ERR(0, 476, __pyx_L1_error)
+      if (unlikely(!__pyx_t_21)) __PYX_ERR(0, 478, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_21);
     }
-    __pyx_t_11 = __Pyx_PyObject_IsTrue(__pyx_t_21); if (unlikely((__pyx_t_11 == (int)-1) && PyErr_Occurred())) __PYX_ERR(0, 476, __pyx_L1_error)
+    __pyx_t_11 = __Pyx_PyObject_IsTrue(__pyx_t_21); if (unlikely((__pyx_t_11 == (int)-1) && PyErr_Occurred())) __PYX_ERR(0, 478, __pyx_L1_error)
     __Pyx_DECREF(__pyx_t_21); __pyx_t_21 = 0;
     __pyx_v_line_toc_like = __pyx_t_11;
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":478
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":480
  *         line_toc_like = _looks_like_toc_heading_line(lines, i)
  *         if (
  *             item_word_count >= 3             # <<<<<<<<<<<<<<
@@ -23660,7 +23625,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
       goto __pyx_L94_bool_binop_done;
     }
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":479
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":481
  *         if (
  *             item_word_count >= 3
  *             and len(line) <= 5000             # <<<<<<<<<<<<<<
@@ -23669,9 +23634,9 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
     if (unlikely(__pyx_v_line == Py_None)) {
       PyErr_SetString(PyExc_TypeError, "object of type 'NoneType' has no len()");
-      __PYX_ERR(0, 479, __pyx_L1_error)
+      __PYX_ERR(0, 481, __pyx_L1_error)
     }
-    __pyx_t_17 = __Pyx_PyUnicode_GET_LENGTH(__pyx_v_line); if (unlikely(__pyx_t_17 == ((Py_ssize_t)-1))) __PYX_ERR(0, 479, __pyx_L1_error)
+    __pyx_t_17 = __Pyx_PyUnicode_GET_LENGTH(__pyx_v_line); if (unlikely(__pyx_t_17 == ((Py_ssize_t)-1))) __PYX_ERR(0, 481, __pyx_L1_error)
     __pyx_t_9 = (__pyx_t_17 <= 0x1388);
     if (__pyx_t_9) {
     } else {
@@ -23679,7 +23644,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
       goto __pyx_L94_bool_binop_done;
     }
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":480
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":482
  *             item_word_count >= 3
  *             and len(line) <= 5000
  *             and (i < 800 or is_toc_marker or line_in_toc_range)             # <<<<<<<<<<<<<<
@@ -23700,7 +23665,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
     __pyx_t_11 = __pyx_v_line_in_toc_range;
     __pyx_L94_bool_binop_done:;
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":477
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":479
  *             item_word_count = len(ITEM_WORD_PATTERN.findall(line))
  *         line_toc_like = _looks_like_toc_heading_line(lines, i)
  *         if (             # <<<<<<<<<<<<<<
@@ -23709,7 +23674,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
     if (__pyx_t_11) {
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":482
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":484
  *             and (i < 800 or is_toc_marker or line_in_toc_range)
  *         ):
  *             line_toc_like = True             # <<<<<<<<<<<<<<
@@ -23718,7 +23683,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
       __pyx_v_line_toc_like = 1;
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":477
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":479
  *             item_word_count = len(ITEM_WORD_PATTERN.findall(line))
  *         line_toc_like = _looks_like_toc_heading_line(lines, i)
  *         if (             # <<<<<<<<<<<<<<
@@ -23727,7 +23692,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
     }
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":483
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":485
  *         ):
  *             line_toc_like = True
  *         if is_toc_marker and item_word_count >= 1 and len(line) <= 8000:             # <<<<<<<<<<<<<<
@@ -23747,15 +23712,15 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
     }
     if (unlikely(__pyx_v_line == Py_None)) {
       PyErr_SetString(PyExc_TypeError, "object of type 'NoneType' has no len()");
-      __PYX_ERR(0, 483, __pyx_L1_error)
+      __PYX_ERR(0, 485, __pyx_L1_error)
     }
-    __pyx_t_17 = __Pyx_PyUnicode_GET_LENGTH(__pyx_v_line); if (unlikely(__pyx_t_17 == ((Py_ssize_t)-1))) __PYX_ERR(0, 483, __pyx_L1_error)
+    __pyx_t_17 = __Pyx_PyUnicode_GET_LENGTH(__pyx_v_line); if (unlikely(__pyx_t_17 == ((Py_ssize_t)-1))) __PYX_ERR(0, 485, __pyx_L1_error)
     __pyx_t_9 = (__pyx_t_17 <= 0x1F40);
     __pyx_t_11 = __pyx_t_9;
     __pyx_L100_bool_binop_done:;
     if (__pyx_t_11) {
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":484
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":486
  *             line_toc_like = True
  *         if is_toc_marker and item_word_count >= 1 and len(line) <= 8000:
  *             line_toc_like = True             # <<<<<<<<<<<<<<
@@ -23764,7 +23729,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
       __pyx_v_line_toc_like = 1;
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":483
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":485
  *         ):
  *             line_toc_like = True
  *         if is_toc_marker and item_word_count >= 1 and len(line) <= 8000:             # <<<<<<<<<<<<<<
@@ -23773,7 +23738,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
     }
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":485
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":487
  *         if is_toc_marker and item_word_count >= 1 and len(line) <= 8000:
  *             line_toc_like = True
  *         content_after = False             # <<<<<<<<<<<<<<
@@ -23782,7 +23747,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
     __pyx_v_content_after = 0;
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":486
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":488
  *             line_toc_like = True
  *         content_after = False
  *         if line_in_toc_range or toc_window_flags[i]:             # <<<<<<<<<<<<<<
@@ -23796,14 +23761,14 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
     }
     if (unlikely(__pyx_v_toc_window_flags == Py_None)) {
       PyErr_SetString(PyExc_TypeError, "'NoneType' object is not subscriptable");
-      __PYX_ERR(0, 486, __pyx_L1_error)
+      __PYX_ERR(0, 488, __pyx_L1_error)
     }
-    __pyx_t_9 = __Pyx_PyObject_IsTrue(__Pyx_PyList_GET_ITEM(__pyx_v_toc_window_flags, __pyx_v_i)); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 486, __pyx_L1_error)
+    __pyx_t_9 = __Pyx_PyObject_IsTrue(__Pyx_PyList_GET_ITEM(__pyx_v_toc_window_flags, __pyx_v_i)); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 488, __pyx_L1_error)
     __pyx_t_11 = __pyx_t_9;
     __pyx_L104_bool_binop_done:;
     if (__pyx_t_11) {
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":487
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":489
  *         content_after = False
  *         if line_in_toc_range or toc_window_flags[i]:
  *             content_after = _has_content_after(             # <<<<<<<<<<<<<<
@@ -23811,20 +23776,20 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
  *                 i,
 */
       __pyx_t_1 = NULL;
-      __Pyx_GetModuleGlobalName(__pyx_t_10, __pyx_mstate_global->__pyx_n_u_has_content_after); if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 487, __pyx_L1_error)
+      __Pyx_GetModuleGlobalName(__pyx_t_10, __pyx_mstate_global->__pyx_n_u_has_content_after); if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 489, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_10);
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":489
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":491
  *             content_after = _has_content_after(
  *                 lines,
  *                 i,             # <<<<<<<<<<<<<<
  *                 toc_cache=toc_cache,
  *                 toc_window_flags=toc_window_flags,
 */
-      __pyx_t_2 = PyLong_FromSsize_t(__pyx_v_i); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 489, __pyx_L1_error)
+      __pyx_t_2 = PyLong_FromSsize_t(__pyx_v_i); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 491, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_2);
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":491
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":493
  *                 i,
  *                 toc_cache=toc_cache,
  *                 toc_window_flags=toc_window_flags,             # <<<<<<<<<<<<<<
@@ -23845,31 +23810,31 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
       #endif
       {
         PyObject *__pyx_callargs[3 + ((CYTHON_VECTORCALL) ? 2 : 0)] = {__pyx_t_1, __pyx_v_lines, __pyx_t_2};
-        __pyx_t_13 = __Pyx_MakeVectorcallBuilderKwds(2); if (unlikely(!__pyx_t_13)) __PYX_ERR(0, 487, __pyx_L1_error)
+        __pyx_t_13 = __Pyx_MakeVectorcallBuilderKwds(2); if (unlikely(!__pyx_t_13)) __PYX_ERR(0, 489, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_13);
-        if (__Pyx_VectorcallBuilder_AddArg(__pyx_mstate_global->__pyx_n_u_toc_cache, __pyx_v_toc_cache, __pyx_t_13, __pyx_callargs+3, 0) < (0)) __PYX_ERR(0, 487, __pyx_L1_error)
-        if (__Pyx_VectorcallBuilder_AddArg(__pyx_mstate_global->__pyx_n_u_toc_window_flags, __pyx_v_toc_window_flags, __pyx_t_13, __pyx_callargs+3, 1) < (0)) __PYX_ERR(0, 487, __pyx_L1_error)
+        if (__Pyx_VectorcallBuilder_AddArg(__pyx_mstate_global->__pyx_n_u_toc_cache, __pyx_v_toc_cache, __pyx_t_13, __pyx_callargs+3, 0) < (0)) __PYX_ERR(0, 489, __pyx_L1_error)
+        if (__Pyx_VectorcallBuilder_AddArg(__pyx_mstate_global->__pyx_n_u_toc_window_flags, __pyx_v_toc_window_flags, __pyx_t_13, __pyx_callargs+3, 1) < (0)) __PYX_ERR(0, 489, __pyx_L1_error)
         __pyx_t_21 = __Pyx_Object_Vectorcall_CallFromBuilder((PyObject*)__pyx_t_10, __pyx_callargs+__pyx_t_4, (3-__pyx_t_4) | (__pyx_t_4*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET), __pyx_t_13);
         __Pyx_XDECREF(__pyx_t_1); __pyx_t_1 = 0;
         __Pyx_DECREF(__pyx_t_2); __pyx_t_2 = 0;
         __Pyx_DECREF(__pyx_t_13); __pyx_t_13 = 0;
         __Pyx_DECREF(__pyx_t_10); __pyx_t_10 = 0;
-        if (unlikely(!__pyx_t_21)) __PYX_ERR(0, 487, __pyx_L1_error)
+        if (unlikely(!__pyx_t_21)) __PYX_ERR(0, 489, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_21);
       }
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":487
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":489
  *         content_after = False
  *         if line_in_toc_range or toc_window_flags[i]:
  *             content_after = _has_content_after(             # <<<<<<<<<<<<<<
  *                 lines,
  *                 i,
 */
-      __pyx_t_11 = __Pyx_PyObject_IsTrue(__pyx_t_21); if (unlikely((__pyx_t_11 == (int)-1) && PyErr_Occurred())) __PYX_ERR(0, 487, __pyx_L1_error)
+      __pyx_t_11 = __Pyx_PyObject_IsTrue(__pyx_t_21); if (unlikely((__pyx_t_11 == (int)-1) && PyErr_Occurred())) __PYX_ERR(0, 489, __pyx_L1_error)
       __Pyx_DECREF(__pyx_t_21); __pyx_t_21 = 0;
       __pyx_v_content_after = __pyx_t_11;
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":486
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":488
  *             line_toc_like = True
  *         content_after = False
  *         if line_in_toc_range or toc_window_flags[i]:             # <<<<<<<<<<<<<<
@@ -23878,7 +23843,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
     }
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":493
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":495
  *                 toc_window_flags=toc_window_flags,
  *             )
  *         toc_window_like = False             # <<<<<<<<<<<<<<
@@ -23887,7 +23852,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
     __pyx_v_toc_window_like = 0;
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":494
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":496
  *             )
  *         toc_window_like = False
  *         if not line_toc_like:             # <<<<<<<<<<<<<<
@@ -23897,7 +23862,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
     __pyx_t_11 = (!__pyx_v_line_toc_like);
     if (__pyx_t_11) {
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":495
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":497
  *         toc_window_like = False
  *         if not line_toc_like:
  *             if embedded_headings._toc_candidate_line(line):             # <<<<<<<<<<<<<<
@@ -23905,9 +23870,9 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
  *             elif toc_window_flags[i] and not content_after:
 */
       __pyx_t_10 = NULL;
-      __Pyx_GetModuleGlobalName(__pyx_t_13, __pyx_mstate_global->__pyx_n_u_embedded_headings); if (unlikely(!__pyx_t_13)) __PYX_ERR(0, 495, __pyx_L1_error)
+      __Pyx_GetModuleGlobalName(__pyx_t_13, __pyx_mstate_global->__pyx_n_u_embedded_headings); if (unlikely(!__pyx_t_13)) __PYX_ERR(0, 497, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_13);
-      __pyx_t_2 = __Pyx_PyObject_GetAttrStr(__pyx_t_13, __pyx_mstate_global->__pyx_n_u_toc_candidate_line); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 495, __pyx_L1_error)
+      __pyx_t_2 = __Pyx_PyObject_GetAttrStr(__pyx_t_13, __pyx_mstate_global->__pyx_n_u_toc_candidate_line); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 497, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_2);
       __Pyx_DECREF(__pyx_t_13); __pyx_t_13 = 0;
       __pyx_t_4 = 1;
@@ -23927,14 +23892,14 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
         __pyx_t_21 = __Pyx_PyObject_FastCall((PyObject*)__pyx_t_2, __pyx_callargs+__pyx_t_4, (2-__pyx_t_4) | (__pyx_t_4*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
         __Pyx_XDECREF(__pyx_t_10); __pyx_t_10 = 0;
         __Pyx_DECREF(__pyx_t_2); __pyx_t_2 = 0;
-        if (unlikely(!__pyx_t_21)) __PYX_ERR(0, 495, __pyx_L1_error)
+        if (unlikely(!__pyx_t_21)) __PYX_ERR(0, 497, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_21);
       }
-      __pyx_t_11 = __Pyx_PyObject_IsTrue(__pyx_t_21); if (unlikely((__pyx_t_11 < 0))) __PYX_ERR(0, 495, __pyx_L1_error)
+      __pyx_t_11 = __Pyx_PyObject_IsTrue(__pyx_t_21); if (unlikely((__pyx_t_11 < 0))) __PYX_ERR(0, 497, __pyx_L1_error)
       __Pyx_DECREF(__pyx_t_21); __pyx_t_21 = 0;
       if (__pyx_t_11) {
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":496
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":498
  *         if not line_toc_like:
  *             if embedded_headings._toc_candidate_line(line):
  *                 line_toc_like = True             # <<<<<<<<<<<<<<
@@ -23943,7 +23908,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
         __pyx_v_line_toc_like = 1;
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":495
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":497
  *         toc_window_like = False
  *         if not line_toc_like:
  *             if embedded_headings._toc_candidate_line(line):             # <<<<<<<<<<<<<<
@@ -23953,7 +23918,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
         goto __pyx_L107;
       }
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":497
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":499
  *             if embedded_headings._toc_candidate_line(line):
  *                 line_toc_like = True
  *             elif toc_window_flags[i] and not content_after:             # <<<<<<<<<<<<<<
@@ -23962,9 +23927,9 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
       if (unlikely(__pyx_v_toc_window_flags == Py_None)) {
         PyErr_SetString(PyExc_TypeError, "'NoneType' object is not subscriptable");
-        __PYX_ERR(0, 497, __pyx_L1_error)
+        __PYX_ERR(0, 499, __pyx_L1_error)
       }
-      __pyx_t_9 = __Pyx_PyObject_IsTrue(__Pyx_PyList_GET_ITEM(__pyx_v_toc_window_flags, __pyx_v_i)); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 497, __pyx_L1_error)
+      __pyx_t_9 = __Pyx_PyObject_IsTrue(__Pyx_PyList_GET_ITEM(__pyx_v_toc_window_flags, __pyx_v_i)); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 499, __pyx_L1_error)
       if (__pyx_t_9) {
       } else {
         __pyx_t_11 = __pyx_t_9;
@@ -23975,7 +23940,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
       __pyx_L108_bool_binop_done:;
       if (__pyx_t_11) {
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":498
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":500
  *                 line_toc_like = True
  *             elif toc_window_flags[i] and not content_after:
  *                 if not (scan_sparse_layout and len(line) > 2000):             # <<<<<<<<<<<<<<
@@ -23989,16 +23954,16 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
         }
         if (unlikely(__pyx_v_line == Py_None)) {
           PyErr_SetString(PyExc_TypeError, "object of type 'NoneType' has no len()");
-          __PYX_ERR(0, 498, __pyx_L1_error)
+          __PYX_ERR(0, 500, __pyx_L1_error)
         }
-        __pyx_t_17 = __Pyx_PyUnicode_GET_LENGTH(__pyx_v_line); if (unlikely(__pyx_t_17 == ((Py_ssize_t)-1))) __PYX_ERR(0, 498, __pyx_L1_error)
+        __pyx_t_17 = __Pyx_PyUnicode_GET_LENGTH(__pyx_v_line); if (unlikely(__pyx_t_17 == ((Py_ssize_t)-1))) __PYX_ERR(0, 500, __pyx_L1_error)
         __pyx_t_9 = (__pyx_t_17 > 0x7D0);
         __pyx_t_11 = __pyx_t_9;
         __pyx_L111_bool_binop_done:;
         __pyx_t_9 = (!__pyx_t_11);
         if (__pyx_t_9) {
 
-          /* "thesis_pkg/core/sec/extraction_fast.pyx":499
+          /* "thesis_pkg/core/sec/extraction_fast.pyx":501
  *             elif toc_window_flags[i] and not content_after:
  *                 if not (scan_sparse_layout and len(line) > 2000):
  *                     line_toc_like = True             # <<<<<<<<<<<<<<
@@ -24007,7 +23972,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
           __pyx_v_line_toc_like = 1;
 
-          /* "thesis_pkg/core/sec/extraction_fast.pyx":500
+          /* "thesis_pkg/core/sec/extraction_fast.pyx":502
  *                 if not (scan_sparse_layout and len(line) > 2000):
  *                     line_toc_like = True
  *                     toc_window_like = True             # <<<<<<<<<<<<<<
@@ -24016,7 +23981,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
           __pyx_v_toc_window_like = 1;
 
-          /* "thesis_pkg/core/sec/extraction_fast.pyx":498
+          /* "thesis_pkg/core/sec/extraction_fast.pyx":500
  *                 line_toc_like = True
  *             elif toc_window_flags[i] and not content_after:
  *                 if not (scan_sparse_layout and len(line) > 2000):             # <<<<<<<<<<<<<<
@@ -24025,7 +23990,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
         }
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":497
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":499
  *             if embedded_headings._toc_candidate_line(line):
  *                 line_toc_like = True
  *             elif toc_window_flags[i] and not content_after:             # <<<<<<<<<<<<<<
@@ -24035,7 +24000,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
       }
       __pyx_L107:;
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":494
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":496
  *             )
  *         toc_window_like = False
  *         if not line_toc_like:             # <<<<<<<<<<<<<<
@@ -24044,7 +24009,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
     }
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":501
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":503
  *                     line_toc_like = True
  *                     toc_window_like = True
  *         compound_line = _line_has_compound_items(line)             # <<<<<<<<<<<<<<
@@ -24052,7 +24017,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
  *         while next_part is not None or next_item is not None:
 */
     __pyx_t_2 = NULL;
-    __Pyx_GetModuleGlobalName(__pyx_t_10, __pyx_mstate_global->__pyx_n_u_line_has_compound_items); if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 501, __pyx_L1_error)
+    __Pyx_GetModuleGlobalName(__pyx_t_10, __pyx_mstate_global->__pyx_n_u_line_has_compound_items); if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 503, __pyx_L1_error)
     __Pyx_GOTREF(__pyx_t_10);
     __pyx_t_4 = 1;
     #if CYTHON_UNPACK_METHODS
@@ -24071,14 +24036,14 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
       __pyx_t_21 = __Pyx_PyObject_FastCall((PyObject*)__pyx_t_10, __pyx_callargs+__pyx_t_4, (2-__pyx_t_4) | (__pyx_t_4*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
       __Pyx_XDECREF(__pyx_t_2); __pyx_t_2 = 0;
       __Pyx_DECREF(__pyx_t_10); __pyx_t_10 = 0;
-      if (unlikely(!__pyx_t_21)) __PYX_ERR(0, 501, __pyx_L1_error)
+      if (unlikely(!__pyx_t_21)) __PYX_ERR(0, 503, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_21);
     }
-    __pyx_t_9 = __Pyx_PyObject_IsTrue(__pyx_t_21); if (unlikely((__pyx_t_9 == (int)-1) && PyErr_Occurred())) __PYX_ERR(0, 501, __pyx_L1_error)
+    __pyx_t_9 = __Pyx_PyObject_IsTrue(__pyx_t_21); if (unlikely((__pyx_t_9 == (int)-1) && PyErr_Occurred())) __PYX_ERR(0, 503, __pyx_L1_error)
     __Pyx_DECREF(__pyx_t_21); __pyx_t_21 = 0;
     __pyx_v_compound_line = __pyx_t_9;
 
-    /* "thesis_pkg/core/sec/extraction_fast.pyx":503
+    /* "thesis_pkg/core/sec/extraction_fast.pyx":505
  *         compound_line = _line_has_compound_items(line)
  * 
  *         while next_part is not None or next_item is not None:             # <<<<<<<<<<<<<<
@@ -24097,7 +24062,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
       __pyx_L115_bool_binop_done:;
       if (!__pyx_t_9) break;
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":505
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":507
  *         while next_part is not None or next_item is not None:
  *             if (
  *                 next_part is not None             # <<<<<<<<<<<<<<
@@ -24111,7 +24076,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
         goto __pyx_L118_bool_binop_done;
       }
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":506
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":508
  *             if (
  *                 next_part is not None
  *                 and (next_item is None or next_part.start() <= next_item.start())             # <<<<<<<<<<<<<<
@@ -24131,7 +24096,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
         PyObject *__pyx_callargs[2] = {__pyx_t_10, NULL};
         __pyx_t_21 = __Pyx_PyObject_FastCallMethod((PyObject*)__pyx_mstate_global->__pyx_n_u_start, __pyx_callargs+__pyx_t_4, (1-__pyx_t_4) | (1*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
         __Pyx_XDECREF(__pyx_t_10); __pyx_t_10 = 0;
-        if (unlikely(!__pyx_t_21)) __PYX_ERR(0, 506, __pyx_L1_error)
+        if (unlikely(!__pyx_t_21)) __PYX_ERR(0, 508, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_21);
       }
       __pyx_t_2 = __pyx_v_next_item;
@@ -24141,18 +24106,18 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
         PyObject *__pyx_callargs[2] = {__pyx_t_2, NULL};
         __pyx_t_10 = __Pyx_PyObject_FastCallMethod((PyObject*)__pyx_mstate_global->__pyx_n_u_start, __pyx_callargs+__pyx_t_4, (1-__pyx_t_4) | (1*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
         __Pyx_XDECREF(__pyx_t_2); __pyx_t_2 = 0;
-        if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 506, __pyx_L1_error)
+        if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 508, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_10);
       }
-      __pyx_t_2 = PyObject_RichCompare(__pyx_t_21, __pyx_t_10, Py_LE); __Pyx_XGOTREF(__pyx_t_2); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 506, __pyx_L1_error)
+      __pyx_t_2 = PyObject_RichCompare(__pyx_t_21, __pyx_t_10, Py_LE); __Pyx_XGOTREF(__pyx_t_2); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 508, __pyx_L1_error)
       __Pyx_DECREF(__pyx_t_21); __pyx_t_21 = 0;
       __Pyx_DECREF(__pyx_t_10); __pyx_t_10 = 0;
-      __pyx_t_11 = __Pyx_PyObject_IsTrue(__pyx_t_2); if (unlikely((__pyx_t_11 < 0))) __PYX_ERR(0, 506, __pyx_L1_error)
+      __pyx_t_11 = __Pyx_PyObject_IsTrue(__pyx_t_2); if (unlikely((__pyx_t_11 < 0))) __PYX_ERR(0, 508, __pyx_L1_error)
       __Pyx_DECREF(__pyx_t_2); __pyx_t_2 = 0;
       __pyx_t_9 = __pyx_t_11;
       __pyx_L118_bool_binop_done:;
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":504
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":506
  * 
  *         while next_part is not None or next_item is not None:
  *             if (             # <<<<<<<<<<<<<<
@@ -24161,7 +24126,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
       if (__pyx_t_9) {
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":508
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":510
  *                 and (next_item is None or next_part.start() <= next_item.start())
  *             ):
  *                 m = next_part             # <<<<<<<<<<<<<<
@@ -24171,7 +24136,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
         __Pyx_INCREF(__pyx_v_next_part);
         __Pyx_XDECREF_SET(__pyx_v_m, __pyx_v_next_part);
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":509
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":511
  *             ):
  *                 m = next_part
  *                 part = m.group("part").upper()             # <<<<<<<<<<<<<<
@@ -24185,7 +24150,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
           PyObject *__pyx_callargs[2] = {__pyx_t_13, __pyx_mstate_global->__pyx_n_u_part};
           __pyx_t_21 = __Pyx_PyObject_FastCallMethod((PyObject*)__pyx_mstate_global->__pyx_n_u_group, __pyx_callargs+__pyx_t_4, (2-__pyx_t_4) | (1*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
           __Pyx_XDECREF(__pyx_t_13); __pyx_t_13 = 0;
-          if (unlikely(!__pyx_t_21)) __PYX_ERR(0, 509, __pyx_L1_error)
+          if (unlikely(!__pyx_t_21)) __PYX_ERR(0, 511, __pyx_L1_error)
           __Pyx_GOTREF(__pyx_t_21);
         }
         __pyx_t_10 = __pyx_t_21;
@@ -24196,14 +24161,14 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
           __pyx_t_2 = __Pyx_PyObject_FastCallMethod((PyObject*)__pyx_mstate_global->__pyx_n_u_upper, __pyx_callargs+__pyx_t_4, (1-__pyx_t_4) | (1*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
           __Pyx_XDECREF(__pyx_t_10); __pyx_t_10 = 0;
           __Pyx_DECREF(__pyx_t_21); __pyx_t_21 = 0;
-          if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 509, __pyx_L1_error)
+          if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 511, __pyx_L1_error)
           __Pyx_GOTREF(__pyx_t_2);
         }
-        if (!(likely(PyUnicode_CheckExact(__pyx_t_2))||((__pyx_t_2) == Py_None) || __Pyx_RaiseUnexpectedTypeError("str", __pyx_t_2))) __PYX_ERR(0, 509, __pyx_L1_error)
+        if (!(likely(PyUnicode_CheckExact(__pyx_t_2))||((__pyx_t_2) == Py_None) || __Pyx_RaiseUnexpectedTypeError("str", __pyx_t_2))) __PYX_ERR(0, 511, __pyx_L1_error)
         __Pyx_XDECREF_SET(__pyx_v_part, ((PyObject*)__pyx_t_2));
         __pyx_t_2 = 0;
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":510
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":512
  *                 m = next_part
  *                 part = m.group("part").upper()
  *                 line_part = part             # <<<<<<<<<<<<<<
@@ -24213,7 +24178,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
         __Pyx_INCREF(__pyx_v_part);
         __Pyx_DECREF_SET(__pyx_v_line_part, __pyx_v_part);
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":511
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":513
  *                 part = m.group("part").upper()
  *                 line_part = part
  *                 line_part_end = m.end()             # <<<<<<<<<<<<<<
@@ -24227,13 +24192,13 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
           PyObject *__pyx_callargs[2] = {__pyx_t_21, NULL};
           __pyx_t_2 = __Pyx_PyObject_FastCallMethod((PyObject*)__pyx_mstate_global->__pyx_n_u_end, __pyx_callargs+__pyx_t_4, (1-__pyx_t_4) | (1*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
           __Pyx_XDECREF(__pyx_t_21); __pyx_t_21 = 0;
-          if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 511, __pyx_L1_error)
+          if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 513, __pyx_L1_error)
           __Pyx_GOTREF(__pyx_t_2);
         }
         __Pyx_DECREF_SET(__pyx_v_line_part_end, __pyx_t_2);
         __pyx_t_2 = 0;
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":512
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":514
  *                 line_part = part
  *                 line_part_end = m.end()
  *                 if line_in_toc_range:             # <<<<<<<<<<<<<<
@@ -24242,7 +24207,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
         if (__pyx_v_line_in_toc_range) {
 
-          /* "thesis_pkg/core/sec/extraction_fast.pyx":513
+          /* "thesis_pkg/core/sec/extraction_fast.pyx":515
  *                 line_part_end = m.end()
  *                 if line_in_toc_range:
  *                     if not line_has_item_word:             # <<<<<<<<<<<<<<
@@ -24252,7 +24217,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
           __pyx_t_9 = (!__pyx_v_line_has_item_word);
           if (__pyx_t_9) {
 
-            /* "thesis_pkg/core/sec/extraction_fast.pyx":514
+            /* "thesis_pkg/core/sec/extraction_fast.pyx":516
  *                 if line_in_toc_range:
  *                     if not line_has_item_word:
  *                         toc_part = part             # <<<<<<<<<<<<<<
@@ -24262,7 +24227,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
             __Pyx_INCREF(__pyx_v_part);
             __Pyx_DECREF_SET(__pyx_v_toc_part, __pyx_v_part);
 
-            /* "thesis_pkg/core/sec/extraction_fast.pyx":513
+            /* "thesis_pkg/core/sec/extraction_fast.pyx":515
  *                 line_part_end = m.end()
  *                 if line_in_toc_range:
  *                     if not line_has_item_word:             # <<<<<<<<<<<<<<
@@ -24271,7 +24236,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
           }
 
-          /* "thesis_pkg/core/sec/extraction_fast.pyx":512
+          /* "thesis_pkg/core/sec/extraction_fast.pyx":514
  *                 line_part = part
  *                 line_part_end = m.end()
  *                 if line_in_toc_range:             # <<<<<<<<<<<<<<
@@ -24281,7 +24246,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
           goto __pyx_L121;
         }
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":515
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":517
  *                     if not line_has_item_word:
  *                         toc_part = part
  *                 elif not line_has_item_word:             # <<<<<<<<<<<<<<
@@ -24291,7 +24256,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
         __pyx_t_9 = (!__pyx_v_line_has_item_word);
         if (__pyx_t_9) {
 
-          /* "thesis_pkg/core/sec/extraction_fast.pyx":516
+          /* "thesis_pkg/core/sec/extraction_fast.pyx":518
  *                         toc_part = part
  *                 elif not line_has_item_word:
  *                     current_part = part             # <<<<<<<<<<<<<<
@@ -24301,7 +24266,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
           __Pyx_INCREF(__pyx_v_part);
           __Pyx_DECREF_SET(__pyx_v_current_part, __pyx_v_part);
 
-          /* "thesis_pkg/core/sec/extraction_fast.pyx":515
+          /* "thesis_pkg/core/sec/extraction_fast.pyx":517
  *                     if not line_has_item_word:
  *                         toc_part = part
  *                 elif not line_has_item_word:             # <<<<<<<<<<<<<<
@@ -24311,7 +24276,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
         }
         __pyx_L121:;
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":517
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":519
  *                 elif not line_has_item_word:
  *                     current_part = part
  *                 if scan_sparse_layout:             # <<<<<<<<<<<<<<
@@ -24320,19 +24285,19 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
         if (__pyx_v_scan_sparse_layout) {
 
-          /* "thesis_pkg/core/sec/extraction_fast.pyx":518
+          /* "thesis_pkg/core/sec/extraction_fast.pyx":520
  *                     current_part = part
  *                 if scan_sparse_layout:
  *                     next_part = _next_valid_part_match_sparse(             # <<<<<<<<<<<<<<
  *                         part_iter, line, allowed_parts
  *                     )
 */
-          __pyx_t_2 = __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__next_valid_part_match_sparse(__pyx_v_part_iter, __pyx_v_line, __pyx_v_allowed_parts); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 518, __pyx_L1_error)
+          __pyx_t_2 = __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__next_valid_part_match_sparse(__pyx_v_part_iter, __pyx_v_line, __pyx_v_allowed_parts); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 520, __pyx_L1_error)
           __Pyx_GOTREF(__pyx_t_2);
           __Pyx_DECREF_SET(__pyx_v_next_part, __pyx_t_2);
           __pyx_t_2 = 0;
 
-          /* "thesis_pkg/core/sec/extraction_fast.pyx":517
+          /* "thesis_pkg/core/sec/extraction_fast.pyx":519
  *                 elif not line_has_item_word:
  *                     current_part = part
  *                 if scan_sparse_layout:             # <<<<<<<<<<<<<<
@@ -24342,7 +24307,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
           goto __pyx_L123;
         }
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":522
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":524
  *                     )
  *                 else:
  *                     next_part = None             # <<<<<<<<<<<<<<
@@ -24355,7 +24320,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
         }
         __pyx_L123:;
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":523
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":525
  *                 else:
  *                     next_part = None
  *                 continue             # <<<<<<<<<<<<<<
@@ -24364,7 +24329,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
         goto __pyx_L113_continue;
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":504
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":506
  * 
  *         while next_part is not None or next_item is not None:
  *             if (             # <<<<<<<<<<<<<<
@@ -24373,7 +24338,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
       }
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":525
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":527
  *                 continue
  * 
  *             m = next_item             # <<<<<<<<<<<<<<
@@ -24383,7 +24348,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
       __Pyx_INCREF(__pyx_v_next_item);
       __Pyx_XDECREF_SET(__pyx_v_m, __pyx_v_next_item);
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":526
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":528
  * 
  *             m = next_item
  *             if item_iter is not None:             # <<<<<<<<<<<<<<
@@ -24393,7 +24358,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
       __pyx_t_9 = (__pyx_v_item_iter != Py_None);
       if (__pyx_t_9) {
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":527
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":529
  *             m = next_item
  *             if item_iter is not None:
  *                 try:             # <<<<<<<<<<<<<<
@@ -24409,19 +24374,19 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
           __Pyx_XGOTREF(__pyx_t_23);
           /*try:*/ {
 
-            /* "thesis_pkg/core/sec/extraction_fast.pyx":528
+            /* "thesis_pkg/core/sec/extraction_fast.pyx":530
  *             if item_iter is not None:
  *                 try:
  *                     next_item = next(item_iter)             # <<<<<<<<<<<<<<
  *                 except StopIteration:
  *                     next_item = None
 */
-            __pyx_t_2 = __Pyx_PyIter_Next(__pyx_v_item_iter); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 528, __pyx_L125_error)
+            __pyx_t_2 = __Pyx_PyIter_Next(__pyx_v_item_iter); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 530, __pyx_L125_error)
             __Pyx_GOTREF(__pyx_t_2);
             __Pyx_DECREF_SET(__pyx_v_next_item, __pyx_t_2);
             __pyx_t_2 = 0;
 
-            /* "thesis_pkg/core/sec/extraction_fast.pyx":527
+            /* "thesis_pkg/core/sec/extraction_fast.pyx":529
  *             m = next_item
  *             if item_iter is not None:
  *                 try:             # <<<<<<<<<<<<<<
@@ -24444,7 +24409,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
           __PYX_XCLEAR_MEMVIEW(&__pyx_t_5, 1);
           __pyx_t_5.memview = NULL; __pyx_t_5.data = NULL;
 
-          /* "thesis_pkg/core/sec/extraction_fast.pyx":529
+          /* "thesis_pkg/core/sec/extraction_fast.pyx":531
  *                 try:
  *                     next_item = next(item_iter)
  *                 except StopIteration:             # <<<<<<<<<<<<<<
@@ -24455,7 +24420,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
           if (__pyx_t_15) {
             __Pyx_ErrRestore(0,0,0);
 
-            /* "thesis_pkg/core/sec/extraction_fast.pyx":530
+            /* "thesis_pkg/core/sec/extraction_fast.pyx":532
  *                     next_item = next(item_iter)
  *                 except StopIteration:
  *                     next_item = None             # <<<<<<<<<<<<<<
@@ -24468,7 +24433,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
           }
           goto __pyx_L127_except_error;
 
-          /* "thesis_pkg/core/sec/extraction_fast.pyx":527
+          /* "thesis_pkg/core/sec/extraction_fast.pyx":529
  *             m = next_item
  *             if item_iter is not None:
  *                 try:             # <<<<<<<<<<<<<<
@@ -24489,7 +24454,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
           __pyx_L132_try_end:;
         }
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":526
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":528
  * 
  *             m = next_item
  *             if item_iter is not None:             # <<<<<<<<<<<<<<
@@ -24498,7 +24463,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
       }
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":531
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":533
  *                 except StopIteration:
  *                     next_item = None
  *             item_id, content_adjust = _normalize_item_match(             # <<<<<<<<<<<<<<
@@ -24506,27 +24471,27 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
  *                 m,
 */
       __pyx_t_21 = NULL;
-      __Pyx_GetModuleGlobalName(__pyx_t_10, __pyx_mstate_global->__pyx_n_u_normalize_item_match); if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 531, __pyx_L1_error)
+      __Pyx_GetModuleGlobalName(__pyx_t_10, __pyx_mstate_global->__pyx_n_u_normalize_item_match); if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 533, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_10);
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":534
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":536
  *                 line,
  *                 m,
  *                 is_10k=is_10k,             # <<<<<<<<<<<<<<
  *                 max_item=max_item_number,
  *             )
 */
-      __pyx_t_13 = __Pyx_PyBool_FromLong(__pyx_v_is_10k); if (unlikely(!__pyx_t_13)) __PYX_ERR(0, 534, __pyx_L1_error)
+      __pyx_t_13 = __Pyx_PyBool_FromLong(__pyx_v_is_10k); if (unlikely(!__pyx_t_13)) __PYX_ERR(0, 536, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_13);
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":535
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":537
  *                 m,
  *                 is_10k=is_10k,
  *                 max_item=max_item_number,             # <<<<<<<<<<<<<<
  *             )
  *             if item_id is None:
 */
-      __pyx_t_1 = __Pyx_PyLong_From_int(__pyx_v_max_item_number); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 535, __pyx_L1_error)
+      __pyx_t_1 = __Pyx_PyLong_From_int(__pyx_v_max_item_number); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 537, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_1);
       __pyx_t_4 = 1;
       #if CYTHON_UNPACK_METHODS
@@ -24542,17 +24507,17 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
       #endif
       {
         PyObject *__pyx_callargs[3 + ((CYTHON_VECTORCALL) ? 2 : 0)] = {__pyx_t_21, __pyx_v_line, __pyx_v_m};
-        __pyx_t_3 = __Pyx_MakeVectorcallBuilderKwds(2); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 531, __pyx_L1_error)
+        __pyx_t_3 = __Pyx_MakeVectorcallBuilderKwds(2); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 533, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_3);
-        if (__Pyx_VectorcallBuilder_AddArg(__pyx_mstate_global->__pyx_n_u_is_10k, __pyx_t_13, __pyx_t_3, __pyx_callargs+3, 0) < (0)) __PYX_ERR(0, 531, __pyx_L1_error)
-        if (__Pyx_VectorcallBuilder_AddArg(__pyx_mstate_global->__pyx_n_u_max_item, __pyx_t_1, __pyx_t_3, __pyx_callargs+3, 1) < (0)) __PYX_ERR(0, 531, __pyx_L1_error)
+        if (__Pyx_VectorcallBuilder_AddArg(__pyx_mstate_global->__pyx_n_u_is_10k, __pyx_t_13, __pyx_t_3, __pyx_callargs+3, 0) < (0)) __PYX_ERR(0, 533, __pyx_L1_error)
+        if (__Pyx_VectorcallBuilder_AddArg(__pyx_mstate_global->__pyx_n_u_max_item, __pyx_t_1, __pyx_t_3, __pyx_callargs+3, 1) < (0)) __PYX_ERR(0, 533, __pyx_L1_error)
         __pyx_t_2 = __Pyx_Object_Vectorcall_CallFromBuilder((PyObject*)__pyx_t_10, __pyx_callargs+__pyx_t_4, (3-__pyx_t_4) | (__pyx_t_4*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET), __pyx_t_3);
         __Pyx_XDECREF(__pyx_t_21); __pyx_t_21 = 0;
         __Pyx_DECREF(__pyx_t_13); __pyx_t_13 = 0;
         __Pyx_DECREF(__pyx_t_1); __pyx_t_1 = 0;
         __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
         __Pyx_DECREF(__pyx_t_10); __pyx_t_10 = 0;
-        if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 531, __pyx_L1_error)
+        if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 533, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_2);
       }
       if ((likely(PyTuple_CheckExact(__pyx_t_2))) || (PyList_CheckExact(__pyx_t_2))) {
@@ -24561,7 +24526,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
         if (unlikely(size != 2)) {
           if (size > 2) __Pyx_RaiseTooManyValuesError(2);
           else if (size >= 0) __Pyx_RaiseNeedMoreValuesError(size);
-          __PYX_ERR(0, 531, __pyx_L1_error)
+          __PYX_ERR(0, 533, __pyx_L1_error)
         }
         #if CYTHON_ASSUME_SAFE_MACROS && !CYTHON_AVOID_BORROWED_REFS
         if (likely(PyTuple_CheckExact(sequence))) {
@@ -24571,22 +24536,22 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
           __Pyx_INCREF(__pyx_t_3);
         } else {
           __pyx_t_10 = __Pyx_PyList_GetItemRefFast(sequence, 0, __Pyx_ReferenceSharing_SharedReference);
-          if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 531, __pyx_L1_error)
+          if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 533, __pyx_L1_error)
           __Pyx_XGOTREF(__pyx_t_10);
           __pyx_t_3 = __Pyx_PyList_GetItemRefFast(sequence, 1, __Pyx_ReferenceSharing_SharedReference);
-          if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 531, __pyx_L1_error)
+          if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 533, __pyx_L1_error)
           __Pyx_XGOTREF(__pyx_t_3);
         }
         #else
-        __pyx_t_10 = __Pyx_PySequence_ITEM(sequence, 0); if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 531, __pyx_L1_error)
+        __pyx_t_10 = __Pyx_PySequence_ITEM(sequence, 0); if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 533, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_10);
-        __pyx_t_3 = __Pyx_PySequence_ITEM(sequence, 1); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 531, __pyx_L1_error)
+        __pyx_t_3 = __Pyx_PySequence_ITEM(sequence, 1); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 533, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_3);
         #endif
         __Pyx_DECREF(__pyx_t_2); __pyx_t_2 = 0;
       } else {
         Py_ssize_t index = -1;
-        __pyx_t_1 = PyObject_GetIter(__pyx_t_2); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 531, __pyx_L1_error)
+        __pyx_t_1 = PyObject_GetIter(__pyx_t_2); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 533, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_1);
         __Pyx_DECREF(__pyx_t_2); __pyx_t_2 = 0;
         __pyx_t_14 = (CYTHON_COMPILING_IN_LIMITED_API) ? PyIter_Next : __Pyx_PyObject_GetIterNextFunc(__pyx_t_1);
@@ -24594,7 +24559,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
         __Pyx_GOTREF(__pyx_t_10);
         index = 1; __pyx_t_3 = __pyx_t_14(__pyx_t_1); if (unlikely(!__pyx_t_3)) goto __pyx_L135_unpacking_failed;
         __Pyx_GOTREF(__pyx_t_3);
-        if (__Pyx_IternextUnpackEndCheck(__pyx_t_14(__pyx_t_1), 2) < (0)) __PYX_ERR(0, 531, __pyx_L1_error)
+        if (__Pyx_IternextUnpackEndCheck(__pyx_t_14(__pyx_t_1), 2) < (0)) __PYX_ERR(0, 533, __pyx_L1_error)
         __pyx_t_14 = NULL;
         __Pyx_DECREF(__pyx_t_1); __pyx_t_1 = 0;
         goto __pyx_L136_unpacking_done;
@@ -24602,24 +24567,24 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
         __Pyx_DECREF(__pyx_t_1); __pyx_t_1 = 0;
         __pyx_t_14 = NULL;
         if (__Pyx_IterFinish() == 0) __Pyx_RaiseNeedMoreValuesError(index);
-        __PYX_ERR(0, 531, __pyx_L1_error)
+        __PYX_ERR(0, 533, __pyx_L1_error)
         __pyx_L136_unpacking_done:;
       }
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":531
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":533
  *                 except StopIteration:
  *                     next_item = None
  *             item_id, content_adjust = _normalize_item_match(             # <<<<<<<<<<<<<<
  *                 line,
  *                 m,
 */
-      __pyx_t_15 = __Pyx_PyLong_As_int(__pyx_t_3); if (unlikely((__pyx_t_15 == (int)-1) && PyErr_Occurred())) __PYX_ERR(0, 531, __pyx_L1_error)
+      __pyx_t_15 = __Pyx_PyLong_As_int(__pyx_t_3); if (unlikely((__pyx_t_15 == (int)-1) && PyErr_Occurred())) __PYX_ERR(0, 533, __pyx_L1_error)
       __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
       __Pyx_XDECREF_SET(__pyx_v_item_id, __pyx_t_10);
       __pyx_t_10 = 0;
       __pyx_v_content_adjust = __pyx_t_15;
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":537
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":539
  *                 max_item=max_item_number,
  *             )
  *             if item_id is None:             # <<<<<<<<<<<<<<
@@ -24629,7 +24594,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
       __pyx_t_9 = (__pyx_v_item_id == Py_None);
       if (__pyx_t_9) {
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":538
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":540
  *             )
  *             if item_id is None:
  *                 continue             # <<<<<<<<<<<<<<
@@ -24638,7 +24603,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
         goto __pyx_L113_continue;
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":537
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":539
  *                 max_item=max_item_number,
  *             )
  *             if item_id is None:             # <<<<<<<<<<<<<<
@@ -24647,17 +24612,17 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
       }
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":539
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":541
  *             if item_id is None:
  *                 continue
  *             if item_id == "16":             # <<<<<<<<<<<<<<
  *                 continue
  * 
 */
-      __pyx_t_9 = (__Pyx_PyUnicode_Equals(__pyx_v_item_id, __pyx_mstate_global->__pyx_kp_u_16, Py_EQ)); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 539, __pyx_L1_error)
+      __pyx_t_9 = (__Pyx_PyUnicode_Equals(__pyx_v_item_id, __pyx_mstate_global->__pyx_kp_u_16, Py_EQ)); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 541, __pyx_L1_error)
       if (__pyx_t_9) {
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":540
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":542
  *                 continue
  *             if item_id == "16":
  *                 continue             # <<<<<<<<<<<<<<
@@ -24666,7 +24631,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
         goto __pyx_L113_continue;
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":539
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":541
  *             if item_id is None:
  *                 continue
  *             if item_id == "16":             # <<<<<<<<<<<<<<
@@ -24675,7 +24640,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
       }
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":542
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":544
  *                 continue
  * 
  *             abs_start = starts_mv[i] + m.start()             # <<<<<<<<<<<<<<
@@ -24683,7 +24648,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
  *             is_line_start = (
 */
       __pyx_t_19 = __pyx_v_i;
-      __pyx_t_2 = __Pyx_PyLong_From_PY_LONG_LONG((*((PY_LONG_LONG *) ( /* dim=0 */ (__pyx_v_starts_mv.data + __pyx_t_19 * __pyx_v_starts_mv.strides[0]) )))); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 542, __pyx_L1_error)
+      __pyx_t_2 = __Pyx_PyLong_From_PY_LONG_LONG((*((PY_LONG_LONG *) ( /* dim=0 */ (__pyx_v_starts_mv.data + __pyx_t_19 * __pyx_v_starts_mv.strides[0]) )))); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 544, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_2);
       __pyx_t_10 = __pyx_v_m;
       __Pyx_INCREF(__pyx_t_10);
@@ -24692,18 +24657,18 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
         PyObject *__pyx_callargs[2] = {__pyx_t_10, NULL};
         __pyx_t_3 = __Pyx_PyObject_FastCallMethod((PyObject*)__pyx_mstate_global->__pyx_n_u_start, __pyx_callargs+__pyx_t_4, (1-__pyx_t_4) | (1*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
         __Pyx_XDECREF(__pyx_t_10); __pyx_t_10 = 0;
-        if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 542, __pyx_L1_error)
+        if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 544, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_3);
       }
-      __pyx_t_10 = PyNumber_Add(__pyx_t_2, __pyx_t_3); if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 542, __pyx_L1_error)
+      __pyx_t_10 = PyNumber_Add(__pyx_t_2, __pyx_t_3); if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 544, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_10);
       __Pyx_DECREF(__pyx_t_2); __pyx_t_2 = 0;
       __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
-      __pyx_t_20 = __Pyx_PyLong_As_PY_LONG_LONG(__pyx_t_10); if (unlikely((__pyx_t_20 == (PY_LONG_LONG)-1) && PyErr_Occurred())) __PYX_ERR(0, 542, __pyx_L1_error)
+      __pyx_t_20 = __Pyx_PyLong_As_PY_LONG_LONG(__pyx_t_10); if (unlikely((__pyx_t_20 == (PY_LONG_LONG)-1) && PyErr_Occurred())) __PYX_ERR(0, 544, __pyx_L1_error)
       __Pyx_DECREF(__pyx_t_10); __pyx_t_10 = 0;
       __pyx_v_abs_start = __pyx_t_20;
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":543
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":545
  * 
  *             abs_start = starts_mv[i] + m.start()
  *             prefix = line[: m.start()]             # <<<<<<<<<<<<<<
@@ -24712,7 +24677,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
       if (unlikely(__pyx_v_line == Py_None)) {
         PyErr_SetString(PyExc_TypeError, "'NoneType' object is not subscriptable");
-        __PYX_ERR(0, 543, __pyx_L1_error)
+        __PYX_ERR(0, 545, __pyx_L1_error)
       }
       __pyx_t_3 = __pyx_v_m;
       __Pyx_INCREF(__pyx_t_3);
@@ -24721,32 +24686,32 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
         PyObject *__pyx_callargs[2] = {__pyx_t_3, NULL};
         __pyx_t_10 = __Pyx_PyObject_FastCallMethod((PyObject*)__pyx_mstate_global->__pyx_n_u_start, __pyx_callargs+__pyx_t_4, (1-__pyx_t_4) | (1*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
         __Pyx_XDECREF(__pyx_t_3); __pyx_t_3 = 0;
-        if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 543, __pyx_L1_error)
+        if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 545, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_10);
       }
       __pyx_t_9 = (__pyx_t_10 == Py_None);
       if (__pyx_t_9) {
         __pyx_t_17 = PY_SSIZE_T_MAX;
       } else {
-        __pyx_t_16 = __Pyx_PyIndex_AsSsize_t(__pyx_t_10); if (unlikely((__pyx_t_16 == (Py_ssize_t)-1) && PyErr_Occurred())) __PYX_ERR(0, 543, __pyx_L1_error)
+        __pyx_t_16 = __Pyx_PyIndex_AsSsize_t(__pyx_t_10); if (unlikely((__pyx_t_16 == (Py_ssize_t)-1) && PyErr_Occurred())) __PYX_ERR(0, 545, __pyx_L1_error)
         __pyx_t_17 = __pyx_t_16;
       }
       __Pyx_DECREF(__pyx_t_10); __pyx_t_10 = 0;
-      __pyx_t_10 = __Pyx_PyUnicode_Substring(__pyx_v_line, 0, __pyx_t_17); if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 543, __pyx_L1_error)
+      __pyx_t_10 = __Pyx_PyUnicode_Substring(__pyx_v_line, 0, __pyx_t_17); if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 545, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_10);
       __Pyx_XDECREF_SET(__pyx_v_prefix, ((PyObject*)__pyx_t_10));
       __pyx_t_10 = 0;
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":545
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":547
  *             prefix = line[: m.start()]
  *             is_line_start = (
  *                 prefix.strip() == ""             # <<<<<<<<<<<<<<
  *                 or _prefix_is_bullet_fast(prefix)
  *                 or _prefix_is_part_only_fast(prefix)
 */
-      __pyx_t_10 = __Pyx_CallUnboundCMethod0(&__pyx_mstate_global->__pyx_umethod_PyUnicode_Type__strip, __pyx_v_prefix); if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 545, __pyx_L1_error)
+      __pyx_t_10 = __Pyx_CallUnboundCMethod0(&__pyx_mstate_global->__pyx_umethod_PyUnicode_Type__strip, __pyx_v_prefix); if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 547, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_10);
-      __pyx_t_11 = (__Pyx_PyUnicode_Equals(__pyx_t_10, __pyx_mstate_global->__pyx_kp_u__12, Py_EQ)); if (unlikely((__pyx_t_11 < 0))) __PYX_ERR(0, 545, __pyx_L1_error)
+      __pyx_t_11 = (__Pyx_PyUnicode_Equals(__pyx_t_10, __pyx_mstate_global->__pyx_kp_u__12, Py_EQ)); if (unlikely((__pyx_t_11 < 0))) __PYX_ERR(0, 547, __pyx_L1_error)
       __Pyx_DECREF(__pyx_t_10); __pyx_t_10 = 0;
       if (!__pyx_t_11) {
       } else {
@@ -24754,45 +24719,45 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
         goto __pyx_L139_bool_binop_done;
       }
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":546
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":548
  *             is_line_start = (
  *                 prefix.strip() == ""
  *                 or _prefix_is_bullet_fast(prefix)             # <<<<<<<<<<<<<<
  *                 or _prefix_is_part_only_fast(prefix)
  *             )
 */
-      __pyx_t_11 = __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__prefix_is_bullet_fast(__pyx_v_prefix); if (unlikely(__pyx_t_11 == ((int)-1) && PyErr_Occurred())) __PYX_ERR(0, 546, __pyx_L1_error)
+      __pyx_t_11 = __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__prefix_is_bullet_fast(__pyx_v_prefix); if (unlikely(__pyx_t_11 == ((int)-1) && PyErr_Occurred())) __PYX_ERR(0, 548, __pyx_L1_error)
       if (!__pyx_t_11) {
       } else {
         __pyx_t_9 = __pyx_t_11;
         goto __pyx_L139_bool_binop_done;
       }
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":547
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":549
  *                 prefix.strip() == ""
  *                 or _prefix_is_bullet_fast(prefix)
  *                 or _prefix_is_part_only_fast(prefix)             # <<<<<<<<<<<<<<
  *             )
  *             prefix_part = _prefix_part_tail_fast(prefix)
 */
-      __pyx_t_11 = __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__prefix_is_part_only_fast(__pyx_v_prefix); if (unlikely(__pyx_t_11 == ((int)-1) && PyErr_Occurred())) __PYX_ERR(0, 547, __pyx_L1_error)
+      __pyx_t_11 = __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__prefix_is_part_only_fast(__pyx_v_prefix); if (unlikely(__pyx_t_11 == ((int)-1) && PyErr_Occurred())) __PYX_ERR(0, 549, __pyx_L1_error)
       __pyx_t_9 = __pyx_t_11;
       __pyx_L139_bool_binop_done:;
       __pyx_v_is_line_start = __pyx_t_9;
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":549
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":551
  *                 or _prefix_is_part_only_fast(prefix)
  *             )
  *             prefix_part = _prefix_part_tail_fast(prefix)             # <<<<<<<<<<<<<<
  *             part_near_item = (
  *                 line_part_end is not None and (m.start() - line_part_end) <= 60
 */
-      __pyx_t_10 = __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__prefix_part_tail_fast(__pyx_v_prefix); if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 549, __pyx_L1_error)
+      __pyx_t_10 = __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__prefix_part_tail_fast(__pyx_v_prefix); if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 551, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_10);
       __Pyx_XDECREF_SET(__pyx_v_prefix_part, __pyx_t_10);
       __pyx_t_10 = 0;
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":551
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":553
  *             prefix_part = _prefix_part_tail_fast(prefix)
  *             part_near_item = (
  *                 line_part_end is not None and (m.start() - line_part_end) <= 60             # <<<<<<<<<<<<<<
@@ -24812,31 +24777,31 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
         PyObject *__pyx_callargs[2] = {__pyx_t_3, NULL};
         __pyx_t_10 = __Pyx_PyObject_FastCallMethod((PyObject*)__pyx_mstate_global->__pyx_n_u_start, __pyx_callargs+__pyx_t_4, (1-__pyx_t_4) | (1*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
         __Pyx_XDECREF(__pyx_t_3); __pyx_t_3 = 0;
-        if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 551, __pyx_L1_error)
+        if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 553, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_10);
       }
-      __pyx_t_3 = PyNumber_Subtract(__pyx_t_10, __pyx_v_line_part_end); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 551, __pyx_L1_error)
+      __pyx_t_3 = PyNumber_Subtract(__pyx_t_10, __pyx_v_line_part_end); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 553, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_3);
       __Pyx_DECREF(__pyx_t_10); __pyx_t_10 = 0;
-      __pyx_t_10 = PyObject_RichCompare(__pyx_t_3, __pyx_mstate_global->__pyx_int_60, Py_LE); __Pyx_XGOTREF(__pyx_t_10); if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 551, __pyx_L1_error)
+      __pyx_t_10 = PyObject_RichCompare(__pyx_t_3, __pyx_mstate_global->__pyx_int_60, Py_LE); __Pyx_XGOTREF(__pyx_t_10); if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 553, __pyx_L1_error)
       __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
-      __pyx_t_11 = __Pyx_PyObject_IsTrue(__pyx_t_10); if (unlikely((__pyx_t_11 < 0))) __PYX_ERR(0, 551, __pyx_L1_error)
+      __pyx_t_11 = __Pyx_PyObject_IsTrue(__pyx_t_10); if (unlikely((__pyx_t_11 < 0))) __PYX_ERR(0, 553, __pyx_L1_error)
       __Pyx_DECREF(__pyx_t_10); __pyx_t_10 = 0;
       __pyx_t_9 = __pyx_t_11;
       __pyx_L142_bool_binop_done:;
       __pyx_v_part_near_item = __pyx_t_9;
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":553
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":555
  *                 line_part_end is not None and (m.start() - line_part_end) <= 60
  *             )
  *             if prefix_part:             # <<<<<<<<<<<<<<
  *                 part_near_item = True
  *             if _prefix_looks_like_cross_ref_fast(prefix):
 */
-      __pyx_t_9 = __Pyx_PyObject_IsTrue(__pyx_v_prefix_part); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 553, __pyx_L1_error)
+      __pyx_t_9 = __Pyx_PyObject_IsTrue(__pyx_v_prefix_part); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 555, __pyx_L1_error)
       if (__pyx_t_9) {
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":554
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":556
  *             )
  *             if prefix_part:
  *                 part_near_item = True             # <<<<<<<<<<<<<<
@@ -24845,7 +24810,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
         __pyx_v_part_near_item = 1;
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":553
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":555
  *                 line_part_end is not None and (m.start() - line_part_end) <= 60
  *             )
  *             if prefix_part:             # <<<<<<<<<<<<<<
@@ -24854,17 +24819,17 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
       }
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":555
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":557
  *             if prefix_part:
  *                 part_near_item = True
  *             if _prefix_looks_like_cross_ref_fast(prefix):             # <<<<<<<<<<<<<<
  *                 continue
  * 
 */
-      __pyx_t_9 = __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__prefix_looks_like_cross_ref_fast(__pyx_v_prefix); if (unlikely(__pyx_t_9 == ((int)-1) && PyErr_Occurred())) __PYX_ERR(0, 555, __pyx_L1_error)
+      __pyx_t_9 = __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__prefix_looks_like_cross_ref_fast(__pyx_v_prefix); if (unlikely(__pyx_t_9 == ((int)-1) && PyErr_Occurred())) __PYX_ERR(0, 557, __pyx_L1_error)
       if (__pyx_t_9) {
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":556
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":558
  *                 part_near_item = True
  *             if _prefix_looks_like_cross_ref_fast(prefix):
  *                 continue             # <<<<<<<<<<<<<<
@@ -24873,7 +24838,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
         goto __pyx_L113_continue;
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":555
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":557
  *             if prefix_part:
  *                 part_near_item = True
  *             if _prefix_looks_like_cross_ref_fast(prefix):             # <<<<<<<<<<<<<<
@@ -24882,7 +24847,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
       }
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":558
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":560
  *                 continue
  * 
  *             accept = is_line_start or part_near_item             # <<<<<<<<<<<<<<
@@ -24898,7 +24863,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
       __pyx_L146_bool_binop_done:;
       __pyx_v_accept = __pyx_t_9;
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":559
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":561
  * 
  *             accept = is_line_start or part_near_item
  *             midline = False             # <<<<<<<<<<<<<<
@@ -24907,7 +24872,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
       __pyx_v_midline = 0;
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":560
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":562
  *             accept = is_line_start or part_near_item
  *             midline = False
  *             if not accept and scan_sparse_layout:             # <<<<<<<<<<<<<<
@@ -24924,7 +24889,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
       __pyx_L149_bool_binop_done:;
       if (__pyx_t_9) {
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":561
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":563
  *             midline = False
  *             if not accept and scan_sparse_layout:
  *                 k = <Py_ssize_t>abs_start - 1             # <<<<<<<<<<<<<<
@@ -24933,7 +24898,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
         __pyx_v_k = (((Py_ssize_t)__pyx_v_abs_start) - 1);
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":562
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":564
  *             if not accept and scan_sparse_layout:
  *                 k = <Py_ssize_t>abs_start - 1
  *                 while k >= 0 and body[k].isspace():             # <<<<<<<<<<<<<<
@@ -24947,13 +24912,13 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
             __pyx_t_9 = __pyx_t_11;
             goto __pyx_L153_bool_binop_done;
           }
-          __pyx_t_26 = __Pyx_GetItemInt_Unicode(__pyx_v_body, __pyx_v_k, Py_ssize_t, 1, PyLong_FromSsize_t, 0, 0, 0, 1, __Pyx_ReferenceSharing_FunctionArgument); if (unlikely(__pyx_t_26 == (Py_UCS4)-1)) __PYX_ERR(0, 562, __pyx_L1_error)
+          __pyx_t_26 = __Pyx_GetItemInt_Unicode(__pyx_v_body, __pyx_v_k, Py_ssize_t, 1, PyLong_FromSsize_t, 0, 0, 0, 1, __Pyx_ReferenceSharing_FunctionArgument); if (unlikely(__pyx_t_26 == (Py_UCS4)-1)) __PYX_ERR(0, 564, __pyx_L1_error)
           __pyx_t_11 = __Pyx_Py_UNICODE_ISSPACE(__pyx_t_26); 
           __pyx_t_9 = __pyx_t_11;
           __pyx_L153_bool_binop_done:;
           if (!__pyx_t_9) break;
 
-          /* "thesis_pkg/core/sec/extraction_fast.pyx":563
+          /* "thesis_pkg/core/sec/extraction_fast.pyx":565
  *                 k = <Py_ssize_t>abs_start - 1
  *                 while k >= 0 and body[k].isspace():
  *                     k -= 1             # <<<<<<<<<<<<<<
@@ -24963,7 +24928,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
           __pyx_v_k = (__pyx_v_k - 1);
         }
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":564
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":566
  *                 while k >= 0 and body[k].isspace():
  *                     k -= 1
  *                 prev_char = body[k] if k >= 0 else ""             # <<<<<<<<<<<<<<
@@ -24972,8 +24937,8 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
         __pyx_t_9 = (__pyx_v_k >= 0);
         if (__pyx_t_9) {
-          __pyx_t_26 = __Pyx_GetItemInt_Unicode(__pyx_v_body, __pyx_v_k, Py_ssize_t, 1, PyLong_FromSsize_t, 0, 0, 0, 1, __Pyx_ReferenceSharing_FunctionArgument); if (unlikely(__pyx_t_26 == (Py_UCS4)-1)) __PYX_ERR(0, 564, __pyx_L1_error)
-          __pyx_t_3 = __Pyx_PyUnicode_FromOrdinal(__pyx_t_26); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 564, __pyx_L1_error)
+          __pyx_t_26 = __Pyx_GetItemInt_Unicode(__pyx_v_body, __pyx_v_k, Py_ssize_t, 1, PyLong_FromSsize_t, 0, 0, 0, 1, __Pyx_ReferenceSharing_FunctionArgument); if (unlikely(__pyx_t_26 == (Py_UCS4)-1)) __PYX_ERR(0, 566, __pyx_L1_error)
+          __pyx_t_3 = __Pyx_PyUnicode_FromOrdinal(__pyx_t_26); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 566, __pyx_L1_error)
           __Pyx_GOTREF(__pyx_t_3);
           __pyx_t_10 = __pyx_t_3;
           __pyx_t_3 = 0;
@@ -24984,28 +24949,28 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
         __Pyx_XDECREF_SET(__pyx_v_prev_char, ((PyObject*)__pyx_t_10));
         __pyx_t_10 = 0;
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":565
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":567
  *                     k -= 1
  *                 prev_char = body[k] if k >= 0 else ""
  *                 if prev_char in ".:;!?":             # <<<<<<<<<<<<<<
  *                     if not _prefix_looks_like_cross_ref_fast(prefix):
  *                         accept = True
 */
-        __pyx_t_9 = (__Pyx_PyUnicode_ContainsTF(__pyx_v_prev_char, __pyx_mstate_global->__pyx_kp_u__13, Py_EQ)); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 565, __pyx_L1_error)
+        __pyx_t_9 = (__Pyx_PyUnicode_ContainsTF(__pyx_v_prev_char, __pyx_mstate_global->__pyx_kp_u__13, Py_EQ)); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 567, __pyx_L1_error)
         if (__pyx_t_9) {
 
-          /* "thesis_pkg/core/sec/extraction_fast.pyx":566
+          /* "thesis_pkg/core/sec/extraction_fast.pyx":568
  *                 prev_char = body[k] if k >= 0 else ""
  *                 if prev_char in ".:;!?":
  *                     if not _prefix_looks_like_cross_ref_fast(prefix):             # <<<<<<<<<<<<<<
  *                         accept = True
  *                         midline = True
 */
-          __pyx_t_9 = __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__prefix_looks_like_cross_ref_fast(__pyx_v_prefix); if (unlikely(__pyx_t_9 == ((int)-1) && PyErr_Occurred())) __PYX_ERR(0, 566, __pyx_L1_error)
+          __pyx_t_9 = __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__prefix_looks_like_cross_ref_fast(__pyx_v_prefix); if (unlikely(__pyx_t_9 == ((int)-1) && PyErr_Occurred())) __PYX_ERR(0, 568, __pyx_L1_error)
           __pyx_t_11 = (!__pyx_t_9);
           if (__pyx_t_11) {
 
-            /* "thesis_pkg/core/sec/extraction_fast.pyx":567
+            /* "thesis_pkg/core/sec/extraction_fast.pyx":569
  *                 if prev_char in ".:;!?":
  *                     if not _prefix_looks_like_cross_ref_fast(prefix):
  *                         accept = True             # <<<<<<<<<<<<<<
@@ -25014,7 +24979,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
             __pyx_v_accept = 1;
 
-            /* "thesis_pkg/core/sec/extraction_fast.pyx":568
+            /* "thesis_pkg/core/sec/extraction_fast.pyx":570
  *                     if not _prefix_looks_like_cross_ref_fast(prefix):
  *                         accept = True
  *                         midline = True             # <<<<<<<<<<<<<<
@@ -25023,7 +24988,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
             __pyx_v_midline = 1;
 
-            /* "thesis_pkg/core/sec/extraction_fast.pyx":566
+            /* "thesis_pkg/core/sec/extraction_fast.pyx":568
  *                 prev_char = body[k] if k >= 0 else ""
  *                 if prev_char in ".:;!?":
  *                     if not _prefix_looks_like_cross_ref_fast(prefix):             # <<<<<<<<<<<<<<
@@ -25032,7 +24997,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
           }
 
-          /* "thesis_pkg/core/sec/extraction_fast.pyx":565
+          /* "thesis_pkg/core/sec/extraction_fast.pyx":567
  *                     k -= 1
  *                 prev_char = body[k] if k >= 0 else ""
  *                 if prev_char in ".:;!?":             # <<<<<<<<<<<<<<
@@ -25041,7 +25006,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
         }
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":560
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":562
  *             accept = is_line_start or part_near_item
  *             midline = False
  *             if not accept and scan_sparse_layout:             # <<<<<<<<<<<<<<
@@ -25050,7 +25015,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
       }
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":570
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":572
  *                         midline = True
  * 
  *             if not accept:             # <<<<<<<<<<<<<<
@@ -25060,7 +25025,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
       __pyx_t_11 = (!__pyx_v_accept);
       if (__pyx_t_11) {
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":571
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":573
  * 
  *             if not accept:
  *                 continue             # <<<<<<<<<<<<<<
@@ -25069,7 +25034,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
         goto __pyx_L113_continue;
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":570
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":572
  *                         midline = True
  * 
  *             if not accept:             # <<<<<<<<<<<<<<
@@ -25078,17 +25043,17 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
       }
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":573
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":575
  *                 continue
  * 
  *             if _starts_with_lowercase_title_fast(line, m):             # <<<<<<<<<<<<<<
  *                 continue
  * 
 */
-      __pyx_t_11 = __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__starts_with_lowercase_title_fast(__pyx_v_line, __pyx_v_m); if (unlikely(__pyx_t_11 == ((int)-1) && PyErr_Occurred())) __PYX_ERR(0, 573, __pyx_L1_error)
+      __pyx_t_11 = __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast__starts_with_lowercase_title_fast(__pyx_v_line, __pyx_v_m); if (unlikely(__pyx_t_11 == ((int)-1) && PyErr_Occurred())) __PYX_ERR(0, 575, __pyx_L1_error)
       if (__pyx_t_11) {
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":574
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":576
  * 
  *             if _starts_with_lowercase_title_fast(line, m):
  *                 continue             # <<<<<<<<<<<<<<
@@ -25097,7 +25062,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
         goto __pyx_L113_continue;
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":573
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":575
  *                 continue
  * 
  *             if _starts_with_lowercase_title_fast(line, m):             # <<<<<<<<<<<<<<
@@ -25106,7 +25071,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
       }
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":576
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":578
  *                 continue
  * 
  *             suffix = line[m.end() : m.end() + 64]             # <<<<<<<<<<<<<<
@@ -25115,7 +25080,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
       if (unlikely(__pyx_v_line == Py_None)) {
         PyErr_SetString(PyExc_TypeError, "'NoneType' object is not subscriptable");
-        __PYX_ERR(0, 576, __pyx_L1_error)
+        __PYX_ERR(0, 578, __pyx_L1_error)
       }
       __pyx_t_3 = __pyx_v_m;
       __Pyx_INCREF(__pyx_t_3);
@@ -25124,14 +25089,14 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
         PyObject *__pyx_callargs[2] = {__pyx_t_3, NULL};
         __pyx_t_10 = __Pyx_PyObject_FastCallMethod((PyObject*)__pyx_mstate_global->__pyx_n_u_end, __pyx_callargs+__pyx_t_4, (1-__pyx_t_4) | (1*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
         __Pyx_XDECREF(__pyx_t_3); __pyx_t_3 = 0;
-        if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 576, __pyx_L1_error)
+        if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 578, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_10);
       }
       __pyx_t_11 = (__pyx_t_10 == Py_None);
       if (__pyx_t_11) {
         __pyx_t_17 = 0;
       } else {
-        __pyx_t_16 = __Pyx_PyIndex_AsSsize_t(__pyx_t_10); if (unlikely((__pyx_t_16 == (Py_ssize_t)-1) && PyErr_Occurred())) __PYX_ERR(0, 576, __pyx_L1_error)
+        __pyx_t_16 = __Pyx_PyIndex_AsSsize_t(__pyx_t_10); if (unlikely((__pyx_t_16 == (Py_ssize_t)-1) && PyErr_Occurred())) __PYX_ERR(0, 578, __pyx_L1_error)
         __pyx_t_17 = __pyx_t_16;
       }
       __Pyx_DECREF(__pyx_t_10); __pyx_t_10 = 0;
@@ -25142,26 +25107,26 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
         PyObject *__pyx_callargs[2] = {__pyx_t_3, NULL};
         __pyx_t_10 = __Pyx_PyObject_FastCallMethod((PyObject*)__pyx_mstate_global->__pyx_n_u_end, __pyx_callargs+__pyx_t_4, (1-__pyx_t_4) | (1*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
         __Pyx_XDECREF(__pyx_t_3); __pyx_t_3 = 0;
-        if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 576, __pyx_L1_error)
+        if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 578, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_10);
       }
-      __pyx_t_3 = __Pyx_PyLong_AddObjC(__pyx_t_10, __pyx_mstate_global->__pyx_int_64, 64, 0, 0); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 576, __pyx_L1_error)
+      __pyx_t_3 = __Pyx_PyLong_AddObjC(__pyx_t_10, __pyx_mstate_global->__pyx_int_64, 64, 0, 0); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 578, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_3);
       __Pyx_DECREF(__pyx_t_10); __pyx_t_10 = 0;
       __pyx_t_11 = (__pyx_t_3 == Py_None);
       if (__pyx_t_11) {
         __pyx_t_16 = PY_SSIZE_T_MAX;
       } else {
-        __pyx_t_18 = __Pyx_PyIndex_AsSsize_t(__pyx_t_3); if (unlikely((__pyx_t_18 == (Py_ssize_t)-1) && PyErr_Occurred())) __PYX_ERR(0, 576, __pyx_L1_error)
+        __pyx_t_18 = __Pyx_PyIndex_AsSsize_t(__pyx_t_3); if (unlikely((__pyx_t_18 == (Py_ssize_t)-1) && PyErr_Occurred())) __PYX_ERR(0, 578, __pyx_L1_error)
         __pyx_t_16 = __pyx_t_18;
       }
       __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
-      __pyx_t_3 = __Pyx_PyUnicode_Substring(__pyx_v_line, __pyx_t_17, __pyx_t_16); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 576, __pyx_L1_error)
+      __pyx_t_3 = __Pyx_PyUnicode_Substring(__pyx_v_line, __pyx_t_17, __pyx_t_16); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 578, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_3);
       __Pyx_XDECREF_SET(__pyx_v_suffix, ((PyObject*)__pyx_t_3));
       __pyx_t_3 = 0;
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":577
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":579
  * 
  *             suffix = line[m.end() : m.end() + 64]
  *             if re.search(r"(?i)^\s*[\(\[]?\s*continued\b", suffix):             # <<<<<<<<<<<<<<
@@ -25169,9 +25134,9 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
  *             if re.match(r"(?i)^\s*[\(\[]\s*[a-z0-9]", suffix):
 */
       __pyx_t_10 = NULL;
-      __Pyx_GetModuleGlobalName(__pyx_t_2, __pyx_mstate_global->__pyx_n_u_re); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 577, __pyx_L1_error)
+      __Pyx_GetModuleGlobalName(__pyx_t_2, __pyx_mstate_global->__pyx_n_u_re); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 579, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_2);
-      __pyx_t_1 = __Pyx_PyObject_GetAttrStr(__pyx_t_2, __pyx_mstate_global->__pyx_n_u_search); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 577, __pyx_L1_error)
+      __pyx_t_1 = __Pyx_PyObject_GetAttrStr(__pyx_t_2, __pyx_mstate_global->__pyx_n_u_search); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 579, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_1);
       __Pyx_DECREF(__pyx_t_2); __pyx_t_2 = 0;
       __pyx_t_4 = 1;
@@ -25191,14 +25156,14 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
         __pyx_t_3 = __Pyx_PyObject_FastCall((PyObject*)__pyx_t_1, __pyx_callargs+__pyx_t_4, (3-__pyx_t_4) | (__pyx_t_4*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
         __Pyx_XDECREF(__pyx_t_10); __pyx_t_10 = 0;
         __Pyx_DECREF(__pyx_t_1); __pyx_t_1 = 0;
-        if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 577, __pyx_L1_error)
+        if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 579, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_3);
       }
-      __pyx_t_11 = __Pyx_PyObject_IsTrue(__pyx_t_3); if (unlikely((__pyx_t_11 < 0))) __PYX_ERR(0, 577, __pyx_L1_error)
+      __pyx_t_11 = __Pyx_PyObject_IsTrue(__pyx_t_3); if (unlikely((__pyx_t_11 < 0))) __PYX_ERR(0, 579, __pyx_L1_error)
       __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
       if (__pyx_t_11) {
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":578
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":580
  *             suffix = line[m.end() : m.end() + 64]
  *             if re.search(r"(?i)^\s*[\(\[]?\s*continued\b", suffix):
  *                 continue             # <<<<<<<<<<<<<<
@@ -25207,7 +25172,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
         goto __pyx_L113_continue;
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":577
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":579
  * 
  *             suffix = line[m.end() : m.end() + 64]
  *             if re.search(r"(?i)^\s*[\(\[]?\s*continued\b", suffix):             # <<<<<<<<<<<<<<
@@ -25216,7 +25181,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
       }
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":579
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":581
  *             if re.search(r"(?i)^\s*[\(\[]?\s*continued\b", suffix):
  *                 continue
  *             if re.match(r"(?i)^\s*[\(\[]\s*[a-z0-9]", suffix):             # <<<<<<<<<<<<<<
@@ -25224,9 +25189,9 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
  *                 probe = probe.rstrip("])")
 */
       __pyx_t_1 = NULL;
-      __Pyx_GetModuleGlobalName(__pyx_t_10, __pyx_mstate_global->__pyx_n_u_re); if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 579, __pyx_L1_error)
+      __Pyx_GetModuleGlobalName(__pyx_t_10, __pyx_mstate_global->__pyx_n_u_re); if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 581, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_10);
-      __pyx_t_2 = __Pyx_PyObject_GetAttrStr(__pyx_t_10, __pyx_mstate_global->__pyx_n_u_match); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 579, __pyx_L1_error)
+      __pyx_t_2 = __Pyx_PyObject_GetAttrStr(__pyx_t_10, __pyx_mstate_global->__pyx_n_u_match); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 581, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_2);
       __Pyx_DECREF(__pyx_t_10); __pyx_t_10 = 0;
       __pyx_t_4 = 1;
@@ -25246,21 +25211,21 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
         __pyx_t_3 = __Pyx_PyObject_FastCall((PyObject*)__pyx_t_2, __pyx_callargs+__pyx_t_4, (3-__pyx_t_4) | (__pyx_t_4*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
         __Pyx_XDECREF(__pyx_t_1); __pyx_t_1 = 0;
         __Pyx_DECREF(__pyx_t_2); __pyx_t_2 = 0;
-        if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 579, __pyx_L1_error)
+        if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 581, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_3);
       }
-      __pyx_t_11 = __Pyx_PyObject_IsTrue(__pyx_t_3); if (unlikely((__pyx_t_11 < 0))) __PYX_ERR(0, 579, __pyx_L1_error)
+      __pyx_t_11 = __Pyx_PyObject_IsTrue(__pyx_t_3); if (unlikely((__pyx_t_11 < 0))) __PYX_ERR(0, 581, __pyx_L1_error)
       __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
       if (__pyx_t_11) {
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":580
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":582
  *                 continue
  *             if re.match(r"(?i)^\s*[\(\[]\s*[a-z0-9]", suffix):
  *                 probe = suffix.strip().lstrip(" \t:-.([")             # <<<<<<<<<<<<<<
  *                 probe = probe.rstrip("])")
  *                 if not (EMPTY_ITEM_PATTERN.match(probe) and "reserved" in probe.lower()):
 */
-        __pyx_t_1 = __Pyx_CallUnboundCMethod0(&__pyx_mstate_global->__pyx_umethod_PyUnicode_Type__strip, __pyx_v_suffix); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 580, __pyx_L1_error)
+        __pyx_t_1 = __Pyx_CallUnboundCMethod0(&__pyx_mstate_global->__pyx_umethod_PyUnicode_Type__strip, __pyx_v_suffix); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 582, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_1);
         __pyx_t_2 = __pyx_t_1;
         __Pyx_INCREF(__pyx_t_2);
@@ -25270,25 +25235,25 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
           __pyx_t_3 = __Pyx_PyObject_FastCallMethod((PyObject*)__pyx_mstate_global->__pyx_n_u_lstrip, __pyx_callargs+__pyx_t_4, (2-__pyx_t_4) | (1*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
           __Pyx_XDECREF(__pyx_t_2); __pyx_t_2 = 0;
           __Pyx_DECREF(__pyx_t_1); __pyx_t_1 = 0;
-          if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 580, __pyx_L1_error)
+          if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 582, __pyx_L1_error)
           __Pyx_GOTREF(__pyx_t_3);
         }
         __Pyx_XDECREF_SET(__pyx_v_probe, ((PyObject*)__pyx_t_3));
         __pyx_t_3 = 0;
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":581
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":583
  *             if re.match(r"(?i)^\s*[\(\[]\s*[a-z0-9]", suffix):
  *                 probe = suffix.strip().lstrip(" \t:-.([")
  *                 probe = probe.rstrip("])")             # <<<<<<<<<<<<<<
  *                 if not (EMPTY_ITEM_PATTERN.match(probe) and "reserved" in probe.lower()):
  *                     continue
 */
-        __pyx_t_3 = __Pyx_CallUnboundCMethod1(&__pyx_mstate_global->__pyx_umethod_PyUnicode_Type__rstrip, __pyx_v_probe, __pyx_mstate_global->__pyx_kp_u__15); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 581, __pyx_L1_error)
+        __pyx_t_3 = __Pyx_CallUnboundCMethod1(&__pyx_mstate_global->__pyx_umethod_PyUnicode_Type__rstrip, __pyx_v_probe, __pyx_mstate_global->__pyx_kp_u__15); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 583, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_3);
         __Pyx_DECREF_SET(__pyx_v_probe, ((PyObject*)__pyx_t_3));
         __pyx_t_3 = 0;
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":582
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":584
  *                 probe = suffix.strip().lstrip(" \t:-.([")
  *                 probe = probe.rstrip("])")
  *                 if not (EMPTY_ITEM_PATTERN.match(probe) and "reserved" in probe.lower()):             # <<<<<<<<<<<<<<
@@ -25296,9 +25261,9 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
  * 
 */
         __pyx_t_1 = NULL;
-        __Pyx_GetModuleGlobalName(__pyx_t_2, __pyx_mstate_global->__pyx_n_u_EMPTY_ITEM_PATTERN); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 582, __pyx_L1_error)
+        __Pyx_GetModuleGlobalName(__pyx_t_2, __pyx_mstate_global->__pyx_n_u_EMPTY_ITEM_PATTERN); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 584, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_2);
-        __pyx_t_10 = __Pyx_PyObject_GetAttrStr(__pyx_t_2, __pyx_mstate_global->__pyx_n_u_match); if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 582, __pyx_L1_error)
+        __pyx_t_10 = __Pyx_PyObject_GetAttrStr(__pyx_t_2, __pyx_mstate_global->__pyx_n_u_match); if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 584, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_10);
         __Pyx_DECREF(__pyx_t_2); __pyx_t_2 = 0;
         __pyx_t_4 = 1;
@@ -25318,26 +25283,26 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
           __pyx_t_3 = __Pyx_PyObject_FastCall((PyObject*)__pyx_t_10, __pyx_callargs+__pyx_t_4, (2-__pyx_t_4) | (__pyx_t_4*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
           __Pyx_XDECREF(__pyx_t_1); __pyx_t_1 = 0;
           __Pyx_DECREF(__pyx_t_10); __pyx_t_10 = 0;
-          if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 582, __pyx_L1_error)
+          if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 584, __pyx_L1_error)
           __Pyx_GOTREF(__pyx_t_3);
         }
-        __pyx_t_9 = __Pyx_PyObject_IsTrue(__pyx_t_3); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 582, __pyx_L1_error)
+        __pyx_t_9 = __Pyx_PyObject_IsTrue(__pyx_t_3); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 584, __pyx_L1_error)
         __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
         if (__pyx_t_9) {
         } else {
           __pyx_t_11 = __pyx_t_9;
           goto __pyx_L162_bool_binop_done;
         }
-        __pyx_t_3 = __Pyx_CallUnboundCMethod0(&__pyx_mstate_global->__pyx_umethod_PyUnicode_Type__lower, __pyx_v_probe); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 582, __pyx_L1_error)
+        __pyx_t_3 = __Pyx_CallUnboundCMethod0(&__pyx_mstate_global->__pyx_umethod_PyUnicode_Type__lower, __pyx_v_probe); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 584, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_3);
-        __pyx_t_9 = (__Pyx_PyUnicode_ContainsTF(__pyx_mstate_global->__pyx_n_u_reserved, __pyx_t_3, Py_EQ)); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 582, __pyx_L1_error)
+        __pyx_t_9 = (__Pyx_PyUnicode_ContainsTF(__pyx_mstate_global->__pyx_n_u_reserved, __pyx_t_3, Py_EQ)); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 584, __pyx_L1_error)
         __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
         __pyx_t_11 = __pyx_t_9;
         __pyx_L162_bool_binop_done:;
         __pyx_t_9 = (!__pyx_t_11);
         if (__pyx_t_9) {
 
-          /* "thesis_pkg/core/sec/extraction_fast.pyx":583
+          /* "thesis_pkg/core/sec/extraction_fast.pyx":585
  *                 probe = probe.rstrip("])")
  *                 if not (EMPTY_ITEM_PATTERN.match(probe) and "reserved" in probe.lower()):
  *                     continue             # <<<<<<<<<<<<<<
@@ -25346,7 +25311,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
           goto __pyx_L113_continue;
 
-          /* "thesis_pkg/core/sec/extraction_fast.pyx":582
+          /* "thesis_pkg/core/sec/extraction_fast.pyx":584
  *                 probe = suffix.strip().lstrip(" \t:-.([")
  *                 probe = probe.rstrip("])")
  *                 if not (EMPTY_ITEM_PATTERN.match(probe) and "reserved" in probe.lower()):             # <<<<<<<<<<<<<<
@@ -25355,7 +25320,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
         }
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":579
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":581
  *             if re.search(r"(?i)^\s*[\(\[]?\s*continued\b", suffix):
  *                 continue
  *             if re.match(r"(?i)^\s*[\(\[]\s*[a-z0-9]", suffix):             # <<<<<<<<<<<<<<
@@ -25364,7 +25329,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
       }
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":585
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":587
  *                     continue
  * 
  *             title_match = is_10k and _heading_title_matches_item(item_id, line, m)             # <<<<<<<<<<<<<<
@@ -25377,7 +25342,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
         goto __pyx_L164_bool_binop_done;
       }
       __pyx_t_10 = NULL;
-      __Pyx_GetModuleGlobalName(__pyx_t_1, __pyx_mstate_global->__pyx_n_u_heading_title_matches_item); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 585, __pyx_L1_error)
+      __Pyx_GetModuleGlobalName(__pyx_t_1, __pyx_mstate_global->__pyx_n_u_heading_title_matches_item); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 587, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_1);
       __pyx_t_4 = 1;
       #if CYTHON_UNPACK_METHODS
@@ -25396,16 +25361,16 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
         __pyx_t_3 = __Pyx_PyObject_FastCall((PyObject*)__pyx_t_1, __pyx_callargs+__pyx_t_4, (4-__pyx_t_4) | (__pyx_t_4*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
         __Pyx_XDECREF(__pyx_t_10); __pyx_t_10 = 0;
         __Pyx_DECREF(__pyx_t_1); __pyx_t_1 = 0;
-        if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 585, __pyx_L1_error)
+        if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 587, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_3);
       }
-      __pyx_t_11 = __Pyx_PyObject_IsTrue(__pyx_t_3); if (unlikely((__pyx_t_11 < 0))) __PYX_ERR(0, 585, __pyx_L1_error)
+      __pyx_t_11 = __Pyx_PyObject_IsTrue(__pyx_t_3); if (unlikely((__pyx_t_11 < 0))) __PYX_ERR(0, 587, __pyx_L1_error)
       __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
       __pyx_t_9 = __pyx_t_11;
       __pyx_L164_bool_binop_done:;
       __pyx_v_title_match = __pyx_t_9;
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":586
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":588
  * 
  *             title_match = is_10k and _heading_title_matches_item(item_id, line, m)
  *             confidence = HEADING_CONF_HIGH if (is_line_start or part_near_item) else HEADING_CONF_MED             # <<<<<<<<<<<<<<
@@ -25420,21 +25385,21 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
       __pyx_t_9 = __pyx_v_part_near_item;
       __pyx_L166_bool_binop_done:;
       if (__pyx_t_9) {
-        __Pyx_GetModuleGlobalName(__pyx_t_3, __pyx_mstate_global->__pyx_n_u_HEADING_CONF_HIGH); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 586, __pyx_L1_error)
+        __Pyx_GetModuleGlobalName(__pyx_t_3, __pyx_mstate_global->__pyx_n_u_HEADING_CONF_HIGH); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 588, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_3);
-        __pyx_t_27 = __Pyx_PyLong_As_int(__pyx_t_3); if (unlikely((__pyx_t_27 == (int)-1) && PyErr_Occurred())) __PYX_ERR(0, 586, __pyx_L1_error)
+        __pyx_t_27 = __Pyx_PyLong_As_int(__pyx_t_3); if (unlikely((__pyx_t_27 == (int)-1) && PyErr_Occurred())) __PYX_ERR(0, 588, __pyx_L1_error)
         __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
         __pyx_t_15 = __pyx_t_27;
       } else {
-        __Pyx_GetModuleGlobalName(__pyx_t_3, __pyx_mstate_global->__pyx_n_u_HEADING_CONF_MED); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 586, __pyx_L1_error)
+        __Pyx_GetModuleGlobalName(__pyx_t_3, __pyx_mstate_global->__pyx_n_u_HEADING_CONF_MED); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 588, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_3);
-        __pyx_t_27 = __Pyx_PyLong_As_int(__pyx_t_3); if (unlikely((__pyx_t_27 == (int)-1) && PyErr_Occurred())) __PYX_ERR(0, 586, __pyx_L1_error)
+        __pyx_t_27 = __Pyx_PyLong_As_int(__pyx_t_3); if (unlikely((__pyx_t_27 == (int)-1) && PyErr_Occurred())) __PYX_ERR(0, 588, __pyx_L1_error)
         __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
         __pyx_t_15 = __pyx_t_27;
       }
       __pyx_v_confidence = __pyx_t_15;
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":587
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":589
  *             title_match = is_10k and _heading_title_matches_item(item_id, line, m)
  *             confidence = HEADING_CONF_HIGH if (is_line_start or part_near_item) else HEADING_CONF_MED
  *             if midline:             # <<<<<<<<<<<<<<
@@ -25443,7 +25408,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
       if (__pyx_v_midline) {
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":588
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":590
  *             confidence = HEADING_CONF_HIGH if (is_line_start or part_near_item) else HEADING_CONF_MED
  *             if midline:
  *                 confidence = HEADING_CONF_MED if title_match else HEADING_CONF_LOW             # <<<<<<<<<<<<<<
@@ -25451,21 +25416,21 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
  *                 if not title_match and _heading_suffix_looks_like_prose(line[m.end() :]):
 */
         if (__pyx_v_title_match) {
-          __Pyx_GetModuleGlobalName(__pyx_t_3, __pyx_mstate_global->__pyx_n_u_HEADING_CONF_MED); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 588, __pyx_L1_error)
+          __Pyx_GetModuleGlobalName(__pyx_t_3, __pyx_mstate_global->__pyx_n_u_HEADING_CONF_MED); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 590, __pyx_L1_error)
           __Pyx_GOTREF(__pyx_t_3);
-          __pyx_t_27 = __Pyx_PyLong_As_int(__pyx_t_3); if (unlikely((__pyx_t_27 == (int)-1) && PyErr_Occurred())) __PYX_ERR(0, 588, __pyx_L1_error)
+          __pyx_t_27 = __Pyx_PyLong_As_int(__pyx_t_3); if (unlikely((__pyx_t_27 == (int)-1) && PyErr_Occurred())) __PYX_ERR(0, 590, __pyx_L1_error)
           __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
           __pyx_t_15 = __pyx_t_27;
         } else {
-          __Pyx_GetModuleGlobalName(__pyx_t_3, __pyx_mstate_global->__pyx_n_u_HEADING_CONF_LOW); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 588, __pyx_L1_error)
+          __Pyx_GetModuleGlobalName(__pyx_t_3, __pyx_mstate_global->__pyx_n_u_HEADING_CONF_LOW); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 590, __pyx_L1_error)
           __Pyx_GOTREF(__pyx_t_3);
-          __pyx_t_27 = __Pyx_PyLong_As_int(__pyx_t_3); if (unlikely((__pyx_t_27 == (int)-1) && PyErr_Occurred())) __PYX_ERR(0, 588, __pyx_L1_error)
+          __pyx_t_27 = __Pyx_PyLong_As_int(__pyx_t_3); if (unlikely((__pyx_t_27 == (int)-1) && PyErr_Occurred())) __PYX_ERR(0, 590, __pyx_L1_error)
           __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
           __pyx_t_15 = __pyx_t_27;
         }
         __pyx_v_confidence = __pyx_t_15;
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":587
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":589
  *             title_match = is_10k and _heading_title_matches_item(item_id, line, m)
  *             confidence = HEADING_CONF_HIGH if (is_line_start or part_near_item) else HEADING_CONF_MED
  *             if midline:             # <<<<<<<<<<<<<<
@@ -25475,7 +25440,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
         goto __pyx_L168;
       }
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":589
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":591
  *             if midline:
  *                 confidence = HEADING_CONF_MED if title_match else HEADING_CONF_LOW
  *             elif is_10k and (is_line_start or part_near_item):             # <<<<<<<<<<<<<<
@@ -25496,7 +25461,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
       __pyx_L169_bool_binop_done:;
       if (__pyx_t_9) {
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":590
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":592
  *                 confidence = HEADING_CONF_MED if title_match else HEADING_CONF_LOW
  *             elif is_10k and (is_line_start or part_near_item):
  *                 if not title_match and _heading_suffix_looks_like_prose(line[m.end() :]):             # <<<<<<<<<<<<<<
@@ -25510,11 +25475,11 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
           goto __pyx_L173_bool_binop_done;
         }
         __pyx_t_1 = NULL;
-        __Pyx_GetModuleGlobalName(__pyx_t_10, __pyx_mstate_global->__pyx_n_u_heading_suffix_looks_like_prose); if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 590, __pyx_L1_error)
+        __Pyx_GetModuleGlobalName(__pyx_t_10, __pyx_mstate_global->__pyx_n_u_heading_suffix_looks_like_prose); if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 592, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_10);
         if (unlikely(__pyx_v_line == Py_None)) {
           PyErr_SetString(PyExc_TypeError, "'NoneType' object is not subscriptable");
-          __PYX_ERR(0, 590, __pyx_L1_error)
+          __PYX_ERR(0, 592, __pyx_L1_error)
         }
         __pyx_t_13 = __pyx_v_m;
         __Pyx_INCREF(__pyx_t_13);
@@ -25523,18 +25488,18 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
           PyObject *__pyx_callargs[2] = {__pyx_t_13, NULL};
           __pyx_t_2 = __Pyx_PyObject_FastCallMethod((PyObject*)__pyx_mstate_global->__pyx_n_u_end, __pyx_callargs+__pyx_t_4, (1-__pyx_t_4) | (1*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
           __Pyx_XDECREF(__pyx_t_13); __pyx_t_13 = 0;
-          if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 590, __pyx_L1_error)
+          if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 592, __pyx_L1_error)
           __Pyx_GOTREF(__pyx_t_2);
         }
         __pyx_t_11 = (__pyx_t_2 == Py_None);
         if (__pyx_t_11) {
           __pyx_t_16 = 0;
         } else {
-          __pyx_t_17 = __Pyx_PyIndex_AsSsize_t(__pyx_t_2); if (unlikely((__pyx_t_17 == (Py_ssize_t)-1) && PyErr_Occurred())) __PYX_ERR(0, 590, __pyx_L1_error)
+          __pyx_t_17 = __Pyx_PyIndex_AsSsize_t(__pyx_t_2); if (unlikely((__pyx_t_17 == (Py_ssize_t)-1) && PyErr_Occurred())) __PYX_ERR(0, 592, __pyx_L1_error)
           __pyx_t_16 = __pyx_t_17;
         }
         __Pyx_DECREF(__pyx_t_2); __pyx_t_2 = 0;
-        __pyx_t_2 = __Pyx_PyUnicode_Substring(__pyx_v_line, __pyx_t_16, PY_SSIZE_T_MAX); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 590, __pyx_L1_error)
+        __pyx_t_2 = __Pyx_PyUnicode_Substring(__pyx_v_line, __pyx_t_16, PY_SSIZE_T_MAX); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 592, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_2);
         __pyx_t_4 = 1;
         #if CYTHON_UNPACK_METHODS
@@ -25554,46 +25519,46 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
           __Pyx_XDECREF(__pyx_t_1); __pyx_t_1 = 0;
           __Pyx_DECREF(__pyx_t_2); __pyx_t_2 = 0;
           __Pyx_DECREF(__pyx_t_10); __pyx_t_10 = 0;
-          if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 590, __pyx_L1_error)
+          if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 592, __pyx_L1_error)
           __Pyx_GOTREF(__pyx_t_3);
         }
-        __pyx_t_11 = __Pyx_PyObject_IsTrue(__pyx_t_3); if (unlikely((__pyx_t_11 < 0))) __PYX_ERR(0, 590, __pyx_L1_error)
+        __pyx_t_11 = __Pyx_PyObject_IsTrue(__pyx_t_3); if (unlikely((__pyx_t_11 < 0))) __PYX_ERR(0, 592, __pyx_L1_error)
         __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
         __pyx_t_9 = __pyx_t_11;
         __pyx_L173_bool_binop_done:;
         if (__pyx_t_9) {
 
-          /* "thesis_pkg/core/sec/extraction_fast.pyx":591
+          /* "thesis_pkg/core/sec/extraction_fast.pyx":593
  *             elif is_10k and (is_line_start or part_near_item):
  *                 if not title_match and _heading_suffix_looks_like_prose(line[m.end() :]):
  *                     confidence = min(confidence, HEADING_CONF_MED)             # <<<<<<<<<<<<<<
  *             if compound_line:
  *                 confidence = min(confidence, HEADING_CONF_LOW)
 */
-          __Pyx_GetModuleGlobalName(__pyx_t_3, __pyx_mstate_global->__pyx_n_u_HEADING_CONF_MED); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 591, __pyx_L1_error)
+          __Pyx_GetModuleGlobalName(__pyx_t_3, __pyx_mstate_global->__pyx_n_u_HEADING_CONF_MED); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 593, __pyx_L1_error)
           __Pyx_GOTREF(__pyx_t_3);
           __pyx_t_15 = __pyx_v_confidence;
-          __pyx_t_2 = __Pyx_PyLong_From_int(__pyx_t_15); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 591, __pyx_L1_error)
+          __pyx_t_2 = __Pyx_PyLong_From_int(__pyx_t_15); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 593, __pyx_L1_error)
           __Pyx_GOTREF(__pyx_t_2);
-          __pyx_t_1 = PyObject_RichCompare(__pyx_t_3, __pyx_t_2, Py_LT); __Pyx_XGOTREF(__pyx_t_1); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 591, __pyx_L1_error)
+          __pyx_t_1 = PyObject_RichCompare(__pyx_t_3, __pyx_t_2, Py_LT); __Pyx_XGOTREF(__pyx_t_1); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 593, __pyx_L1_error)
           __Pyx_DECREF(__pyx_t_2); __pyx_t_2 = 0;
-          __pyx_t_9 = __Pyx_PyObject_IsTrue(__pyx_t_1); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 591, __pyx_L1_error)
+          __pyx_t_9 = __Pyx_PyObject_IsTrue(__pyx_t_1); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 593, __pyx_L1_error)
           __Pyx_DECREF(__pyx_t_1); __pyx_t_1 = 0;
           if (__pyx_t_9) {
             __Pyx_INCREF(__pyx_t_3);
             __pyx_t_10 = __pyx_t_3;
           } else {
-            __pyx_t_1 = __Pyx_PyLong_From_int(__pyx_t_15); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 591, __pyx_L1_error)
+            __pyx_t_1 = __Pyx_PyLong_From_int(__pyx_t_15); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 593, __pyx_L1_error)
             __Pyx_GOTREF(__pyx_t_1);
             __pyx_t_10 = __pyx_t_1;
             __pyx_t_1 = 0;
           }
           __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
-          __pyx_t_15 = __Pyx_PyLong_As_int(__pyx_t_10); if (unlikely((__pyx_t_15 == (int)-1) && PyErr_Occurred())) __PYX_ERR(0, 591, __pyx_L1_error)
+          __pyx_t_15 = __Pyx_PyLong_As_int(__pyx_t_10); if (unlikely((__pyx_t_15 == (int)-1) && PyErr_Occurred())) __PYX_ERR(0, 593, __pyx_L1_error)
           __Pyx_DECREF(__pyx_t_10); __pyx_t_10 = 0;
           __pyx_v_confidence = __pyx_t_15;
 
-          /* "thesis_pkg/core/sec/extraction_fast.pyx":590
+          /* "thesis_pkg/core/sec/extraction_fast.pyx":592
  *                 confidence = HEADING_CONF_MED if title_match else HEADING_CONF_LOW
  *             elif is_10k and (is_line_start or part_near_item):
  *                 if not title_match and _heading_suffix_looks_like_prose(line[m.end() :]):             # <<<<<<<<<<<<<<
@@ -25602,7 +25567,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
         }
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":589
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":591
  *             if midline:
  *                 confidence = HEADING_CONF_MED if title_match else HEADING_CONF_LOW
  *             elif is_10k and (is_line_start or part_near_item):             # <<<<<<<<<<<<<<
@@ -25612,7 +25577,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
       }
       __pyx_L168:;
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":592
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":594
  *                 if not title_match and _heading_suffix_looks_like_prose(line[m.end() :]):
  *                     confidence = min(confidence, HEADING_CONF_MED)
  *             if compound_line:             # <<<<<<<<<<<<<<
@@ -25621,37 +25586,37 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
       if (__pyx_v_compound_line) {
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":593
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":595
  *                     confidence = min(confidence, HEADING_CONF_MED)
  *             if compound_line:
  *                 confidence = min(confidence, HEADING_CONF_LOW)             # <<<<<<<<<<<<<<
  *             if _pageish_line(line):
  *                 confidence = min(confidence, HEADING_CONF_LOW)
 */
-        __Pyx_GetModuleGlobalName(__pyx_t_10, __pyx_mstate_global->__pyx_n_u_HEADING_CONF_LOW); if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 593, __pyx_L1_error)
+        __Pyx_GetModuleGlobalName(__pyx_t_10, __pyx_mstate_global->__pyx_n_u_HEADING_CONF_LOW); if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 595, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_10);
         __pyx_t_15 = __pyx_v_confidence;
-        __pyx_t_1 = __Pyx_PyLong_From_int(__pyx_t_15); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 593, __pyx_L1_error)
+        __pyx_t_1 = __Pyx_PyLong_From_int(__pyx_t_15); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 595, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_1);
-        __pyx_t_2 = PyObject_RichCompare(__pyx_t_10, __pyx_t_1, Py_LT); __Pyx_XGOTREF(__pyx_t_2); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 593, __pyx_L1_error)
+        __pyx_t_2 = PyObject_RichCompare(__pyx_t_10, __pyx_t_1, Py_LT); __Pyx_XGOTREF(__pyx_t_2); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 595, __pyx_L1_error)
         __Pyx_DECREF(__pyx_t_1); __pyx_t_1 = 0;
-        __pyx_t_9 = __Pyx_PyObject_IsTrue(__pyx_t_2); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 593, __pyx_L1_error)
+        __pyx_t_9 = __Pyx_PyObject_IsTrue(__pyx_t_2); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 595, __pyx_L1_error)
         __Pyx_DECREF(__pyx_t_2); __pyx_t_2 = 0;
         if (__pyx_t_9) {
           __Pyx_INCREF(__pyx_t_10);
           __pyx_t_3 = __pyx_t_10;
         } else {
-          __pyx_t_2 = __Pyx_PyLong_From_int(__pyx_t_15); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 593, __pyx_L1_error)
+          __pyx_t_2 = __Pyx_PyLong_From_int(__pyx_t_15); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 595, __pyx_L1_error)
           __Pyx_GOTREF(__pyx_t_2);
           __pyx_t_3 = __pyx_t_2;
           __pyx_t_2 = 0;
         }
         __Pyx_DECREF(__pyx_t_10); __pyx_t_10 = 0;
-        __pyx_t_15 = __Pyx_PyLong_As_int(__pyx_t_3); if (unlikely((__pyx_t_15 == (int)-1) && PyErr_Occurred())) __PYX_ERR(0, 593, __pyx_L1_error)
+        __pyx_t_15 = __Pyx_PyLong_As_int(__pyx_t_3); if (unlikely((__pyx_t_15 == (int)-1) && PyErr_Occurred())) __PYX_ERR(0, 595, __pyx_L1_error)
         __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
         __pyx_v_confidence = __pyx_t_15;
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":592
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":594
  *                 if not title_match and _heading_suffix_looks_like_prose(line[m.end() :]):
  *                     confidence = min(confidence, HEADING_CONF_MED)
  *             if compound_line:             # <<<<<<<<<<<<<<
@@ -25660,7 +25625,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
       }
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":594
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":596
  *             if compound_line:
  *                 confidence = min(confidence, HEADING_CONF_LOW)
  *             if _pageish_line(line):             # <<<<<<<<<<<<<<
@@ -25668,7 +25633,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
  * 
 */
       __pyx_t_10 = NULL;
-      __Pyx_GetModuleGlobalName(__pyx_t_2, __pyx_mstate_global->__pyx_n_u_pageish_line); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 594, __pyx_L1_error)
+      __Pyx_GetModuleGlobalName(__pyx_t_2, __pyx_mstate_global->__pyx_n_u_pageish_line); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 596, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_2);
       __pyx_t_4 = 1;
       #if CYTHON_UNPACK_METHODS
@@ -25687,44 +25652,44 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
         __pyx_t_3 = __Pyx_PyObject_FastCall((PyObject*)__pyx_t_2, __pyx_callargs+__pyx_t_4, (2-__pyx_t_4) | (__pyx_t_4*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
         __Pyx_XDECREF(__pyx_t_10); __pyx_t_10 = 0;
         __Pyx_DECREF(__pyx_t_2); __pyx_t_2 = 0;
-        if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 594, __pyx_L1_error)
+        if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 596, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_3);
       }
-      __pyx_t_9 = __Pyx_PyObject_IsTrue(__pyx_t_3); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 594, __pyx_L1_error)
+      __pyx_t_9 = __Pyx_PyObject_IsTrue(__pyx_t_3); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 596, __pyx_L1_error)
       __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
       if (__pyx_t_9) {
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":595
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":597
  *                 confidence = min(confidence, HEADING_CONF_LOW)
  *             if _pageish_line(line):
  *                 confidence = min(confidence, HEADING_CONF_LOW)             # <<<<<<<<<<<<<<
  * 
  *             item_part = toc_part if line_in_toc_range else current_part
 */
-        __Pyx_GetModuleGlobalName(__pyx_t_3, __pyx_mstate_global->__pyx_n_u_HEADING_CONF_LOW); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 595, __pyx_L1_error)
+        __Pyx_GetModuleGlobalName(__pyx_t_3, __pyx_mstate_global->__pyx_n_u_HEADING_CONF_LOW); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 597, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_3);
         __pyx_t_15 = __pyx_v_confidence;
-        __pyx_t_10 = __Pyx_PyLong_From_int(__pyx_t_15); if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 595, __pyx_L1_error)
+        __pyx_t_10 = __Pyx_PyLong_From_int(__pyx_t_15); if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 597, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_10);
-        __pyx_t_1 = PyObject_RichCompare(__pyx_t_3, __pyx_t_10, Py_LT); __Pyx_XGOTREF(__pyx_t_1); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 595, __pyx_L1_error)
+        __pyx_t_1 = PyObject_RichCompare(__pyx_t_3, __pyx_t_10, Py_LT); __Pyx_XGOTREF(__pyx_t_1); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 597, __pyx_L1_error)
         __Pyx_DECREF(__pyx_t_10); __pyx_t_10 = 0;
-        __pyx_t_9 = __Pyx_PyObject_IsTrue(__pyx_t_1); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 595, __pyx_L1_error)
+        __pyx_t_9 = __Pyx_PyObject_IsTrue(__pyx_t_1); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 597, __pyx_L1_error)
         __Pyx_DECREF(__pyx_t_1); __pyx_t_1 = 0;
         if (__pyx_t_9) {
           __Pyx_INCREF(__pyx_t_3);
           __pyx_t_2 = __pyx_t_3;
         } else {
-          __pyx_t_1 = __Pyx_PyLong_From_int(__pyx_t_15); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 595, __pyx_L1_error)
+          __pyx_t_1 = __Pyx_PyLong_From_int(__pyx_t_15); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 597, __pyx_L1_error)
           __Pyx_GOTREF(__pyx_t_1);
           __pyx_t_2 = __pyx_t_1;
           __pyx_t_1 = 0;
         }
         __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
-        __pyx_t_15 = __Pyx_PyLong_As_int(__pyx_t_2); if (unlikely((__pyx_t_15 == (int)-1) && PyErr_Occurred())) __PYX_ERR(0, 595, __pyx_L1_error)
+        __pyx_t_15 = __Pyx_PyLong_As_int(__pyx_t_2); if (unlikely((__pyx_t_15 == (int)-1) && PyErr_Occurred())) __PYX_ERR(0, 597, __pyx_L1_error)
         __Pyx_DECREF(__pyx_t_2); __pyx_t_2 = 0;
         __pyx_v_confidence = __pyx_t_15;
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":594
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":596
  *             if compound_line:
  *                 confidence = min(confidence, HEADING_CONF_LOW)
  *             if _pageish_line(line):             # <<<<<<<<<<<<<<
@@ -25733,7 +25698,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
       }
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":597
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":599
  *                 confidence = min(confidence, HEADING_CONF_LOW)
  * 
  *             item_part = toc_part if line_in_toc_range else current_part             # <<<<<<<<<<<<<<
@@ -25750,14 +25715,14 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
       __Pyx_XDECREF_SET(__pyx_v_item_part, __pyx_t_2);
       __pyx_t_2 = 0;
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":598
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":600
  * 
  *             item_part = toc_part if line_in_toc_range else current_part
  *             part_hint = line_part or prefix_part             # <<<<<<<<<<<<<<
  *             if part_near_item and part_hint:
  *                 item_part = part_hint
 */
-      __pyx_t_9 = __Pyx_PyObject_IsTrue(__pyx_v_line_part); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 598, __pyx_L1_error)
+      __pyx_t_9 = __Pyx_PyObject_IsTrue(__pyx_v_line_part); if (unlikely((__pyx_t_9 < 0))) __PYX_ERR(0, 600, __pyx_L1_error)
       if (!__pyx_t_9) {
       } else {
         __Pyx_INCREF(__pyx_v_line_part);
@@ -25770,7 +25735,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
       __Pyx_XDECREF_SET(__pyx_v_part_hint, __pyx_t_2);
       __pyx_t_2 = 0;
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":599
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":601
  *             item_part = toc_part if line_in_toc_range else current_part
  *             part_hint = line_part or prefix_part
  *             if part_near_item and part_hint:             # <<<<<<<<<<<<<<
@@ -25782,12 +25747,12 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
         __pyx_t_9 = __pyx_v_part_near_item;
         goto __pyx_L180_bool_binop_done;
       }
-      __pyx_t_11 = __Pyx_PyObject_IsTrue(__pyx_v_part_hint); if (unlikely((__pyx_t_11 < 0))) __PYX_ERR(0, 599, __pyx_L1_error)
+      __pyx_t_11 = __Pyx_PyObject_IsTrue(__pyx_v_part_hint); if (unlikely((__pyx_t_11 < 0))) __PYX_ERR(0, 601, __pyx_L1_error)
       __pyx_t_9 = __pyx_t_11;
       __pyx_L180_bool_binop_done:;
       if (__pyx_t_9) {
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":600
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":602
  *             part_hint = line_part or prefix_part
  *             if part_near_item and part_hint:
  *                 item_part = part_hint             # <<<<<<<<<<<<<<
@@ -25797,33 +25762,33 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
         __Pyx_INCREF(__pyx_v_part_hint);
         __Pyx_DECREF_SET(__pyx_v_item_part, __pyx_v_part_hint);
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":601
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":603
  *             if part_near_item and part_hint:
  *                 item_part = part_hint
  *                 if confidence >= HEADING_CONF_HIGH or prefix_part:             # <<<<<<<<<<<<<<
  *                     current_part = part_hint
  * 
 */
-        __pyx_t_2 = __Pyx_PyLong_From_int(__pyx_v_confidence); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 601, __pyx_L1_error)
+        __pyx_t_2 = __Pyx_PyLong_From_int(__pyx_v_confidence); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 603, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_2);
-        __Pyx_GetModuleGlobalName(__pyx_t_3, __pyx_mstate_global->__pyx_n_u_HEADING_CONF_HIGH); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 601, __pyx_L1_error)
+        __Pyx_GetModuleGlobalName(__pyx_t_3, __pyx_mstate_global->__pyx_n_u_HEADING_CONF_HIGH); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 603, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_3);
-        __pyx_t_1 = PyObject_RichCompare(__pyx_t_2, __pyx_t_3, Py_GE); __Pyx_XGOTREF(__pyx_t_1); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 601, __pyx_L1_error)
+        __pyx_t_1 = PyObject_RichCompare(__pyx_t_2, __pyx_t_3, Py_GE); __Pyx_XGOTREF(__pyx_t_1); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 603, __pyx_L1_error)
         __Pyx_DECREF(__pyx_t_2); __pyx_t_2 = 0;
         __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
-        __pyx_t_11 = __Pyx_PyObject_IsTrue(__pyx_t_1); if (unlikely((__pyx_t_11 < 0))) __PYX_ERR(0, 601, __pyx_L1_error)
+        __pyx_t_11 = __Pyx_PyObject_IsTrue(__pyx_t_1); if (unlikely((__pyx_t_11 < 0))) __PYX_ERR(0, 603, __pyx_L1_error)
         __Pyx_DECREF(__pyx_t_1); __pyx_t_1 = 0;
         if (!__pyx_t_11) {
         } else {
           __pyx_t_9 = __pyx_t_11;
           goto __pyx_L183_bool_binop_done;
         }
-        __pyx_t_11 = __Pyx_PyObject_IsTrue(__pyx_v_prefix_part); if (unlikely((__pyx_t_11 < 0))) __PYX_ERR(0, 601, __pyx_L1_error)
+        __pyx_t_11 = __Pyx_PyObject_IsTrue(__pyx_v_prefix_part); if (unlikely((__pyx_t_11 < 0))) __PYX_ERR(0, 603, __pyx_L1_error)
         __pyx_t_9 = __pyx_t_11;
         __pyx_L183_bool_binop_done:;
         if (__pyx_t_9) {
 
-          /* "thesis_pkg/core/sec/extraction_fast.pyx":602
+          /* "thesis_pkg/core/sec/extraction_fast.pyx":604
  *                 item_part = part_hint
  *                 if confidence >= HEADING_CONF_HIGH or prefix_part:
  *                     current_part = part_hint             # <<<<<<<<<<<<<<
@@ -25833,7 +25798,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
           __Pyx_INCREF(__pyx_v_part_hint);
           __Pyx_DECREF_SET(__pyx_v_current_part, __pyx_v_part_hint);
 
-          /* "thesis_pkg/core/sec/extraction_fast.pyx":601
+          /* "thesis_pkg/core/sec/extraction_fast.pyx":603
  *             if part_near_item and part_hint:
  *                 item_part = part_hint
  *                 if confidence >= HEADING_CONF_HIGH or prefix_part:             # <<<<<<<<<<<<<<
@@ -25842,7 +25807,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
         }
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":599
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":601
  *             item_part = toc_part if line_in_toc_range else current_part
  *             part_hint = line_part or prefix_part
  *             if part_near_item and part_hint:             # <<<<<<<<<<<<<<
@@ -25851,7 +25816,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
       }
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":604
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":606
  *                     current_part = part_hint
  * 
  *             start_abs = starts_mv[i] + m.start()             # <<<<<<<<<<<<<<
@@ -25859,7 +25824,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
  *             candidate_toc_like = line_toc_like
 */
       __pyx_t_19 = __pyx_v_i;
-      __pyx_t_1 = __Pyx_PyLong_From_PY_LONG_LONG((*((PY_LONG_LONG *) ( /* dim=0 */ (__pyx_v_starts_mv.data + __pyx_t_19 * __pyx_v_starts_mv.strides[0]) )))); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 604, __pyx_L1_error)
+      __pyx_t_1 = __Pyx_PyLong_From_PY_LONG_LONG((*((PY_LONG_LONG *) ( /* dim=0 */ (__pyx_v_starts_mv.data + __pyx_t_19 * __pyx_v_starts_mv.strides[0]) )))); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 606, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_1);
       __pyx_t_2 = __pyx_v_m;
       __Pyx_INCREF(__pyx_t_2);
@@ -25868,18 +25833,18 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
         PyObject *__pyx_callargs[2] = {__pyx_t_2, NULL};
         __pyx_t_3 = __Pyx_PyObject_FastCallMethod((PyObject*)__pyx_mstate_global->__pyx_n_u_start, __pyx_callargs+__pyx_t_4, (1-__pyx_t_4) | (1*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
         __Pyx_XDECREF(__pyx_t_2); __pyx_t_2 = 0;
-        if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 604, __pyx_L1_error)
+        if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 606, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_3);
       }
-      __pyx_t_2 = PyNumber_Add(__pyx_t_1, __pyx_t_3); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 604, __pyx_L1_error)
+      __pyx_t_2 = PyNumber_Add(__pyx_t_1, __pyx_t_3); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 606, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_2);
       __Pyx_DECREF(__pyx_t_1); __pyx_t_1 = 0;
       __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
-      __pyx_t_20 = __Pyx_PyLong_As_PY_LONG_LONG(__pyx_t_2); if (unlikely((__pyx_t_20 == (PY_LONG_LONG)-1) && PyErr_Occurred())) __PYX_ERR(0, 604, __pyx_L1_error)
+      __pyx_t_20 = __Pyx_PyLong_As_PY_LONG_LONG(__pyx_t_2); if (unlikely((__pyx_t_20 == (PY_LONG_LONG)-1) && PyErr_Occurred())) __PYX_ERR(0, 606, __pyx_L1_error)
       __Pyx_DECREF(__pyx_t_2); __pyx_t_2 = 0;
       __pyx_v_start_abs = __pyx_t_20;
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":605
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":607
  * 
  *             start_abs = starts_mv[i] + m.start()
  *             content_start_abs = starts_mv[i] + m.end() + content_adjust             # <<<<<<<<<<<<<<
@@ -25887,7 +25852,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
  *             if (
 */
       __pyx_t_19 = __pyx_v_i;
-      __pyx_t_2 = __Pyx_PyLong_From_PY_LONG_LONG((*((PY_LONG_LONG *) ( /* dim=0 */ (__pyx_v_starts_mv.data + __pyx_t_19 * __pyx_v_starts_mv.strides[0]) )))); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 605, __pyx_L1_error)
+      __pyx_t_2 = __Pyx_PyLong_From_PY_LONG_LONG((*((PY_LONG_LONG *) ( /* dim=0 */ (__pyx_v_starts_mv.data + __pyx_t_19 * __pyx_v_starts_mv.strides[0]) )))); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 607, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_2);
       __pyx_t_1 = __pyx_v_m;
       __Pyx_INCREF(__pyx_t_1);
@@ -25896,24 +25861,24 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
         PyObject *__pyx_callargs[2] = {__pyx_t_1, NULL};
         __pyx_t_3 = __Pyx_PyObject_FastCallMethod((PyObject*)__pyx_mstate_global->__pyx_n_u_end, __pyx_callargs+__pyx_t_4, (1-__pyx_t_4) | (1*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
         __Pyx_XDECREF(__pyx_t_1); __pyx_t_1 = 0;
-        if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 605, __pyx_L1_error)
+        if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 607, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_3);
       }
-      __pyx_t_1 = PyNumber_Add(__pyx_t_2, __pyx_t_3); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 605, __pyx_L1_error)
+      __pyx_t_1 = PyNumber_Add(__pyx_t_2, __pyx_t_3); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 607, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_1);
       __Pyx_DECREF(__pyx_t_2); __pyx_t_2 = 0;
       __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
-      __pyx_t_3 = __Pyx_PyLong_From_int(__pyx_v_content_adjust); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 605, __pyx_L1_error)
+      __pyx_t_3 = __Pyx_PyLong_From_int(__pyx_v_content_adjust); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 607, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_3);
-      __pyx_t_2 = PyNumber_Add(__pyx_t_1, __pyx_t_3); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 605, __pyx_L1_error)
+      __pyx_t_2 = PyNumber_Add(__pyx_t_1, __pyx_t_3); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 607, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_2);
       __Pyx_DECREF(__pyx_t_1); __pyx_t_1 = 0;
       __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
-      __pyx_t_20 = __Pyx_PyLong_As_PY_LONG_LONG(__pyx_t_2); if (unlikely((__pyx_t_20 == (PY_LONG_LONG)-1) && PyErr_Occurred())) __PYX_ERR(0, 605, __pyx_L1_error)
+      __pyx_t_20 = __Pyx_PyLong_As_PY_LONG_LONG(__pyx_t_2); if (unlikely((__pyx_t_20 == (PY_LONG_LONG)-1) && PyErr_Occurred())) __PYX_ERR(0, 607, __pyx_L1_error)
       __Pyx_DECREF(__pyx_t_2); __pyx_t_2 = 0;
       __pyx_v_content_start_abs = __pyx_t_20;
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":606
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":608
  *             start_abs = starts_mv[i] + m.start()
  *             content_start_abs = starts_mv[i] + m.end() + content_adjust
  *             candidate_toc_like = line_toc_like             # <<<<<<<<<<<<<<
@@ -25922,7 +25887,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
       __pyx_v_candidate_toc_like = __pyx_v_line_toc_like;
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":608
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":610
  *             candidate_toc_like = line_toc_like
  *             if (
  *                 candidate_toc_like             # <<<<<<<<<<<<<<
@@ -25935,7 +25900,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
         goto __pyx_L186_bool_binop_done;
       }
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":609
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":611
  *             if (
  *                 candidate_toc_like
  *                 and toc_window_like             # <<<<<<<<<<<<<<
@@ -25948,7 +25913,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
         goto __pyx_L186_bool_binop_done;
       }
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":610
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":612
  *                 candidate_toc_like
  *                 and toc_window_like
  *                 and scan_sparse_layout             # <<<<<<<<<<<<<<
@@ -25961,7 +25926,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
         goto __pyx_L186_bool_binop_done;
       }
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":611
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":613
  *                 and toc_window_like
  *                 and scan_sparse_layout
  *                 and m.start() > embedded_headings.EMBEDDED_TOC_START_EARLY_MAX_CHAR             # <<<<<<<<<<<<<<
@@ -25975,23 +25940,23 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
         PyObject *__pyx_callargs[2] = {__pyx_t_3, NULL};
         __pyx_t_2 = __Pyx_PyObject_FastCallMethod((PyObject*)__pyx_mstate_global->__pyx_n_u_start, __pyx_callargs+__pyx_t_4, (1-__pyx_t_4) | (1*__Pyx_PY_VECTORCALL_ARGUMENTS_OFFSET));
         __Pyx_XDECREF(__pyx_t_3); __pyx_t_3 = 0;
-        if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 611, __pyx_L1_error)
+        if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 613, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_2);
       }
-      __Pyx_GetModuleGlobalName(__pyx_t_3, __pyx_mstate_global->__pyx_n_u_embedded_headings); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 611, __pyx_L1_error)
+      __Pyx_GetModuleGlobalName(__pyx_t_3, __pyx_mstate_global->__pyx_n_u_embedded_headings); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 613, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_3);
-      __pyx_t_1 = __Pyx_PyObject_GetAttrStr(__pyx_t_3, __pyx_mstate_global->__pyx_n_u_EMBEDDED_TOC_START_EARLY_MAX_CHA); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 611, __pyx_L1_error)
+      __pyx_t_1 = __Pyx_PyObject_GetAttrStr(__pyx_t_3, __pyx_mstate_global->__pyx_n_u_EMBEDDED_TOC_START_EARLY_MAX_CHA); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 613, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_1);
       __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
-      __pyx_t_3 = PyObject_RichCompare(__pyx_t_2, __pyx_t_1, Py_GT); __Pyx_XGOTREF(__pyx_t_3); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 611, __pyx_L1_error)
+      __pyx_t_3 = PyObject_RichCompare(__pyx_t_2, __pyx_t_1, Py_GT); __Pyx_XGOTREF(__pyx_t_3); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 613, __pyx_L1_error)
       __Pyx_DECREF(__pyx_t_2); __pyx_t_2 = 0;
       __Pyx_DECREF(__pyx_t_1); __pyx_t_1 = 0;
-      __pyx_t_11 = __Pyx_PyObject_IsTrue(__pyx_t_3); if (unlikely((__pyx_t_11 < 0))) __PYX_ERR(0, 611, __pyx_L1_error)
+      __pyx_t_11 = __Pyx_PyObject_IsTrue(__pyx_t_3); if (unlikely((__pyx_t_11 < 0))) __PYX_ERR(0, 613, __pyx_L1_error)
       __Pyx_DECREF(__pyx_t_3); __pyx_t_3 = 0;
       __pyx_t_9 = __pyx_t_11;
       __pyx_L186_bool_binop_done:;
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":607
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":609
  *             content_start_abs = starts_mv[i] + m.end() + content_adjust
  *             candidate_toc_like = line_toc_like
  *             if (             # <<<<<<<<<<<<<<
@@ -26000,7 +25965,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
       if (__pyx_t_9) {
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":613
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":615
  *                 and m.start() > embedded_headings.EMBEDDED_TOC_START_EARLY_MAX_CHAR
  *             ):
  *                 candidate_toc_like = False             # <<<<<<<<<<<<<<
@@ -26009,7 +25974,7 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
         __pyx_v_candidate_toc_like = 0;
 
-        /* "thesis_pkg/core/sec/extraction_fast.pyx":607
+        /* "thesis_pkg/core/sec/extraction_fast.pyx":609
  *             content_start_abs = starts_mv[i] + m.end() + content_adjust
  *             candidate_toc_like = line_toc_like
  *             if (             # <<<<<<<<<<<<<<
@@ -26018,47 +25983,47 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
       }
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":616
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":618
  *             boundaries.append(
  *                 (
  *                     start_abs,             # <<<<<<<<<<<<<<
  *                     content_start_abs,
  *                     item_part,
 */
-      __pyx_t_3 = __Pyx_PyLong_From_PY_LONG_LONG(__pyx_v_start_abs); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 616, __pyx_L1_error)
+      __pyx_t_3 = __Pyx_PyLong_From_PY_LONG_LONG(__pyx_v_start_abs); if (unlikely(!__pyx_t_3)) __PYX_ERR(0, 618, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_3);
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":617
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":619
  *                 (
  *                     start_abs,
  *                     content_start_abs,             # <<<<<<<<<<<<<<
  *                     item_part,
  *                     item_id,
 */
-      __pyx_t_1 = __Pyx_PyLong_From_PY_LONG_LONG(__pyx_v_content_start_abs); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 617, __pyx_L1_error)
+      __pyx_t_1 = __Pyx_PyLong_From_PY_LONG_LONG(__pyx_v_content_start_abs); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 619, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_1);
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":620
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":622
  *                     item_part,
  *                     item_id,
  *                     i,             # <<<<<<<<<<<<<<
  *                     confidence,
  *                     line_in_toc_range and not content_after,
 */
-      __pyx_t_2 = PyLong_FromSsize_t(__pyx_v_i); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 620, __pyx_L1_error)
+      __pyx_t_2 = PyLong_FromSsize_t(__pyx_v_i); if (unlikely(!__pyx_t_2)) __PYX_ERR(0, 622, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_2);
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":621
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":623
  *                     item_id,
  *                     i,
  *                     confidence,             # <<<<<<<<<<<<<<
  *                     line_in_toc_range and not content_after,
  *                     candidate_toc_like,
 */
-      __pyx_t_10 = __Pyx_PyLong_From_int(__pyx_v_confidence); if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 621, __pyx_L1_error)
+      __pyx_t_10 = __Pyx_PyLong_From_int(__pyx_v_confidence); if (unlikely(!__pyx_t_10)) __PYX_ERR(0, 623, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_10);
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":622
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":624
  *                     i,
  *                     confidence,
  *                     line_in_toc_range and not content_after,             # <<<<<<<<<<<<<<
@@ -26067,56 +26032,56 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
 */
       if (__pyx_v_line_in_toc_range) {
       } else {
-        __pyx_t_21 = __Pyx_PyBool_FromLong(__pyx_v_line_in_toc_range); if (unlikely(!__pyx_t_21)) __PYX_ERR(0, 622, __pyx_L1_error)
+        __pyx_t_21 = __Pyx_PyBool_FromLong(__pyx_v_line_in_toc_range); if (unlikely(!__pyx_t_21)) __PYX_ERR(0, 624, __pyx_L1_error)
         __Pyx_GOTREF(__pyx_t_21);
         __pyx_t_13 = __pyx_t_21;
         __pyx_t_21 = 0;
         goto __pyx_L190_bool_binop_done;
       }
       __pyx_t_9 = (!__pyx_v_content_after);
-      __pyx_t_21 = __Pyx_PyBool_FromLong(__pyx_t_9); if (unlikely(!__pyx_t_21)) __PYX_ERR(0, 622, __pyx_L1_error)
+      __pyx_t_21 = __Pyx_PyBool_FromLong(__pyx_t_9); if (unlikely(!__pyx_t_21)) __PYX_ERR(0, 624, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_21);
       __pyx_t_13 = __pyx_t_21;
       __pyx_t_21 = 0;
       __pyx_L190_bool_binop_done:;
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":623
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":625
  *                     confidence,
  *                     line_in_toc_range and not content_after,
  *                     candidate_toc_like,             # <<<<<<<<<<<<<<
  *                 )
  *             )
 */
-      __pyx_t_21 = __Pyx_PyBool_FromLong(__pyx_v_candidate_toc_like); if (unlikely(!__pyx_t_21)) __PYX_ERR(0, 623, __pyx_L1_error)
+      __pyx_t_21 = __Pyx_PyBool_FromLong(__pyx_v_candidate_toc_like); if (unlikely(!__pyx_t_21)) __PYX_ERR(0, 625, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_21);
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":616
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":618
  *             boundaries.append(
  *                 (
  *                     start_abs,             # <<<<<<<<<<<<<<
  *                     content_start_abs,
  *                     item_part,
 */
-      __pyx_t_12 = PyTuple_New(8); if (unlikely(!__pyx_t_12)) __PYX_ERR(0, 616, __pyx_L1_error)
+      __pyx_t_12 = PyTuple_New(8); if (unlikely(!__pyx_t_12)) __PYX_ERR(0, 618, __pyx_L1_error)
       __Pyx_GOTREF(__pyx_t_12);
       __Pyx_GIVEREF(__pyx_t_3);
-      if (__Pyx_PyTuple_SET_ITEM(__pyx_t_12, 0, __pyx_t_3) != (0)) __PYX_ERR(0, 616, __pyx_L1_error);
+      if (__Pyx_PyTuple_SET_ITEM(__pyx_t_12, 0, __pyx_t_3) != (0)) __PYX_ERR(0, 618, __pyx_L1_error);
       __Pyx_GIVEREF(__pyx_t_1);
-      if (__Pyx_PyTuple_SET_ITEM(__pyx_t_12, 1, __pyx_t_1) != (0)) __PYX_ERR(0, 616, __pyx_L1_error);
+      if (__Pyx_PyTuple_SET_ITEM(__pyx_t_12, 1, __pyx_t_1) != (0)) __PYX_ERR(0, 618, __pyx_L1_error);
       __Pyx_INCREF(__pyx_v_item_part);
       __Pyx_GIVEREF(__pyx_v_item_part);
-      if (__Pyx_PyTuple_SET_ITEM(__pyx_t_12, 2, __pyx_v_item_part) != (0)) __PYX_ERR(0, 616, __pyx_L1_error);
+      if (__Pyx_PyTuple_SET_ITEM(__pyx_t_12, 2, __pyx_v_item_part) != (0)) __PYX_ERR(0, 618, __pyx_L1_error);
       __Pyx_INCREF(__pyx_v_item_id);
       __Pyx_GIVEREF(__pyx_v_item_id);
-      if (__Pyx_PyTuple_SET_ITEM(__pyx_t_12, 3, __pyx_v_item_id) != (0)) __PYX_ERR(0, 616, __pyx_L1_error);
+      if (__Pyx_PyTuple_SET_ITEM(__pyx_t_12, 3, __pyx_v_item_id) != (0)) __PYX_ERR(0, 618, __pyx_L1_error);
       __Pyx_GIVEREF(__pyx_t_2);
-      if (__Pyx_PyTuple_SET_ITEM(__pyx_t_12, 4, __pyx_t_2) != (0)) __PYX_ERR(0, 616, __pyx_L1_error);
+      if (__Pyx_PyTuple_SET_ITEM(__pyx_t_12, 4, __pyx_t_2) != (0)) __PYX_ERR(0, 618, __pyx_L1_error);
       __Pyx_GIVEREF(__pyx_t_10);
-      if (__Pyx_PyTuple_SET_ITEM(__pyx_t_12, 5, __pyx_t_10) != (0)) __PYX_ERR(0, 616, __pyx_L1_error);
+      if (__Pyx_PyTuple_SET_ITEM(__pyx_t_12, 5, __pyx_t_10) != (0)) __PYX_ERR(0, 618, __pyx_L1_error);
       __Pyx_GIVEREF(__pyx_t_13);
-      if (__Pyx_PyTuple_SET_ITEM(__pyx_t_12, 6, __pyx_t_13) != (0)) __PYX_ERR(0, 616, __pyx_L1_error);
+      if (__Pyx_PyTuple_SET_ITEM(__pyx_t_12, 6, __pyx_t_13) != (0)) __PYX_ERR(0, 618, __pyx_L1_error);
       __Pyx_GIVEREF(__pyx_t_21);
-      if (__Pyx_PyTuple_SET_ITEM(__pyx_t_12, 7, __pyx_t_21) != (0)) __PYX_ERR(0, 616, __pyx_L1_error);
+      if (__Pyx_PyTuple_SET_ITEM(__pyx_t_12, 7, __pyx_t_21) != (0)) __PYX_ERR(0, 618, __pyx_L1_error);
       __pyx_t_3 = 0;
       __pyx_t_1 = 0;
       __pyx_t_2 = 0;
@@ -26124,21 +26089,21 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
       __pyx_t_13 = 0;
       __pyx_t_21 = 0;
 
-      /* "thesis_pkg/core/sec/extraction_fast.pyx":614
+      /* "thesis_pkg/core/sec/extraction_fast.pyx":616
  *             ):
  *                 candidate_toc_like = False
  *             boundaries.append(             # <<<<<<<<<<<<<<
  *                 (
  *                     start_abs,
 */
-      __pyx_t_22 = __Pyx_PyObject_Append(__pyx_v_boundaries, __pyx_t_12); if (unlikely(__pyx_t_22 == ((int)-1))) __PYX_ERR(0, 614, __pyx_L1_error)
+      __pyx_t_22 = __Pyx_PyObject_Append(__pyx_v_boundaries, __pyx_t_12); if (unlikely(__pyx_t_22 == ((int)-1))) __PYX_ERR(0, 616, __pyx_L1_error)
       __Pyx_DECREF(__pyx_t_12); __pyx_t_12 = 0;
       __pyx_L113_continue:;
     }
     __pyx_L3_continue:;
   }
 
-  /* "thesis_pkg/core/sec/extraction_fast.pyx":627
+  /* "thesis_pkg/core/sec/extraction_fast.pyx":629
  *             )
  * 
  *     return boundaries             # <<<<<<<<<<<<<<
@@ -26146,12 +26111,12 @@ static PyObject *__pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_bou
   __Pyx_XDECREF(__pyx_r);
   __pyx_t_12 = __pyx_v_boundaries;
   __Pyx_INCREF(__pyx_t_12);
-  if (!(likely(PyList_CheckExact(__pyx_t_12)) || __Pyx_RaiseUnexpectedTypeError("list", __pyx_t_12))) __PYX_ERR(0, 627, __pyx_L1_error)
+  if (!(likely(PyList_CheckExact(__pyx_t_12)) || __Pyx_RaiseUnexpectedTypeError("list", __pyx_t_12))) __PYX_ERR(0, 629, __pyx_L1_error)
   __pyx_r = ((PyObject*)__pyx_t_12);
   __pyx_t_12 = 0;
   goto __pyx_L0;
 
-  /* "thesis_pkg/core/sec/extraction_fast.pyx":253
+  /* "thesis_pkg/core/sec/extraction_fast.pyx":255
  * 
  * 
  * cpdef list scan_item_boundaries_fast(             # <<<<<<<<<<<<<<
@@ -26250,102 +26215,102 @@ PyObject *__pyx_args, PyObject *__pyx_kwds
   {
     PyObject ** const __pyx_pyargnames[] = {&__pyx_mstate_global->__pyx_n_u_lines,&__pyx_mstate_global->__pyx_n_u_line_starts,&__pyx_mstate_global->__pyx_n_u_body,&__pyx_mstate_global->__pyx_n_u_is_10k,&__pyx_mstate_global->__pyx_n_u_max_item_number,&__pyx_mstate_global->__pyx_n_u_allowed_parts,&__pyx_mstate_global->__pyx_n_u_scan_sparse_layout,&__pyx_mstate_global->__pyx_n_u_toc_mask,&__pyx_mstate_global->__pyx_n_u_toc_window_flags,&__pyx_mstate_global->__pyx_n_u_toc_cache,&__pyx_mstate_global->__pyx_n_u_extraction_regime_v2,0};
     const Py_ssize_t __pyx_kwds_len = (__pyx_kwds) ? __Pyx_NumKwargs_FASTCALL(__pyx_kwds) : 0;
-    if (unlikely(__pyx_kwds_len) < 0) __PYX_ERR(0, 253, __pyx_L3_error)
+    if (unlikely(__pyx_kwds_len) < 0) __PYX_ERR(0, 255, __pyx_L3_error)
     if (__pyx_kwds_len > 0) {
       switch (__pyx_nargs) {
         case 11:
         values[10] = __Pyx_ArgRef_FASTCALL(__pyx_args, 10);
-        if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[10])) __PYX_ERR(0, 253, __pyx_L3_error)
+        if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[10])) __PYX_ERR(0, 255, __pyx_L3_error)
         CYTHON_FALLTHROUGH;
         case 10:
         values[9] = __Pyx_ArgRef_FASTCALL(__pyx_args, 9);
-        if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[9])) __PYX_ERR(0, 253, __pyx_L3_error)
+        if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[9])) __PYX_ERR(0, 255, __pyx_L3_error)
         CYTHON_FALLTHROUGH;
         case  9:
         values[8] = __Pyx_ArgRef_FASTCALL(__pyx_args, 8);
-        if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[8])) __PYX_ERR(0, 253, __pyx_L3_error)
+        if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[8])) __PYX_ERR(0, 255, __pyx_L3_error)
         CYTHON_FALLTHROUGH;
         case  8:
         values[7] = __Pyx_ArgRef_FASTCALL(__pyx_args, 7);
-        if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[7])) __PYX_ERR(0, 253, __pyx_L3_error)
+        if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[7])) __PYX_ERR(0, 255, __pyx_L3_error)
         CYTHON_FALLTHROUGH;
         case  7:
         values[6] = __Pyx_ArgRef_FASTCALL(__pyx_args, 6);
-        if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[6])) __PYX_ERR(0, 253, __pyx_L3_error)
+        if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[6])) __PYX_ERR(0, 255, __pyx_L3_error)
         CYTHON_FALLTHROUGH;
         case  6:
         values[5] = __Pyx_ArgRef_FASTCALL(__pyx_args, 5);
-        if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[5])) __PYX_ERR(0, 253, __pyx_L3_error)
+        if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[5])) __PYX_ERR(0, 255, __pyx_L3_error)
         CYTHON_FALLTHROUGH;
         case  5:
         values[4] = __Pyx_ArgRef_FASTCALL(__pyx_args, 4);
-        if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[4])) __PYX_ERR(0, 253, __pyx_L3_error)
+        if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[4])) __PYX_ERR(0, 255, __pyx_L3_error)
         CYTHON_FALLTHROUGH;
         case  4:
         values[3] = __Pyx_ArgRef_FASTCALL(__pyx_args, 3);
-        if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[3])) __PYX_ERR(0, 253, __pyx_L3_error)
+        if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[3])) __PYX_ERR(0, 255, __pyx_L3_error)
         CYTHON_FALLTHROUGH;
         case  3:
         values[2] = __Pyx_ArgRef_FASTCALL(__pyx_args, 2);
-        if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[2])) __PYX_ERR(0, 253, __pyx_L3_error)
+        if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[2])) __PYX_ERR(0, 255, __pyx_L3_error)
         CYTHON_FALLTHROUGH;
         case  2:
         values[1] = __Pyx_ArgRef_FASTCALL(__pyx_args, 1);
-        if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[1])) __PYX_ERR(0, 253, __pyx_L3_error)
+        if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[1])) __PYX_ERR(0, 255, __pyx_L3_error)
         CYTHON_FALLTHROUGH;
         case  1:
         values[0] = __Pyx_ArgRef_FASTCALL(__pyx_args, 0);
-        if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[0])) __PYX_ERR(0, 253, __pyx_L3_error)
+        if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[0])) __PYX_ERR(0, 255, __pyx_L3_error)
         CYTHON_FALLTHROUGH;
         case  0: break;
         default: goto __pyx_L5_argtuple_error;
       }
       const Py_ssize_t kwd_pos_args = __pyx_nargs;
-      if (__Pyx_ParseKeywords(__pyx_kwds, __pyx_kwvalues, __pyx_pyargnames, 0, values, kwd_pos_args, __pyx_kwds_len, "scan_item_boundaries_fast", 0) < (0)) __PYX_ERR(0, 253, __pyx_L3_error)
+      if (__Pyx_ParseKeywords(__pyx_kwds, __pyx_kwvalues, __pyx_pyargnames, 0, values, kwd_pos_args, __pyx_kwds_len, "scan_item_boundaries_fast", 0) < (0)) __PYX_ERR(0, 255, __pyx_L3_error)
       for (Py_ssize_t i = __pyx_nargs; i < 11; i++) {
-        if (unlikely(!values[i])) { __Pyx_RaiseArgtupleInvalid("scan_item_boundaries_fast", 1, 11, 11, i); __PYX_ERR(0, 253, __pyx_L3_error) }
+        if (unlikely(!values[i])) { __Pyx_RaiseArgtupleInvalid("scan_item_boundaries_fast", 1, 11, 11, i); __PYX_ERR(0, 255, __pyx_L3_error) }
       }
     } else if (unlikely(__pyx_nargs != 11)) {
       goto __pyx_L5_argtuple_error;
     } else {
       values[0] = __Pyx_ArgRef_FASTCALL(__pyx_args, 0);
-      if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[0])) __PYX_ERR(0, 253, __pyx_L3_error)
+      if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[0])) __PYX_ERR(0, 255, __pyx_L3_error)
       values[1] = __Pyx_ArgRef_FASTCALL(__pyx_args, 1);
-      if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[1])) __PYX_ERR(0, 253, __pyx_L3_error)
+      if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[1])) __PYX_ERR(0, 255, __pyx_L3_error)
       values[2] = __Pyx_ArgRef_FASTCALL(__pyx_args, 2);
-      if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[2])) __PYX_ERR(0, 253, __pyx_L3_error)
+      if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[2])) __PYX_ERR(0, 255, __pyx_L3_error)
       values[3] = __Pyx_ArgRef_FASTCALL(__pyx_args, 3);
-      if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[3])) __PYX_ERR(0, 253, __pyx_L3_error)
+      if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[3])) __PYX_ERR(0, 255, __pyx_L3_error)
       values[4] = __Pyx_ArgRef_FASTCALL(__pyx_args, 4);
-      if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[4])) __PYX_ERR(0, 253, __pyx_L3_error)
+      if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[4])) __PYX_ERR(0, 255, __pyx_L3_error)
       values[5] = __Pyx_ArgRef_FASTCALL(__pyx_args, 5);
-      if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[5])) __PYX_ERR(0, 253, __pyx_L3_error)
+      if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[5])) __PYX_ERR(0, 255, __pyx_L3_error)
       values[6] = __Pyx_ArgRef_FASTCALL(__pyx_args, 6);
-      if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[6])) __PYX_ERR(0, 253, __pyx_L3_error)
+      if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[6])) __PYX_ERR(0, 255, __pyx_L3_error)
       values[7] = __Pyx_ArgRef_FASTCALL(__pyx_args, 7);
-      if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[7])) __PYX_ERR(0, 253, __pyx_L3_error)
+      if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[7])) __PYX_ERR(0, 255, __pyx_L3_error)
       values[8] = __Pyx_ArgRef_FASTCALL(__pyx_args, 8);
-      if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[8])) __PYX_ERR(0, 253, __pyx_L3_error)
+      if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[8])) __PYX_ERR(0, 255, __pyx_L3_error)
       values[9] = __Pyx_ArgRef_FASTCALL(__pyx_args, 9);
-      if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[9])) __PYX_ERR(0, 253, __pyx_L3_error)
+      if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[9])) __PYX_ERR(0, 255, __pyx_L3_error)
       values[10] = __Pyx_ArgRef_FASTCALL(__pyx_args, 10);
-      if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[10])) __PYX_ERR(0, 253, __pyx_L3_error)
+      if (!CYTHON_ASSUME_SAFE_MACROS && unlikely(!values[10])) __PYX_ERR(0, 255, __pyx_L3_error)
     }
     __pyx_v_lines = ((PyObject*)values[0]);
     __pyx_v_line_starts = values[1];
     __pyx_v_body = ((PyObject*)values[2]);
-    __pyx_v_is_10k = __Pyx_PyObject_IsTrue(values[3]); if (unlikely((__pyx_v_is_10k == (int)-1) && PyErr_Occurred())) __PYX_ERR(0, 257, __pyx_L3_error)
-    __pyx_v_max_item_number = __Pyx_PyLong_As_int(values[4]); if (unlikely((__pyx_v_max_item_number == (int)-1) && PyErr_Occurred())) __PYX_ERR(0, 258, __pyx_L3_error)
+    __pyx_v_is_10k = __Pyx_PyObject_IsTrue(values[3]); if (unlikely((__pyx_v_is_10k == (int)-1) && PyErr_Occurred())) __PYX_ERR(0, 259, __pyx_L3_error)
+    __pyx_v_max_item_number = __Pyx_PyLong_As_int(values[4]); if (unlikely((__pyx_v_max_item_number == (int)-1) && PyErr_Occurred())) __PYX_ERR(0, 260, __pyx_L3_error)
     __pyx_v_allowed_parts = ((PyObject*)values[5]);
-    __pyx_v_scan_sparse_layout = __Pyx_PyObject_IsTrue(values[6]); if (unlikely((__pyx_v_scan_sparse_layout == (int)-1) && PyErr_Occurred())) __PYX_ERR(0, 260, __pyx_L3_error)
+    __pyx_v_scan_sparse_layout = __Pyx_PyObject_IsTrue(values[6]); if (unlikely((__pyx_v_scan_sparse_layout == (int)-1) && PyErr_Occurred())) __PYX_ERR(0, 262, __pyx_L3_error)
     __pyx_v_toc_mask = ((PyObject*)values[7]);
     __pyx_v_toc_window_flags = ((PyObject*)values[8]);
     __pyx_v_toc_cache = ((PyObject*)values[9]);
-    __pyx_v_extraction_regime_v2 = __Pyx_PyObject_IsTrue(values[10]); if (unlikely((__pyx_v_extraction_regime_v2 == (int)-1) && PyErr_Occurred())) __PYX_ERR(0, 264, __pyx_L3_error)
+    __pyx_v_extraction_regime_v2 = __Pyx_PyObject_IsTrue(values[10]); if (unlikely((__pyx_v_extraction_regime_v2 == (int)-1) && PyErr_Occurred())) __PYX_ERR(0, 266, __pyx_L3_error)
   }
   goto __pyx_L6_skip;
   __pyx_L5_argtuple_error:;
-  __Pyx_RaiseArgtupleInvalid("scan_item_boundaries_fast", 1, 11, 11, __pyx_nargs); __PYX_ERR(0, 253, __pyx_L3_error)
+  __Pyx_RaiseArgtupleInvalid("scan_item_boundaries_fast", 1, 11, 11, __pyx_nargs); __PYX_ERR(0, 255, __pyx_L3_error)
   __pyx_L6_skip:;
   goto __pyx_L4_argument_unpacking_done;
   __pyx_L3_error:;
@@ -26356,12 +26321,12 @@ PyObject *__pyx_args, PyObject *__pyx_kwds
   __Pyx_RefNannyFinishContext();
   return NULL;
   __pyx_L4_argument_unpacking_done:;
-  if (unlikely(!__Pyx_ArgTypeTest(((PyObject *)__pyx_v_lines), (&PyList_Type), 1, "lines", 1))) __PYX_ERR(0, 254, __pyx_L1_error)
-  if (unlikely(!__Pyx_ArgTypeTest(((PyObject *)__pyx_v_body), (&PyUnicode_Type), 1, "body", 1))) __PYX_ERR(0, 256, __pyx_L1_error)
-  if (unlikely(!__Pyx_ArgTypeTest(((PyObject *)__pyx_v_allowed_parts), (&PySet_Type), 1, "allowed_parts", 1))) __PYX_ERR(0, 259, __pyx_L1_error)
-  if (unlikely(!__Pyx_ArgTypeTest(((PyObject *)__pyx_v_toc_mask), (&PySet_Type), 1, "toc_mask", 1))) __PYX_ERR(0, 261, __pyx_L1_error)
-  if (unlikely(!__Pyx_ArgTypeTest(((PyObject *)__pyx_v_toc_window_flags), (&PyList_Type), 1, "toc_window_flags", 1))) __PYX_ERR(0, 262, __pyx_L1_error)
-  if (unlikely(!__Pyx_ArgTypeTest(((PyObject *)__pyx_v_toc_cache), (&PyDict_Type), 1, "toc_cache", 1))) __PYX_ERR(0, 263, __pyx_L1_error)
+  if (unlikely(!__Pyx_ArgTypeTest(((PyObject *)__pyx_v_lines), (&PyList_Type), 1, "lines", 1))) __PYX_ERR(0, 256, __pyx_L1_error)
+  if (unlikely(!__Pyx_ArgTypeTest(((PyObject *)__pyx_v_body), (&PyUnicode_Type), 1, "body", 1))) __PYX_ERR(0, 258, __pyx_L1_error)
+  if (unlikely(!__Pyx_ArgTypeTest(((PyObject *)__pyx_v_allowed_parts), (&PySet_Type), 1, "allowed_parts", 1))) __PYX_ERR(0, 261, __pyx_L1_error)
+  if (unlikely(!__Pyx_ArgTypeTest(((PyObject *)__pyx_v_toc_mask), (&PySet_Type), 1, "toc_mask", 1))) __PYX_ERR(0, 263, __pyx_L1_error)
+  if (unlikely(!__Pyx_ArgTypeTest(((PyObject *)__pyx_v_toc_window_flags), (&PyList_Type), 1, "toc_window_flags", 1))) __PYX_ERR(0, 264, __pyx_L1_error)
+  if (unlikely(!__Pyx_ArgTypeTest(((PyObject *)__pyx_v_toc_cache), (&PyDict_Type), 1, "toc_cache", 1))) __PYX_ERR(0, 265, __pyx_L1_error)
   __pyx_r = __pyx_pf_10thesis_pkg_4core_3sec_15extraction_fast_2scan_item_boundaries_fast(__pyx_self, __pyx_v_lines, __pyx_v_line_starts, __pyx_v_body, __pyx_v_is_10k, __pyx_v_max_item_number, __pyx_v_allowed_parts, __pyx_v_scan_sparse_layout, __pyx_v_toc_mask, __pyx_v_toc_window_flags, __pyx_v_toc_cache, __pyx_v_extraction_regime_v2);
 
   /* function exit code */
@@ -26390,7 +26355,7 @@ static PyObject *__pyx_pf_10thesis_pkg_4core_3sec_15extraction_fast_2scan_item_b
   int __pyx_clineno = 0;
   __Pyx_RefNannySetupContext("scan_item_boundaries_fast", 0);
   __Pyx_XDECREF(__pyx_r);
-  __pyx_t_1 = __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_boundaries_fast(__pyx_v_lines, __pyx_v_line_starts, __pyx_v_body, __pyx_v_is_10k, __pyx_v_max_item_number, __pyx_v_allowed_parts, __pyx_v_scan_sparse_layout, __pyx_v_toc_mask, __pyx_v_toc_window_flags, __pyx_v_toc_cache, __pyx_v_extraction_regime_v2, 1); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 253, __pyx_L1_error)
+  __pyx_t_1 = __pyx_f_10thesis_pkg_4core_3sec_15extraction_fast_scan_item_boundaries_fast(__pyx_v_lines, __pyx_v_line_starts, __pyx_v_body, __pyx_v_is_10k, __pyx_v_max_item_number, __pyx_v_allowed_parts, __pyx_v_scan_sparse_layout, __pyx_v_toc_mask, __pyx_v_toc_window_flags, __pyx_v_toc_cache, __pyx_v_extraction_regime_v2, 1); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 255, __pyx_L1_error)
   __Pyx_GOTREF(__pyx_t_1);
   __pyx_r = __pyx_t_1;
   __pyx_t_1 = 0;
@@ -28377,35 +28342,35 @@ __Pyx_RefNannySetupContext("PyInit_extraction_fast", 0);
   }
   __Pyx_DECREF(__pyx_t_4); __pyx_t_4 = 0;
 
-  /* "thesis_pkg/core/sec/extraction_fast.pyx":130
+  /* "thesis_pkg/core/sec/extraction_fast.pyx":132
  * 
  * 
  * cpdef list scan_part_markers_v2_fast(             # <<<<<<<<<<<<<<
  *     list lines,
  *     object line_starts,
 */
-  __pyx_t_4 = __Pyx_CyFunction_New(&__pyx_mdef_10thesis_pkg_4core_3sec_15extraction_fast_1scan_part_markers_v2_fast, 0, __pyx_mstate_global->__pyx_n_u_scan_part_markers_v2_fast, NULL, __pyx_mstate_global->__pyx_n_u_thesis_pkg_core_sec_extraction_f, __pyx_mstate_global->__pyx_d, ((PyObject *)__pyx_mstate_global->__pyx_codeobj_tab[0])); if (unlikely(!__pyx_t_4)) __PYX_ERR(0, 130, __pyx_L1_error)
+  __pyx_t_4 = __Pyx_CyFunction_New(&__pyx_mdef_10thesis_pkg_4core_3sec_15extraction_fast_1scan_part_markers_v2_fast, 0, __pyx_mstate_global->__pyx_n_u_scan_part_markers_v2_fast, NULL, __pyx_mstate_global->__pyx_n_u_thesis_pkg_core_sec_extraction_f, __pyx_mstate_global->__pyx_d, ((PyObject *)__pyx_mstate_global->__pyx_codeobj_tab[0])); if (unlikely(!__pyx_t_4)) __PYX_ERR(0, 132, __pyx_L1_error)
   __Pyx_GOTREF(__pyx_t_4);
   #if CYTHON_COMPILING_IN_CPYTHON && PY_VERSION_HEX >= 0x030E0000
   PyUnstable_Object_EnableDeferredRefcount(__pyx_t_4);
   #endif
   __Pyx_CyFunction_SetDefaultsTuple(__pyx_t_4, __pyx_mstate_global->__pyx_tuple[1]);
-  if (PyDict_SetItem(__pyx_mstate_global->__pyx_d, __pyx_mstate_global->__pyx_n_u_scan_part_markers_v2_fast, __pyx_t_4) < (0)) __PYX_ERR(0, 130, __pyx_L1_error)
+  if (PyDict_SetItem(__pyx_mstate_global->__pyx_d, __pyx_mstate_global->__pyx_n_u_scan_part_markers_v2_fast, __pyx_t_4) < (0)) __PYX_ERR(0, 132, __pyx_L1_error)
   __Pyx_DECREF(__pyx_t_4); __pyx_t_4 = 0;
 
-  /* "thesis_pkg/core/sec/extraction_fast.pyx":253
+  /* "thesis_pkg/core/sec/extraction_fast.pyx":255
  * 
  * 
  * cpdef list scan_item_boundaries_fast(             # <<<<<<<<<<<<<<
  *     list lines,
  *     object line_starts,
 */
-  __pyx_t_4 = __Pyx_CyFunction_New(&__pyx_mdef_10thesis_pkg_4core_3sec_15extraction_fast_3scan_item_boundaries_fast, 0, __pyx_mstate_global->__pyx_n_u_scan_item_boundaries_fast, NULL, __pyx_mstate_global->__pyx_n_u_thesis_pkg_core_sec_extraction_f, __pyx_mstate_global->__pyx_d, ((PyObject *)__pyx_mstate_global->__pyx_codeobj_tab[1])); if (unlikely(!__pyx_t_4)) __PYX_ERR(0, 253, __pyx_L1_error)
+  __pyx_t_4 = __Pyx_CyFunction_New(&__pyx_mdef_10thesis_pkg_4core_3sec_15extraction_fast_3scan_item_boundaries_fast, 0, __pyx_mstate_global->__pyx_n_u_scan_item_boundaries_fast, NULL, __pyx_mstate_global->__pyx_n_u_thesis_pkg_core_sec_extraction_f, __pyx_mstate_global->__pyx_d, ((PyObject *)__pyx_mstate_global->__pyx_codeobj_tab[1])); if (unlikely(!__pyx_t_4)) __PYX_ERR(0, 255, __pyx_L1_error)
   __Pyx_GOTREF(__pyx_t_4);
   #if CYTHON_COMPILING_IN_CPYTHON && PY_VERSION_HEX >= 0x030E0000
   PyUnstable_Object_EnableDeferredRefcount(__pyx_t_4);
   #endif
-  if (PyDict_SetItem(__pyx_mstate_global->__pyx_d, __pyx_mstate_global->__pyx_n_u_scan_item_boundaries_fast, __pyx_t_4) < (0)) __PYX_ERR(0, 253, __pyx_L1_error)
+  if (PyDict_SetItem(__pyx_mstate_global->__pyx_d, __pyx_mstate_global->__pyx_n_u_scan_item_boundaries_fast, __pyx_t_4) < (0)) __PYX_ERR(0, 255, __pyx_L1_error)
   __Pyx_DECREF(__pyx_t_4); __pyx_t_4 = 0;
 
   /* "thesis_pkg/core/sec/extraction_fast.pyx":1
@@ -28509,14 +28474,14 @@ static int __Pyx_InitCachedConstants(__pyx_mstatetype *__pyx_mstate) {
   __Pyx_GOTREF(__pyx_mstate_global->__pyx_slice[0]);
   __Pyx_GIVEREF(__pyx_mstate_global->__pyx_slice[0]);
 
-  /* "thesis_pkg/core/sec/extraction_fast.pyx":130
+  /* "thesis_pkg/core/sec/extraction_fast.pyx":132
  * 
  * 
  * cpdef list scan_part_markers_v2_fast(             # <<<<<<<<<<<<<<
  *     list lines,
  *     object line_starts,
 */
-  __pyx_mstate_global->__pyx_tuple[1] = PyTuple_Pack(1, Py_False); if (unlikely(!__pyx_mstate_global->__pyx_tuple[1])) __PYX_ERR(0, 130, __pyx_L1_error)
+  __pyx_mstate_global->__pyx_tuple[1] = PyTuple_Pack(1, Py_False); if (unlikely(!__pyx_mstate_global->__pyx_tuple[1])) __PYX_ERR(0, 132, __pyx_L1_error)
   __Pyx_GOTREF(__pyx_mstate_global->__pyx_tuple[1]);
   __Pyx_GIVEREF(__pyx_mstate_global->__pyx_tuple[1]);
   #if CYTHON_IMMORTAL_CONSTANTS
@@ -28568,31 +28533,31 @@ static int __Pyx_InitCachedConstants(__pyx_mstatetype *__pyx_mstate) {
 static int __Pyx_InitConstants(__pyx_mstatetype *__pyx_mstate) {
   CYTHON_UNUSED_VAR(__pyx_mstate);
   {
-    const struct { const unsigned int length: 12; } index[] = {{2},{2},{68},{35},{54},{37},{60},{24},{52},{26},{34},{29},{33},{45},{22},{15},{179},{37},{30},{32},{3},{3},{0},{5},{7},{2},{1},{1},{1},{1},{1},{1},{1},{3},{2},{8},{5},{6},{15},{23},{25},{7},{6},{2},{6},{35},{32},{25},{29},{9},{30},{50},{8},{43},{20},{32},{22},{20},{30},{28},{30},{37},{5},{26},{22},{24},{33},{18},{8},{17},{16},{16},{1},{2},{4},{22},{17},{4},{4},{22},{19},{24},{24},{4},{20},{8},{23},{18},{15},{0},{3},{15},{13},{6},{5},{18},{4},{4},{1},{9},{17},{18},{5},{8},{15},{17},{6},{3},{9},{5},{20},{9},{7},{8},{5},{6},{7},{8},{12},{5},{18},{32},{27},{10},{2},{10},{5},{6},{6},{13},{7},{7},{7},{4},{5},{8},{24},{11},{5},{28},{5},{6},{8},{5},{8},{15},{7},{4},{10},{4},{8},{4},{7},{4},{21},{3},{5},{4},{13},{4},{23},{8},{3},{20},{28},{17},{12},{14},{11},{10},{19},{14},{1},{12},{2},{10},{17},{13},{8},{8},{6},{25},{25},{18},{6},{12},{10},{12},{19},{5},{4},{5},{28},{4},{4},{5},{6},{8},{35},{9},{19},{8},{16},{6},{6},{5},{6},{1},{392},{2274},{850},{1}};
-    #if (CYTHON_COMPRESS_STRINGS) == 2 /* compression: bz2 (3700 bytes) */
-const char* const cstring = "BZh91AY&SY\247M9\227\000\003*\377\377\377\377\377\377\377\377\377\377\377\377\377\377\277\377\377\367\300@L@P@@\300P@@@P\000@\000`\r\335\337\n\364w=\357*\364\347\267\270\356\356p\356v\367Ok\265\305\267Vw2\331\333tx\031\000<\007\206\232D\247\2214\032\001\223L\251\372\2322zOC\032i\032b\2460MO\004\301F\236\2312\214\321=2L\2312=O\024\3314\324\3656\220\321\240\311\023&M\031\002\t\242\236\324\364\322\217S\305\037\252~\250\375)\223G\251\240\000\000\000h\323 \000\014@d\000z\200\001\246\206\240\211\241\032\215M\032zA\221\241\246\207\244\017S\324\000\000\000\000\000\000\r\000\000\r4\310\032h%4A\024\365\032d\231F\312i\352=\250\236\002e\r\003\322y2\200<\246\232\000\000\000\000\000z\201\240z\236\223'\250\004\0310M20\231\030\232i\200\230\023\000&\023L\00112`\000F#\000##C\004i\221\246M0$PA\243H\3211\031L\217IO\325\036)\223\324\323@f\240\321\264\200=M=@\000\000\000\r4\031=M\000\000,\323\313\225\267\223i\356\372\214}\020\373\274\014p\235&\016\230u\033\213\247J\016t\250I\324\"\225\024\000\342\260\345\214\2368OV\254R\234\256P\004\026i\252\276\303\016H\273Qr\300\205R\344J\356\023\t\222\262\23064\r\24611\211\261\261\330\247\344\332\251L\267\225\234\355\377\245\366$\244\314q\000\305\246\300m&11\215\203\030\330\301\203a\321\1772\025\326\350(\254\224\3216\223\030\332E\251%s\023m\244&\300m\270'\233!\221LB\241\240\250D\223\214\236\204\230!\302p\340\301\ncT\314D\204u<\252\006\254\315(f\305\307\004\3030\274\014X6\017\005i\205\304\323\267&\200lI\262\342Z\020\300uD=\361\203Z\330n\302\272\\\\\216\202\267\200)0J\331\002\332\205\202\024\007\207\320\024\006R\205\306R\344\316\200\016\2023)\251\254Q\020l\361\346\257\361\2540\267\210Yq2F\254\2413u\r\327\255\0011\2166\027\252B\n\206\345\030\226\332\026\366\235\324\260\236\004.f\322\022\266X\236A\347\376Z\372G\250z\004\275IK\304\375\036\320\227\312z>C00\254N\315\347\337\273y\202\275\031\205\267\255\037\036\211#\307\202\232\230\216\\>\373\331o\r.\036%?u\237#\223\037\007\367\352u\246\332|z%8\207\177\303F\"\214\313(\177\326\262t\2048\332\321\210\223\242r""\300H\276\230\343\321\0365\360\266h\213\027\214\366\013D\227\210ajYN\230\255\362\315Kc-/o\224\256Z\311\223\367\230\004\023\337\205\016a)8\t\342\224 \301\010*\320`\303a*\373KQS\255\215mE4\210C\304\340\271\3256/c\223\177\222\272\201x\220\240\327^\002\017!\021\003lf\252\225\320\361\255J\2251\211_m\201\2400\366C\262\365\247\302\005\253%\347\275\326\226\243\"\2475;\276\317\353uW6\326\323I\345\262\265\207*\021\3144\374]\273\373\347\265\361\021\017:\230i\321\253-:G\340s\335\350\236\346$\034B\222\244\352\231\264\024\025\231\301\\\266\271\240m3\0362\203]\335q\212l\344\337\300\025\032|\372\350\217\216\327\276\363=\017s}\373\310\366|\313\374\216\362\r\334\277\353\276\276\032xrMH\353@\355\264\035\206\200\252\3704f\265\355\235-\237'S\305\315\343]\256\026Y\350'*I\010\n\375^\364+w<\332\317\324\014\353j\372\233Yv\034\274G\02157\304R'\314\271\324\244%\024\240\306$\334\231\246N \036\340\260\336\\k\230M@\345G\231*\243\355\357\336i\254\212\314D@\210\027\353 \262\253\334\3470\353\320\030\030\301G2\306\005\316\246,R\361\222sl\034\\1\263\305\265d,\332\320\270\221aK\203c\267_ee\022\222\210W\376,k\310D\340d\014\363\n\355\356\265\330\277\337\207\032$Z\341k=+\212[\013\007:\367}\270I}\n\337\305\225W\322\007\037\247\327\300\033\220\341@M\267\255@G=\026\3118M\002P\354&\241\243\206\002TU\020!\301/\000\314\310\202_j\317J@t*\351,\007s3N\336\276\032\207K\232\243\365\r'\273\301\336\r[\230+5\212\305\326\016\306\213+\327\311\321\265j)\322N\376\351\010\344u\303o\243\303\032\342\210v \303\260\301K\365\223\213<{\353\361sSL\337\276fk?\033\275s\t\035\220\355\0317\366Q\243rp\266 \271q],\274\221\306\030\227\217\010\276T\271\225Bc\034\217n0r/Co\342#\035\264\273\221\211\003\251/\260\252\021\263!\210\320\324\202\352*(R\021\330\26687\351 \007%:$F@\226\030\226~\027\241\333\205$\004\261\200\005I-Z\275\354WI\0006\3464$\2171%v\004\230:\261\2646l-[<\224DY#\025HP\330\031z<U\352\317\023\276\253d9\3201\000vDV@Y\323\023H\207M\260\0249\343\2169\3308o\026\210\304ZW)mF\221\255\324\035\000\265\370:-\272@\271y\"\006h\311f\215""\371Xz\336B\302\303_\245b\352\320\360\035v\277*'\264H\264y\340\365\207\"X\013[\204\215\033z6\000\345\017X;\227\220\033\327\373\203!s{\303\202\2278\314\360P\271w\230\247TE\216>\211\000\016\322hL\330\245\037\035.\034\177\262\316s\204\305kY\003{l\206\310kI\306\335o\324V\364\334\326\341\214\260\3072\r\2378p\332\372\376\302\365\016\334\354\330%\317G\3072\002\360\270\267\340\221(\023\3100w^\323\343\201k\233\t\310Tim-,\371\301\177\320`\023\273\350NU-\362B\326\244\035*1\300;\324\326!\2179\245\320\230\276\2001\244h-%\215\342\261a\310|Zf\216\033>\347k\216!\231Y\356@\270\210Q\236\020yd\211\243C\345\027\356?\275\275O(\215F\335'\247\352\213\002\221\376!\022\233\030\206\0149*Np\233\024\204\243\321\263m\324\0148\332\\)^\202\022\017\215;\002W\352\324T\310)\266/_}\213[\325\010<Lv\322{\003\016\000u\241q[\013V\212\017\005\007<\3078\330P\211\354J;b\324L\021\205={\201X\252P\263\264\302L\372\201B\234\305\264\217\345\027B\314YK52\020&\360\016\200\037\2248\004Kl\026\244\267s8\2149U\237\215\022*e\340\250O1\224\367\200\253\350V\\\322\310\266\032\307PV\257-\354Q\351\246\347<\352\265\326xpxt\215y\221x\274\303d!\210\020\201\r\001\000\2313\341\233\316\013\210\272ze\256\3644xqp \343\023\022\nJZN\341\215-*O\220I\252\364\314VLA}BLV\306 \206L\216\372d\345$\350\207\010\260\305\013\372\0300\022\224ro\352|\030\010Zo\327?&Ik\303fRT\352\353\277a\3006q@\243\204\"\321\0243\276\253\235\345\315\262\202\257Z,\361|\0040\227\030:P\217\366B\202M\230B\370\300\246+\253\232\222\323?'9\323V\001\234m\277\333\316#Rb\341Z\024\324\006\327\033`\263\200u\365i\322\372\241\006\240\271\276\017\327\361\034\203\260\365\325\272R\240\245\240\305%R\343\2022\331@\252\306p\373\005\212\005\227\323V\033\340p\320\245#^ K\031\211\305\234O\004\341\334\376\235\315]+\220>\027)\210\014\340\215a\241\367\266\023&\351nG\233\203V\031\267\333\301\273i\335\0327\265\216\320(k\242\215K\030j\034\211\333pS\203L\245-\022\260g7\277)8c\016\322v\023\211\r\243\233\0041g~\326hO\220E\r\276\303&f4C5\207A$%\022\253Q\262s\247\243\210\354`\313k+\031\304\207@""\372\230\215D\311V\366;\261~\306j=\346q\220\2253Eb\250\306\270X\324zb\204\r<\335U\217\005\270\020\331HUA\016MgAj\260\264\272\320\033Z\014r$\301\007\005\303)x\030\001p\364\331\333N/f7B\244\203;\361\r\274\320\316\220P\276:q\211xR0\033\234\274\031C\316h\223M\222\245\2220b\227\343\216\322\233\341\272\t*Tp\266H\005\307\327\314\235.\013$\302\256\032SO3xfXh\200(a\256\234\222\361\275\210\220\013\270\016\300\227{O\026\204Z`T\244\353\262\356\301\022D\032\320\322\244@\323\023\\\206\220\230.\005\030Y-w$\022\010z\212\001p\332,n\314\24501\236\261\210U\330\005\030]\205\3179#%\250\332\367tZ\030\251\342\360R\246,\"(\370J\304,\026+\206S-\353\016\301a\034\034KT\r\t@\231\272\304\330\330\275\207\264\345\263XR\355\306\225\006\337X\030m3\340\330t\256Z\021:\010,Y\270\372\262\024\031\355\n\\\222\225\300\031\350\305\312\2661\"\332\030\326\005\362\333\356\212\336\236\252`\302\272\226u\232\270MV\320c_\226OJ\233\t\331U\325\024\340I\244\342;\033\025+YV\265\2450\\\2311\312a&Fhe\277,\305\236\343\260p\346\021#p\342\2312\226\337y\200\231\010'\274\355\306A\"i\207U\264\257\033\013-\006\207\323\010\305\260\033cW\221\"\226\303f\343v\336B\231Nd\010\271\336\354\345G\235%{q\207&\225ZS\307\"d;\352\262p#\214\326\254$\327c\030\346\027\215\264t&L\300q\370\251\225Q\033\025\030\261\263\031\2626\320lx;e\032et\264R\373 ^w\257\275jjl\334\344\335\245\343p\235YZ\373\244\315\233%\027@\201M\2725K\033:\307\025\317\317\316\273&\355hN\343ljj\214\332\220\302z\266\222\221\234\315\230U3pN\302P\370='v\200\275\234\"1\277\023a3fL,\\\202I\203\224\035\241\010\231\t\246\035\245\014\333k\365\303*\200a\306ESfoQ\233{|\211\205\207\016\"\031\206[\241\266\2444\232@\316D\372\370\307hr\026\311\007q\225\302dL\241E\221+/+\263\335\345\370\350\206\023\013ac\016\0344\241\2037\301./\006@\262e\231\254z\n\252\231DmO\217N\010\216\310z\264\371\3728X\311.\323\363Z\330\033\r\353~\372\206\223w\027\010s\235*\266`\257\274\356\350\003&\302\313\307\030dd\254\221\206\227\006Wh\310\r\213\325J@\304d_^\023c|\217Y\337\223B\201\030\357\2544\273Q\347u\302\345""\331\243\020\257\237}j\225\346\316\351\316\243-\036W\tU\327\262\346\371\247\"qp\220\021\302\231\\\203\243\326N\210\005\000B`\375\306p7c\222@\312\n?\217\217F\370\"(\366\247\300\242\005 \023Tr\240\0069\\}\000wy\276$Gq\305`\336\370\201\316N\024\200\243,\024\001r\302\373D\234\222\242T\325E\323T\033\203\211\n\034\361\301{\265{\356\025\001\343\353x\310b3\177\252\024_\035\241\337\230\301\375\314\345A\354)\201\250\241\254\232\3166\373\246\315\346\372\360\3473\017\374\247\t\2571\302\316\220\347\275\377\027\205\273=?&\270\307^te\016q\212\252\244\323\342\246\337\032\255uMQ\277\246H\254A\277\250\031V\265f0\3607\241\035\313\004~_\322\246\342N\361\267\362Jh\3356Mf\332\363\337{p\037\212s\024\017\263\314\347!tS\355\255\2760\350\332\342\332\325\204\334\350\037c\343E\233\357\315!\236\010\207[\\\336\346|'p\272\002\271'\330\340\223\225xF)4\272\352\266l\340\306V\217\203\0305+\303\342\210x\317\243\302\374\3418iQf\221U+\307<\320\375\231:\000\273\265\311\250\014\005\275)\251\257\211Hkb\327o\006\206.\323 \300\245\254\214\252Z5JS\213\\\326\212Z\324\351)\2467vM:ZC\330\314j\232\315SS\020ch\325\340r\263\205\305V\223\370\324 \220H#q{\264\305@+\026\311\354\343p\232\205\032J\324c6\224d\301\006x\3175\230\345Zr\350f\214v\013\277\001\002vu\000\376t\214!8?=\363\262\331\322\254\312a\361P@\256|\274\363\362\013\373:\373\013\363\365s\364\217\003\364q\032)\027\026\361\256\r7\264\314\017\261\2069$\025\304jQ\270}GwWr\n%-\274)GOa\233\032\215\2244{:\030\205\272%\230\277\t\340\276I/\256\315\n446\263\250}'?\2450I\276\030\021V\030\226\036\222Dn\215D\255\336\272\300\255o\347\014\314\026\373~O\2365AWn6\224h2G:\371\266\350\351M\235\344N\256qI\023f\336\016\\\336\371\333\036\224\262\201/\206\327RVo\240\002R^ly?LA5\"y\323\273a\241\370o\213\372\376\346>/\252$\272\220\r\013\035w\261|a\355\311\025^L\367\245\346YX\334\360\210\267S5L:\355\331\372\233\024\207\233$v\277\235\301\322\377\305\371\275\017\300\020\312^x\017\305O4[\"$\"\023\275\r\254D\005k8y*r\212\232\264\336\211X\225\"\322b\"\"\260\235)B\017M\026T\211J\256\026""\024\023&\261I\261Rf\241\320\271\243\302\016)B\366/\024\"\316v\246\225\256\366'\n\271\030I\244 jo\006\025U\300\223\232\0067\0266\026w\351\374lv\251\\^\373\311\300\243Ss\200\3125\226X,l\221I\003d\226\021@\237\222z\332\324\232\270\245\275\310\243L\254=\227{\304\025\215q\255o'[\340lKe|\321\342\315bs`e\357\273\362\3518f\205\006\271\241\244\266S\252\034;\3451\252Q\223\205\216\026\242\024~\363o\227\265\205m\205V\331J\277\361w$S\205\t\nt\323\231p";
-    PyObject *data = __Pyx_DecompressString(cstring, 3700, 2);
+    const struct { const unsigned int length: 12; } index[] = {{2},{2},{68},{35},{54},{37},{60},{24},{52},{26},{34},{29},{33},{45},{22},{15},{179},{37},{30},{32},{3},{3},{0},{5},{7},{2},{1},{1},{1},{1},{1},{1},{1},{3},{2},{8},{5},{6},{15},{23},{25},{7},{6},{2},{6},{35},{32},{25},{29},{9},{30},{50},{8},{43},{20},{32},{22},{20},{30},{28},{30},{37},{5},{26},{22},{24},{33},{18},{8},{17},{16},{16},{1},{2},{22},{17},{22},{19},{24},{24},{20},{8},{23},{18},{15},{0},{3},{15},{13},{6},{5},{18},{4},{4},{1},{9},{17},{18},{5},{8},{15},{17},{6},{3},{9},{5},{20},{9},{7},{8},{5},{6},{7},{8},{12},{5},{18},{32},{27},{10},{2},{10},{5},{6},{6},{13},{7},{7},{7},{4},{5},{8},{24},{11},{5},{28},{5},{6},{8},{5},{8},{15},{7},{4},{10},{4},{8},{4},{7},{4},{21},{3},{5},{4},{13},{4},{23},{8},{3},{20},{28},{17},{12},{14},{11},{10},{19},{14},{1},{12},{2},{10},{17},{13},{8},{8},{6},{25},{25},{18},{6},{12},{10},{12},{19},{5},{4},{5},{28},{4},{4},{5},{6},{8},{35},{9},{19},{8},{16},{6},{6},{5},{6},{1},{392},{2274},{855},{1}};
+    #if (CYTHON_COMPRESS_STRINGS) == 2 /* compression: bz2 (3701 bytes) */
+const char* const cstring = "BZh91AY&SYo\3313\002\000\003+\377\377\377\377\377\377\377\377\377\377\377\377\377\377\277\377\377\367\300@L@P@@\300P@@@P\000@\000`\r\255\361\355{\267S\336{f\215\331\253f{\227\252\365\273]\256\266\265\321\253\272wk\254\271\340\000\007\200\032i\0224\206\202=OF\215M\252xS\301=S\364\306\200\010&\231G\247\2410Q\247\246\324\312d\364OSi2d\310\365<FM=S\321\224\3654h2@\214 &Ha\032OE=M\351M\244\3642M2d\321\221\240h4\0004\320\000\000\320i\240\001\240\000i\240\"\nb\232\236S\324\323\0204hh\321\352\000\000\000\000h\000\000\320\000\000\001\3524\323 i\240\224\321\010\321\032\002\247\264\204zF\322i\3514\332\236\240\032=M\032\006\206\214\206\200\000\000\000\001\240\000\000\001\006L\023L\214&F&\232`&\004\300\t\204\323\000LL\230\000\021\210\300\010\310\320\301\032di\223L\tM@F\223 \247\205<\224z\217\364\250\3654\375LSC\322\003M\0004\032\000\000\000\000\000\0004\003@\001\334h\215\201jS\033?m\007\354\305\317\260\203\230|\020\016p:\023\247\235\363\340\243\340\3705K\010|\374(\004T\251B\347\214!i)\246y<\220\010(\217Q}\224\034\201t\230\345\000\311iS\020\253j!\022\022\245\211\t\201&B\031\010d\204\205&\217\004\332\224\273Qlc?\364\256L\315\004`\300\001\2012@$\314\2042\020\220!\t\010\020$\033u\351a\252\236\022\215(E\210\246d!&bl\314\326\241\222I\230d\200I'e\231\017\201v \306\031\014a\004\224H\364\004\261\n!B\202\304C\266\273\2733\210:\352\361!)\336d\275\212\216\000\2770T\014H\022\005{X_iu\031\355\3010\t\014\311\025%\221\204\003\350\"\020\246Ns\243\301\215r\234\316\223\305Z\000(\300\2266%\324\n\304`\036\037\000\316\021J\025\027C.:\000*\014c)\2216\006\036\t\033\361j\367\244Y;\302\226\223$g\301\346j\270\325V\310\023\020\242\205Z\347v\270\324\321\005\226\005\233J\330H\214B\330\215\220\257O\220\333\036?\315\237\3407\007\322\037q\337\363?_B\021<\303\243\312#\021\215\221;yO\316\277\224\301g\3270\256\025\037%\022G6\nq.r\361\371\317m\177:^<I\376\373.g4>\037\357\324\352{i\341\314C\342\025\177\035\030\211D\214\331\177Zs\244@\342\352lC\235\017\236\001\305\364\267\032`\361o\205\262f\261V\326\260\215\016U\231""\005\246\320\372Z\257\236S\010\337&\006\022\225\316[\333\337\001\232&\312z\005\226))$\tBt\000\301\000*\313`\307a*\363K\221S-\256u\005;Q\030\370\\l\023\320\352^\331\323o\220\272\001x\252\006\272\357 \361\321\020\" Am\002\212\222TP(\024\n(`W\"\"\240#\274\021\3175\364\200\023\032O\212\232S\023b\342\323M8\335O\245\271i\215&\316b9\010\266\327p\330cH\231s6W\333\035_0x;\266\226rd=\032\322H\345L\016\257y;6\250\022\344Z\"\234'/\302\205\276t-w\316\276\002\375\313\253\244@\207\207\201k(\202\354X\3000B\231p@\217\035\017C\233\325\346=\370\202\363\363_\273\312 ii\377\\\365\362\245\312\304\311\016\020\034\315\303\221\300*\2766\346\275\257t\311l\330\266{\035L\3301\205\226\371\211\313\251#\021\213\317\355Bvr\316OE\272\027\3277n\362t\324o\321\302\"\242\352(\021\340\261\312\020\022|\244\032\324g!\214N\300\017\234,;\317\246\266\006@r\351\351\325E>\316\335\306U\221Y\244Ri\002\355D\026Qt\363\316\032q\30045\242\035;\032\0272\232\261'\214S\030\333'\227\2157tmY\013L\034L9)\337\372<\356lj\252So\254?k\324\355\362\301\023Gv<\024~I\366r\r\257r\032\222\265\302\355\322\370\247XAs\022\363.\002a@\353~9\265=\000qz=[\341\255\314@L/R\200\216y\341$\241\034\010\303\202\232\343GJ\004D\305\006\014\240\225`]\3341+\302\262\314\260X\024\261\021\200\347\261\223;v<Q\327\352(\365\206\351\347_\317\034M\253\3535\212\306\013\006\364,\276\314x\272\270\026\242\235t\350]X\252\241\254\006\227\317\222TH\205&`3 \005\235`\325\240\341>\217\022\302\322\203\0366\213\005\221\352\\\300G\375w\363#a\333D\211\307\300\333Ar\342\277,\353\305\342\014G\342\337\363Hq\245\3432$!\365f_\206\342H\256Vb\307\307\336\230\346\355\024\242\031\242\003N\n@\223\025\025)\t\232\312w;#\214\006\352\3141\304@\220g\333\277\204\204\220\022\014\300\025;\006\237\335=\361 \006\303\272u\"b%\3560\353\314\222$\215\345\205\252\312\346\010kD\026\250\201&\300\272\312\265-\"\263\357i3\034\320\033\000\034\202\225\200\026xt\231\010\375n\210\204\357\033\303\251\177&\341h\246\221h]Uf\246CS`\347\000\340\350\353L\260\016\235\320\000XE&\3021R\341\242\340\340\341\203""\256\343\261RDM4y\322\373\004^\243\256\207`\361\244\021\325\206\221\"y\"b\216@\354\027\371\275\220\334M\260\310\034\276\360\340\233`}u\367\256_\362\224\301\027\027c\350\212\000\312M\034]\231\327}\224\206\343\331,\260d1Z\326Mn[,\231d\263\234l\007\032\270\017\353N\3037\024\307u\370\2466\030n@\3324zT\363\227\032[\025'>\004{\262\220O\231\357Wi\022\230\217\034\261\330\342.8\024\271\260|\305\r)\245\035\027X\025\334\030\010U]\020\246&\337+F\251c\246\033\034\002\255\032fC\315\351X\016\327\320\0062\332\n9Cv\246\260\343\256))Q\306\303w\264\276\361\232v\275PT\210\234a\023\036M9\245F\207\307\032v\253\311\322\365\262RR\341a\255sS\303\001\376&0\303\206Y\233>\253W\242CF\023\r\337&=\312\250\026k\231h\322\253\003\3109\263\240J\271\363\230\314\002\355hZ\031\263\254\316\352\362\376z\263\322\024\324\006\323\2520H\233]AX\316Q\304(\276E\007\234r\212oM\203|\351:gr\207\207t\3129\020\222\3527G\035wO\237y\353\232\346S'B\267{f\033\330\013\000\256\301h\021-\260Z\225vy\247#\016\262\270\031\251\"\206\334\n\204\3145Mp\n\272\n\326\325\023\255\3533\272\202\313\036\\\254C\323\206\347zkm\256\214?\036]#nd``\303gC\016;\217\220\034\021\"r\315F\323^6\275p\341V\302c\302\300\2349=\346\001\315\005\r\216pf\375\024\306\360:R\316\354\332\001\003IbPU\2200d(Gw\002\035\312\220\316\021i\2102\364\231\263\022\224l\345\342{9\210]+\357\337fIm\303oi*j\263e\216\n\265\311\020\334\020\326f\222\373\352S\265sl\330\305\352cY\257\200d\016\243\005DV\344 E\022\210\"\247\255B\022;:\220em\342X\330[\020,\\\317\345\265a\013\0207nu\265\223\0263\234a3\202\317\243.W\321\023\032\205Un}\336\245\320\265\236\315\032g'\036\021\253\"\2459\276\232\265P*\261\234>\301b\201m\322\243\r\3218`\245#\236\"KPHk\240\327:\310\273\213\315\342\344\326\335\016`\356\364\226\200\216q\214\241\211r3\221\"\254\236\023\264\317\301\242\033\262\343\350\300t\r\315\274G8(k\2048\253\030h\034y\235\200*p\343UUnU`\3307+e\024\005\003\264\235\204\342Cp\367\360C\026\367\rn\324\371\362(v\\-31\3043Zr\322BO\204\332M\226\370\354\243\230\307\245\252\233\357 9\003\267\250\322L""\224\356\302\3461T\315'`\3162\022\246\300\255V\014n\005\255G\246 \201\247\261\305Y \256dl+\361\334\302t\324\236+U\205\306{@uh4\352$\305\007\033\000\326/\002\360g\036\203x%\026\227\312\327\306H3W\020ko\0375\316\317X\313\212\n\205\320\342S\2273\007\344\246$\323d\246\3165d4\266\322</;\2139\232\n\005\334\200\016\327O\273\211\304\013:\nP\217\r-\345a\232wd\200\242\206\254\335$\361\276\210\220'pv\022w\251\337P\212\231\225);;\027v\010\222 \333\206\225\"\006\230\232\3644\204\301P\243\026\316y\335!!\017a@\250\331-Uf\234\246\302\214,\213\311\331\254\027 \266\373R\306\021I\264aM-Y\200\221l\222%\220\222\000\260W\322\024,\007\003#\216\226\211\262\n\203_\027\250,g2393U\031!!\272\2566\2754\005\326\352lNSNPa\264\315~I\352\300\264\"d\021X\263i\364b(3\332\024\272\222K\2103BW\275p[\334[Pb+\304\344N\350\357&\rk\367\253k{Y\274\334F8\333\344vK\2019\224\334\245\322\272\\\022\220\240\207\261\232\247\252\251\235X\224(7\350\tB7\300s\013\265\0015r\343\2376\264\214@\320'\262\"Ru\326X2\034\346Z\215\217\200@\213 \334\235-\276D\246\t\205\255\317\036\002HMX\361\354\331\214\332\r\031\362\224\314\343 \213\035\357\350\225\036t\226\034\206\034\232V4\247\220\211\220\357\3232p#CV\005-\032\346\273\005\303a'\213\023\\\r\376\304\252\242\221\222\203K\\\302\314N\264\033\036\016\301G\ngeP{\234Vu\325\326\331\023E\032\024\022\231X\223\243j-\267\261df\315\007\252\003\212g\303\221\222vA\256r\345\312s\215,\004\024\234a]\002\325\265\013\002\000\333p\2060R\214\234\211\232\211\300;.\261\202\313\354@\027\262\210#\033\365\0330\211\224 \261R\tD\306\312,\021hLa\311{s\272|A\262\200i\322\"L\314\354\231\270:\010`\260\337\204*\300)\302\253\350\016\304b\003\034\010\355\340~p\312N\014\033\021m\221\036\\\3525\304*\271Y\270\347C\354\342\005\345\355{\027\337|\244c\333\345\026\027\006Ae\206\255\363\312SR\314>l\257\327c\017\314\255\222\231uq\271\003\016\322s\220\336\005\343\021\324\220\025\014:\350\245e\034\003'@\345x\334\250\003\004\202\225\024>\006\rI\027\345N\214z\302\034Hn\014\244\010c\002\270\367\323BZV\203\305\222a\234\210""\336\343|\252\3069;\360\265\266nC\027\356p\2645\353.\274\370\014\352:\256\022\253\261m\313\363N4\341\340 #\2053x\3077\250\235 \n\000\204\315\366\n\300\336\0168\2434(\376\2729\267\201\027\003\332\237\022\210\024\200MA\310\200\033\262\271z \356\362\364\021v\343\212\301\344\350\002\3012\"\205\031\300\240\013\234\027\332/{EDh\352\213\246\2507\007\n\024:\003\177\003k\003\334)\203\305\364\370\210b3{\004(\302;Cc\025\203\247\027\221\007\254\2466\252\206\262;8\233\356\217\037\227\355\307\222\314\177\362\214\006\272\307\0139\303\236\367\274>\006\327\347\3715\306?u\370\315\026\005\005U&\217\r\026\356*\276\247\2547\265\t\025H8t\303*U\252\306\035\366\363#\374\340G\353\375\252e\022\252\314\237;\\#<T\022\022\257y{y@/K\216\002\300\265\036\310 \373J\344\234\236\250R*\364\325\216\302\231\014\013G\322C\273\353H1\025\201\214SV\22579\205\003\244\r\231+F\303TT\340\024\t\235\210\253n\315\372J\337\213\0305l\303\302`t\312\231\300\364\221$i\314f\231U+\305(\313\376Y&h]\327\311\252\014\322\336t\325\330\2378k\320}\344\r\014]\246M\306\235\256\214\250Z5\212[\270\306\t\272\364&\251\2407k\232\023t\307\255\224ik\265M)\302\216\225=\367*8\\Ui?\245\"\t\004\2027\027\271@R\002\241m\356E\036\003H\243IZLf\322\214\311\22344\rF9N\205\364\256\330\313`\274\357\220$\326\226+V\213 I\017=.\273d\306\267)\217\303-\002\271\362\363J\314/W\330\331_\237\246\3078\357\275=\202qj\305l\341\250\356\241\232\363\030n\311 \254\366\244\310o(\356knM3\025!xRf\246\3136u[\030id\350\317-\322,\241\361\224\013\304\222\362\327\2272^\216\324\332\317d\035\016t\220N\030\354u\026\314_\207c\021\257y\315\254\231\035\333\270\360\241\371\2033\304=\277\037\316\235AWn\356\216\245\344\374\321a|\273s\265$K\361\244\254=\002\227\270\370\361\206\037%m\223\370\017B\\ALA\267\203}[\316\001)\201Z\3626U\240\220\226\236d\323\203\245\371o\014[<\376\325/M\245\375Y\343\271j;\316\322\361\207|Qr\035M'o\273v\326\267<\002\342\353\032\201\262}\273/Z\274\361\345\315\031\177\nb?\374V-\262\340\206Hu}\372\374\220\2571\275\014\342\010\205Y6\261\014\"\326P\256a\363j4""\217y\210\2610\342\316Y\231\232\232\026!\3401\3415\242Y\342)Da!\334\323K\330\303\227\240\260.ejB\212\242\266*\322D\251\333y\252\346Y\357JF\016e\240\0327b\321Qp\034\344\303\033\213\033\013*\364\334<v\346\261[\355>\006\r\033\234\006m\2523\3021\264A\210\200m\021\0304\210^A\353j\211\245\023ou\245\035\343\016\"\255\331\214cX\325]\316\257\2051)\235\362o!\351\237,\013\255\366<\331|2hcY29L\337]\224*\346\355\256\360\\\341c\205\246\004\257\177\327r\266\360\255\3269\356\265d\277\370\273\222)\302\204\203~\311\230\020";
+    PyObject *data = __Pyx_DecompressString(cstring, 3701, 2);
     if (unlikely(!data)) __PYX_ERR(0, 1, __pyx_L1_error)
     const char* const bytes = __Pyx_PyBytes_AsString(data);
     #if !CYTHON_ASSUME_SAFE_MACROS
     if (likely(bytes)); else { Py_DECREF(data); __PYX_ERR(0, 1, __pyx_L1_error) }
     #endif
     #elif (CYTHON_COMPRESS_STRINGS) != 0 /* compression: zlib (3732 bytes) */
-const char* const cstring = "x\332\235VIw\333F\266\026\333\222#'L,Z\324`[v@\211\032-\321\242%y\212b7\255\301Q\307\226LQ\036\022;\306\001\001\220B\213\002H\000\324\340\223\316\363RK\236\323\275\300\022\247WXb\327X\362\274\025\227Xb\311\223_\340\237\360\276[ 5x\350\305\363\241\251b\325\255\252{\277\373\335\357\326}.};S*q\222\262+\253\206\242\251\006W\326eQ\226\024\265x2\311\215J\334n\3250\271\274\314)\252$\037\310\022'\250\022\247j&g\224\024\230?\252\026\n\262\316\355)\362>'i\262\301\226\344\203\262f\310\234a\352\212$\033K\202\312ij\351\220\023uY0eN\340\362\341&s[09\305\340DM5\225bU\253\032\270\204\333\225w5\3750\205]t\224`\030JQ\345L\215\303fi\206\235\023Z\320\225-\243\326\301\373\272b\n\371\222\3342\010\235*\350\332\356\177\333\313\302\342\366\025s\2333\017\31327\336\2327uA5X\030'[B3\354P\000\225y\n\273\345\323\200)!\010\241\321\312n\331<\344\214m\001G\233\3252\234+h:'\036\232\333\232\232\022t]8\\c\016hU\223\323\n\\^\253\252\222\301M\010\0078eT\232\\\373\364\256\020\374j\271\254\351\246,\255\251{BIA\2264I\236&\340a\214$\215\213\343\034\356\031\307e\024\310\3704W\304\256\266q\350\016\260f\327,>e\001\276\240\000\341\302\272\006(Yj\226\230\227\024\217$\227\224\274\254\003d@Hi\305%,\177*\367l\345\331\314\374\335yF\013]\376;\2567\340]^,!s\240\003\305TUJ&.#x\215\024\267V\340\016\265*\247\312p\023i-\303\356\364\006s[V9C6i\300\215\263\\\010&\342\346\261\035\334\034o\341\252\354\311\264{U(\031rj\343\014xp\271E0A\024e\243\215f\316\224\313\334\256p\310\360\003\237\337\311\272v\002\364s\2251\007G\202\215{\262\016b\230\362.\375\326\362\024\324\237\357\377\371\347\373\177\245\356\377\220x\310]\270?\223\232x\375\333\344\303\324\203\361\311\231\251?\337\377\373\177\377#H\022\257\022r\204\003\007\360f\017D\255T\"O\221\263\224\220\027\027O\321\234\214\3028\036|<\335f\327\003I1\310%\2319V\024\271\t\312`\221\021\213\202\243:\225\017LY5Y\325\234\224\354\304Ce\022i\337}c\334H\317\316T~\257T\005\020EG\342t\2318C\353o\337\030S\257\337L\274y\375\033\r\204\231w\2633\367~;\273\360\020#\346\232Z\225\2457y\305\010\035\221""\010\026Cy's\213?r\263\237\220Y\325\300\225\202P-\231\034\317\353\262T\025e\236\347\244*CV\325\324\031pgO\021JX\025\025U1\261\030\342\373\300\320\305\233H\271\241\030|y\247xS\324t\371\246!\2137\021\243.0\024\371\202`\230\251\362\341\301b(,\322\031\030?\235\243\0028F\363\314\372\361\354\311\205)\2720\205\013S\237\233\333\226\253\272b\230\212h|n\265,\230\000X5\252\307\034\022J%MdZG\240p\222`\n\251\317\254\206uH\036\265\2442\225\311-\255\255-m<}\264\266\276\262\314?\313ln\361k[+O1\332\332Z\331\\_\332\334\310\345\370\315\225\325p\351\323Y|\255\275j\317\257<}\264\262\274\214s\2666\226\370\334\026\355X\311l>\371\205\177\232y\305/\375\224\331\\y\372l\353\2273\027\254\224JJ\031\001\376\264\222Y^[\177\314/m\254\257\362?\255=\376\351\314\304\223\215\227g~?]Y^\303?\234\303\316Z\312\254/\257-g\266V\332\247\262\331\227\033\233\313\307\023 \021E\300\242x\202XC\357Z\253l\366if\363\347\225\3153S\033\353\360\375l\210!\014\341\324Vf\355\311\361<8\317\363\317\016\017\360\177\031j\305\257\203G\233r!'W\252\262*\312\204\010\205\200\033\350\372\3666\232>{1\251b\352D Q\307\355\354\361\241\310\320\317}Y\342\313\270\321\020\312eY\225X\322\005\343P\025\025\215X\002mWT\331\310\013\206\234\327\244C\021\334'\261\343\371\366\240(\233TV\364\023\206\274\002\261\003\347\345\274 \356\210\3204D\"Q\014\274D\022\312\203~a\315\310\273yY\002\247\371m\2647\350\001JTD\033\200\007\262Z\335er-\353:XzRB\272\\\204P\360{\267\n\212*\300?\241\204\201\204\030\350\017|\320\013%\241h\220|\010f\253w\360|\241\252\212\344,\3344L\212\234/\"\2462\277-\030<I\0044\210\027\n\330\334v\2047\000\215r\300\2274m\307\340K\312\216\314\227u\264\322\343u\204[\222y\334!\242\234x\212\375\244\302\024\211\347\225]R*\374\245\336\210x\323\263;\354\273B\301\037#\n\201,\225\267\005\305\240\014`\267Q\006htX\250Q-\241\342\031\246\241\2578\026-\202]h\260i\304\203\264\321\3208\355\255\251\211\307\276\322\"\273\240DEZ\346\3416\022\024:\277+\034\260\303\332\177y\340\216>\211\027\003=\027\250'\303P\223\252\010\226W\205\335\223o\3105\276\345}\372:0""\3219\000x\211\234e\247\260\263\221c\rj\243#\250\035\260\253\210p\267\2313\3044F7\330\351;@\035\230\264\234m+QY+\003q\231r@bE\266\364\372i\317\235\212TD^\014\320\242\320^c\306\246\240\224x\036R\313\213BY\241\334\263\361\266,\356\030\325\335\360W\213\n4d\264d\243\252ZV\304\035\204\273\242\266\355\366\330\233\214\347+\370T\205R\010\200.\237\264\207\343Q\330HNM\310\007<c\254\201\240t\331\220\365=Y\322Y\026\014\021\304dX\261\246/\350\n\022H\375\201-\234\002\307\000\327O\026\300\020\0354,\tx\201\230\206,\350\3426\317\343\261\321J\013F\255\356\305\306\255\010O\215\333\0362\341&r1\376\264X\304\323\353\220gT\021Q\352!\311\341z\3310\265r\350\265\251W\251\216ML\343\3733\255\344\243nG<\024\005\340\316\207#\360F\"?\210\0064\263+\030;\364w\037\205\242\355\363\254x\221\0020\246Z&C\274\022\001\232P\252\312\306\301\263\303\r\246\032\334\324\304\311p\232\373\322XQ\315O&\270V\346wP\006x\236\224\211\246\323\\\030UkM+C\013\364\"\025\353I|\374<\005\310\317!B>\275\360Q\214\374\027S\306M\035\237\tc\241\304\016\236\354\370\377\004\362\271h\276\274\345s\333?\027\373d\307\027}\357\370\"C\337G>\254F:\272\256[\331\240\363\232\365\334N\330\013N$\350\034\266\023A\347\367V%\350\274j\245?Lut]<\022k\261\032&\273\217\272\216\236\327\022\265t\320}\361\250Z\313\324\262A\367\220\365\310\022\355X\320\375\315\321\374Q%\210\016\324*\315\356o\374o\206\3551'\342\304\202\350\267\315\356A\177\360\206\223v2\301\251\021\231\377am\331q;\313l\256Yo\235\005\1776S\037hD\032\375\215}\377\305\313f\367\205 :f\027\234\214\223\rzF\355-\347\272kz\351 v\t7\034\245\203ho\355\201\335oW\234\257\234=\027\247\220OK\265J\320s\315\2776\347\336\361\022A\274/\210\267\034i\366\364\326~\260${\312YuG\334\234\367]\275\320\3104\262A\034\306)?\265TO\007\203\227\331\207B\037L\330\261f|\240v`\355\333\2623\357\034\270\006\216\303l\334\3169_\273c^$\030\274j\315\373\337\377\265\036\251\307\202!r.\346L\271\313^\227\367k\335l\3145\362\376\263l0\364\275e\332\267\354\227N\306\237\331hT\002n\304\236\267u\247\337\251\004\311Q|\232\311y\177~\265^ld""\033\005\177\353\265\377\372M\220\274\355\nAr\334\376\303}\356\r{\217<\251>R\177\353\347^\000\217`\342\2767\342e\203\351\037\275W\365l]`\273\237\341\036?\373\312\177\365\013\0359q\327;\007\204&\246\235%\247\342\236wE/\026L\3148\233\216\356\306Y\320b#\326\204Q\204\031O\302\320\237^\364\226\274\312\231--\213y7\003O\374\361{^\257\277\370\204\2415q\327\277\373\267F\"\230\236a\037\362\025\336d\233m\257M\007\227\337\360o,\372\213\241c\233\001\316\317\00430\362\304z\274\276\325\210\005\3237\021\377\354R}\276n4\022\215\333~6\347\347\266\232\263\2002\230}TO\004\024Vx]\362\226;\356\305\375\037Yx\023i\267\337\2554\223i7v\354\275\263\354FX\020\260\017\246g\335\210{\305\233\367*\037\316wL\336\363\"\336P=K^U\010\227\343_\377p3n\366\324\314=\357\324y\231\343\257\277\271\0058>1\345O\375\340\245\233\023\010 H\316\272\027\274\030r\260\351\275\003GY\022\341U\314M\300\216e?B\203D3\231r\212n\266\331B\351\364\347\001\022\232\254\003\265\031\3708:\021\002v\307\245\243\232\335\361\032\n\203}1z_D=\365\014\371C7\235C\370\032cc8\353\335\250\277h\244\233=q?>\345\214!d\254\364\326n\325^Z\231\000\2245\375\253\267\334\204{\033i\004\233\343\250ak\025\245}\207Li\275j-\021\301\223v\346\223\013Q\235)Gq+\010#\372-\256\263\226\355\010J\2737N\343\014\025\335\375Z\316\352B\325^q\346\034\201\214\302\335\203V\204\325\366\2243\0164\306\274\257@\250\356+V\202\316}`\365Yy\373/v\322\026Q\277TF\321\353\244\030\376\360\234{\327K{\241*\200k\356K\032\243\344\207\230\207\321\236\332\271Z\272\266j\215@\237\242\261\332%\204\270e\365Z\353\316\210\223m\302(\023\236\036\367\257\31589\367/n\222\250\353\215\325\317\241\224\303e\346\026\264\350\232\225\363\271Y\206T\024\030\246\340zO\214}\310\307\036\252\365\266\267L\303.\372\0279\237\233g<\351\341\354H\020\203\211=\202\032\217\223\022\365\326\026H\306\346\035\203\341|\t\005\027\007\234A|\314\026X0\354\252f\367wG\177\267\276\262\252\366\222\375\316\035haz\305\032\007\242=}\265_-\303\036\265\rg\022'\364\242\002\017\033\347\033\002\222\n8{\240\241\326yK\200\366@\373\030\366""\314\r\246\225\270=\315\322lA\260F\354t\320w\331\212\005q\032\205K\360\234\270\212\265\333N\014$\353K \200\236X\023xF\210S\357\254\0016\001K\273\323\316\340\310\201A\032c\261\317\357\033\363\307@\3676<\003\244\2468\277\211}\0075\203\300\212\005\247\306\315\350\240u\201A\263\t\031>O\224\350cI\312X/\340\020\005\334_+ \235\006zJO\257\337;\t\225\014G\323\244\352\315\350\025\377J+1\260\275n\025\355\347\316hK\206.y\017\033#\215l3\254\003d\200%&\264\246\253\373jo\3559 \036\355\257\t\344\224Y\273c%-\2446^{b\177\355\014\023t\375\265\274u\316\272\025\366\031;\357tS\r\020`-r\367C\215{\235\307.\003\357\276\225\263#\255\022\202h\021\210t\353 \032b\223\235\237f\367\266\234\200\026\265\334\330\262bV\302\232G\2463\240H\257\363\310a\376\350\265\001+\342_n\301\311&\372k\025\177\220\244\262g\020\t.\330\217\354\242\223u\330\317.\353%KF\310\256\260\260\007\274N\357g\210\344hc\317\177\376\002\335\014x\201?q\177\224\332\316\345\306\030\365\230\350e\377\362M\347\017/\347\377\3659Y\205p\241\253\245\3754\251i\214\316~\313\352\025g\317\327~\267\347\375\361\307\365J\243\223$\266!\371\2339F_\373\215\033km&\256\r9\254\243\376\003\251\314\036\317P\276\243~\222B\302\350k\344\235\031\375\017\372j\242\305S\352\262\242\237\230s\347\020&\321\3623\034\341\354\013\340\301\010\332R\305\355t\227\\\035\342\026e\t\376\226\321\216\025A\373\253\366\302\232\263\362>\007\235m\342\021\220\245|\027\255l\223z\373G\2371[r\222\270 \336\367\241\273\243+z\224\306\013'\332\021\273\364a\260\243\353\252\225@1\340\261s\366\235C>\343\361\223mv~\367\337^9-a\370\226F\267\216r5V\314\037\275f*\354\035\303\204\264\247v\301\277<\355\254\271Y\3125i\356\211\004S\202!\013\025\362\030\265\025\007\351\272\354\027h\003=\244!X\275m\365\243^\222\266\344O\205\257\0130r\037\010'\3751J\033{y\334\"\266\370\243\324\212[o\217Q\307t\027\274\363\236@\217\016\322\034\023\002\365\2737\207\tR\262 1\006\375\355s$w\202\275!\330\\[F.7{\206\375\341{L=#-\031!-#\276\370\003\324\325\027XE\366z\264\307\037\230\300\213\213jT\362\222\376\203_\375__\263GS""\023\254M\204\034\243\340\232(\347\022\334\242\247\031\250\261\206\372\023\235K\024'\205\223\267\277qn\273\275n\246\031=\325\307\300\245=t\030&OQ\302\351D\005\331\353\356\261\025\326R(2+\364\370#6E\302\215D\024\006SX\274\360\204\004A\362\207\361\270\253\263hu\322>?\261\212\006\314\336rY\366\270\253\272\253\364\270\273j-\330\347\360>3\235E\326\246\206P\345\301\265a\020\3679X\265\315\336Rl\356$\304\350u\377\372\002\222L/\205\260t\210T\244\025~/=\365\252\255\307f\204I^\322~\014\266\254\242QI\376}\366\240\243\356\334dP\237\322\227+\3264\334\272Mp\234\252\034\302\343\2165l\375l\357\241\333E\232\235_\2757\217\356\324FH}\210\250\225f'9\000\366~\r\022w\023\036Y\350\"\370\270@}4\274`\021\317\321y\234\005\275\001\003\251\r\\\267\204\026\255\217\315~\207\224\231\324N\216\215\350E\014\243Np{\343\377\000m\322\3632";
+const char* const cstring = "x\332\235VIw\333F\2666\333\222#'L,Z\324`[v@\211\032-\321\2425x\210b7\255\301Q\307\226LQ\036\022;\306\001\001\220B\213\002H\000\324\340\223\316\363RK\236\323\275\300\022\247WXb\327X\362\274\025\227Xb\311\223_\340\237\360\276[ 5x\350\305\363\241\251b\325\255\252{\277\373\335\357\326}.\275\220)\2258I\331\225UC\321T\203+\353\262(K\212Z<\231\344F$n\267j\230\\^\346\024U\222\017d\211\023T\211S5\2233J\n\314\037U\013\005Y\347\366\024y\237\2234\331`K\362AY3d\3160uE\222\215%A\3454\265t\310\211\272,\2302'p\371p\223\271-\230\234bp\242\246\232J\261\252U\r\\\302\355\312\273\232~\230\302.:J0\014\245\250r\246\306a\2634\315\316\t-\350\312\226Q\353\340}]1\205|In\031\204N\025tm\367\277\355eaq\373\212\271\315\231\207e\231\033k\315\233\272\240\032,\214\223-\241\031v(\200\312<\205\335\362i\300\224\020\204\320he\267l\036r\306\266\200\243\315j\031\316\0254\235\023\017\315mMM\t\272.\034\2561\007\264\252\311i\005.\257UU\311\340\306\205\003\2342\"M\254}zW\010~\265\\\326tS\226\326\324=\241\244 K\232$O\021\3600F\222\306\3041\016\367\214\3412\ndl\212+bW\3338t\007X\263k\026\237\262\000_P\200pa]\003\224,5K\314K\212G\222KJ^\326\0012 \244\264\342\022\226?\225{\266\362lz\356\356\034\243\205.\377\035\327\033\360./\226\2209\320\201b\252*%\023\227\021\274F\212[+p\207Z\225Se\270\211\264\226awz\203\271-\253\234!\2334\340\306X.\004\023q\363\330\016n\216\265pU\366d\332\275*\224\0149\265q\006<\270\334\"\230 \212\262\321F3g\312enW8d\370\201\317\357d];\001\372\271\312\230\203#\301\306=Y\0071Ly\227~ky\n\352\317\367\377\374\363\375\277R\367\177H<\344.\336\237N\215\277\376m\342a\352\301\330\304\364\344\237\357\377\375\277\377\021$\211W\t9\302\201\003x3\007\242V*\221\247\310YJ\310\213\213\247hNFa\034\017>\236n\263\353\201\244\030\344\222\314\034+\212\3348e\260\310\210E\301Q\235\312\007\246\254\232\254jNJv\374\2412\201\264\357\2761n\246g\246+\277W\252\002\210\242#q\272L\234\241\365\267o\214\311\327o\306\337\274\376\215\006\302\364\273\231\351{\277\235]x\210\021sM\255\312\322\233\274b\204\216H\004\213\241\274\223""\271\305\037\271\231O\310\254j\340JA\250\226L\216\347uY\252\2122\317sR\225!\253j\3524\270\263\247\010%\254\212\212\252\230X\014\361}`\350\342-\244\334P\014\276\274S\274%j\272|\313\220\305[\210Q\027\030\212|A0\314T\371\360`1\024\026\351\014\214\237\316Q\001\034\243yf\375x\366\344\302\024]\230\302\205\251\317\315m\313U]1LE4>\267Z\026L\000\254\032\325c\016\t\245\222&2\255#P8I0\205\324gV\303:$\217ZR\231\312\344\226\326\326\2266\236>Z[_Y\346\237e6\267\370\265\255\225\247\030mm\255l\256/mn\344r\374\346\312j\270\364\351,\276\326^\265\347W\236>ZY^\3069[\033K|n\213v\254d6\237\374\302?\315\274\342\227~\312l\256<}\266\365\313\231\013VJ%\245\214\000\177Z\311,\257\255?\346\2276\326W\371\237\326\036\377tf\342\311\306\3133\277\237\256,\257\341\037\235\263\224Y_^[\316l\255\264Od\263/76\227\333\023\314\363'\210/\364\350\364\354\323\314\346\317+\233g\2466\326\341\357\331\260\302\320\303\251\255\314\332\223\366<\317?;<\300\377e\250\023\277\016\336l\312\205\234\\\251\312\252(\023\002\3442N\247\253\333[h\372\354\245\244\202\251\023AD\335\266\263\305\207\242B?\367e\211/\243\252\014\241\\\226U\211%Y0\016UQ\321\210\025\320rE\225\215\274`\310yM:\024\301u\0227\236o\017\212\262IeD?a\310+\0207p\\\316\013\342\216\010\rCUH\024\003/\221d\362\240[X#\362n^\226\300a~\033\355\014\365\217\222\024!\373\360@V\253\273L\236e]\007+OJF\227\213\020\006~\357vAQ\005\370'\2240\220\020\003\375\201\017z\241$\024\r\222\013\301l\365\n\236/TU\221\234\205\233\206I\221\363E\304T\346\267\005\203'I\200\346\360B\001\233\333\216\360\006\240Q\016\370\222\246\355\030|I\331\221\371\262\216\326y\274\216pK2\217;D\224\017O\261\237T\224\"\361\274\262K\312\204\277\324\013\021ozf\207}W(\370cD!\210\245\362\266\240\030\224\001\3546\312\000\215\016\0135\251%L<\3034\364\025\307\242%\260\013\r6\215x\2206\032\032\247\27555\361\330WZd\027\224\250(\313<\334F\202B\347w\205\003vX\373/\017\334\321\027\361B\240\347\001\365`\030jR\025\301\362\252\260{\362\ry\306\267\274O_\007&:\005\000/\221\263\354\024v6r\254A]t\004\265\003v\025\021\3566s\206""\230\306\350\006;}\007\250\003\223\226\263m\345)ke .S\016H\234\310\226^;\355\271S\221\212\310\213\001Z\024\332k\314\330\024\224\022\317CZyQ(+\224{6\336\226\305\035\243\272\033\376jQ\201\206\214\226lTU\313\212\270\203pW\324\266\335\036{\203\361|\005\237\252P\n\001\320\345\223vp<\n\033\307\251\t\371\200g\2145\020\224.\033\262\276'K:\313\202!\202\230\014+\326\344\005]A\002\251\037\260\205S\340\030\340\372\311\002\030\242\203\206%\001/\016\323\220\005]\334\346y<.Zi\301\250\325\255\330\270\025\341\251q\333C&\324D.\306\237\026\213xz\r\362\214*\"J=$9\\/\033\246V\016\2756\365*\325\261\211i|\177\246u|\324\335\210\207\242\000\334\371p\004\336H\344\007\321\200fv\005c\207\376\356\243P\264}\236\025/R\000\306T\313d\210W!@\023JU\3318xv\270\301T\203\233\034?\031Nq_\032+\252\371\311\004\327\312\374\016\312\000\317\2212\321t\212\013\243j\255ieh\201^\244b=\211\217\237\243\000\371YD\310\247\347?\212\221\377b\312\270\311\3433a,\224\330\301\023\347\376?\201|.\232/o\371\334\366\317\305>q\356\213\276\237\373\"C\337G>\254F\316u\336\260\262A\307u\353\271\235\260\347\235H\3201d'\202\216\357\255J\320q\315J\177\230<\327y\351H\254\305j\230\354:\352<z^K\324\322A\327\245\243j-S\313\006]\203\326#K\264cA\3277GsG\225 \332_\2534\273\276\361\277\031\262G\235\210\023\013\242\3376\273\006\374\201\233N\332\311\004\247Fd\376\207\265e\307\355,\263\271n\275u\346\375\231L\275\277\021i\3645\366\375\027/\233]\027\203\350\250]p2N6\350\036\261\267\234\033\256\351\245\203\330e\334p\224\016\242=\265\007v\237]q\276r\366\\\234B>-\325*A\367u\377\372\254{\307K\004\361\336 \336r\244\331\335S\373\301\222\354Ig\325\035vs\336w\365B#\323\310\006q\030\247\374\324R=\035\014\\a\037\n} a\307\232\361\376\332\201\265o\313\316\234s\340\0328\016\263q;\347|\355\216z\221`\340\2325\347\177\377\327z\244\036\013\006\311\271\2303\351.{\235\336\257u\2631\333\310\373\317\262\301\340\367\226i\337\266_:\031\177z\243Q\t\270a{\316\326\235>\247\022$G\360i&\347\374\271\325z\261\221m\024\374\255\327\376\3537Ar\301\025\202\344\230\375\207\373\334""\033\362\036yR}\270\376\326\317\275\000\036\301\370}o\330\313\006S?z\257\352\331\272\300v?\303=~\366\225\377\352\027:r\374\256w\036\010\215O9KN\305\275\340\212^,\030\237v6\035\335\215\263\240\305F\254\t\243\0103\236\200\241?\265\350-y\2253[Z\026sn\006\236\370c\367\274\036\177\361\tCk\374\256\177\367o\215D05\315>\344+\274\3116\333^\233\016.\277\351\337\\\364\027C\3076\003\234\237\t\246a\344\211\365x}\253\021\013\246n!\376\231\245\372\\\335h$\032\013~6\347\347\266\2323\2002\230yTO\004\024Vx]\362\266;\346\305\375\037Yx\343i\267\317\2554\223i7v\354\275\263\354FX\020\260\017\246f\334\210{\325\233\363*\037.\234\233\270\347E\274\301z\226\274\252\020.\307\277\376\341f\334\354\251\231{\336\251\3632\307_\177s\013p||\322\237\374\301K7\307\021@\220\234q/z1\344`\323{\007\216\262$\302\253\230\233\200\035\313~\204\006\211f2\345\024\335l\263\205\322\351\317\003$4Y\007j\323\360qd<\004\354\216KG5\273\3425\024\006\373b\364\276\204z\352\036\364\007o9\207\3605\306\306p\326\273Y\177\321H7\273\343~|\322\031E\310X\351\251\335\256\275\2642\001(k\372\327n\273\tw\001i\004\233\343\250ak\025\245}\207Li\275j-\021\301\223v\346\223\013Q\235)Gq+\010#\372-\256\263\226\355\010J\273'N\343\014\025\335\375Z\316\352D\325^uf\035\201\214\302\335\003V\204\325\366\2443\0064F\275\257@\250\256\253V\202\316}`\365Zy\373/v\322\026Q\277TF\321\033\244\030\376\320\254{\327K{\241*\200k\356K\032\243\344\007\231\207\321\356\332\371Z\272\266j\rC\237\242\261\332e\204\270e\365X\353\316\260\223m\302(\023\236\036\367\257O;9\367/n\222\250\353\215\326\317\243\224\303e\346\026\264\350\272\225\363\271\031\206T\024\030\246\340zw\214}\310\307n\252\365\266\267L\303.\371\2278\237\233c<\351\346\354H\020\203\211=\214\032\217\223\022\365\324\346I\306\346\034\203\341|\031\005\027\007\234A|\324\026X0\354\252f\327wG\177\267\276\262\252\366\222\375\316\355oaz\325\032\003\242\335\275\265_-\303\036\261\rg\002'\364\240\002\017\033\027\032\002\222\n8\273\241\241\326\005K\200\366@\373\030\366\314\r\246\225\270=\315\322lA\260\206\355t\320{\305""\212\005q\032\205K\360\234\270\212\265\005'\006\222\365&\020@w\254\t<#\304\251wV?\233\200\245\335agpd\377\000\215\261\330\353\367\216\372\243\240{\033\236~RS\234\337\304\276\203\232A`\305\202S\343ft\300\272\310\240\331\204\014_ J\364\262$e\254\027p\210\002\356\253\025\220N\003=\245\273\307\357\231\200J\206\243)R\365f\364\252\177\265\225\030\330\336\260\212\366sg\244%C\227\275\207\215\341F\266\031\326\0012\300\022\023Z\323\325\275\265\267\366,\020\217\366\325\004r\312\254\335\261\222\026R\033\257=\261\277v\206\010\272\276Z\336:o\335\016\373\214\235w\272\250\006\010\260\026\271\373\240\306=\316c\227\201w\337\312\331\221V\tA\264\010D\272u\000\r\261\311\316O\263{[N@\213ZnlY1+a\315!\323\031P\244\307y\3440\177\364Z\277\025\361\257\264\340d\023}\265\212?@R\331=\200\004\027\354Gv\321\311:\354g\247\365\222%#dWX\330\375^\207\3673Dr\244\261\347?\177\201n\006\274\300\237\270?Bm\347Jc\224zL\364\212\177\345\226\363\207\227\363\377\372\234\254B\270\320\325\322~\232\3244Fg\277e\365\212\263\347j\277\333s\376\330\343z\245\321A\022\333\220\374\315\034\243\257\375\306\215\2656\023\327\006\035\326Q\377\201Tf\217g(\337Q?I!a\3645\362\316\214\376\007}5\321\342)uY\321O\314\272\263\010\223h\371\031\216p\366E\360`\030m\251\342v\270K\256\016q\213\262\004\177\313h\307\212\240\375U{a\315Zy\237\203\3166\361\010\310R\276\213V\266I\275\375\243\317\250-9I\\\020\357\375\320u\2563z\224\306\013'z.v\371\303\300\271\316kV\002\305\200\307\316\331w\016\371\214\307O\266\331\361\335\177{\345\264\204\341[\032\335>\312\325X1\177\364\232\251\260w\014\023\322\356\332E\377\312\224\263\346f)\327\244\271'\022L\t\206,T\310c\324V\034\244\353\264_\240\rt\223\206`u\301\352C\275$m\311\237\014_\027`\344>\020N\372\243\2246\366\362\270Ml\361G\250\025\267\336\036#\216\351\316{\027<\201\036\035\2449&\004\352wo\026\023\244dAb\024\372\333\353H\3568{C\260\271\266\214\\iv\017\371C\367\230zFZ2BZF|\361\373\251\253\317\263\212\354\361h\217\337?\216\027\027\325\250\344%\375\007\277\372\277\276f\217\246&X\233\0109F\3015Q\316%\270EO3P""c\r\365':\227)N\n'o\177\343,\270=n\246\031=\325\307\300\245=t\030&OQ\302\351D\005\331\353\356\261\025\326R(2+\364\370#6E\302\215D\024\006SX\274\360\204\004A\362\207\360\270\253\263hu\322>?\261\212\006\314\336rY\366\270\253\272\253\364\270\273f\315\333\347\361>3\235E\326\246\006Q\345\301\365!\020\3679X\265\315\336Rl\356$\304\350\r\377\306<\222L/\205\260t\210T\244\025~\3170\325\331}/\351\311\365\205FOc\t\317\005\322\275\244\375\030\224YE\267\222\374\373\354UG-\272\311\360>%2W\255)\370\266@\230\234*\037\002\345\2165d\375l\357\241\345E\232\035_\2757\217\356\324\206I\202\210\255\225f\007y\001\n\177\r&w\021(Y\210#H9O\3154\274`\021o\3229\234\005\321\001\r\251\027\334\260\204\026\267\217\315~\207\236\231\324S\216\215\350Y\014\243\016\020|\343\377\000(\206\360S";
     PyObject *data = __Pyx_DecompressString(cstring, 3732, 1);
     if (unlikely(!data)) __PYX_ERR(0, 1, __pyx_L1_error)
     const char* const bytes = __Pyx_PyBytes_AsString(data);
     #if !CYTHON_ASSUME_SAFE_MACROS
     if (likely(bytes)); else { Py_DECREF(data); __PYX_ERR(0, 1, __pyx_L1_error) }
     #endif
-    #else /* compression: none (6575 bytes) */
-const char* const bytes = ": 16All dimensions preceding dimension %d must be indexed and not slicedBuffer view does not expose stridesCan only create a buffer that is contiguous in memory.Cannot assign to read-only memoryviewCannot create writable memory view from read-only memoryviewCannot index with type 'Cannot transpose memoryview with indirect dimensionsDimension %d is not directEmpty shape tuple for cython.arrayIndex out of bounds (axis %d)Indirect dimensions not supportedInvalid mode, expected 'c' or 'fortran', got Invalid shape in axis <MemoryView of Note that Cython is deliberately stricter than PEP-484 and rejects subclasses of builtin types. If you need to pass subclasses then set the 'annotation_typing' directive to False.Out of bounds on buffer access (axis Step may not be zero (axis %d)Unable to convert item to object\342\200\223\342\200\224.:;!? \t:-.([])?.>')-*\342\200\242\302\267add_note and  at 0xcollections.abc<contiguous and direct><contiguous and indirect>disableenablegc (got got differing extents in dimension (?i)form\\s+10-q|quarterly report(?i)^\\s*[\\(\\[]\\s*[a-z0-9](?i)^\\s*[\\(\\[]?\\s*continued\\bisenableditemsize <= 0 for cython.arrayno default __reduce__ due to non-trivial __cinit__ object>src/thesis_pkg/core/sec/extraction_fast.pyx<strided and direct><strided and direct or indirect><strided and indirect>thesis_pkg.core.sec.thesis_pkg.core.sec.heuristicsthesis_pkg.core.sec.patternsunable to allocate array data.unable to allocate shape and strides.ASCIICOMBINED_PART_ITEM_PATTERNCROSS_REF_PART_PATTERNCROSS_REF_PREFIX_PATTERNEMBEDDED_TOC_START_EARLY_MAX_CHAREMPTY_ITEM_PATTERNEllipsisHEADING_CONF_HIGHHEADING_CONF_LOWHEADING_CONF_MEDIIIITEMITEM_CANDIDATE_PATTERNITEM_WORD_PATTERNItemPARTPART_LINESTART_PATTERNPART_MARKER_PATTERNPART_ONLY_PREFIX_PATTERNPART_PREFIX_TAIL_PATTERNPart__Pyx_PyDict_NextRefSequenceTOC_HEADER_LINE_PATTERNTOC_MARKER_PATTERNView.MemoryViewabcallocate_bufferallowed_partsappendarrayasyncio.coroutinesbasebodyc__class____class_getitem__cline_in_trace""backcount__dict__dtype_is_objectembedded_headingsencodeendenumerateerrorextraction_regime_v2financialfindallfinditerflagsformatfortran__func____getstate__group_has_content_after_heading_suffix_looks_like_prose_heading_title_matches_itemheuristicsid__import__indexis_10kis_10q_is_coroutineisalphaislowerisspaceitemitemsitemsize_line_has_compound_itemsline_startslines_looks_like_toc_heading_linelowerlstrip__main__matchmax_itemmax_item_numbermemviewmode__module__name__name__ndim__new__next_normalize_item_matchobjotherpack_pageish_linepart_part_marker_is_headingpatternspop_prefix_is_part_only_prefix_looks_like_cross_ref_prefix_part_tail__pyx_capi____pyx_checksum__pyx_state__pyx_type__pyx_unpickle_Enum__pyx_vtable__q__qualname__re__reduce____reduce_cython____reduce_ex__registerreservedrstripscan_item_boundaries_fastscan_part_markers_v2_fastscan_sparse_layoutsearch__set_name__setdefault__setstate____setstate_cython__shapesizestart_starts_with_lowercase_titlestepstopstripstruct__test__thesis_pkg.core.sec.extraction_fasttoc_cache_toc_candidate_linetoc_masktoc_window_flagsunpackupdateuppervaluesxPyObject *(PyObject *, PyObject *, PyObject *, int, PyObject *, int __pyx_skip_dispatch, struct __pyx_opt_args_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_markers_v2_fast *__pyx_optional_args)\000PyObject *(PyObject *, PyObject *, PyObject *, int, int, PyObject *, int, PyObject *, PyObject *, PyObject *, int, int __pyx_skip_dispatch)\000scan_part_markers_v2_fast\000scan_item_boundaries_fast\200\001\360F\001\000\005\036\230Q\330\004\035\230U\240!\2405\250\001\330\004\"\240!\330\004\037\230q\330\004\033\2301\360*\000\005\017\210c\220\021\220!\330\004\010\210\005\210U\220!\2201\330\010\017\210u\220A\220Q\330\010\034\230B\230c\240\021\330\010\013\2104\210q\330\014\027\220q\340\010\013\320\013\"\240&\250\001\250\021\330\014\r\340\010\030\320\030+\2501\250A\330\010\030\320\030+\2501\250A\330\010\013\2104\210~\230T\240\024\240Q\330\014\r\340\010\035\230^\2505\3200A\300\027\310\001""\310\026\310w\320VW\340\010\t\330\014&\240f\250A\250Q\330\020%\240T\250\036\260t\2701\330\021\022\340\010\013\2101\330\014\023\220>\240\026\240q\250\007\250v\260Q\330\014\017\210u\220C\220q\330\020\035\320\0353\2607\270!\330\024\025\330\024\"\240&\250\001\250\021\340\020\023\220;\230d\240*\250F\260#\260S\270\016\300f\310A\310Q\330\024\035\320\035.\320.C\3001\330\030\031\330\030\031\330\030\037\230q\330\030!\240\021\340\024\027\220x\230w\240e\2504\250x\260s\270!\330\030!\240\024\240S\250\n\260&\270\001\330\030\033\2304\320\037@\300\001\300\021\330\034%\240T\250\021\250*\260D\270\005\270Z\300t\3103\310b\320PQ\330\034\037\230t\2402\240W\250A\320-O\310q\330 #\2404\240r\250\026\250q\330$%\330$%\340$4\3204F\300g\310Q\310f\320T[\320[\\\330$6\260a\330$'\240~\260U\270\"\270B\270d\300#\300^\320SV\320VW\330(:\270#\270Q\330,=\270X\300Q\300a\340$4\3204P\320PQ\320QX\320XY\330$%\330(8\270\003\2701\330(,\250C\250q\260\006\260c\270\021\330(-\250R\250r\260\024\260S\270\016\300c\310\021\340(8\270\001\330$%\330()\330(,\320,<\270C\270q\330(,\250C\250q\260\006\260c\270\021\340(8\270\001\330$4\260A\330$'\320'9\270\023\320<L\310A\310Q\330(8\3208J\310!\330,-\330,-\330,6\260a\330,=\270Q\340$6\260a\330$'\240t\2501\330(+\320+<\320<P\320PQ\320QR\330,<\270A\330-=\270Q\270c\300\024\300T\310\021\330,/\250q\3300C\3004\300s\310!\3106\320QS\320ST\3400@\300\001\3300B\300!\330$4\3204L\310A\310Q\330$2\260'\270\024\320=X\320XY\330(1\260\026\260q\340$1\260\021\330$%\330()\330(,\250D\260\001\330(,\320,L\310A\330,0\260\001\260\032\2704\270q\360\006\000)9\270\001\270\034\300Q\330$'\240q\330(8\270\001\270\034\300Q\330$'\240}\260A\260Q\330(8\270\001\270\034\300Q\330$9\270\021\330$%\330()\330(,\250A\330(,\250A\330(,\250J\260f\270A\330(*\320*;\2701\340(=\270Q\330$0\260\t\270\021\270#\270R\270z\310\026\310q\330$%\330(1\260\021\260!\330(*\250*\260D\270\001\330(*\250!\340$.\250g\260Q\340,-\330,-\330,-\330,-\330,-\330,-\330,>\270d\300$\300a\330,-\360\006\000%(\240t\2501\330(7\260q\330$%\340\010\024\220A\330\010\024""\220A\330\010\013\2101\330\014\017\210q\330\020\034\320\034/\250y\270\001\270\021\330\020\034\320\0349\270\021\270+\300V\3101\340\020\024\320\024*\250&\260\001\260\021\330\020\023\2202\220W\230A\330\024\027\220t\320\0332\260!\2606\270\021\340\030\031\330\024\033\2301\230F\240!\2407\250&\260\001\330\024\027\220u\230C\230q\330\030$\240A\340\010\024\220A\330\010\024\220A\330\010\013\2101\330\014\030\320\030.\250i\260q\270\001\330\014\r\330\020\034\230D\240\001\240\021\330\023\024\330\020\034\230A\340\010\013\210:\220S\230\005\230T\240\032\2503\250a\330\014\r\330\010\024\220A\330\010\030\230\001\330\010\030\320\030*\250'\260\021\260&\270\007\270q\330\010\032\230!\330\010\013\210>\230\025\230b\240\002\240$\240c\250\036\260s\270!\330\014\036\230c\240\021\320\"3\2608\2701\270A\330\010\030\320\0304\260A\260W\270A\330\010\t\330\014\034\230C\230q\330\014\020\220\003\2201\220F\230#\230Q\330\014\021\220\022\2202\220T\230\023\230N\250#\250Q\340\014\034\230A\330\010\013\210>\230\024\320\035-\250S\260\002\260$\260c\270\021\270&\300\003\3001\330\014\034\230A\330\010\030\230\001\330\010\013\320\013\035\230S\320 0\260\001\260\021\330\014\034\320\034.\250a\330\020\021\330\020\021\330\020\032\230!\330\020!\240\021\340\010\032\230!\330\010\013\2104\210q\330\014\017\320\017 \320 4\260A\260Q\330\020 \240\001\330\021!\240\021\240#\240T\250\024\250Q\330\020\023\2205\320\030+\2504\250s\260!\2606\270\022\2701\330\024$\240A\330\024&\240a\330\010\030\320\0300\260\001\260\021\340\010\016\210j\230\007\230u\240C\240z\260\027\270\001\330\014\r\330\020\032\230'\240\021\330\020\025\220Z\230s\240%\240s\250)\2606\270\023\270C\270y\310\006\310a\340\020\024\220A\330\020\027\220q\230\006\230a\230w\240f\250A\330\020\034\230A\330\020 \240\001\240\024\240Q\330\020\023\2201\330\024\027\220t\2301\330\030#\2401\330\025\031\230\021\330\024#\2401\330\020\023\2201\330\024 \320 =\270Q\330\030#\2406\250\021\360\006\000\025!\240\001\330\020\021\340\014\020\220\001\330\014\017\210z\230\027\240\001\330\020\021\330\024 ""\240\004\240A\240Q\330\027\030\330\024 \240\001\330\014\025\320\025&\320&;\2701\330\020\021\330\020\021\330\020\027\220q\330\020\031\230\021\340\014\017\210x\220s\230!\330\020\021\330\014\017\210x\220s\230!\330\020\021\340\014\030\230\t\240\021\240#\240R\240q\250\006\250a\330\014\025\220T\230\023\230A\230V\2401\330\014\r\330\020\026\220f\230C\230s\240!\330\020\023\320\023)\250\021\250!\330\020\023\320\023,\250A\250Q\340\014\032\320\0320\260\001\260\021\330\014\r\330\020\036\230g\240U\250%\250q\260\006\260c\270\022\270?\310#\310Q\340\014\017\210q\330\020!\240\021\330\014\017\320\0170\260\001\260\021\330\020\021\340\014\025\220^\2403\240a\330\014\026\220a\330\014\017\210t\2207\230$\230a\330\020\024\220L\240\n\250\"\250A\330\020\026\220b\230\003\2302\230T\240\024\240Q\240b\250\010\260\001\330\024\031\230\021\330\020\034\230D\240\001\240\026\240r\250\023\250G\2601\330\020\023\220:\230S\240\001\330\024\027\220t\320\033<\270A\270Q\330\030!\240\021\330\030\"\240!\340\014\017\210t\2201\330\020\021\340\014\017\320\0170\260\001\260\026\260q\330\020\021\340\014\025\220T\230\021\230!\2304\230u\240A\240T\250\023\250B\250a\330\014\017\210r\220\027\230\001\320\031;\2701\330\020\021\330\014\017\210r\220\026\220q\320\0306\260a\330\020\030\230\006\230f\240B\240g\250Q\250a\330\020\030\230\005\230W\240A\240Q\330\020\023\2205\320\030*\250&\260\001\260\027\270\004\270K\300s\310%\310v\320UV\330\024\025\340\014\032\230'\240\024\320%@\300\001\300\031\310&\320PQ\330\014\031\320\031/\250~\270S\320@U\320UV\330\014\017\210q\330\020\035\320\0351\3201B\300!\330\021\030\230\005\230^\2503\250a\330\020\023\2204\220|\2404\320'G\300q\310\004\310A\310Q\310d\320RS\330\024$\240A\240\\\260\021\330\014\017\210q\330\020 \240\001\240\034\250Q\330\014\017\210}\230A\230Q\330\020 \240\001\240\034\250Q\340\014\030\230\014\320$;\2701\330\014\030\230\n\240#\240Q\330\014\017\210\177\230d\240!\330\020\034\230A\330\020\023\220;\230c\320!3\2603\260a\330\024#\2401\340\014\030\230\t\240\021\240#\240R\240q\250\006\250a""\330\014 \240\t\250\021\250#\250R\250q\260\004\260C\260r\270\021\330\014!\240\021\330\014\r\330\020\021\330\020\024\220A\330\020\024\220A\330\020\024\220A\220V\2303\230b\320 1\260\021\340\020%\240Q\330\014\026\220g\230Q\340\024\025\330\024\025\330\024\025\330\024\025\330\024\025\330\024\025\330\024&\240d\250$\250a\330\024\025\360\010\000\005\014\2101\200\001\360\014\000\021\022\360\030\000\005\033\230!\360\006\000\005\036\230U\240!\2405\250\001\330\004\"\240!\330\004\034\230A\330\004\035\230Q\340\004\016\210c\220\021\220!\330\004\010\210\005\210U\220!\2201\330\010\017\210u\220A\220Q\330\010\013\2104\210q\330\014\r\330\010\013\2102\210S\220\001\330\014\r\330\010\030\320\030+\2501\250A\330\010\013\2104\210q\330\014\r\340\010\013\2101\330\014\020\220\t\320\031,\250I\260Q\260a\330\020\027\220u\230F\240!\2407\250&\260\001\330\020\023\2205\230\007\230q\330\024\025\330\020\031\230\024\230S\240\005\240V\2501\330\020$\240A\330\020\023\2206\230\026\230s\240$\240d\320*@\300\001\300\021\330\024\027\220w\230d\240$\320&G\300q\310\001\330\030\033\2302\230W\240A\320%J\310!\330\034%\240T\250\021\250%\250t\2605\270\006\270a\330\034\037\230u\240C\240t\2504\250|\2703\270a\330 4\260A\330!&\240c\250\025\250d\260(\270#\270Q\330 4\260A\330\024\027\220t\2301\330\030\031\340\020\"\320\"9\270\021\270&\300\001\330\020\023\2201\330\024&\240a\330\020\023\2204\320\027'\240t\2505\260\006\260c\270\023\270A\330\024\027\320\027(\250\007\250q\260\006\260d\270$\320>Z\320Z[\330\030\037\230q\340\030*\250!\330\020\023\2204\220q\330\024\025\340\020\036\230l\250%\250v\260Q\330\020\034\230I\240Q\240c\250\022\2501\330\020\027\220w\230b\240\013\2506\260\023\260A\340\014\024\320\024*\250&\260\001\260\021\330\014\017\210v\220S\230\001\330\020\021\330\014\023\2205\230\006\230a\230w\240f\250A\330\014\017\210u\220G\2301\330\020\021\330\014\025\220T\230\023\230E\240\026\240q\330\014 \240\001\330\014\017\210v\220V\2303\230d\240$\320&<\270A\270Q\330\020\023\2207\230$\230d\320\"C\3001\300A\330\024\027\220r\230\027\240""\001\320!F\300a\330\030!\240\024\240Q\240e\2504\250u\260F\270!\330\030\033\2305\240\003\2404\240t\250<\260s\270!\330\0340\260\001\330\035\"\240#\240U\250$\250h\260c\270\021\330\0340\260\001\330\020\023\2204\220q\330\024\025\340\014\036\320\0365\260Q\260f\270A\330\014\017\210q\330\020\"\240!\330\014\017\210t\320\023#\2404\240u\250F\260#\260S\270\001\330\020\023\320\023$\240G\2501\250F\260$\260d\320:V\320VW\330\024\033\2301\340\024&\240a\330\014\017\210t\2201\330\020\021\340\014\032\230,\240e\2506\260\021\330\014\030\230\t\240\021\240#\240R\240q\330\014\023\2207\230\"\230K\240v\250S\260\001\340\004\007\200t\2107\220#\220T\230\021\330\010\017\210q\340\004\017\210q\330\004\010\210\n\220!\330\010\017\210v\220Q\220a\330\010\013\2105\220\003\2201\330\014\017\210t\220<\230t\2404\240q\330\020\030\230\007\230q\240\001\330\020\036\230a\330\014\r\330\010\013\2105\220\003\2201\330\014\017\210|\2304\230t\2401\330\020\030\230\007\230q\240\001\330\020\037\230q\330\014\r\330\004\013\2101O";
+    #else /* compression: none (6564 bytes) */
+const char* const bytes = ": 16All dimensions preceding dimension %d must be indexed and not slicedBuffer view does not expose stridesCan only create a buffer that is contiguous in memory.Cannot assign to read-only memoryviewCannot create writable memory view from read-only memoryviewCannot index with type 'Cannot transpose memoryview with indirect dimensionsDimension %d is not directEmpty shape tuple for cython.arrayIndex out of bounds (axis %d)Indirect dimensions not supportedInvalid mode, expected 'c' or 'fortran', got Invalid shape in axis <MemoryView of Note that Cython is deliberately stricter than PEP-484 and rejects subclasses of builtin types. If you need to pass subclasses then set the 'annotation_typing' directive to False.Out of bounds on buffer access (axis Step may not be zero (axis %d)Unable to convert item to object\342\200\223\342\200\224.:;!? \t:-.([])?.>')-*\342\200\242\302\267add_note and  at 0xcollections.abc<contiguous and direct><contiguous and indirect>disableenablegc (got got differing extents in dimension (?i)form\\s+10-q|quarterly report(?i)^\\s*[\\(\\[]\\s*[a-z0-9](?i)^\\s*[\\(\\[]?\\s*continued\\bisenableditemsize <= 0 for cython.arrayno default __reduce__ due to non-trivial __cinit__ object>src/thesis_pkg/core/sec/extraction_fast.pyx<strided and direct><strided and direct or indirect><strided and indirect>thesis_pkg.core.sec.thesis_pkg.core.sec.heuristicsthesis_pkg.core.sec.patternsunable to allocate array data.unable to allocate shape and strides.ASCIICOMBINED_PART_ITEM_PATTERNCROSS_REF_PART_PATTERNCROSS_REF_PREFIX_PATTERNEMBEDDED_TOC_START_EARLY_MAX_CHAREMPTY_ITEM_PATTERNEllipsisHEADING_CONF_HIGHHEADING_CONF_LOWHEADING_CONF_MEDIIIITEM_CANDIDATE_PATTERNITEM_WORD_PATTERNPART_LINESTART_PATTERNPART_MARKER_PATTERNPART_ONLY_PREFIX_PATTERNPART_PREFIX_TAIL_PATTERN__Pyx_PyDict_NextRefSequenceTOC_HEADER_LINE_PATTERNTOC_MARKER_PATTERNView.MemoryViewabcallocate_bufferallowed_partsappendarrayasyncio.coroutinesbasebodyc__class____class_getitem__cline_in_tracebackcount__dict_""_dtype_is_objectembedded_headingsencodeendenumerateerrorextraction_regime_v2financialfindallfinditerflagsformatfortran__func____getstate__group_has_content_after_heading_suffix_looks_like_prose_heading_title_matches_itemheuristicsid__import__indexis_10kis_10q_is_coroutineisalphaislowerisspaceitemitemsitemsize_line_has_compound_itemsline_startslines_looks_like_toc_heading_linelowerlstrip__main__matchmax_itemmax_item_numbermemviewmode__module__name__name__ndim__new__next_normalize_item_matchobjotherpack_pageish_linepart_part_marker_is_headingpatternspop_prefix_is_part_only_prefix_looks_like_cross_ref_prefix_part_tail__pyx_capi____pyx_checksum__pyx_state__pyx_type__pyx_unpickle_Enum__pyx_vtable__q__qualname__re__reduce____reduce_cython____reduce_ex__registerreservedrstripscan_item_boundaries_fastscan_part_markers_v2_fastscan_sparse_layoutsearch__set_name__setdefault__setstate____setstate_cython__shapesizestart_starts_with_lowercase_titlestepstopstripstruct__test__thesis_pkg.core.sec.extraction_fasttoc_cache_toc_candidate_linetoc_masktoc_window_flagsunpackupdateuppervaluesxPyObject *(PyObject *, PyObject *, PyObject *, int, PyObject *, int __pyx_skip_dispatch, struct __pyx_opt_args_10thesis_pkg_4core_3sec_15extraction_fast_scan_part_markers_v2_fast *__pyx_optional_args)\000PyObject *(PyObject *, PyObject *, PyObject *, int, int, PyObject *, int, PyObject *, PyObject *, PyObject *, int, int __pyx_skip_dispatch)\000scan_part_markers_v2_fast\000scan_item_boundaries_fast\200\001\360F\001\000\005\036\230Q\330\004\035\230U\240!\2405\250\001\330\004\"\240!\330\004\037\230q\330\004\033\2301\360*\000\005\017\210c\220\021\220!\330\004\010\210\005\210U\220!\2201\330\010\017\210u\220A\220Q\330\010\034\230B\230c\240\021\330\010\013\2104\210q\330\014\027\220q\340\010\013\320\013\"\240&\250\001\250\021\330\014\r\340\010\030\320\030+\2501\250A\330\010\030\320\030+\2501\250A\330\010\013\2104\210~\230T\240\024\240Q\330\014\r\340\010\035\230^\2505\3200A\300\027\310\001\310\026\310w\320VW""\340\010\t\330\014&\240f\250A\250Q\330\020%\240T\250\036\260t\2701\330\021\022\340\010\013\2101\330\014\023\220>\240\026\240q\250\007\250v\260Q\330\014\017\210u\220C\220q\330\020\035\320\0353\2607\270!\330\024\025\330\024\"\240&\250\001\250\021\340\020\023\220;\230d\240*\250F\260#\260S\270\016\300f\310A\310Q\330\024\035\320\035.\320.C\3001\330\030\031\330\030\031\330\030\037\230q\330\030!\240\021\340\024\027\220x\230w\240e\2504\250x\260s\270!\330\030!\240\024\240S\250\n\260&\270\001\330\030\033\2304\320\037@\300\001\300\021\330\034%\240T\250\021\250*\260D\270\005\270Z\300t\3103\310b\320PQ\330\034\037\230t\2402\240W\250A\320-O\310q\330 #\2404\240r\250\026\250q\330$%\330$%\340$4\3204F\300g\310Q\310f\320T[\320[\\\330$6\260a\330$'\240~\260U\270\"\270B\270d\300#\300^\320SV\320VW\330(:\270#\270Q\330,=\270X\300Q\300a\340$4\3204P\320PQ\320QX\320XY\330$%\330(8\270\003\2701\330(,\250C\250q\260\006\260c\270\021\330(-\250R\250r\260\024\260S\270\016\300c\310\021\340(8\270\001\330$%\330()\330(,\320,<\270C\270q\330(,\250C\250q\260\006\260c\270\021\340(8\270\001\330$4\260A\330$'\320'9\270\023\320<L\310A\310Q\330(8\3208J\310!\330,-\330,-\330,6\260a\330,=\270Q\340$6\260a\330$'\240t\2501\330(+\320+<\320<P\320PQ\320QR\330,<\270A\330-=\270Q\270c\300\024\300T\310\021\330,/\250q\3300C\3004\300s\310!\3106\320QS\320ST\3400@\300\001\3300B\300!\330$4\3204L\310A\310Q\330$2\260'\270\024\320=X\320XY\330(1\260\026\260q\340$1\260\021\330$%\330()\330(,\250D\260\001\330(,\320,L\310A\330,0\260\001\260\032\2704\270q\360\006\000)9\270\001\270\034\300Q\330$'\240q\330(8\270\001\270\034\300Q\330$'\240}\260A\260Q\330(8\270\001\270\034\300Q\330$9\270\021\330$%\330()\330(,\250A\330(,\250A\330(,\250J\260f\270A\330(*\320*;\2701\340(=\270Q\330$0\260\t\270\021\270#\270R\270z\310\026\310q\330$%\330(1\260\021\260!\330(*\250*\260D\270\001\330(*\250!\340$.\250g\260Q\340,-\330,-\330,-\330,-\330,-\330,-\330,>\270d\300$\300a\330,-\360\006\000%(\240t\2501\330(7\260q\330$%\340\010\024\220A\330\010\024\220A\330\010\013""\2101\330\014\017\210q\330\020\034\320\034/\250y\270\001\270\021\330\020\034\320\0349\270\021\270+\300V\3101\340\020\024\320\024*\250&\260\001\260\021\330\020\023\2202\220W\230A\330\024\027\220t\320\0332\260!\2606\270\021\340\030\031\330\024\033\2301\230F\240!\2407\250&\260\001\330\024\027\220u\230C\230q\330\030$\240A\340\010\024\220A\330\010\024\220A\330\010\013\2101\330\014\030\320\030.\250i\260q\270\001\330\014\r\330\020\034\230D\240\001\240\021\330\023\024\330\020\034\230A\340\010\013\210:\220S\230\005\230T\240\032\2503\250a\330\014\r\330\010\024\220A\330\010\030\230\001\330\010\030\320\030*\250'\260\021\260&\270\007\270q\330\010\032\230!\330\010\013\210>\230\025\230b\240\002\240$\240c\250\036\260s\270!\330\014\036\230c\240\021\320\"3\2608\2701\270A\330\010\030\320\0304\260A\260W\270A\330\010\t\330\014\034\230C\230q\330\014\020\220\003\2201\220F\230#\230Q\330\014\021\220\022\2202\220T\230\023\230N\250#\250Q\340\014\034\230A\330\010\013\210>\230\024\320\035-\250S\260\002\260$\260c\270\021\270&\300\003\3001\330\014\034\230A\330\010\030\230\001\330\010\013\320\013\035\230S\320 0\260\001\260\021\330\014\034\320\034.\250a\330\020\021\330\020\021\330\020\032\230!\330\020!\240\021\340\010\032\230!\330\010\013\2104\210q\330\014\017\320\017 \320 4\260A\260Q\330\020 \240\001\330\021!\240\021\240#\240T\250\024\250Q\330\020\023\2205\320\030+\2504\250s\260!\2606\270\022\2701\330\024$\240A\330\024&\240a\330\010\030\320\0300\260\001\260\021\340\010\016\210j\230\007\230u\240C\240z\260\027\270\001\330\014\r\330\020\032\230'\240\021\330\020\025\220Z\230s\240%\240s\250)\2606\270\023\270C\270y\310\006\310a\340\020\024\220A\330\020\027\220q\230\006\230a\230w\240f\250A\330\020\034\230A\330\020 \240\001\240\024\240Q\330\020\023\2201\330\024\027\220t\2301\330\030#\2401\330\025\031\230\021\330\024#\2401\330\020\023\2201\330\024 \320 =\270Q\330\030#\2406\250\021\360\006\000\025!\240\001\330\020\021\340\014\020\220\001\330\014\017\210z\230\027\240\001\330\020\021\330\024 \240\004\240A""\240Q\330\027\030\330\024 \240\001\330\014\025\320\025&\320&;\2701\330\020\021\330\020\021\330\020\027\220q\330\020\031\230\021\340\014\017\210x\220s\230!\330\020\021\330\014\017\210x\220s\230!\330\020\021\340\014\030\230\t\240\021\240#\240R\240q\250\006\250a\330\014\025\220T\230\023\230A\230V\2401\330\014\r\330\020\026\220f\230C\230s\240!\330\020\023\320\023)\250\021\250!\330\020\023\320\023,\250A\250Q\340\014\032\320\0320\260\001\260\021\330\014\r\330\020\036\230g\240U\250%\250q\260\006\260c\270\022\270?\310#\310Q\340\014\017\210q\330\020!\240\021\330\014\017\320\0170\260\001\260\021\330\020\021\340\014\025\220^\2403\240a\330\014\026\220a\330\014\017\210t\2207\230$\230a\330\020\024\220L\240\n\250\"\250A\330\020\026\220b\230\003\2302\230T\240\024\240Q\240b\250\010\260\001\330\024\031\230\021\330\020\034\230D\240\001\240\026\240r\250\023\250G\2601\330\020\023\220:\230S\240\001\330\024\027\220t\320\033<\270A\270Q\330\030!\240\021\330\030\"\240!\340\014\017\210t\2201\330\020\021\340\014\017\320\0170\260\001\260\026\260q\330\020\021\340\014\025\220T\230\021\230!\2304\230u\240A\240T\250\023\250B\250a\330\014\017\210r\220\027\230\001\320\031;\2701\330\020\021\330\014\017\210r\220\026\220q\320\0306\260a\330\020\030\230\006\230f\240B\240g\250Q\250a\330\020\030\230\005\230W\240A\240Q\330\020\023\2205\320\030*\250&\260\001\260\027\270\004\270K\300s\310%\310v\320UV\330\024\025\340\014\032\230'\240\024\320%@\300\001\300\031\310&\320PQ\330\014\031\320\031/\250~\270S\320@U\320UV\330\014\017\210q\330\020\035\320\0351\3201B\300!\330\021\030\230\005\230^\2503\250a\330\020\023\2204\220|\2404\320'G\300q\310\004\310A\310Q\310d\320RS\330\024$\240A\240\\\260\021\330\014\017\210q\330\020 \240\001\240\034\250Q\330\014\017\210}\230A\230Q\330\020 \240\001\240\034\250Q\340\014\030\230\014\320$;\2701\330\014\030\230\n\240#\240Q\330\014\017\210\177\230d\240!\330\020\034\230A\330\020\023\220;\230c\320!3\2603\260a\330\024#\2401\340\014\030\230\t\240\021\240#\240R\240q\250\006\250a\330\014 \240""\t\250\021\250#\250R\250q\260\004\260C\260r\270\021\330\014!\240\021\330\014\r\330\020\021\330\020\024\220A\330\020\024\220A\330\020\024\220A\220V\2303\230b\320 1\260\021\340\020%\240Q\330\014\026\220g\230Q\340\024\025\330\024\025\330\024\025\330\024\025\330\024\025\330\024\025\330\024&\240d\250$\250a\330\024\025\360\010\000\005\014\2101\200\001\360\014\000\021\022\360\030\000\005\033\230!\360\006\000\005\036\230U\240!\2405\250\001\330\004\"\240!\330\004\034\230A\330\004\035\230Q\340\004\016\210c\220\021\220!\330\004\010\210\005\210U\220!\2201\330\010\017\210u\220A\220Q\330\010\013\2104\210q\330\014\r\330\010\013\2102\210S\220\001\330\014\r\330\010\030\320\030+\2501\250A\330\010\013\2104\210q\330\014\r\340\010\013\2101\330\014\020\220\t\320\031,\250I\260Q\260a\330\020\027\220u\230F\240!\2407\250&\260\001\330\020\023\2205\230\007\230q\330\024\025\330\020\031\230\024\230S\240\005\240V\2501\330\020$\240A\330\020\023\2206\230\026\230s\240$\240d\320*@\300\001\300\021\330\024\027\220w\230d\240$\320&G\300q\310\001\330\030\033\2302\230W\240A\320%J\310!\330\034%\240T\250\021\250%\250t\2605\270\006\270a\330\034\037\230u\240C\240t\2504\250|\2703\270a\330 4\260A\330!&\240c\250\025\250d\260(\270#\270Q\330 4\260A\330\024\027\220t\2301\330\030\031\340\020\"\320\"9\270\021\270&\300\001\330\020\023\2201\330\024&\240a\330\020\023\2204\320\027'\240t\2505\260\006\260c\270\023\270A\330\024\027\320\027(\250\007\250q\260\006\260d\270$\320>Z\320Z[\330\030\037\230q\340\030*\250!\330\020\023\2204\220q\330\024\025\340\020\036\230l\250%\250v\260Q\330\020\034\230I\240Q\240c\250\022\2501\330\020\027\220w\230b\240\013\2506\260\023\260A\340\014\024\320\024*\250&\260\001\260\021\330\014\017\210v\220S\230\001\330\020\021\330\014\023\2205\230\006\230a\230w\240f\250A\330\014\017\210u\220G\2301\330\020\021\330\014\025\220T\230\023\230E\240\026\240q\330\014 \240\001\330\014\017\210v\220V\2303\230d\240$\320&<\270A\270Q\330\020\023\2207\230$\230d\320\"C\3001\300A\330\024\027\220r\230\027\240\001\320!F""\300a\330\030!\240\024\240Q\240e\2504\250u\260F\270!\330\030\033\2305\240\003\2404\240t\250<\260s\270!\330\0340\260\001\330\035\"\240#\240U\250$\250h\260c\270\021\330\0340\260\001\330\020\023\2204\220q\330\024\025\340\014\036\320\0365\260Q\260f\270A\330\014\017\210q\330\020\"\240!\330\014\017\210t\320\023#\2404\320':\270$\270e\3006\310\023\310C\310q\330\020\023\320\023$\240G\2501\250F\260$\260d\320:V\320VW\330\024\033\2301\340\024&\240a\330\014\017\210t\2201\330\020\021\340\014\032\230,\240e\2506\260\021\330\014\030\230\t\240\021\240#\240R\240q\330\014\023\2207\230\"\230K\240v\250S\260\001\340\004\007\200t\2107\220#\220T\230\021\330\010\017\210q\340\004\017\210q\330\004\010\210\n\220!\330\010\017\210v\220Q\220a\330\010\013\2105\220\003\2201\330\014\017\210t\220<\230t\2404\240q\330\020\030\230\007\230q\240\001\330\020\036\230a\330\014\r\330\010\013\2105\220\003\2201\330\014\017\210|\2304\230t\2401\330\020\030\230\007\230q\240\001\330\020\037\230q\330\014\r\330\004\013\2101O";
     PyObject *data = NULL;
     CYTHON_UNUSED_VAR(__Pyx_DecompressString);
     #endif
     PyObject **stringtab = __pyx_mstate->__pyx_string_tab;
     Py_ssize_t pos = 0;
-    for (int i = 0; i < 208; i++) {
+    for (int i = 0; i < 204; i++) {
       Py_ssize_t bytes_length = index[i].length;
       PyObject *string = PyUnicode_DecodeUTF8(bytes + pos, bytes_length, NULL);
       if (likely(string) && i >= 62) PyUnicode_InternInPlace(&string);
@@ -28603,7 +28568,7 @@ const char* const bytes = ": 16All dimensions preceding dimension %d must be ind
       stringtab[i] = string;
       pos += bytes_length;
     }
-    for (int i = 208; i < 212; i++) {
+    for (int i = 204; i < 208; i++) {
       Py_ssize_t bytes_length = index[i].length;
       PyObject *string = PyBytes_FromStringAndSize(bytes + pos, bytes_length);
       stringtab[i] = string;
@@ -28614,14 +28579,14 @@ const char* const bytes = ": 16All dimensions preceding dimension %d must be ind
       }
     }
     Py_XDECREF(data);
-    for (Py_ssize_t i = 0; i < 212; i++) {
+    for (Py_ssize_t i = 0; i < 208; i++) {
       if (unlikely(PyObject_Hash(stringtab[i]) == -1)) {
         __PYX_ERR(0, 1, __pyx_L1_error)
       }
     }
     #if CYTHON_IMMORTAL_CONSTANTS
     {
-      PyObject **table = stringtab + 208;
+      PyObject **table = stringtab + 204;
       for (Py_ssize_t i=0; i<4; ++i) {
         #if CYTHON_COMPILING_IN_CPYTHON_FREETHREADING
         #if PY_VERSION_HEX < 0x030E0000
@@ -28695,12 +28660,12 @@ static int __Pyx_CreateCodeObjects(__pyx_mstatetype *__pyx_mstate) {
   PyObject* tuple_dedup_map = PyDict_New();
   if (unlikely(!tuple_dedup_map)) return -1;
   {
-    const __Pyx_PyCode_New_function_description descr = {6, 0, 0, 6, (unsigned int)(CO_OPTIMIZED|CO_NEWLOCALS), 130};
+    const __Pyx_PyCode_New_function_description descr = {6, 0, 0, 6, (unsigned int)(CO_OPTIMIZED|CO_NEWLOCALS), 132};
     PyObject* const varnames[] = {__pyx_mstate->__pyx_n_u_lines, __pyx_mstate->__pyx_n_u_line_starts, __pyx_mstate->__pyx_n_u_allowed_parts, __pyx_mstate->__pyx_n_u_scan_sparse_layout, __pyx_mstate->__pyx_n_u_toc_mask, __pyx_mstate->__pyx_n_u_is_10q};
     __pyx_mstate_global->__pyx_codeobj_tab[0] = __Pyx_PyCode_New(descr, varnames, __pyx_mstate->__pyx_kp_u_src_thesis_pkg_core_sec_extracti, __pyx_mstate->__pyx_n_u_scan_part_markers_v2_fast, __pyx_mstate->__pyx_kp_b_iso88591_U_5_A_Q_c_U_1_uAQ_4q_2S_1A_4q_1, tuple_dedup_map); if (unlikely(!__pyx_mstate_global->__pyx_codeobj_tab[0])) goto bad;
   }
   {
-    const __Pyx_PyCode_New_function_description descr = {11, 0, 0, 11, (unsigned int)(CO_OPTIMIZED|CO_NEWLOCALS), 253};
+    const __Pyx_PyCode_New_function_description descr = {11, 0, 0, 11, (unsigned int)(CO_OPTIMIZED|CO_NEWLOCALS), 255};
     PyObject* const varnames[] = {__pyx_mstate->__pyx_n_u_lines, __pyx_mstate->__pyx_n_u_line_starts, __pyx_mstate->__pyx_n_u_body, __pyx_mstate->__pyx_n_u_is_10k, __pyx_mstate->__pyx_n_u_max_item_number, __pyx_mstate->__pyx_n_u_allowed_parts, __pyx_mstate->__pyx_n_u_scan_sparse_layout, __pyx_mstate->__pyx_n_u_toc_mask, __pyx_mstate->__pyx_n_u_toc_window_flags, __pyx_mstate->__pyx_n_u_toc_cache, __pyx_mstate->__pyx_n_u_extraction_regime_v2};
     __pyx_mstate_global->__pyx_codeobj_tab[1] = __Pyx_PyCode_New(descr, varnames, __pyx_mstate->__pyx_kp_u_src_thesis_pkg_core_sec_extracti, __pyx_mstate->__pyx_n_u_scan_item_boundaries_fast, __pyx_mstate->__pyx_kp_b_iso88591_F_Q_U_5_q_1_c_U_1_uAQ_Bc_4q_q_1, tuple_dedup_map); if (unlikely(!__pyx_mstate_global->__pyx_codeobj_tab[1])) goto bad;
   }

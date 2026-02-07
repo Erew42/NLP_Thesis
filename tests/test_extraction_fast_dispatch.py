@@ -16,6 +16,11 @@ def _line_starts(lines: list[str]) -> list[int]:
     return starts
 
 
+def _require_fast_extension() -> None:
+    if extraction._extraction_fast is None:
+        pytest.skip("Fast extraction extension is unavailable in this environment.")
+
+
 def test_scan_part_markers_v2_fallback_matches_python_impl(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -215,3 +220,71 @@ def test_scan_item_boundaries_warns_once_and_falls_back_on_fast_failure(
     assert metrics["scan_item_boundaries_fast_failures"] == 2
     assert metrics["scan_item_boundaries_fallbacks"] == 2
     assert metrics["scan_item_boundaries_fast_success"] == 0
+
+
+def test_scan_part_markers_v2_fast_parity_mixed_case_part_token() -> None:
+    _require_fast_extension()
+    extraction.reset_extraction_fastpath_metrics()
+
+    lines = ["pArT I"]
+    starts = _line_starts(lines)
+    kwargs = {
+        "allowed_parts": {"I", "II"},
+        "scan_sparse_layout": False,
+        "toc_mask": set(),
+        "is_10q": True,
+    }
+    expected = extraction._scan_part_markers_v2_py(lines, starts, **kwargs)
+    actual = extraction._scan_part_markers_v2(lines, starts, **kwargs)
+    assert actual == expected
+
+    metrics = extraction.get_extraction_fastpath_metrics()
+    assert metrics["scan_part_markers_fast_failures"] == 0
+    assert metrics["scan_part_markers_fast_success"] == 1
+
+
+def test_scan_item_boundaries_fast_parity_mixed_case_item_token() -> None:
+    _require_fast_extension()
+    extraction.reset_extraction_fastpath_metrics()
+
+    lines = ["iTeM 1. Business"]
+    starts = _line_starts(lines)
+    body = "\n".join(lines)
+    kwargs = {
+        "is_10k": True,
+        "max_item_number": 20,
+        "allowed_parts": {"I", "II", "III", "IV"},
+        "scan_sparse_layout": False,
+        "toc_mask": set(),
+        "toc_window_flags": [False],
+        "toc_cache": {},
+        "extraction_regime": "legacy",
+    }
+    expected = extraction._scan_item_boundaries_py(lines, starts, body, **kwargs)
+    actual = extraction._scan_item_boundaries(lines, starts, body, **kwargs)
+    assert actual == expected
+
+    metrics = extraction.get_extraction_fastpath_metrics()
+    assert metrics["scan_item_boundaries_fast_failures"] == 0
+    assert metrics["scan_item_boundaries_fast_success"] == 1
+
+
+def test_scan_part_markers_v2_fast_parity_non_sparse_rescue_behavior() -> None:
+    _require_fast_extension()
+    extraction.reset_extraction_fastpath_metrics()
+
+    lines = ["PART I, ITEM 1. FINANCIAL STATEMENTS"]
+    starts = _line_starts(lines)
+    kwargs = {
+        "allowed_parts": {"I", "II"},
+        "scan_sparse_layout": False,
+        "toc_mask": set(),
+        "is_10q": True,
+    }
+    expected = extraction._scan_part_markers_v2_py(lines, starts, **kwargs)
+    actual = extraction._scan_part_markers_v2(lines, starts, **kwargs)
+    assert actual == expected
+
+    metrics = extraction.get_extraction_fastpath_metrics()
+    assert metrics["scan_part_markers_fast_failures"] == 0
+    assert metrics["scan_part_markers_fast_success"] == 1
