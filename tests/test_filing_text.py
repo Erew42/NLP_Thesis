@@ -5,6 +5,7 @@ from pathlib import Path
 import polars as pl
 import pytest
 
+import thesis_pkg.pipelines.sec_pipeline as sec_pipeline
 from thesis_pkg.filing_text import (
     parse_filename_minimal,
     extract_filing_items,
@@ -983,6 +984,66 @@ def test_process_year_parquet_extract_items_no_item_diagnostics(tmp_path: Path):
     assert row_total["share_no_item"] == pytest.approx(2 / 3)
     assert row_total["avg_text_len_with_items"] == pytest.approx(len(text_with_items))
     assert row_total["avg_text_len_no_items"] == pytest.approx(len(text_no_items) / 2)
+
+
+def test_process_year_parquet_extract_items_fast_alias_uses_v2(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    df = pl.DataFrame(
+        [
+            {
+                "doc_id": "doc1",
+                "cik": 1,
+                "cik_10": "0000000001",
+                "accession_number": "0001-01-000001",
+                "accession_nodash": "000101000001",
+                "file_date_filename": dt.date(2024, 1, 1),
+                "filing_date": dt.date(2024, 1, 1),
+                "period_end": dt.date(2023, 12, 31),
+                "document_type_filename": "10-K",
+                "filename": "f1.txt",
+                "full_text": "ITEM 1. BUSINESS\\nAlpha",
+            }
+        ]
+    )
+    year_path = tmp_path / "2024.parquet"
+    df.write_parquet(year_path)
+
+    seen_regimes: list[str | None] = []
+
+    def _fake_extract(*_args, **kwargs):
+        seen_regimes.append(kwargs.get("extraction_regime"))
+        return [
+            {
+                "item_part": "I",
+                "item_id": "1",
+                "item": "I:1",
+                "canonical_item": "I:1_BUSINESS",
+                "exists_by_regime": True,
+                "item_status": "active",
+                "full_text": "Alpha",
+            }
+        ]
+
+    monkeypatch.setattr(sec_pipeline, "extract_filing_items", _fake_extract)
+
+    out_dir = tmp_path / "out"
+    out_path = process_year_parquet_extract_items(
+        year_parquet_path=year_path,
+        out_dir=out_dir,
+        parquet_batch_rows=1,
+        out_batch_max_rows=10,
+        out_batch_max_text_bytes=10**6,
+        tmp_dir=tmp_path,
+        local_work_dir=tmp_path / "work",
+        extraction_regime="fast",
+    )
+
+    assert seen_regimes == ["v2"]
+    out_df = pl.read_parquet(out_path)
+    assert out_df.height == 1
+    assert out_df["item"].to_list() == ["I:1"]
 
 
 def test_compute_no_item_diagnostics_anti_join(tmp_path: Path):

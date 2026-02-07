@@ -105,6 +105,17 @@ _NO_ITEM_STATS_COLUMNS = (
 )
 
 
+def _normalize_extraction_regime(
+    value: Literal["legacy", "v2", "fast"] | str,
+) -> Literal["legacy", "v2"]:
+    normalized = str(value or "legacy").strip().lower()
+    if normalized == "fast":
+        return "v2"
+    if normalized == "v2":
+        return "v2"
+    return "legacy"
+
+
 def _flush_non_item_batch(records: list[dict], out_path: Path, compression: str) -> None:
     if not records:
         return
@@ -853,6 +864,7 @@ def process_year_parquet_extract_items(
     non_item_diagnostic: bool = False,
     include_full_text: bool = False,
     regime: bool = True,
+    extraction_regime: Literal["legacy", "v2", "fast"] = "legacy",
 ) -> Path:
     """
     Expand a merged yearly filing parquet (one row per filing with `full_text`)
@@ -872,6 +884,11 @@ def process_year_parquet_extract_items(
     `{out_dir}/{year}_no_item_filings.parquet` and a stats CSV to
     `{out_dir}/{year}_no_item_stats.csv`. Set include_full_text=True to keep full_text
     in the no-item parquet output.
+
+    extraction_regime controls item extraction behavior:
+      - "legacy": baseline extractor behavior
+      - "v2": v2 extractor behavior
+      - "fast": alias for "v2" (enables native fast path when available)
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     tmp_dir = tmp_dir or Path(tempfile.gettempdir())
@@ -937,6 +954,7 @@ def process_year_parquet_extract_items(
     non_item_text_bytes = 0
     non_item_batch_idx = 1
     non_item_stats: dict[str, dict[str, int]] | None = {} if non_item_diagnostic else None
+    extraction_regime_norm = _normalize_extraction_regime(extraction_regime)
 
     pf: pq.ParquetFile | None = None
     input_schema: pa.Schema | None = None
@@ -1002,6 +1020,7 @@ def process_year_parquet_extract_items(
                         filing_date=row.get("filing_date"),
                         period_end=row.get("period_end"),
                         regime=regime,
+                        extraction_regime=extraction_regime_norm,
                     )
                 except Exception as exc:
                     print(
@@ -1390,10 +1409,13 @@ def process_year_dir_extract_items(
     non_item_diagnostic: bool = False,
     include_full_text: bool = False,
     regime: bool = True,
+    extraction_regime: Literal["legacy", "v2", "fast"] = "legacy",
 ) -> list[Path]:
     """
     Process a directory of per-year merged filing parquets (e.g., 2024.parquet) into
     per-year item parquets in `out_dir`.
+
+    extraction_regime accepts "legacy", "v2", or "fast" (alias of "v2").
     """
     year_dir = Path(year_dir)
     out_dir = Path(out_dir)
@@ -1420,6 +1442,7 @@ def process_year_dir_extract_items(
                 non_item_diagnostic=non_item_diagnostic,
                 include_full_text=include_full_text,
                 regime=regime,
+                extraction_regime=extraction_regime,
             )
         )
 
