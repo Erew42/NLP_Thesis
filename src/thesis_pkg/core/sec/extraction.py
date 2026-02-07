@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import warnings
 from bisect import bisect_right
 from dataclasses import dataclass, replace
 from datetime import date, datetime
@@ -79,6 +80,57 @@ class _PartMarker:
     high_confidence: bool
 
 
+_FASTPATH_IMPORT_ERROR: str | None = None
+
+try:
+    from . import extraction_fast as _extraction_fast
+except Exception as exc:  # pragma: no cover - runtime fallback when extension is unavailable
+    _extraction_fast = None
+    _FASTPATH_IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
+
+
+_FASTPATH_METRICS: dict[str, int] = {
+    "scan_part_markers_fast_success": 0,
+    "scan_part_markers_fast_failures": 0,
+    "scan_part_markers_fallbacks": 0,
+    "scan_item_boundaries_fast_success": 0,
+    "scan_item_boundaries_fast_failures": 0,
+    "scan_item_boundaries_fallbacks": 0,
+}
+_FASTPATH_WARNING_EMITTED: dict[str, bool] = {
+    "scan_part_markers": False,
+    "scan_item_boundaries": False,
+}
+
+
+def _warn_fastpath_failure_once(kind: str, exc: Exception) -> None:
+    if _FASTPATH_WARNING_EMITTED[kind]:
+        return
+    _FASTPATH_WARNING_EMITTED[kind] = True
+    warnings.warn(
+        (
+            f"SEC extraction fast path failed in {kind}; "
+            f"falling back to Python implementation. Cause: {type(exc).__name__}: {exc}"
+        ),
+        RuntimeWarning,
+        stacklevel=2,
+    )
+
+
+def get_extraction_fastpath_metrics() -> dict[str, int | str | bool | None]:
+    metrics: dict[str, int | str | bool | None] = dict(_FASTPATH_METRICS)
+    metrics["fastpath_extension_available"] = _extraction_fast is not None
+    metrics["fastpath_import_error"] = _FASTPATH_IMPORT_ERROR
+    return metrics
+
+
+def reset_extraction_fastpath_metrics() -> None:
+    for key in _FASTPATH_METRICS:
+        _FASTPATH_METRICS[key] = 0
+    for key in _FASTPATH_WARNING_EMITTED:
+        _FASTPATH_WARNING_EMITTED[key] = False
+
+
 def _strip_leading_header_block(full_text: str) -> str:
     """
     Remove the synthetic <Header>...</Header> block when present.
@@ -153,7 +205,7 @@ def _extract_fallback_items_10k(
     return boundaries
 
 
-def _scan_part_markers_v2(
+def _scan_part_markers_v2_py(
     lines: list[str],
     line_starts: list[int],
     *,
@@ -228,6 +280,431 @@ def _scan_part_markers_v2(
                 seen_part_ii = True
             continue
     return filtered
+
+
+def _scan_part_markers_v2(
+    lines: list[str],
+    line_starts: list[int],
+    *,
+    allowed_parts: set[str],
+    scan_sparse_layout: bool,
+    toc_mask: set[int],
+    is_10q: bool = False,
+) -> list[_PartMarker]:
+    if _extraction_fast is not None:
+        try:
+            markers_raw = _extraction_fast.scan_part_markers_v2_fast(
+                lines,
+                line_starts,
+                allowed_parts,
+                scan_sparse_layout,
+                toc_mask,
+                is_10q,
+            )
+            markers = [
+                _PartMarker(
+                    start=int(start),
+                    part=str(part),
+                    line_index=int(line_index),
+                    high_confidence=bool(high_confidence),
+                )
+                for start, part, line_index, high_confidence in markers_raw
+            ]
+            _FASTPATH_METRICS["scan_part_markers_fast_success"] += 1
+            return markers
+        except Exception as exc:
+            # Keep extraction behavior stable when native extension import/runtime fails.
+            _FASTPATH_METRICS["scan_part_markers_fast_failures"] += 1
+            _FASTPATH_METRICS["scan_part_markers_fallbacks"] += 1
+            _warn_fastpath_failure_once("scan_part_markers", exc)
+    else:
+        _FASTPATH_METRICS["scan_part_markers_fallbacks"] += 1
+    return _scan_part_markers_v2_py(
+        lines,
+        line_starts,
+        allowed_parts=allowed_parts,
+        scan_sparse_layout=scan_sparse_layout,
+        toc_mask=toc_mask,
+        is_10q=is_10q,
+    )
+
+
+def _scan_item_boundaries_py(
+    lines: list[str],
+    line_starts: list[int],
+    body: str,
+    *,
+    is_10k: bool,
+    max_item_number: int,
+    allowed_parts: set[str],
+    scan_sparse_layout: bool,
+    toc_mask: set[int],
+    toc_window_flags: list[bool],
+    toc_cache: dict[tuple[int, bool], bool],
+    extraction_regime: Literal["legacy", "v2"],
+) -> list[_ItemBoundary]:
+    boundaries: list[_ItemBoundary] = []
+    current_part: str | None = None
+    toc_part: str | None = None
+    for i, line in enumerate(lines):
+        line_in_toc_range = i in toc_mask
+        if not line_in_toc_range:
+            toc_part = None
+
+        # Skip obvious page-header TOC repeats inside items (keep content otherwise).
+        if TOC_HEADER_LINE_PATTERN.match(line):
+            continue
+
+        events: list[tuple[int, str, str | None, re.Match[str] | None]] = []
+        line_has_item_word = ITEM_WORD_PATTERN.search(line) is not None
+
+        combined_match = (
+            COMBINED_PART_ITEM_PATTERN.match(line) if extraction_regime == "v2" else None
+        )
+        if combined_match:
+            part = combined_match.group("part").upper()
+            if part in allowed_parts:
+                item_match = ITEM_CANDIDATE_PATTERN.search(
+                    line,
+                    combined_match.start("item"),
+                )
+                if item_match and item_match.start() == combined_match.start("item"):
+                    item_id, content_adjust = _normalize_item_match(
+                        line,
+                        item_match,
+                        is_10k=is_10k,
+                        max_item=max_item_number,
+                    )
+                    if item_id is not None and item_id != "16":
+                        prefix = line[: item_match.start()]
+                        if not _prefix_looks_like_cross_ref(prefix):
+                            suffix = line[item_match.end() : item_match.end() + 64]
+                            if not re.search(r"(?i)^\s*[\(\[]?\s*continued\b", suffix):
+                                if not re.match(
+                                    r"(?i)^\s*[\(\[]\s*[a-z0-9]",
+                                    suffix,
+                                ):
+                                    is_toc_marker = TOC_MARKER_PATTERN.search(line) is not None
+                                    item_word_count = 0
+                                    if i < 800 or is_toc_marker or line_in_toc_range:
+                                        item_word_count = len(
+                                            ITEM_WORD_PATTERN.findall(line)
+                                        )
+                                    line_toc_like = _looks_like_toc_heading_line(lines, i)
+                                    if (
+                                        item_word_count >= 3
+                                        and len(line) <= 5_000
+                                        and (i < 800 or is_toc_marker or line_in_toc_range)
+                                    ):
+                                        line_toc_like = True
+                                    if (
+                                        is_toc_marker
+                                        and item_word_count >= 1
+                                        and len(line) <= 8_000
+                                    ):
+                                        line_toc_like = True
+                                    content_after = False
+                                    if line_in_toc_range or toc_window_flags[i]:
+                                        content_after = _has_content_after(
+                                            lines,
+                                            i,
+                                            toc_cache=toc_cache,
+                                            toc_window_flags=toc_window_flags,
+                                        )
+                                    toc_window_like = False
+                                    if not line_toc_like:
+                                        if embedded_headings._toc_candidate_line(line):
+                                            line_toc_like = True
+                                        elif toc_window_flags[i] and not content_after:
+                                            if not (
+                                                scan_sparse_layout and len(line) > 2_000
+                                            ):
+                                                line_toc_like = True
+                                                toc_window_like = True
+                                    compound_line = _line_has_compound_items(line)
+                                    title_match = is_10k and _heading_title_matches_item(
+                                        item_id, line, item_match
+                                    )
+                                    confidence = HEADING_CONF_HIGH
+                                    if is_10k and not title_match and _heading_suffix_looks_like_prose(
+                                        line[item_match.end() :]
+                                    ):
+                                        confidence = min(confidence, HEADING_CONF_MED)
+                                    if compound_line:
+                                        confidence = min(confidence, HEADING_CONF_LOW)
+                                    if _pageish_line(line):
+                                        confidence = min(confidence, HEADING_CONF_LOW)
+                                    candidate_toc_like = line_toc_like
+                                    if (
+                                        candidate_toc_like
+                                        and toc_window_like
+                                        and scan_sparse_layout
+                                        and item_match.start()
+                                        > embedded_headings.EMBEDDED_TOC_START_EARLY_MAX_CHAR
+                                    ):
+                                        candidate_toc_like = False
+                                    boundaries.append(
+                                        _ItemBoundary(
+                                            start=line_starts[i] + item_match.start(),
+                                            content_start=(
+                                                line_starts[i]
+                                                + item_match.end()
+                                                + content_adjust
+                                            ),
+                                            item_part=part,
+                                            item_id=item_id,
+                                            line_index=i,
+                                            confidence=confidence,
+                                            in_toc_range=(
+                                                line_in_toc_range and not content_after
+                                            ),
+                                            toc_like_line=candidate_toc_like,
+                                        )
+                                    )
+                                    if not line_in_toc_range:
+                                        current_part = part
+                                    continue
+
+        if scan_sparse_layout:
+            for m in PART_MARKER_PATTERN.finditer(line):
+                if not _part_marker_is_heading(line, m):
+                    continue
+                part = m.group("part").upper()
+                if part in allowed_parts:
+                    events.append((m.start(), "part", part, m))
+        else:
+            m = PART_LINESTART_PATTERN.match(line)
+            if m is not None:
+                if not _part_marker_is_heading(line, m):
+                    continue
+                part = m.group("part").upper()
+                if part in allowed_parts:
+                    events.append((m.start(), "part", part, m))
+
+        for m in ITEM_CANDIDATE_PATTERN.finditer(line):
+            events.append((m.start(), "item", None, m))
+
+        if not events:
+            continue
+
+        events.sort(key=lambda t: t[0])
+        line_part: str | None = None
+        line_part_end: int | None = None
+        is_toc_marker = TOC_MARKER_PATTERN.search(line) is not None
+        item_word_count = 0
+        if i < 800 or is_toc_marker or line_in_toc_range:
+            item_word_count = len(ITEM_WORD_PATTERN.findall(line))
+        line_toc_like = _looks_like_toc_heading_line(lines, i)
+        if item_word_count >= 3 and len(line) <= 5_000 and (i < 800 or is_toc_marker or line_in_toc_range):
+            line_toc_like = True
+        if is_toc_marker and item_word_count >= 1 and len(line) <= 8_000:
+            line_toc_like = True
+        content_after = False
+        if line_in_toc_range or toc_window_flags[i]:
+            content_after = _has_content_after(
+                lines, i, toc_cache=toc_cache, toc_window_flags=toc_window_flags
+            )
+        toc_window_like = False
+        if not line_toc_like:
+            if embedded_headings._toc_candidate_line(line):
+                line_toc_like = True
+            elif toc_window_flags[i] and not content_after:
+                if not (scan_sparse_layout and len(line) > 2_000):
+                    line_toc_like = True
+                    toc_window_like = True
+        compound_line = _line_has_compound_items(line)
+        for _, kind, part, m in events:
+            if kind == "part":
+                assert m is not None
+                line_part = part
+                line_part_end = m.end()
+                if line_in_toc_range:
+                    if not line_has_item_word:
+                        toc_part = part
+                elif not line_has_item_word:
+                    current_part = part
+                continue
+
+            assert m is not None
+            item_id, content_adjust = _normalize_item_match(
+                line,
+                m,
+                is_10k=is_10k,
+                max_item=max_item_number,
+            )
+            if item_id is None:
+                continue
+            if item_id == "16":
+                continue
+
+            abs_start = line_starts[i] + m.start()
+
+            # Heuristics to avoid cross-references:
+            prefix = line[: m.start()]
+            is_line_start = (
+                prefix.strip() == "" or _prefix_is_bullet(prefix) or _prefix_is_part_only(prefix)
+            )
+            prefix_part = _prefix_part_tail(prefix)
+            part_near_item = (
+                line_part_end is not None and (m.start() - line_part_end) <= 60
+            )
+            if prefix_part:
+                part_near_item = True
+            if _prefix_looks_like_cross_ref(prefix):
+                continue
+
+            # Only accept headings that look like real section starts (line-start or 'PART .. ITEM ..').
+            # This intentionally rejects mid-sentence cross-references like "Part II, Item 7 ...".
+            accept = is_line_start or part_near_item
+            midline = False
+            if not accept and scan_sparse_layout:
+                # For filings with very few line breaks, headings often follow sentence punctuation.
+                # Keep this strict elsewhere to avoid mid-sentence cross-reference matches.
+                k = abs_start - 1
+                while k >= 0 and body[k].isspace():
+                    k -= 1
+                prev_char = body[k] if k >= 0 else ""
+                if prev_char in ".:;!?":
+                    if not _prefix_looks_like_cross_ref(prefix):
+                        accept = True
+                        midline = True
+
+            if not accept:
+                continue
+
+            if _starts_with_lowercase_title(line, m):
+                continue
+
+            # Ignore "(continued)" headings; they are typically page-header repeats.
+            # Only treat it as a continuation marker when it appears immediately after the heading,
+            # not elsewhere later in the same (potentially very long) line.
+            suffix = line[m.end() : m.end() + 64]
+            if re.search(r"(?i)^\s*[\(\[]?\s*continued\b", suffix):
+                continue
+            if re.match(r"(?i)^\s*[\(\[]\s*[a-z0-9]", suffix):
+                probe = suffix.strip().lstrip(" \t:-.([")
+                probe = probe.rstrip("])")
+                if not (EMPTY_ITEM_PATTERN.match(probe) and "reserved" in probe.lower()):
+                    continue
+
+            title_match = is_10k and _heading_title_matches_item(item_id, line, m)
+            confidence = HEADING_CONF_HIGH if (is_line_start or part_near_item) else HEADING_CONF_MED
+            if midline:
+                confidence = HEADING_CONF_MED if title_match else HEADING_CONF_LOW
+            elif is_10k and (is_line_start or part_near_item):
+                if not title_match and _heading_suffix_looks_like_prose(line[m.end() :]):
+                    confidence = min(confidence, HEADING_CONF_MED)
+            if compound_line:
+                confidence = min(confidence, HEADING_CONF_LOW)
+            if _pageish_line(line):
+                confidence = min(confidence, HEADING_CONF_LOW)
+
+            item_part = toc_part if line_in_toc_range else current_part
+            part_hint = line_part or prefix_part
+            if part_near_item and part_hint:
+                item_part = part_hint
+                if confidence >= HEADING_CONF_HIGH or prefix_part:
+                    current_part = part_hint
+
+            start_abs = line_starts[i] + m.start()
+            content_start_abs = line_starts[i] + m.end() + content_adjust
+            candidate_toc_like = line_toc_like
+            if (
+                candidate_toc_like
+                and toc_window_like
+                and scan_sparse_layout
+                and m.start() > embedded_headings.EMBEDDED_TOC_START_EARLY_MAX_CHAR
+            ):
+                candidate_toc_like = False
+            boundaries.append(
+                _ItemBoundary(
+                    start=start_abs,
+                    content_start=content_start_abs,
+                    item_part=item_part,
+                    item_id=item_id,
+                    line_index=i,
+                    confidence=confidence,
+                    in_toc_range=line_in_toc_range and not content_after,
+                    toc_like_line=candidate_toc_like,
+                )
+            )
+
+    return boundaries
+
+
+def _scan_item_boundaries(
+    lines: list[str],
+    line_starts: list[int],
+    body: str,
+    *,
+    is_10k: bool,
+    max_item_number: int,
+    allowed_parts: set[str],
+    scan_sparse_layout: bool,
+    toc_mask: set[int],
+    toc_window_flags: list[bool],
+    toc_cache: dict[tuple[int, bool], bool],
+    extraction_regime: Literal["legacy", "v2"],
+) -> list[_ItemBoundary]:
+    if _extraction_fast is not None:
+        try:
+            boundaries_raw = _extraction_fast.scan_item_boundaries_fast(
+                lines,
+                line_starts,
+                body,
+                is_10k,
+                max_item_number,
+                allowed_parts,
+                scan_sparse_layout,
+                toc_mask,
+                toc_window_flags,
+                toc_cache,
+                extraction_regime == "v2",
+            )
+            boundaries = [
+                _ItemBoundary(
+                    start=int(start),
+                    content_start=int(content_start),
+                    item_part=item_part,
+                    item_id=item_id,
+                    line_index=int(line_index),
+                    confidence=int(confidence),
+                    in_toc_range=bool(in_toc_range),
+                    toc_like_line=bool(toc_like_line),
+                )
+                for (
+                    start,
+                    content_start,
+                    item_part,
+                    item_id,
+                    line_index,
+                    confidence,
+                    in_toc_range,
+                    toc_like_line,
+                ) in boundaries_raw
+            ]
+            _FASTPATH_METRICS["scan_item_boundaries_fast_success"] += 1
+            return boundaries
+        except Exception as exc:
+            # Keep extraction behavior stable when native extension import/runtime fails.
+            _FASTPATH_METRICS["scan_item_boundaries_fast_failures"] += 1
+            _FASTPATH_METRICS["scan_item_boundaries_fallbacks"] += 1
+            _warn_fastpath_failure_once("scan_item_boundaries", exc)
+    else:
+        _FASTPATH_METRICS["scan_item_boundaries_fallbacks"] += 1
+    return _scan_item_boundaries_py(
+        lines,
+        line_starts,
+        body,
+        is_10k=is_10k,
+        max_item_number=max_item_number,
+        allowed_parts=allowed_parts,
+        scan_sparse_layout=scan_sparse_layout,
+        toc_mask=toc_mask,
+        toc_window_flags=toc_window_flags,
+        toc_cache=toc_cache,
+        extraction_regime=extraction_regime,
+    )
 
 
 def _apply_part_by_position_v2(
@@ -457,8 +934,6 @@ def extract_filing_items(
 
         scan_sparse_layout = True if attempt else sparse_layout
         boundaries = []
-        current_part: str | None = None
-        toc_part: str | None = None
         part_markers: list[_PartMarker] = []
         if extraction_regime == "v2" and is_10q:
             part_markers = _scan_part_markers_v2(
@@ -470,289 +945,19 @@ def extract_filing_items(
                 is_10q=True,
             )
 
-        # Build candidates by scanning lines in order while tracking PART markers within each line.
-        for i, line in enumerate(lines):
-            line_in_toc_range = i in toc_mask
-            if not line_in_toc_range:
-                toc_part = None
-
-            # Skip obvious page-header TOC repeats inside items (keep content otherwise).
-            if TOC_HEADER_LINE_PATTERN.match(line):
-                continue
-
-            events: list[tuple[int, str, str | None, re.Match[str] | None]] = []
-            line_has_item_word = ITEM_WORD_PATTERN.search(line) is not None
-
-            combined_match = (
-                COMBINED_PART_ITEM_PATTERN.match(line) if extraction_regime == "v2" else None
-            )
-            if combined_match:
-                part = combined_match.group("part").upper()
-                if part in allowed_parts:
-                    item_match = ITEM_CANDIDATE_PATTERN.search(
-                        line,
-                        combined_match.start("item"),
-                    )
-                    if item_match and item_match.start() == combined_match.start("item"):
-                        item_id, content_adjust = _normalize_item_match(
-                            line,
-                            item_match,
-                            is_10k=is_10k,
-                            max_item=max_item_number,
-                        )
-                        if item_id is not None and item_id != "16":
-                            prefix = line[: item_match.start()]
-                            if not _prefix_looks_like_cross_ref(prefix):
-                                suffix = line[item_match.end() : item_match.end() + 64]
-                                if not re.search(r"(?i)^\s*[\(\[]?\s*continued\b", suffix):
-                                    if not re.match(
-                                        r"(?i)^\s*[\(\[]\s*[a-z0-9]",
-                                        suffix,
-                                    ):
-                                        is_toc_marker = TOC_MARKER_PATTERN.search(line) is not None
-                                        item_word_count = 0
-                                        if i < 800 or is_toc_marker or line_in_toc_range:
-                                            item_word_count = len(
-                                                ITEM_WORD_PATTERN.findall(line)
-                                            )
-                                        line_toc_like = _looks_like_toc_heading_line(lines, i)
-                                        if (
-                                            item_word_count >= 3
-                                            and len(line) <= 5_000
-                                            and (i < 800 or is_toc_marker or line_in_toc_range)
-                                        ):
-                                            line_toc_like = True
-                                        if (
-                                            is_toc_marker
-                                            and item_word_count >= 1
-                                            and len(line) <= 8_000
-                                        ):
-                                            line_toc_like = True
-                                        content_after = False
-                                        if line_in_toc_range or toc_window_flags[i]:
-                                            content_after = _has_content_after(
-                                                lines,
-                                                i,
-                                                toc_cache=toc_cache,
-                                                toc_window_flags=toc_window_flags,
-                                            )
-                                        toc_window_like = False
-                                        if not line_toc_like:
-                                            if embedded_headings._toc_candidate_line(line):
-                                                line_toc_like = True
-                                            elif toc_window_flags[i] and not content_after:
-                                                if not (
-                                                    scan_sparse_layout and len(line) > 2_000
-                                                ):
-                                                    line_toc_like = True
-                                                    toc_window_like = True
-                                        compound_line = _line_has_compound_items(line)
-                                        title_match = is_10k and _heading_title_matches_item(
-                                            item_id, line, item_match
-                                        )
-                                        confidence = HEADING_CONF_HIGH
-                                        if is_10k and not title_match and _heading_suffix_looks_like_prose(
-                                            line[item_match.end() :]
-                                        ):
-                                            confidence = min(confidence, HEADING_CONF_MED)
-                                        if compound_line:
-                                            confidence = min(confidence, HEADING_CONF_LOW)
-                                        if _pageish_line(line):
-                                            confidence = min(confidence, HEADING_CONF_LOW)
-                                        candidate_toc_like = line_toc_like
-                                        if (
-                                            candidate_toc_like
-                                            and toc_window_like
-                                            and scan_sparse_layout
-                                            and item_match.start()
-                                            > embedded_headings.EMBEDDED_TOC_START_EARLY_MAX_CHAR
-                                        ):
-                                            candidate_toc_like = False
-                                        boundaries.append(
-                                            _ItemBoundary(
-                                                start=line_starts[i] + item_match.start(),
-                                                content_start=(
-                                                    line_starts[i]
-                                                    + item_match.end()
-                                                    + content_adjust
-                                                ),
-                                                item_part=part,
-                                                item_id=item_id,
-                                                line_index=i,
-                                                confidence=confidence,
-                                                in_toc_range=(
-                                                    line_in_toc_range and not content_after
-                                                ),
-                                                toc_like_line=candidate_toc_like,
-                                            )
-                                        )
-                                        if not line_in_toc_range:
-                                            current_part = part
-                                        continue
-
-            if scan_sparse_layout:
-                for m in PART_MARKER_PATTERN.finditer(line):
-                    if not _part_marker_is_heading(line, m):
-                        continue
-                    part = m.group("part").upper()
-                    if part in allowed_parts:
-                        events.append((m.start(), "part", part, m))
-            else:
-                m = PART_LINESTART_PATTERN.match(line)
-                if m is not None:
-                    if not _part_marker_is_heading(line, m):
-                        continue
-                    part = m.group("part").upper()
-                    if part in allowed_parts:
-                        events.append((m.start(), "part", part, m))
-
-            for m in ITEM_CANDIDATE_PATTERN.finditer(line):
-                events.append((m.start(), "item", None, m))
-
-            if not events:
-                continue
-
-            events.sort(key=lambda t: t[0])
-            line_part: str | None = None
-            line_part_end: int | None = None
-            is_toc_marker = TOC_MARKER_PATTERN.search(line) is not None
-            item_word_count = 0
-            if i < 800 or is_toc_marker or line_in_toc_range:
-                item_word_count = len(ITEM_WORD_PATTERN.findall(line))
-            line_toc_like = _looks_like_toc_heading_line(lines, i)
-            if item_word_count >= 3 and len(line) <= 5_000 and (i < 800 or is_toc_marker or line_in_toc_range):
-                line_toc_like = True
-            if is_toc_marker and item_word_count >= 1 and len(line) <= 8_000:
-                line_toc_like = True
-            content_after = False
-            if line_in_toc_range or toc_window_flags[i]:
-                content_after = _has_content_after(
-                    lines, i, toc_cache=toc_cache, toc_window_flags=toc_window_flags
-                )
-            toc_window_like = False
-            if not line_toc_like:
-                if embedded_headings._toc_candidate_line(line):
-                    line_toc_like = True
-                elif toc_window_flags[i] and not content_after:
-                    if not (scan_sparse_layout and len(line) > 2_000):
-                        line_toc_like = True
-                        toc_window_like = True
-            compound_line = _line_has_compound_items(line)
-            for _, kind, part, m in events:
-                if kind == "part":
-                    assert m is not None
-                    line_part = part
-                    line_part_end = m.end()
-                    if line_in_toc_range:
-                        if not line_has_item_word:
-                            toc_part = part
-                    elif not line_has_item_word:
-                        current_part = part
-                    continue
-
-                assert m is not None
-                item_id, content_adjust = _normalize_item_match(
-                    line,
-                    m,
-                    is_10k=is_10k,
-                    max_item=max_item_number,
-                )
-                if item_id is None:
-                    continue
-                if item_id == "16":
-                    continue
-
-                abs_start = line_starts[i] + m.start()
-
-                # Heuristics to avoid cross-references:
-                prefix = line[: m.start()]
-                is_line_start = (
-                    prefix.strip() == "" or _prefix_is_bullet(prefix) or _prefix_is_part_only(prefix)
-                )
-                prefix_part = _prefix_part_tail(prefix)
-                part_near_item = (
-                    line_part_end is not None and (m.start() - line_part_end) <= 60
-                )
-                if prefix_part:
-                    part_near_item = True
-                if _prefix_looks_like_cross_ref(prefix):
-                    continue
-
-                # Only accept headings that look like real section starts (line-start or 'PART .. ITEM ..').
-                # This intentionally rejects mid-sentence cross-references like "Part II, Item 7 ...".
-                accept = is_line_start or part_near_item
-                midline = False
-                if not accept and scan_sparse_layout:
-                    # For filings with very few line breaks, headings often follow sentence punctuation.
-                    # Keep this strict elsewhere to avoid mid-sentence cross-reference matches.
-                    k = abs_start - 1
-                    while k >= 0 and body[k].isspace():
-                        k -= 1
-                    prev_char = body[k] if k >= 0 else ""
-                    if prev_char in ".:;!?":
-                        if not _prefix_looks_like_cross_ref(prefix):
-                            accept = True
-                            midline = True
-
-                if not accept:
-                    continue
-
-                if _starts_with_lowercase_title(line, m):
-                    continue
-
-                # Ignore "(continued)" headings; they are typically page-header repeats.
-                # Only treat it as a continuation marker when it appears immediately after the heading,
-                # not elsewhere later in the same (potentially very long) line.
-                suffix = line[m.end() : m.end() + 64]
-                if re.search(r"(?i)^\s*[\(\[]?\s*continued\b", suffix):
-                    continue
-                if re.match(r"(?i)^\s*[\(\[]\s*[a-z0-9]", suffix):
-                    probe = suffix.strip().lstrip(" \t:-.([")
-                    probe = probe.rstrip("])")
-                    if not (EMPTY_ITEM_PATTERN.match(probe) and "reserved" in probe.lower()):
-                        continue
-
-                title_match = is_10k and _heading_title_matches_item(item_id, line, m)
-                confidence = HEADING_CONF_HIGH if (is_line_start or part_near_item) else HEADING_CONF_MED
-                if midline:
-                    confidence = HEADING_CONF_MED if title_match else HEADING_CONF_LOW
-                elif is_10k and (is_line_start or part_near_item):
-                    if not title_match and _heading_suffix_looks_like_prose(line[m.end() :]):
-                        confidence = min(confidence, HEADING_CONF_MED)
-                if compound_line:
-                    confidence = min(confidence, HEADING_CONF_LOW)
-                if _pageish_line(line):
-                    confidence = min(confidence, HEADING_CONF_LOW)
-
-                item_part = toc_part if line_in_toc_range else current_part
-                part_hint = line_part or prefix_part
-                if part_near_item and part_hint:
-                    item_part = part_hint
-                    if confidence >= HEADING_CONF_HIGH or prefix_part:
-                        current_part = part_hint
-
-                start_abs = line_starts[i] + m.start()
-                content_start_abs = line_starts[i] + m.end() + content_adjust
-                candidate_toc_like = line_toc_like
-                if (
-                    candidate_toc_like
-                    and toc_window_like
-                    and scan_sparse_layout
-                    and m.start() > embedded_headings.EMBEDDED_TOC_START_EARLY_MAX_CHAR
-                ):
-                    candidate_toc_like = False
-                boundaries.append(
-                    _ItemBoundary(
-                        start=start_abs,
-                        content_start=content_start_abs,
-                        item_part=item_part,
-                        item_id=item_id,
-                        line_index=i,
-                        confidence=confidence,
-                        in_toc_range=line_in_toc_range and not content_after,
-                        toc_like_line=candidate_toc_like,
-                    )
-                )
+        boundaries = _scan_item_boundaries(
+            lines,
+            line_starts,
+            body,
+            is_10k=is_10k,
+            max_item_number=max_item_number,
+            allowed_parts=allowed_parts,
+            scan_sparse_layout=scan_sparse_layout,
+            toc_mask=toc_mask,
+            toc_window_flags=toc_window_flags,
+            toc_cache=toc_cache,
+            extraction_regime=extraction_regime,
+        )
 
         if boundaries or attempt:
             break

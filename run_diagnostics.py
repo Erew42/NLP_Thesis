@@ -15,6 +15,7 @@ from thesis_pkg.core.sec.suspicious_boundary_diagnostics import (  # noqa: E402
     parse_focus_items,
     run_boundary_diagnostics,
 )
+from thesis_pkg.core.sec.extraction import get_extraction_fastpath_metrics  # noqa: E402
 
 
 DEFAULT_PARQUET_DIR = Path(
@@ -24,6 +25,7 @@ DEFAULT_OUT_PATH = Path("results/suspicious_boundaries_v9.csv")
 DEFAULT_REPORT_PATH = Path("results/suspicious_boundaries_report_v9.txt")
 DEFAULT_SAMPLES_DIR = Path("results/Suspicious_Filings_Demo")
 DEFAULT_HTML_OUT_DIR = Path("results/html_audit")
+REGIME_CHOICES = ("legacy", "v2", "fast")
 
 
 def parse_args() -> argparse.Namespace:
@@ -198,15 +200,21 @@ def parse_args() -> argparse.Namespace:
         "--extraction-regime",
         type=str,
         default="legacy",
-        choices=("legacy", "v2"),
-        help="Extraction regime to use (default: legacy).",
+        choices=REGIME_CHOICES,
+        help=(
+            "Extraction regime to use: legacy, v2, or fast "
+            "(fast = v2 with native fast-path enabled when available)."
+        ),
     )
     parser.add_argument(
         "--diagnostics-regime",
         type=str,
         default="legacy",
-        choices=("legacy", "v2"),
-        help="Diagnostics regime to use (default: legacy).",
+        choices=REGIME_CHOICES,
+        help=(
+            "Diagnostics regime to use: legacy, v2, or fast "
+            "(fast is treated as v2 for diagnostics logic)."
+        ),
     )
     parser.set_defaults(
         emit_manifest=True,
@@ -238,8 +246,26 @@ def _parse_core_items(value: str | None) -> tuple[str, ...]:
     return cleaned or ("1", "1A", "7", "7A", "8")
 
 
+def _normalize_regime(value: str) -> str:
+    normalized = (value or "legacy").strip().lower()
+    if normalized == "fast":
+        return "v2"
+    if normalized == "v2":
+        return "v2"
+    return "legacy"
+
+
 def main() -> None:
     args = parse_args()
+    extraction_regime = _normalize_regime(args.extraction_regime)
+    diagnostics_regime = _normalize_regime(args.diagnostics_regime)
+    if args.extraction_regime == "fast":
+        fastpath = get_extraction_fastpath_metrics()
+        if not bool(fastpath.get("fastpath_extension_available")):
+            print(
+                "Warning: --extraction-regime fast requested, but native fast-path "
+                "extension is unavailable; running v2 with Python fallback."
+            )
     if args.report_item_scope is None:
         report_item_scope = "target" if args.target_set else "all"
     else:
@@ -267,8 +293,8 @@ def main() -> None:
         html_min_largest_item_chars=args.html_min_largest_item_chars,
         html_min_largest_item_chars_pct_total=args.html_min_largest_item_chars_pct_total,
         dump_missing_part_samples=args.dump_missing_part_samples,
-        extraction_regime=args.extraction_regime,
-        diagnostics_regime=args.diagnostics_regime,
+        extraction_regime=extraction_regime,
+        diagnostics_regime=diagnostics_regime,
     )
     run_boundary_diagnostics(config)
 

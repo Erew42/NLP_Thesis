@@ -21,6 +21,7 @@ import pyarrow.parquet as pq
 
 from .extraction import (
     extract_filing_items,
+    get_extraction_fastpath_metrics,
     parse_header,
 )
 from .extraction_utils import EmbeddedHeadingHit
@@ -155,6 +156,7 @@ DEFAULT_HTML_SCOPE = "sample"
 DEFAULT_HTML_SAMPLE_SIZE = 100
 DEFAULT_HTML_FILING_PREVIEW_CHARS = 1200
 DEFAULT_HTML_ITEM_PREVIEW_CHARS = 800
+REGIME_CHOICES = ("legacy", "v2", "fast")
 COHEN2020_COMMON_CANONICAL: dict[str, set[str]] = {
     "10-K": {
         "II:7_MDA",
@@ -979,6 +981,15 @@ def _parse_core_items_arg(value: str | None) -> tuple[str, ...]:
     parts = re.split(r"[,\s]+", value.strip())
     cleaned = tuple(sorted({p.strip().upper() for p in parts if p.strip()}))
     return cleaned or DEFAULT_CORE_ITEMS
+
+
+def _normalize_regime(value: str) -> str:
+    normalized = (value or "legacy").strip().lower()
+    if normalized == "fast":
+        return "v2"
+    if normalized == "v2":
+        return "v2"
+    return "legacy"
 
 
 def _normalize_focus_form(value: str | None) -> str | None:
@@ -3971,15 +3982,21 @@ def _build_parser() -> tuple[argparse.ArgumentParser, argparse.ArgumentParser]:
         "--extraction-regime",
         type=str,
         default="legacy",
-        choices=("legacy", "v2"),
-        help="Extraction regime to use (default: legacy).",
+        choices=REGIME_CHOICES,
+        help=(
+            "Extraction regime to use: legacy, v2, or fast "
+            "(fast = v2 with native fast-path enabled when available)."
+        ),
     )
     scan.add_argument(
         "--diagnostics-regime",
         type=str,
         default="legacy",
-        choices=("legacy", "v2"),
-        help="Diagnostics regime to use (default: legacy).",
+        choices=REGIME_CHOICES,
+        help=(
+            "Diagnostics regime to use: legacy, v2, or fast "
+            "(fast is treated as v2 for diagnostics logic)."
+        ),
     )
     scan.set_defaults(
         emit_manifest=True,
@@ -4023,6 +4040,15 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
 
     if args.command == "scan":
+        extraction_regime = _normalize_regime(args.extraction_regime)
+        diagnostics_regime = _normalize_regime(args.diagnostics_regime)
+        if args.extraction_regime == "fast":
+            fastpath = get_extraction_fastpath_metrics()
+            if not bool(fastpath.get("fastpath_extension_available")):
+                print(
+                    "Warning: --extraction-regime fast requested, but native fast-path "
+                    "extension is unavailable; running v2 with Python fallback."
+                )
         if not args.emit_manifest and args.emit_html:
             scan_parser.error(
                 "HTML output requires manifests. Remove --no-manifest or add --no-html."
@@ -4063,8 +4089,8 @@ def main(argv: list[str] | None = None) -> None:
             html_min_largest_item_chars=args.html_min_largest_item_chars,
             html_min_largest_item_chars_pct_total=args.html_min_largest_item_chars_pct_total,
             dump_missing_part_samples=args.dump_missing_part_samples,
-            extraction_regime=args.extraction_regime,
-            diagnostics_regime=args.diagnostics_regime,
+            extraction_regime=extraction_regime,
+            diagnostics_regime=diagnostics_regime,
         )
         run_boundary_diagnostics(config)
         return
