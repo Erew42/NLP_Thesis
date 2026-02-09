@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from thesis_pkg.core.sec.suspicious_boundary_diagnostics import (
+    _MissingPartDiagnostics,
     _build_diagnostics_report,
     _update_item_breakdown,
 )
@@ -57,7 +58,10 @@ def test_report_scope_target_excludes_non_target_item() -> None:
         parquet_dir=Path("."),
         max_examples=1,
         provenance={},
+        extraction_regime="legacy",
+        diagnostics_regime="legacy",
         item_breakdown=item_breakdown,
+        missing_part_diagnostics=_MissingPartDiagnostics(),
         focus_items=None,
         report_item_scope="target",
         target_set="cohen2020_all_items",

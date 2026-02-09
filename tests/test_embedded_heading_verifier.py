@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from thesis_pkg.core.sec.suspicious_boundary_diagnostics import (
+    _MissingPartDiagnostics,
     _build_diagnostics_report,
     _build_flagged_row,
     _find_embedded_heading_hits,
@@ -247,6 +248,7 @@ def test_flagged_row_includes_embedded_fields() -> None:
         },
         item_id="5",
         item_part="II",
+        item_missing_part=False,
         heading_line_clean="ITEM 5. OTHER INFORMATION",
         heading_line_raw="ITEM 5. OTHER INFORMATION",
         heading_idx=0,
@@ -323,6 +325,7 @@ def test_report_includes_embedded_summary_and_not_v3() -> None:
         },
         item_id="5",
         item_part="II",
+        item_missing_part=False,
         heading_line_clean="ITEM 5. OTHER INFORMATION",
         heading_line_raw="ITEM 5. OTHER INFORMATION",
         heading_idx=0,
@@ -368,6 +371,13 @@ def test_report_includes_embedded_summary_and_not_v3() -> None:
             "prov_sys_path_hash": "abc12345",
             "prov_enable_embedded_verifier": "True",
         },
+        extraction_regime="legacy",
+        diagnostics_regime="legacy",
+        item_breakdown={},
+        missing_part_diagnostics=_MissingPartDiagnostics(),
+        focus_items=None,
+        report_item_scope="all",
+        target_set=None,
     )
     assert "Embedded heading summary:" in report
     assert "(v3)" not in report

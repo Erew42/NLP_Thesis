@@ -1,5 +1,16 @@
 from __future__ import annotations
 
+from thesis_pkg.core.ccm.sec_ccm_contracts import MatchReasonCode, SecCcmJoinSpecV1
+from thesis_pkg.core.ccm.sec_ccm_premerge import (
+    align_doc_dates_phase_b,
+    apply_concept_filter_flags_doc,
+    apply_phase_b_reason_codes,
+    build_match_status_doc,
+    build_unmatched_diagnostics_doc,
+    normalize_sec_filings_phase_a,
+    resolve_links_phase_a,
+    join_daily_phase_b,
+)
 from thesis_pkg.core.ccm.transforms import (
     add_final_returns,
     attach_ccm_links,
@@ -10,6 +21,7 @@ from thesis_pkg.core.ccm.transforms import (
 from thesis_pkg.core.sec.filing_text import ParsedFilingSchema, RawTextSchema, parse_filename_minimal
 from thesis_pkg.io.parquet import load_tables
 from thesis_pkg.pipelines.ccm_pipeline import merge_histories
+from thesis_pkg.pipelines.sec_ccm_pipeline import run_sec_ccm_premerge_pipeline
 from thesis_pkg.pipelines.sec_pipeline import process_zip_year, process_zip_year_raw_text
 
 
@@ -21,6 +33,17 @@ __all__ = [
     "attach_ccm_links",
     "attach_company_description",
     "merge_histories",
+    "MatchReasonCode",
+    "SecCcmJoinSpecV1",
+    "normalize_sec_filings_phase_a",
+    "resolve_links_phase_a",
+    "align_doc_dates_phase_b",
+    "join_daily_phase_b",
+    "apply_phase_b_reason_codes",
+    "build_match_status_doc",
+    "build_unmatched_diagnostics_doc",
+    "apply_concept_filter_flags_doc",
+    "run_sec_ccm_premerge_pipeline",
     "parse_filename_minimal",
     "process_zip_year_raw_text",
     "process_zip_year",

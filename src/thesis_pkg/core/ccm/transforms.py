@@ -44,6 +44,30 @@ class DataStatus(IntFlag):
     # Auxiliary metadata
     HAS_COMP_DESC = 1 << 19
 
+    # SEC-CCM Phase A linking diagnostics
+    SEC_CCM_PHASE_A_ATTEMPTED = 1 << 20
+    SEC_CCM_BAD_INPUT = 1 << 21
+    SEC_CCM_CIK_NOT_IN_LINK_UNIVERSE = 1 << 22
+    SEC_CCM_AMBIGUOUS_LINK = 1 << 23
+    SEC_CCM_LINKED_OK = 1 << 24
+    SEC_CCM_HAS_ACCEPTANCE_DATETIME = 1 << 25
+
+    # SEC-CCM Phase B alignment + daily join diagnostics
+    SEC_CCM_PHASE_B_ALIGNMENT_ATTEMPTED = 1 << 26
+    SEC_CCM_PHASE_B_ALIGNED = 1 << 27
+    SEC_CCM_PHASE_B_OUT_OF_CCM_COVERAGE = 1 << 28
+    SEC_CCM_PHASE_B_DAILY_JOIN_ATTEMPTED = 1 << 29
+    SEC_CCM_PHASE_B_DAILY_ROW_FOUND = 1 << 30
+    SEC_CCM_PHASE_B_NO_CCM_ROW_FOR_DATE = 1 << 31
+
+    # Concept filter pass diagnostics
+    SEC_CCM_FILTER_PRICE_PASS = 1 << 32
+    SEC_CCM_FILTER_COMMON_STOCK_PASS = 1 << 33
+    SEC_CCM_FILTER_MAJOR_EXCHANGE_PASS = 1 << 34
+    SEC_CCM_FILTER_LIQUIDITY_PASS = 1 << 35
+    SEC_CCM_FILTER_NON_MICROCAP_PASS = 1 << 36
+    SEC_CCM_FILTER_ALL_PASS = 1 << 37
+
     # Convenience Combinations for Filtering
     FULL_PANEL_DATA = HAS_RET | HAS_BIDLO
     ANY_RET_DATA = HAS_RET | HAS_DLRET
@@ -59,7 +83,7 @@ def _ensure_data_status(lf: pl.LazyFrame) -> pl.LazyFrame:
 
 def _flag_if(expr: pl.Expr, flag: DataStatus) -> pl.Expr:
     """Helper to promote a boolean to a UInt64 bitmask."""
-    return expr.cast(STATUS_DTYPE) * int(flag)
+    return expr.fill_null(False).cast(STATUS_DTYPE) * int(flag)
 
 
 def _coerce_date(value: dt.date | dt.datetime | str) -> dt.date:

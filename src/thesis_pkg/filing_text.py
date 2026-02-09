@@ -36,6 +36,7 @@ from thesis_pkg.pipelines.sec_pipeline import (
     merge_parquet_files_arrow,
     merge_yearly_batches,
     process_year_dir_extract_items,
+    process_year_dir_extract_items_gated,
     process_year_dir_extract_non_items,
     process_year_parquet_extract_non_items,
     process_year_parquet_extract_items,

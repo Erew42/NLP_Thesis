@@ -1449,6 +1449,91 @@ def process_year_dir_extract_items(
     return out_paths
 
 
+def process_year_dir_extract_items_gated(
+    year_dir: Path,
+    out_dir: Path,
+    doc_id_allowlist: Path | pl.LazyFrame | pl.DataFrame,
+    *,
+    years: list[str] | None = None,
+    parquet_batch_rows: int = 16,
+    out_batch_max_rows: int = 50_000,
+    out_batch_max_text_bytes: int = 250 * 1024 * 1024,
+    tmp_dir: Path | None = None,
+    compression: Literal["zstd", "snappy", "gzip", "uncompressed"] = "zstd",
+    local_work_dir: Path | None = None,
+    copy_retries: int = 3,
+    copy_sleep: float = 1.0,
+    validate_on_copy: bool | Literal["quick", "full"] = True,
+    non_item_diagnostic: bool = False,
+    include_full_text: bool = False,
+    regime: bool = True,
+    extraction_regime: Literal["legacy", "v2", "fast"] = "legacy",
+) -> list[Path]:
+    """
+    Gated variant of item extraction using a doc_id allowlist.
+
+    This wrapper keeps extractor behavior unchanged and only filters yearly filing
+    inputs before calling `process_year_parquet_extract_items`.
+    """
+    year_dir = Path(year_dir)
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    if isinstance(doc_id_allowlist, Path):
+        allow_lf = pl.scan_parquet(doc_id_allowlist)
+    elif isinstance(doc_id_allowlist, pl.DataFrame):
+        allow_lf = doc_id_allowlist.lazy()
+    else:
+        allow_lf = doc_id_allowlist
+
+    allow_ids = (
+        allow_lf
+        .select(pl.col("doc_id").cast(pl.Utf8))
+        .drop_nulls(subset=["doc_id"])
+        .unique(subset=["doc_id"])
+    )
+
+    tmp_dir = tmp_dir or Path(tempfile.gettempdir())
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    staged_root = tmp_dir / "_gated_item_extract_inputs"
+    staged_root.mkdir(parents=True, exist_ok=True)
+
+    wanted = set(years) if years else None
+    out_paths: list[Path] = []
+    for p in sorted(year_dir.glob("*.parquet")):
+        if wanted is not None and p.stem not in wanted:
+            continue
+
+        staged_path = staged_root / p.name
+        (
+            pl.scan_parquet(p)
+            .join(allow_ids, on="doc_id", how="semi")
+            .sink_parquet(staged_path, compression=compression)
+        )
+
+        out_paths.append(
+            process_year_parquet_extract_items(
+                year_parquet_path=staged_path,
+                out_dir=out_dir,
+                parquet_batch_rows=parquet_batch_rows,
+                out_batch_max_rows=out_batch_max_rows,
+                out_batch_max_text_bytes=out_batch_max_text_bytes,
+                tmp_dir=tmp_dir,
+                compression=compression,
+                local_work_dir=local_work_dir,
+                copy_retries=copy_retries,
+                copy_sleep=copy_sleep,
+                validate_on_copy=validate_on_copy,
+                non_item_diagnostic=non_item_diagnostic,
+                include_full_text=include_full_text,
+                regime=regime,
+                extraction_regime=extraction_regime,
+            )
+        )
+
+    return out_paths
+
+
 def _process_year_parquet_extract_non_items(
     year_parquet_path: Path,
     item_parquet_path: Path,
