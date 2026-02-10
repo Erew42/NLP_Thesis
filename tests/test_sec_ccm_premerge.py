@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 from pathlib import Path
 
 import polars as pl
@@ -198,6 +199,11 @@ def test_end_to_end_pipeline_outputs_doc_grain_artifacts(tmp_path: Path):
         "sec_ccm_analysis_doc_ids",
         "sec_ccm_diagnostic_doc_ids",
         "sec_ccm_join_spec_v1",
+        "sec_ccm_run_steps",
+        "sec_ccm_run_dag_mermaid",
+        "sec_ccm_run_dag_dot",
+        "sec_ccm_run_manifest",
+        "sec_ccm_run_report",
     }
     assert required_keys.issubset(paths.keys())
     for key, path in paths.items():
@@ -217,3 +223,22 @@ def test_end_to_end_pipeline_outputs_doc_grain_artifacts(tmp_path: Path):
     actual_status = status_df.sort("doc_id")
     assert expected_status.columns == actual_status.columns
     assert expected_status.to_dicts() == actual_status.to_dicts()
+
+    run_steps_df = pl.read_parquet(paths["sec_ccm_run_steps"]).sort("step_order")
+    assert run_steps_df.height > 0
+    assert {"run_id", "step_name", "duration_ms", "step_order"}.issubset(run_steps_df.columns)
+    assert run_steps_df.select((pl.col("duration_ms") >= 0).all()).item() is True
+
+    dag_mermaid = Path(paths["sec_ccm_run_dag_mermaid"]).read_text(encoding="utf-8")
+    dag_dot = Path(paths["sec_ccm_run_dag_dot"]).read_text(encoding="utf-8")
+    assert "graph TD" in dag_mermaid
+    assert "digraph sec_ccm_premerge_run" in dag_dot
+
+    manifest = json.loads(Path(paths["sec_ccm_run_manifest"]).read_text(encoding="utf-8"))
+    assert manifest["pipeline_name"] == "sec_ccm_premerge"
+    assert manifest["summary"]["n_docs_total"] == sec.height
+    assert "sec_ccm_match_status" in manifest["artifacts"]
+
+    report_text = Path(paths["sec_ccm_run_report"]).read_text(encoding="utf-8")
+    assert "SEC-CCM Pre-Merge Run Report" in report_text
+    assert "Step Performance" in report_text

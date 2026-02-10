@@ -26,3 +26,9 @@ Pipeline entrypoint:
 
 Additional contract details:
 - `docs/sec_ccm_premerge.md`
+
+Automatic per-run observability artifacts are produced by default:
+- Step performance table: `sec_ccm_run_steps.parquet`
+- DAG visuals: `sec_ccm_run_dag.mmd` and `sec_ccm_run_dag.dot`
+- Run manifest: `sec_ccm_run_manifest.json`
+- Run report: `sec_ccm_run_report.md`
