@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 from pathlib import Path
+import warnings
 
 import polars as pl
 
@@ -120,6 +121,47 @@ def test_phase_b_strict_next_day_alignment_and_reason_scoping():
     assert by_doc["ambig"]["phase_a_reason_code"] == MatchReasonCode.AMBIGUOUS_LINK.value
     assert by_doc["ambig"]["match_reason_code"] == MatchReasonCode.AMBIGUOUS_LINK.value
     assert by_doc["ambig"]["phase_b_reason_code"] is None
+
+
+def test_grouped_asof_join_sorts_inputs_and_avoids_sortedness_warning():
+    sec = pl.DataFrame(
+        {
+            "doc_id": ["d1", "d2"],
+            "cik_10": ["0000000001", "0000000002"],
+            "filing_date": [dt.date(2024, 1, 2), dt.date(2024, 1, 2)],
+        }
+    )
+    link_universe = pl.DataFrame(
+        {
+            "cik_10": ["0000000001", "0000000002"],
+            "gvkey": ["1000", "2000"],
+            "kypermno": [1, 2],
+            "link_rank": [0, 0],
+            "link_quality": [1.0, 1.0],
+        }
+    )
+    trading_calendar = pl.DataFrame({"CALDT": [dt.date(2024, 1, 3), dt.date(2024, 1, 4)]})
+    # Intentionally unsorted to verify the function's internal sort path.
+    daily = pl.DataFrame(
+        {
+            "KYPERMNO": [2, 1],
+            "CALDT": [dt.date(2024, 1, 3), dt.date(2024, 1, 3)],
+            "RET": [0.02, 0.01],
+        }
+    )
+
+    phase_a = resolve_links_phase_a(sec.lazy(), link_universe.lazy())
+    aligned = align_doc_dates_phase_b(phase_a, trading_calendar.lazy(), SecCcmJoinSpecV1())
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        out = join_daily_phase_b(aligned, daily.lazy(), SecCcmJoinSpecV1(required_daily_non_null_features=("RET",)))
+        out.collect()
+
+    assert not any(
+        "Sortedness of columns cannot be checked when 'by' groups provided" in str(w.message)
+        for w in caught
+    )
 
 
 def test_acceptance_datetime_optional_and_not_default_coerced():

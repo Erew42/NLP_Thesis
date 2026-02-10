@@ -340,17 +340,25 @@ def join_daily_phase_b(
         pl.col("daily_caldt").max().alias("key_max_caldt"),
     )
 
-    joined = (
+    left_for_asof = (
         aligned_doc_lf
         .with_columns(pl.col("kypermno").cast(pl.Int32, strict=False))
         .join(coverage, on="kypermno", how="left")
         .sort("kypermno", "aligned_caldt")
+    )
+    right_for_asof = daily.sort("kypermno", "daily_caldt")
+
+    joined = (
+        left_for_asof
         .join_asof(
-            daily.sort("kypermno", "daily_caldt"),
+            right_for_asof,
             left_on="aligned_caldt",
             right_on="daily_caldt",
             by="kypermno",
             strategy="forward",
+            # We explicitly sort both sides by (group key, asof key) above.
+            # Polars cannot validate grouped sortedness and otherwise emits a warning.
+            check_sortedness=False,
         )
         .rename({"daily_caldt": "daily_join_caldt"})
     )
