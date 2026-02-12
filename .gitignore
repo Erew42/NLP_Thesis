@@ -1,5 +1,6 @@
 __pycache__/
 *.py[cod]
+*.c
 
 .venv/
 dist/
@@ -17,6 +18,7 @@ visualize_*.py
 results/
 reviews/
 diff_files/
+docs/
 
 # Repo-root files (ignore all except README.md)
 /AGENTS.md
