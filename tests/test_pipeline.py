@@ -3,6 +3,7 @@ from pathlib import Path
 import warnings
 
 import polars as pl
+import pytest
 
 from thesis_pkg.pipeline import (
     add_final_returns,
@@ -32,6 +33,8 @@ def test_build_price_panel_merges_delistings_and_flags():
             "RET": [0.01, 0.02],
             "RETX": [0.009, 0.018],
             "PRC": [-10.2, -11.3],
+            "TCAP": [100_000_000.0, 101_000_000.0],
+            "VOL": [1000.0, 1100.0],
         }
     )
 
@@ -46,11 +49,37 @@ def test_build_price_panel_merges_delistings_and_flags():
             "DLSTCD": [500],
         }
     )
+    nam = pl.DataFrame(
+        {
+            "KYPERMNO": [1],
+            "NAMEDT": [dt.date(2023, 1, 1)],
+            "NAMEENDDT": [dt.date(2024, 12, 31)],
+            "SHRCD": [10],
+            "EXCHCD": [1],
+            "PRIMEXCH": ["N"],
+            "TRDSTAT": ["A"],
+            "SECSTAT": ["A"],
+        }
+    )
+    hdr = pl.DataFrame(
+        {
+            "KYPERMNO": [1],
+            "BEGDT": [dt.date(2020, 1, 1)],
+            "ENDDT": [dt.date(2025, 1, 1)],
+            "HSHRCD": [11],
+            "HEXCD": [3],
+            "HPRIMEXCH": ["Q"],
+            "HTRDSTAT": ["A"],
+            "HSECSTAT": ["A"],
+        }
+    )
 
     panel = build_price_panel(
         ds.lazy(),
         dp.lazy(),
         delist.lazy(),
+        nam.lazy(),
+        hdr.lazy(),
         start_date=dt.date(2024, 1, 2),
     ).collect()
 
@@ -66,6 +95,209 @@ def test_build_price_panel_merges_delistings_and_flags():
     assert "price_status" not in panel.columns
     assert panel.filter(pl.col("CALDT") == dt.date(2024, 1, 2)).select("DLRET").item() is None
     assert panel.filter(pl.col("CALDT") == dt.date(2024, 1, 3)).select("DLRET").item() == -0.5
+    assert panel.select("SHRCD").to_series().to_list() == [10, 10]
+    assert panel.select("EXCHCD").to_series().to_list() == [1, 1]
+
+
+def test_build_price_panel_uses_hdr_fallback_when_nam_out_of_range():
+    ds = pl.DataFrame(
+        {
+            "KYPERMNO": [1],
+            "CALDT": [dt.date(2024, 1, 2)],
+            "BIDLO": [10.0],
+            "ASKHI": [10.5],
+        }
+    )
+    dp = pl.DataFrame(
+        {
+            "KYPERMNO": [1],
+            "CALDT": [dt.date(2024, 1, 2)],
+            "RET": [0.01],
+            "RETX": [0.009],
+            "PRC": [-10.2],
+            "TCAP": [100_000_000.0],
+            "VOL": [1000.0],
+        }
+    )
+    delist = pl.DataFrame(
+        {
+            "KYPERMNO": [999],
+            "DLSTDT": [dt.date(2024, 1, 2)],
+            "DLRET": [None],
+            "DLRETX": [None],
+            "DLPRC": [None],
+            "DLAMT": [None],
+            "DLSTCD": [None],
+        }
+    )
+    nam = pl.DataFrame(
+        {
+            "KYPERMNO": [1],
+            "NAMEDT": [dt.date(2020, 1, 1)],
+            "NAMEENDDT": [dt.date(2023, 12, 31)],
+            "SHRCD": [10],
+            "EXCHCD": [1],
+            "PRIMEXCH": ["N"],
+            "TRDSTAT": ["A"],
+            "SECSTAT": ["A"],
+        }
+    )
+    hdr = pl.DataFrame(
+        {
+            "KYPERMNO": [1],
+            "BEGDT": [dt.date(2020, 1, 1)],
+            "ENDDT": [dt.date(2024, 12, 31)],
+            "HSHRCD": [11],
+            "HEXCD": [3],
+            "HPRIMEXCH": ["Q"],
+            "HTRDSTAT": ["A"],
+            "HSECSTAT": ["A"],
+        }
+    )
+
+    panel = build_price_panel(
+        ds.lazy(),
+        dp.lazy(),
+        delist.lazy(),
+        nam.lazy(),
+        hdr.lazy(),
+        start_date=dt.date(2024, 1, 2),
+    ).collect()
+
+    assert panel.select("SHRCD").item() == 11
+    assert panel.select("EXCHCD").item() == 3
+    assert panel.select("PRIMEXCH").item() == "Q"
+    assert panel.select("TRDSTAT").item() == "A"
+    assert panel.select("SECSTAT").item() == "A"
+
+
+def test_build_price_panel_sets_null_metadata_when_nam_and_hdr_out_of_range():
+    ds = pl.DataFrame(
+        {
+            "KYPERMNO": [1],
+            "CALDT": [dt.date(2024, 1, 2)],
+            "BIDLO": [10.0],
+            "ASKHI": [10.5],
+        }
+    )
+    dp = pl.DataFrame(
+        {
+            "KYPERMNO": [1],
+            "CALDT": [dt.date(2024, 1, 2)],
+            "RET": [0.01],
+            "RETX": [0.009],
+            "PRC": [-10.2],
+            "TCAP": [100_000_000.0],
+            "VOL": [1000.0],
+        }
+    )
+    delist = pl.DataFrame(
+        {
+            "KYPERMNO": [999],
+            "DLSTDT": [dt.date(2024, 1, 2)],
+            "DLRET": [None],
+            "DLRETX": [None],
+            "DLPRC": [None],
+            "DLAMT": [None],
+            "DLSTCD": [None],
+        }
+    )
+    nam = pl.DataFrame(
+        {
+            "KYPERMNO": [1],
+            "NAMEDT": [dt.date(2020, 1, 1)],
+            "NAMEENDDT": [dt.date(2023, 12, 31)],
+            "SHRCD": [10],
+            "EXCHCD": [1],
+            "PRIMEXCH": ["N"],
+            "TRDSTAT": ["A"],
+            "SECSTAT": ["A"],
+        }
+    )
+    hdr = pl.DataFrame(
+        {
+            "KYPERMNO": [1],
+            "BEGDT": [dt.date(2020, 1, 1)],
+            "ENDDT": [dt.date(2023, 12, 31)],
+            "HSHRCD": [11],
+            "HEXCD": [3],
+            "HPRIMEXCH": ["Q"],
+            "HTRDSTAT": ["A"],
+            "HSECSTAT": ["A"],
+        }
+    )
+
+    panel = build_price_panel(
+        ds.lazy(),
+        dp.lazy(),
+        delist.lazy(),
+        nam.lazy(),
+        hdr.lazy(),
+        start_date=dt.date(2024, 1, 2),
+    ).collect()
+
+    assert panel.select("SHRCD").item() is None
+    assert panel.select("EXCHCD").item() is None
+    assert panel.select("PRIMEXCH").item() is None
+    assert panel.select("TRDSTAT").item() is None
+    assert panel.select("SECSTAT").item() is None
+
+
+def test_build_price_panel_requires_nam_and_hdr_columns():
+    ds = pl.DataFrame(
+        {
+            "KYPERMNO": [1],
+            "CALDT": [dt.date(2024, 1, 2)],
+            "BIDLO": [10.0],
+            "ASKHI": [10.5],
+        }
+    )
+    dp = pl.DataFrame(
+        {
+            "KYPERMNO": [1],
+            "CALDT": [dt.date(2024, 1, 2)],
+            "RET": [0.01],
+            "RETX": [0.009],
+            "PRC": [-10.2],
+            "TCAP": [100_000_000.0],
+            "VOL": [1000.0],
+        }
+    )
+    delist = pl.DataFrame(
+        {
+            "KYPERMNO": [999],
+            "DLSTDT": [dt.date(2024, 1, 2)],
+            "DLRET": [None],
+            "DLRETX": [None],
+            "DLPRC": [None],
+            "DLAMT": [None],
+            "DLSTCD": [None],
+        }
+    )
+    nam_missing = pl.DataFrame(
+        {
+            "KYPERMNO": [1],
+            "NAMEDT": [dt.date(2020, 1, 1)],
+            "NAMEENDDT": [dt.date(2024, 12, 31)],
+        }
+    )
+    hdr_missing = pl.DataFrame(
+        {
+            "KYPERMNO": [1],
+            "BEGDT": [dt.date(2020, 1, 1)],
+            "ENDDT": [dt.date(2024, 12, 31)],
+        }
+    )
+
+    with pytest.raises(ValueError, match="sfz_nam missing required columns"):
+        build_price_panel(
+            ds.lazy(),
+            dp.lazy(),
+            delist.lazy(),
+            nam_missing.lazy(),
+            hdr_missing.lazy(),
+            start_date=dt.date(2024, 1, 2),
+        ).collect()
 
 
 def test_add_final_returns_combines_sources():

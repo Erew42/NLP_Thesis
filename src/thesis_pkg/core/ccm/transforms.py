@@ -110,6 +110,14 @@ def _coerce_date(value: dt.date | dt.datetime | str) -> dt.date:
     return dt.date.fromisoformat(str(value))
 
 
+def _require_columns(lf: pl.LazyFrame, required: tuple[str, ...], label: str) -> None:
+    """Fail fast when an input frame is missing required columns."""
+    schema = lf.collect_schema()
+    missing = [name for name in required if name not in schema]
+    if missing:
+        raise ValueError(f"{label} missing required columns: {missing}")
+
+
 def add_five_to_six() -> int:
     """Return the result of adding five to six."""
     return 5 + 6
@@ -119,9 +127,37 @@ def build_price_panel(
     sfz_ds: pl.LazyFrame,
     sfz_dp: pl.LazyFrame,
     sfz_del: pl.LazyFrame,
+    sfz_nam: pl.LazyFrame,
+    sfz_hdr: pl.LazyFrame,
     start_date: dt.date | dt.datetime | str,
 ) -> pl.LazyFrame:
     """Merge CRSP price feeds plus delist data."""
+    _require_columns(
+        sfz_ds,
+        ("KYPERMNO", "CALDT", "BIDLO", "ASKHI"),
+        "sfz_ds_dly",
+    )
+    _require_columns(
+        sfz_dp,
+        ("KYPERMNO", "CALDT", "PRC", "RET", "RETX", "TCAP", "VOL"),
+        "sfz_dp_dly",
+    )
+    _require_columns(
+        sfz_del,
+        ("KYPERMNO", "DLSTDT", "DLSTCD", "DLPRC", "DLAMT", "DLRET", "DLRETX"),
+        "sfz_del",
+    )
+    _require_columns(
+        sfz_nam,
+        ("KYPERMNO", "NAMEDT", "NAMEENDDT", "SHRCD", "EXCHCD", "PRIMEXCH", "TRDSTAT", "SECSTAT"),
+        "sfz_nam",
+    )
+    _require_columns(
+        sfz_hdr,
+        ("KYPERMNO", "BEGDT", "ENDDT", "HSHRCD", "HEXCD", "HPRIMEXCH", "HTRDSTAT", "HSECSTAT"),
+        "sfz_hdr",
+    )
+
     start_dt = _coerce_date(start_date)
     ds = sfz_ds.filter(pl.col("CALDT") >= pl.lit(start_dt))
     dp = sfz_dp.filter(pl.col("CALDT") >= pl.lit(start_dt))
@@ -134,6 +170,112 @@ def build_price_panel(
                 (pl.col("BIDLO").is_not_null(), DataStatus.HAS_BIDLO),
             ),
         ).alias("data_status")
+    )
+
+    nam = (
+        sfz_nam.select(
+            pl.col("KYPERMNO").cast(pl.Int32, strict=False).alias("KYPERMNO"),
+            pl.col("NAMEDT").cast(pl.Date, strict=False).alias("NAMEDT"),
+            pl.col("NAMEENDDT").cast(pl.Date, strict=False).alias("NAMEENDDT"),
+            pl.col("SHRCD").cast(pl.Int32, strict=False).alias("_NAM_SHRCD"),
+            pl.col("EXCHCD").cast(pl.Int32, strict=False).alias("_NAM_EXCHCD"),
+            pl.col("PRIMEXCH").cast(pl.Utf8, strict=False).alias("_NAM_PRIMEXCH"),
+            pl.col("TRDSTAT").cast(pl.Utf8, strict=False).alias("_NAM_TRDSTAT"),
+            pl.col("SECSTAT").cast(pl.Utf8, strict=False).alias("_NAM_SECSTAT"),
+        )
+        .drop_nulls(subset=["KYPERMNO", "NAMEDT"])
+        .unique(subset=["KYPERMNO", "NAMEDT"], keep="first")
+        .sort("KYPERMNO", "NAMEDT")
+    )
+    hdr = (
+        sfz_hdr.select(
+            pl.col("KYPERMNO").cast(pl.Int32, strict=False).alias("KYPERMNO"),
+            pl.col("BEGDT").cast(pl.Date, strict=False).alias("BEGDT"),
+            pl.col("ENDDT").cast(pl.Date, strict=False).alias("ENDDT"),
+            pl.col("HSHRCD").cast(pl.Int32, strict=False).alias("_HDR_SHRCD"),
+            pl.col("HEXCD").cast(pl.Int32, strict=False).alias("_HDR_EXCHCD"),
+            pl.col("HPRIMEXCH").cast(pl.Utf8, strict=False).alias("_HDR_PRIMEXCH"),
+            pl.col("HTRDSTAT").cast(pl.Utf8, strict=False).alias("_HDR_TRDSTAT"),
+            pl.col("HSECSTAT").cast(pl.Utf8, strict=False).alias("_HDR_SECSTAT"),
+        )
+        .drop_nulls(subset=["KYPERMNO", "BEGDT"])
+        .unique(subset=["KYPERMNO", "BEGDT"], keep="first")
+        .sort("KYPERMNO", "BEGDT")
+    )
+
+    price = (
+        price.with_columns(
+            pl.col("KYPERMNO").cast(pl.Int32, strict=False).alias("KYPERMNO"),
+            pl.col("CALDT").cast(pl.Date, strict=False).alias("CALDT"),
+        )
+        .sort("KYPERMNO", "CALDT")
+        .join_asof(
+            nam,
+            left_on="CALDT",
+            right_on="NAMEDT",
+            by="KYPERMNO",
+            strategy="backward",
+            check_sortedness=False,
+        )
+        .join_asof(
+            hdr,
+            left_on="CALDT",
+            right_on="BEGDT",
+            by="KYPERMNO",
+            strategy="backward",
+            check_sortedness=False,
+        )
+    )
+
+    nam_valid = pl.col("NAMEDT").is_not_null() & (pl.col("CALDT") <= pl.col("NAMEENDDT"))
+    hdr_valid = pl.col("BEGDT").is_not_null() & (pl.col("CALDT") <= pl.col("ENDDT"))
+    price = price.with_columns(
+        pl.coalesce(
+            [
+                pl.when(nam_valid).then(pl.col("_NAM_SHRCD")).otherwise(pl.lit(None, dtype=pl.Int32)),
+                pl.when(hdr_valid).then(pl.col("_HDR_SHRCD")).otherwise(pl.lit(None, dtype=pl.Int32)),
+            ]
+        ).alias("SHRCD"),
+        pl.coalesce(
+            [
+                pl.when(nam_valid).then(pl.col("_NAM_EXCHCD")).otherwise(pl.lit(None, dtype=pl.Int32)),
+                pl.when(hdr_valid).then(pl.col("_HDR_EXCHCD")).otherwise(pl.lit(None, dtype=pl.Int32)),
+            ]
+        ).alias("EXCHCD"),
+        pl.coalesce(
+            [
+                pl.when(nam_valid).then(pl.col("_NAM_PRIMEXCH")).otherwise(pl.lit(None, dtype=pl.Utf8)),
+                pl.when(hdr_valid).then(pl.col("_HDR_PRIMEXCH")).otherwise(pl.lit(None, dtype=pl.Utf8)),
+            ]
+        ).alias("PRIMEXCH"),
+        pl.coalesce(
+            [
+                pl.when(nam_valid).then(pl.col("_NAM_TRDSTAT")).otherwise(pl.lit(None, dtype=pl.Utf8)),
+                pl.when(hdr_valid).then(pl.col("_HDR_TRDSTAT")).otherwise(pl.lit(None, dtype=pl.Utf8)),
+            ]
+        ).alias("TRDSTAT"),
+        pl.coalesce(
+            [
+                pl.when(nam_valid).then(pl.col("_NAM_SECSTAT")).otherwise(pl.lit(None, dtype=pl.Utf8)),
+                pl.when(hdr_valid).then(pl.col("_HDR_SECSTAT")).otherwise(pl.lit(None, dtype=pl.Utf8)),
+            ]
+        ).alias("SECSTAT"),
+    ).drop(
+        "NAMEDT",
+        "NAMEENDDT",
+        "BEGDT",
+        "ENDDT",
+        "_NAM_SHRCD",
+        "_NAM_EXCHCD",
+        "_NAM_PRIMEXCH",
+        "_NAM_TRDSTAT",
+        "_NAM_SECSTAT",
+        "_HDR_SHRCD",
+        "_HDR_EXCHCD",
+        "_HDR_PRIMEXCH",
+        "_HDR_TRDSTAT",
+        "_HDR_SECSTAT",
+        strict=False,
     )
 
     last_trade = price.group_by("KYPERMNO").agg(pl.col("CALDT").max().alias("LAST_CALDT"))

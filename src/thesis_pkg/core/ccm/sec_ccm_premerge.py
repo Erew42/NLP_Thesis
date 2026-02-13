@@ -612,11 +612,15 @@ def apply_concept_filter_flags_doc(final_doc_lf: pl.LazyFrame) -> pl.LazyFrame:
     """Apply concept-based filter flags without dropping doc rows."""
     lf = _ensure_data_status(final_doc_lf)
     schema = lf.collect_schema()
+    metadata_hint = (
+        "concept filter input (rebuild upstream CCM daily panel with sfz_nam/sfz_hdr enrichment, "
+        "and include canonical columns in daily_feature_columns)"
+    )
 
     price_col = _resolve_first_existing(schema, ("FINAL_PRC", "PRC", "DLPRC"), "concept filter input (price)")
-    shrcd_col = _resolve_first_existing(schema, ("SHRCD",), "concept filter input")
-    exchcd_col = _resolve_first_existing(schema, ("EXCHCD",), "concept filter input")
-    vol_col = _resolve_first_existing(schema, ("VOL",), "concept filter input")
+    shrcd_col = _resolve_first_existing(schema, ("SHRCD",), f"{metadata_hint} (SHRCD)")
+    exchcd_col = _resolve_first_existing(schema, ("EXCHCD",), f"{metadata_hint} (EXCHCD)")
+    vol_col = _resolve_first_existing(schema, ("VOL",), f"{metadata_hint} (VOL)")
     market_cap_col = _resolve_first_existing(schema, ("MKT_CAP", "TCAP"), "concept filter input (market cap)")
 
     price_ok = (pl.col(price_col).abs().cast(pl.Float64, strict=False) >= pl.lit(1.0)).fill_null(False)
