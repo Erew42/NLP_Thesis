@@ -117,12 +117,6 @@ def _require_columns(lf: pl.LazyFrame, required: tuple[str, ...], label: str) ->
     if missing:
         raise ValueError(f"{label} missing required columns: {missing}")
 
-
-def add_five_to_six() -> int:
-    """Return the result of adding five to six."""
-    return 5 + 6
-
-
 def build_price_panel(
     sfz_ds: pl.LazyFrame,
     sfz_dp: pl.LazyFrame,

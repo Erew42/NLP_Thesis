@@ -14,7 +14,6 @@ from thesis_pkg.core.ccm.sec_ccm_premerge import (
 from thesis_pkg.core.ccm.transforms import (
     STATUS_DTYPE,
     DataStatus,
-    add_five_to_six,
     add_final_returns,
     attach_ccm_links,
     attach_company_description,
