@@ -1,5 +1,6 @@
 import datetime as dt
 from pathlib import Path
+import warnings
 
 import polars as pl
 
@@ -434,3 +435,48 @@ def test_merge_histories_preserves_uint64_roundtrip(tmp_path: Path):
 
     loaded_schema = pl.scan_parquet(output_path).collect_schema()
     assert loaded_schema["data_status"] == pl.UInt64
+
+
+def test_merge_histories_grouped_asof_paths_do_not_emit_sortedness_warning(tmp_path: Path):
+    price = pl.DataFrame(
+        {
+            "KYPERMNO": [2, 1],
+            "CALDT": [dt.date(2024, 1, 2), dt.date(2024, 1, 2)],
+            "KYGVKEY_final": ["2000", "1000"],
+            "LIID": ["B", "A"],
+            "data_status": [0, 0],
+        }
+    )
+
+    # Intentionally unsorted source frames to verify internal sorting + grouped asof behavior.
+    sec_hist = pl.DataFrame(
+        {
+            "KYGVKEY": ["2000", "1000"],
+            "KYIID": ["B", "A"],
+            "HSCHGDT": [dt.date(2023, 12, 31), dt.date(2023, 12, 31)],
+            "HSCHGENDDT": [dt.date(2025, 1, 1), dt.date(2025, 1, 1)],
+            "HTPCI": ["US", "US"],
+            "HEXCNTRY": ["US", "US"],
+        }
+    )
+
+    comp_hist = pl.DataFrame(
+        {
+            "KYGVKEY": ["2000", "1000"],
+            "HCHGDT": [dt.date(2023, 1, 1), dt.date(2023, 1, 1)],
+            "HCHGENDDT": [dt.date(2025, 1, 1), dt.date(2025, 1, 1)],
+            "HCIK": ["CIK2", "CIK1"],
+            "HSIC": [200, 100],
+            "HNAICS": ["2222", "1111"],
+            "HGSUBIND": ["Sub2", "Sub1"],
+        }
+    )
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        merge_histories(price.lazy(), sec_hist.lazy(), comp_hist.lazy(), tmp_path)
+
+    assert not any(
+        "Sortedness of columns cannot be checked when 'by' groups provided" in str(w.message)
+        for w in caught
+    )

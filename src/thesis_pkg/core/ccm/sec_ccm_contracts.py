@@ -31,7 +31,18 @@ class SecCcmJoinSpecV1:
     daily_join_source: Literal["CRSP_DAILY", "MERGED_DAILY_PANEL"] = "CRSP_DAILY"
     daily_permno_col: str = "KYPERMNO"
     daily_date_col: str = "CALDT"
-    daily_feature_columns: tuple[str, ...] = ("RET", "RETX", "PRC", "BIDLO", "ASKHI")
+    daily_feature_columns: tuple[str, ...] = (
+        "RET",
+        "RETX",
+        "PRC",
+        "BIDLO",
+        "ASKHI",
+        "SHRCD",
+        "EXCHCD",
+        "VOL",
+        "MKT_CAP",
+        "TCAP",
+    )
     required_daily_non_null_features: tuple[str, ...] = ()
 
     def to_dict(self) -> dict:

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import polars as pl
 
-from thesis_pkg.core.ccm.transforms import DataStatus, STATUS_DTYPE, _ensure_data_status, _flag_if
+from thesis_pkg.core.ccm.transforms import DataStatus, STATUS_DTYPE, _ensure_data_status, _update_data_status
 
 
 def merge_histories(
@@ -103,6 +103,9 @@ def merge_histories(
             by_left=["KYGVKEY_final", "LIID"],
             by_right=["KYGVKEY", "KYIID"],
             strategy="backward",
+            # Both sides are explicitly sorted above by (group keys, asof key).
+            # Polars cannot verify grouped sortedness and otherwise emits a warning.
+            check_sortedness=False,
         )
         .select(pl.all().exclude(["KYGVKEY", "KYIID"]))
     )
@@ -111,13 +114,15 @@ def merge_histories(
     sec_valid = sec_matched & (pl.col("HCHGENDDT_SEC").is_null() | (pl.col("CALDT") <= pl.col("HCHGENDDT_SEC")))
     sec_stale = sec_matched & pl.col("HCHGENDDT_SEC").is_not_null() & (pl.col("CALDT") > pl.col("HCHGENDDT_SEC"))
 
-    sec_status = (
-        pl.col("data_status").cast(STATUS_DTYPE)
-        | pl.lit(int(DataStatus.SECHIST_CAN_ATTEMPT | DataStatus.SECHIST_ATTEMPTED), dtype=STATUS_DTYPE)
-        | _flag_if(sec_matched, DataStatus.SECHIST_MATCHED)
-        | _flag_if(sec_valid, DataStatus.SECHIST_VALID)
-        | _flag_if(sec_stale, DataStatus.SECHIST_STALE)
-        | _flag_if(sec_matched.not_(), DataStatus.SECHIST_NO_MATCH)
+    sec_status = _update_data_status(
+        pl.col("data_status"),
+        static_flags=DataStatus.SECHIST_CAN_ATTEMPT | DataStatus.SECHIST_ATTEMPTED,
+        conditional_flags=(
+            (sec_matched, DataStatus.SECHIST_MATCHED),
+            (sec_valid, DataStatus.SECHIST_VALID),
+            (sec_stale, DataStatus.SECHIST_STALE),
+            (sec_matched.not_(), DataStatus.SECHIST_NO_MATCH),
+        ),
     ).alias("data_status")
 
     sec_joined = sec_joined.with_columns(
@@ -170,6 +175,9 @@ def merge_histories(
             by_left="KYGVKEY_final",
             by_right="KYGVKEY",
             strategy="backward",
+            # Both sides are explicitly sorted above by (group key, asof key).
+            # Polars cannot verify grouped sortedness and otherwise emits a warning.
+            check_sortedness=False,
         )
         .select(pl.all().exclude(["KYGVKEY"]))
     )
@@ -178,13 +186,15 @@ def merge_histories(
     comp_valid = comp_matched & (pl.col("HCHGENDDT_COMP").is_null() | (pl.col("CALDT") <= pl.col("HCHGENDDT_COMP")))
     comp_stale = comp_matched & pl.col("HCHGENDDT_COMP").is_not_null() & (pl.col("CALDT") > pl.col("HCHGENDDT_COMP"))
 
-    comp_status = (
-        pl.col("data_status").cast(STATUS_DTYPE)
-        | pl.lit(int(DataStatus.COMPHIST_CAN_ATTEMPT | DataStatus.COMPHIST_ATTEMPTED), dtype=STATUS_DTYPE)
-        | _flag_if(comp_matched, DataStatus.COMPHIST_MATCHED)
-        | _flag_if(comp_valid, DataStatus.COMPHIST_VALID)
-        | _flag_if(comp_stale, DataStatus.COMPHIST_STALE)
-        | _flag_if(comp_matched.not_(), DataStatus.COMPHIST_NO_MATCH)
+    comp_status = _update_data_status(
+        pl.col("data_status"),
+        static_flags=DataStatus.COMPHIST_CAN_ATTEMPT | DataStatus.COMPHIST_ATTEMPTED,
+        conditional_flags=(
+            (comp_matched, DataStatus.COMPHIST_MATCHED),
+            (comp_valid, DataStatus.COMPHIST_VALID),
+            (comp_stale, DataStatus.COMPHIST_STALE),
+            (comp_matched.not_(), DataStatus.COMPHIST_NO_MATCH),
+        ),
     ).alias("data_status")
 
     comp_joined = comp_joined.with_columns(

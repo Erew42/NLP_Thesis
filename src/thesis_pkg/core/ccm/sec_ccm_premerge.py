@@ -3,7 +3,7 @@ from __future__ import annotations
 import polars as pl
 
 from thesis_pkg.core.ccm.sec_ccm_contracts import MatchReasonCode, SecCcmJoinSpecV1
-from thesis_pkg.core.ccm.transforms import DataStatus, STATUS_DTYPE, _ensure_data_status, _flag_if
+from thesis_pkg.core.ccm.transforms import DataStatus, STATUS_DTYPE, _ensure_data_status, _update_data_status
 
 
 def _require_columns(lf: pl.LazyFrame, required: tuple[str, ...], label: str) -> None:
@@ -213,20 +213,22 @@ def resolve_links_phase_a(sec_norm_lf: pl.LazyFrame, link_universe_lf: pl.LazyFr
         .alias("link_quality"),
     )
 
-    status = (
-        pl.col("data_status").cast(STATUS_DTYPE)
-        | pl.lit(int(DataStatus.SEC_CCM_PHASE_A_ATTEMPTED), dtype=STATUS_DTYPE)
-        | _flag_if(pl.col("phase_a_reason_code") == pl.lit(MatchReasonCode.BAD_INPUT.value), DataStatus.SEC_CCM_BAD_INPUT)
-        | _flag_if(
-            pl.col("phase_a_reason_code") == pl.lit(MatchReasonCode.CIK_NOT_IN_LINK_UNIVERSE.value),
-            DataStatus.SEC_CCM_CIK_NOT_IN_LINK_UNIVERSE,
-        )
-        | _flag_if(
-            pl.col("phase_a_reason_code") == pl.lit(MatchReasonCode.AMBIGUOUS_LINK.value),
-            DataStatus.SEC_CCM_AMBIGUOUS_LINK,
-        )
-        | _flag_if(pl.col("phase_a_reason_code") == pl.lit(MatchReasonCode.OK.value), DataStatus.SEC_CCM_LINKED_OK)
-        | _flag_if(pl.col("has_acceptance_datetime"), DataStatus.SEC_CCM_HAS_ACCEPTANCE_DATETIME)
+    status = _update_data_status(
+        pl.col("data_status"),
+        static_flags=DataStatus.SEC_CCM_PHASE_A_ATTEMPTED,
+        conditional_flags=(
+            (pl.col("phase_a_reason_code") == pl.lit(MatchReasonCode.BAD_INPUT.value), DataStatus.SEC_CCM_BAD_INPUT),
+            (
+                pl.col("phase_a_reason_code") == pl.lit(MatchReasonCode.CIK_NOT_IN_LINK_UNIVERSE.value),
+                DataStatus.SEC_CCM_CIK_NOT_IN_LINK_UNIVERSE,
+            ),
+            (
+                pl.col("phase_a_reason_code") == pl.lit(MatchReasonCode.AMBIGUOUS_LINK.value),
+                DataStatus.SEC_CCM_AMBIGUOUS_LINK,
+            ),
+            (pl.col("phase_a_reason_code") == pl.lit(MatchReasonCode.OK.value), DataStatus.SEC_CCM_LINKED_OK),
+            (pl.col("has_acceptance_datetime"), DataStatus.SEC_CCM_HAS_ACCEPTANCE_DATETIME),
+        ),
     ).alias("data_status")
 
     return out.with_columns(status).drop(
@@ -301,10 +303,12 @@ def align_doc_dates_phase_b(
     alignment_attempted = phase_a_ok & pl.col("kypermno").is_not_null()
     aligned_ok = alignment_attempted & pl.col("aligned_caldt").is_not_null() & (pl.col("alignment_lag_days") >= 1)
 
-    status = (
-        pl.col("data_status").cast(STATUS_DTYPE)
-        | _flag_if(alignment_attempted, DataStatus.SEC_CCM_PHASE_B_ALIGNMENT_ATTEMPTED)
-        | _flag_if(aligned_ok, DataStatus.SEC_CCM_PHASE_B_ALIGNED)
+    status = _update_data_status(
+        pl.col("data_status"),
+        conditional_flags=(
+            (alignment_attempted, DataStatus.SEC_CCM_PHASE_B_ALIGNMENT_ATTEMPTED),
+            (aligned_ok, DataStatus.SEC_CCM_PHASE_B_ALIGNED),
+        ),
     ).alias("data_status")
 
     return aligned.with_columns(status).drop("_alignment_anchor_date", strict=False)
@@ -374,10 +378,12 @@ def join_daily_phase_b(
         & pl.col("aligned_caldt").is_not_null()
     )
 
-    status = (
-        pl.col("data_status").cast(STATUS_DTYPE)
-        | _flag_if(daily_attempted, DataStatus.SEC_CCM_PHASE_B_DAILY_JOIN_ATTEMPTED)
-        | _flag_if(usable_expr, DataStatus.SEC_CCM_PHASE_B_DAILY_ROW_FOUND)
+    status = _update_data_status(
+        pl.col("data_status"),
+        conditional_flags=(
+            (daily_attempted, DataStatus.SEC_CCM_PHASE_B_DAILY_JOIN_ATTEMPTED),
+            (usable_expr, DataStatus.SEC_CCM_PHASE_B_DAILY_ROW_FOUND),
+        ),
     ).alias("data_status")
 
     return joined.with_columns(
@@ -446,16 +452,18 @@ def apply_phase_b_reason_codes(
         .otherwise(pl.col("phase_a_reason_code"))
     )
 
-    status = (
-        pl.col("data_status").cast(STATUS_DTYPE)
-        | _flag_if(
-            phase_a_ok & (phase_b_reason == pl.lit(MatchReasonCode.OUT_OF_CCM_COVERAGE.value)),
-            DataStatus.SEC_CCM_PHASE_B_OUT_OF_CCM_COVERAGE,
-        )
-        | _flag_if(
-            phase_a_ok & (phase_b_reason == pl.lit(MatchReasonCode.NO_CCM_ROW_FOR_DATE.value)),
-            DataStatus.SEC_CCM_PHASE_B_NO_CCM_ROW_FOR_DATE,
-        )
+    status = _update_data_status(
+        pl.col("data_status"),
+        conditional_flags=(
+            (
+                phase_a_ok & (phase_b_reason == pl.lit(MatchReasonCode.OUT_OF_CCM_COVERAGE.value)),
+                DataStatus.SEC_CCM_PHASE_B_OUT_OF_CCM_COVERAGE,
+            ),
+            (
+                phase_a_ok & (phase_b_reason == pl.lit(MatchReasonCode.NO_CCM_ROW_FOR_DATE.value)),
+                DataStatus.SEC_CCM_PHASE_B_NO_CCM_ROW_FOR_DATE,
+            ),
+        ),
     ).alias("data_status")
 
     return out.with_columns(
@@ -605,37 +613,31 @@ def apply_concept_filter_flags_doc(final_doc_lf: pl.LazyFrame) -> pl.LazyFrame:
     lf = _ensure_data_status(final_doc_lf)
     schema = lf.collect_schema()
 
-    price_col = next((col for col in ("FINAL_PRC", "PRC", "DLPRC") if col in schema), None)
-    price_ok = (
-        pl.col(price_col).abs().cast(pl.Float64, strict=False) >= pl.lit(1.0)
-        if price_col is not None
-        else pl.lit(True)
-    )
+    price_col = _resolve_first_existing(schema, ("FINAL_PRC", "PRC", "DLPRC"), "concept filter input (price)")
+    shrcd_col = _resolve_first_existing(schema, ("SHRCD",), "concept filter input")
+    exchcd_col = _resolve_first_existing(schema, ("EXCHCD",), "concept filter input")
+    vol_col = _resolve_first_existing(schema, ("VOL",), "concept filter input")
+    market_cap_col = _resolve_first_existing(schema, ("MKT_CAP", "TCAP"), "concept filter input (market cap)")
 
-    common_stock_ok = (
-        pl.col("SHRCD").cast(pl.Int32, strict=False).is_in([10, 11]) if "SHRCD" in schema else pl.lit(True)
-    )
-    major_exchange_ok = (
-        pl.col("EXCHCD").cast(pl.Int32, strict=False).is_in([1, 2, 3]) if "EXCHCD" in schema else pl.lit(True)
-    )
-    liquidity_ok = (
-        pl.col("VOL").cast(pl.Float64, strict=False).fill_null(0.0) > pl.lit(0.0) if "VOL" in schema else pl.lit(True)
-    )
+    price_ok = (pl.col(price_col).abs().cast(pl.Float64, strict=False) >= pl.lit(1.0)).fill_null(False)
+    common_stock_ok = pl.col(shrcd_col).cast(pl.Int32, strict=False).is_in([10, 11]).fill_null(False)
+    major_exchange_ok = pl.col(exchcd_col).cast(pl.Int32, strict=False).is_in([1, 2, 3]).fill_null(False)
+    liquidity_ok = (pl.col(vol_col).cast(pl.Float64, strict=False).fill_null(0.0) > pl.lit(0.0)).fill_null(False)
     non_microcap_ok = (
-        pl.col("MKT_CAP").cast(pl.Float64, strict=False).fill_null(0.0) >= pl.lit(50_000_000.0)
-        if "MKT_CAP" in schema
-        else pl.lit(True)
-    )
+        pl.col(market_cap_col).cast(pl.Float64, strict=False).fill_null(0.0) >= pl.lit(50_000_000.0)
+    ).fill_null(False)
     passes_all = price_ok & common_stock_ok & major_exchange_ok & liquidity_ok & non_microcap_ok
 
-    status = (
-        pl.col("data_status").cast(STATUS_DTYPE)
-        | _flag_if(price_ok, DataStatus.SEC_CCM_FILTER_PRICE_PASS)
-        | _flag_if(common_stock_ok, DataStatus.SEC_CCM_FILTER_COMMON_STOCK_PASS)
-        | _flag_if(major_exchange_ok, DataStatus.SEC_CCM_FILTER_MAJOR_EXCHANGE_PASS)
-        | _flag_if(liquidity_ok, DataStatus.SEC_CCM_FILTER_LIQUIDITY_PASS)
-        | _flag_if(non_microcap_ok, DataStatus.SEC_CCM_FILTER_NON_MICROCAP_PASS)
-        | _flag_if(passes_all, DataStatus.SEC_CCM_FILTER_ALL_PASS)
+    status = _update_data_status(
+        pl.col("data_status"),
+        conditional_flags=(
+            (price_ok, DataStatus.SEC_CCM_FILTER_PRICE_PASS),
+            (common_stock_ok, DataStatus.SEC_CCM_FILTER_COMMON_STOCK_PASS),
+            (major_exchange_ok, DataStatus.SEC_CCM_FILTER_MAJOR_EXCHANGE_PASS),
+            (liquidity_ok, DataStatus.SEC_CCM_FILTER_LIQUIDITY_PASS),
+            (non_microcap_ok, DataStatus.SEC_CCM_FILTER_NON_MICROCAP_PASS),
+            (passes_all, DataStatus.SEC_CCM_FILTER_ALL_PASS),
+        ),
     ).alias("data_status")
 
     return lf.with_columns(

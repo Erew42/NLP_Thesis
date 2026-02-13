@@ -6,17 +6,19 @@ from pathlib import Path
 import warnings
 
 import polars as pl
+import pytest
 
 from thesis_pkg.core.ccm.sec_ccm_contracts import MatchReasonCode, SecCcmJoinSpecV1
 from thesis_pkg.core.ccm.sec_ccm_premerge import (
     align_doc_dates_phase_b,
+    apply_concept_filter_flags_doc,
     apply_phase_b_reason_codes,
     build_match_status_doc,
     normalize_sec_filings_phase_a,
     resolve_links_phase_a,
     join_daily_phase_b,
 )
-from thesis_pkg.core.ccm.transforms import STATUS_DTYPE
+from thesis_pkg.core.ccm.transforms import DataStatus, STATUS_DTYPE
 from thesis_pkg.pipelines.sec_ccm_pipeline import run_sec_ccm_premerge_pipeline
 
 
@@ -189,6 +191,45 @@ def test_acceptance_datetime_optional_and_not_default_coerced():
     assert out2.select("has_acceptance_datetime").to_series().to_list() == [True, False]
 
 
+def test_apply_concept_filter_flags_doc_requires_required_columns():
+    base = pl.DataFrame(
+        {
+            "doc_id": ["d1"],
+            "data_status": [0],
+            "PRC": [10.0],
+        }
+    )
+    with pytest.raises(ValueError, match="concept filter input"):
+        apply_concept_filter_flags_doc(base.lazy()).collect()
+
+
+def test_apply_concept_filter_flags_doc_sets_flags_with_complete_inputs():
+    base = pl.DataFrame(
+        {
+            "doc_id": ["pass", "fail"],
+            "data_status": [0, 0],
+            "PRC": [10.0, 0.5],
+            "SHRCD": [10, 12],
+            "EXCHCD": [1, 4],
+            "VOL": [1000.0, 0.0],
+            "MKT_CAP": [100_000_000.0, 10_000_000.0],
+        }
+    )
+    out = apply_concept_filter_flags_doc(base.lazy()).collect().sort("doc_id")
+
+    assert out.select("passes_all_filters").to_series().to_list() == [False, True]
+    pass_status = out.filter(pl.col("doc_id") == "pass").select("data_status").item()
+    fail_status = out.filter(pl.col("doc_id") == "fail").select("data_status").item()
+
+    assert pass_status & int(DataStatus.SEC_CCM_FILTER_PRICE_PASS)
+    assert pass_status & int(DataStatus.SEC_CCM_FILTER_COMMON_STOCK_PASS)
+    assert pass_status & int(DataStatus.SEC_CCM_FILTER_MAJOR_EXCHANGE_PASS)
+    assert pass_status & int(DataStatus.SEC_CCM_FILTER_LIQUIDITY_PASS)
+    assert pass_status & int(DataStatus.SEC_CCM_FILTER_NON_MICROCAP_PASS)
+    assert pass_status & int(DataStatus.SEC_CCM_FILTER_ALL_PASS)
+    assert fail_status == 0
+
+
 def test_end_to_end_pipeline_outputs_doc_grain_artifacts(tmp_path: Path):
     sec = pl.DataFrame(
         {
@@ -217,6 +258,10 @@ def test_end_to_end_pipeline_outputs_doc_grain_artifacts(tmp_path: Path):
             "PRC": [10.0],
             "BIDLO": [9.5],
             "ASKHI": [10.5],
+            "SHRCD": [10],
+            "EXCHCD": [1],
+            "VOL": [1000.0],
+            "MKT_CAP": [100_000_000.0],
         }
     )
 
@@ -284,3 +329,42 @@ def test_end_to_end_pipeline_outputs_doc_grain_artifacts(tmp_path: Path):
     report_text = Path(paths["sec_ccm_run_report"]).read_text(encoding="utf-8")
     assert "SEC-CCM Pre-Merge Run Report" in report_text
     assert "Step Performance" in report_text
+
+
+def test_end_to_end_pipeline_daily_join_disabled_sets_filter_columns_false(tmp_path: Path):
+    sec = pl.DataFrame(
+        {
+            "doc_id": ["d1"],
+            "cik_10": ["0000000001"],
+            "filing_date": [dt.date(2024, 1, 2)],
+            "document_type_filename": ["10-K"],
+        }
+    )
+    link_universe = pl.DataFrame(
+        {
+            "cik_10": ["0000000001"],
+            "gvkey": ["1000"],
+            "kypermno": [1],
+            "link_rank": [0],
+            "link_quality": [1.0],
+        }
+    )
+    trading_calendar = pl.DataFrame({"CALDT": [dt.date(2024, 1, 3)]})
+
+    paths = run_sec_ccm_premerge_pipeline(
+        sec.lazy(),
+        link_universe.lazy(),
+        trading_calendar.lazy(),
+        tmp_path,
+        daily_lf=None,
+        join_spec=SecCcmJoinSpecV1(daily_join_enabled=False),
+        emit_run_report=False,
+    )
+
+    final_df = pl.read_parquet(paths["final_flagged_data"])
+    assert final_df.select("filter_price_pass").item() is False
+    assert final_df.select("filter_common_stock_pass").item() is False
+    assert final_df.select("filter_major_exchange_pass").item() is False
+    assert final_df.select("filter_liquidity_pass").item() is False
+    assert final_df.select("filter_non_microcap_pass").item() is False
+    assert final_df.select("passes_all_filters").item() is False

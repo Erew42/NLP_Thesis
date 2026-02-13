@@ -86,6 +86,21 @@ def _flag_if(expr: pl.Expr, flag: DataStatus) -> pl.Expr:
     return expr.fill_null(False).cast(STATUS_DTYPE) * int(flag)
 
 
+def _update_data_status(
+    base_status: pl.Expr,
+    *,
+    conditional_flags: tuple[tuple[pl.Expr, DataStatus], ...] = (),
+    static_flags: DataStatus = DataStatus.NONE,
+) -> pl.Expr:
+    """Compose status updates from static and conditional flags."""
+    status = base_status.cast(STATUS_DTYPE).fill_null(int(DataStatus.NONE))
+    if static_flags != DataStatus.NONE:
+        status = status | pl.lit(int(static_flags), dtype=STATUS_DTYPE)
+    for expr, flag in conditional_flags:
+        status = status | _flag_if(expr, flag)
+    return status.cast(STATUS_DTYPE)
+
+
 def _coerce_date(value: dt.date | dt.datetime | str) -> dt.date:
     """Normalize input to a date for filtering."""
     if isinstance(value, dt.datetime):
@@ -112,12 +127,13 @@ def build_price_panel(
     dp = sfz_dp.filter(pl.col("CALDT") >= pl.lit(start_dt))
 
     price = dp.join(ds, on=["KYPERMNO", "CALDT"], how="full", coalesce=True).with_columns(
-        (
-            _flag_if(pl.col("RET").is_not_null(), DataStatus.HAS_RET)
-            | _flag_if(pl.col("BIDLO").is_not_null(), DataStatus.HAS_BIDLO)
-        )
-        .cast(STATUS_DTYPE)
-        .alias("data_status")
+        _update_data_status(
+            pl.lit(int(DataStatus.NONE), dtype=STATUS_DTYPE),
+            conditional_flags=(
+                (pl.col("RET").is_not_null(), DataStatus.HAS_RET),
+                (pl.col("BIDLO").is_not_null(), DataStatus.HAS_BIDLO),
+            ),
+        ).alias("data_status")
     )
 
     last_trade = price.group_by("KYPERMNO").agg(pl.col("CALDT").max().alias("LAST_CALDT"))
@@ -173,15 +189,17 @@ def add_final_returns(price_lf: pl.LazyFrame) -> pl.LazyFrame:
     dlretx_available = pl.col("DLRETX").is_not_null()
     dlprc_available = pl.col("DLPRC").is_not_null()
 
-    availability_flags = (
-        pl.col("data_status").cast(STATUS_DTYPE)
-        | _flag_if(ret_available, DataStatus.HAS_RET)
-        | _flag_if(retx_available, DataStatus.HAS_RETX)
-        | _flag_if(prc_available, DataStatus.HAS_PRC)
-        | _flag_if(dlret_available, DataStatus.HAS_DLRET)
-        | _flag_if(dlretx_available, DataStatus.HAS_DLRETX)
-        | _flag_if(dlprc_available, DataStatus.HAS_DLPRC)
-    ).cast(STATUS_DTYPE).alias("data_status")
+    availability_flags = _update_data_status(
+        pl.col("data_status"),
+        conditional_flags=(
+            (ret_available, DataStatus.HAS_RET),
+            (retx_available, DataStatus.HAS_RETX),
+            (prc_available, DataStatus.HAS_PRC),
+            (dlret_available, DataStatus.HAS_DLRET),
+            (dlretx_available, DataStatus.HAS_DLRETX),
+            (dlprc_available, DataStatus.HAS_DLPRC),
+        ),
+    ).alias("data_status")
 
     return lf.with_columns(
         availability_flags,
@@ -389,7 +407,6 @@ def attach_company_description(
         ])
         .drop_nulls(subset=["KYGVKEY_final"])
         .unique(subset=["KYGVKEY_final"])
-        .collect()
     )
 
     # --- 2) Deterministic-ish CIK map (mode per GVKEY) ---
@@ -418,20 +435,19 @@ def attach_company_description(
             pl.col("CIK_desc_10").drop_nulls().mode().first().alias("CIK_desc_10"),
             pl.col("CIK_desc_10").drop_nulls().n_unique().alias("n_cik_desc_uniq"),
         ])
-        .collect()
     )
 
     out = (
         lf
-        .join(desc_keys.lazy(), on="KYGVKEY_final", how="left")
+        .join(desc_keys, on="KYGVKEY_final", how="left")
         .with_columns(
-            (
-                pl.col("data_status").cast(STATUS_DTYPE)
-                | _flag_if(pl.col("_has_comp_desc").fill_null(False), DataStatus.HAS_COMP_DESC)
+            _update_data_status(
+                pl.col("data_status"),
+                conditional_flags=((pl.col("_has_comp_desc").fill_null(False), DataStatus.HAS_COMP_DESC),),
             ).alias("data_status")
         )
         .drop("_has_comp_desc", strict=False)
-        .join(cik_map.lazy(), on="KYGVKEY_final", how="left")
+        .join(cik_map, on="KYGVKEY_final", how="left")
     )
 
     # Normalize CompHist CIK too (avoid turning empty-string into "0000000000")

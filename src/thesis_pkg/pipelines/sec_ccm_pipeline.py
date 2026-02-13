@@ -502,7 +502,18 @@ def run_sec_ccm_premerge_pipeline(
         _record_step("phase_b_daily_join", notes="daily_join_enabled=False")
 
     final_doc = apply_phase_b_reason_codes(phase_a_links, phase_b_joined, join_spec)
-    final_doc = apply_concept_filter_flags_doc(final_doc)
+    if join_spec.daily_join_enabled:
+        final_doc = apply_concept_filter_flags_doc(final_doc)
+    else:
+        # In no-daily mode we preserve doc rows and leave filter pass flags as explicit False.
+        final_doc = final_doc.with_columns(
+            pl.lit(False).alias("filter_price_pass"),
+            pl.lit(False).alias("filter_common_stock_pass"),
+            pl.lit(False).alias("filter_major_exchange_pass"),
+            pl.lit(False).alias("filter_liquidity_pass"),
+            pl.lit(False).alias("filter_non_microcap_pass"),
+            pl.lit(False).alias("passes_all_filters"),
+        )
     _assert_unique_doc_id(final_doc, "final doc output")
     _record_step("phase_b_reason_and_filter_flags")
 
