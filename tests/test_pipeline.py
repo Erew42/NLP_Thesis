@@ -6,12 +6,23 @@ import polars as pl
 import pytest
 
 from thesis_pkg.pipeline import (
+    EXCHCD_NAME_MAP,
+    SHRCD_FIRST_DIGIT_MAP,
+    SHRCD_NAME_MAP,
+    SHRCD_SECOND_DIGIT_MAP,
+    add_exchcd_name,
     add_final_returns,
+    filter_us_common_major_exchange,
+    add_shrcd_name,
     attach_company_description,
     attach_ccm_links,
     attach_filings,
     build_price_panel,
     DataStatus,
+    exchcd_name_expr,
+    map_shrcd_to_name,
+    shrcd_name_expr,
+    map_exchcd_to_name,
     merge_histories,
 )
 
@@ -97,6 +108,119 @@ def test_build_price_panel_merges_delistings_and_flags():
     assert panel.filter(pl.col("CALDT") == dt.date(2024, 1, 3)).select("DLRET").item() == -0.5
     assert panel.select("SHRCD").to_series().to_list() == [10, 10]
     assert panel.select("EXCHCD").to_series().to_list() == [1, 1]
+
+
+def test_map_exchcd_to_name_scalar():
+    assert map_exchcd_to_name(1) == "NYSE"
+    assert map_exchcd_to_name(3) == "NASDAQ"
+    assert map_exchcd_to_name(-2) == "Halted by Primary Listing Exchange"
+    assert map_exchcd_to_name(33) == "When-Issued Trading on NASDAQ"
+    assert map_exchcd_to_name(None) is None
+    assert map_exchcd_to_name(999) is None
+    assert map_exchcd_to_name(999, unknown="UNKNOWN") == "UNKNOWN"
+    assert EXCHCD_NAME_MAP[2] == "NYSE MKT"
+
+
+def test_exchcd_name_expr_and_add_exchcd_name():
+    base = pl.DataFrame({"EXCHCD": [1, 3, 33, 999, None, -1]})
+    out_expr = base.lazy().with_columns(exchcd_name_expr("EXCHCD").alias("EXCHCD_NAME")).collect()
+    assert out_expr.select("EXCHCD_NAME").to_series().to_list() == [
+        "NYSE",
+        "NASDAQ",
+        "When-Issued Trading on NASDAQ",
+        None,
+        None,
+        "Suspended by Primary Listing Exchange",
+    ]
+
+    out_helper = add_exchcd_name(base.lazy(), unknown="OTHER").collect()
+    assert out_helper.select("EXCHCD_NAME").to_series().to_list() == [
+        "NYSE",
+        "NASDAQ",
+        "When-Issued Trading on NASDAQ",
+        "OTHER",
+        None,
+        "Suspended by Primary Listing Exchange",
+    ]
+
+
+def test_map_shrcd_to_name_scalar():
+    assert map_shrcd_to_name(10) == "Ordinary Common Shares | Securities which have not been further defined"
+    assert map_shrcd_to_name(11) == "Ordinary Common Shares | Securities which need not be further defined"
+    assert map_shrcd_to_name(12) == "Ordinary Common Shares | Companies incorporated outside the US"
+    assert map_shrcd_to_name(18) == "Ordinary Common Shares | REITs (Real Estate Investment Trusts)"
+    assert map_shrcd_to_name(None) is None
+    assert map_shrcd_to_name(99) is None
+    assert map_shrcd_to_name(99, unknown="UNKNOWN") == "UNKNOWN"
+    assert SHRCD_FIRST_DIGIT_MAP[1] == "Ordinary Common Shares"
+    assert SHRCD_NAME_MAP[11] == "Ordinary Common Shares | Securities which need not be further defined"
+    assert SHRCD_SECOND_DIGIT_MAP[8] == "REITs (Real Estate Investment Trusts)"
+
+
+def test_shrcd_name_expr_and_add_shrcd_name():
+    base = pl.DataFrame({"SHRCD": [10, 11, 12, 18, 99, None]})
+    out_expr = base.lazy().with_columns(shrcd_name_expr("SHRCD").alias("SHRCD_NAME")).collect()
+    assert out_expr.select("SHRCD_NAME").to_series().to_list() == [
+        "Ordinary Common Shares | Securities which have not been further defined",
+        "Ordinary Common Shares | Securities which need not be further defined",
+        "Ordinary Common Shares | Companies incorporated outside the US",
+        "Ordinary Common Shares | REITs (Real Estate Investment Trusts)",
+        None,
+        None,
+    ]
+
+    out_helper = add_shrcd_name(base.lazy(), unknown="OTHER").collect()
+    assert out_helper.select("SHRCD_NAME").to_series().to_list() == [
+        "Ordinary Common Shares | Securities which have not been further defined",
+        "Ordinary Common Shares | Securities which need not be further defined",
+        "Ordinary Common Shares | Companies incorporated outside the US",
+        "Ordinary Common Shares | REITs (Real Estate Investment Trusts)",
+        "OTHER",
+        None,
+    ]
+
+
+def test_datastatus_us_common_stock_major_exchange_composite():
+    composite = DataStatus.US_COMMON_STOCK_MAJOR_EXCHANGE
+    expected = DataStatus.SEC_CCM_FILTER_COMMON_STOCK_PASS | DataStatus.SEC_CCM_FILTER_MAJOR_EXCHANGE_PASS
+    assert composite == expected
+    assert DataStatus.SEC_CCM_FILTER_US_COMMON_STOCK_MAJOR_EXCHANGE_PASS == expected
+
+    both = int(DataStatus.SEC_CCM_FILTER_COMMON_STOCK_PASS | DataStatus.SEC_CCM_FILTER_MAJOR_EXCHANGE_PASS)
+    only_exchange = int(DataStatus.SEC_CCM_FILTER_MAJOR_EXCHANGE_PASS)
+
+    assert (both & int(composite)) == int(composite)
+    assert (only_exchange & int(composite)) != int(composite)
+
+
+def test_filter_us_common_major_exchange_by_status_bits():
+    common = int(DataStatus.SEC_CCM_FILTER_COMMON_STOCK_PASS)
+    exch = int(DataStatus.SEC_CCM_FILTER_MAJOR_EXCHANGE_PASS)
+    both = int(DataStatus.US_COMMON_STOCK_MAJOR_EXCHANGE)
+    all_pass = int(DataStatus.SEC_CCM_FILTER_ALL_PASS)
+
+    base = pl.DataFrame(
+        {
+            "row_id": [1, 2, 3, 4, 5, 6],
+            "data_status": [
+                int(DataStatus.NONE),
+                common,
+                exch,
+                both,
+                both | all_pass,
+                None,
+            ],
+        }
+    )
+
+    filtered = filter_us_common_major_exchange(base.lazy()).collect().sort("row_id")
+    assert filtered.select("row_id").to_series().to_list() == [4, 5]
+
+
+def test_filter_us_common_major_exchange_handles_missing_status_column():
+    base = pl.DataFrame({"row_id": [1, 2, 3]})
+    filtered = filter_us_common_major_exchange(base.lazy()).collect()
+    assert filtered.height == 0
 
 
 def test_build_price_panel_uses_hdr_fallback_when_nam_out_of_range():

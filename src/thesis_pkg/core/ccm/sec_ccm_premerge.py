@@ -621,7 +621,7 @@ def apply_concept_filter_flags_doc(final_doc_lf: pl.LazyFrame) -> pl.LazyFrame:
     shrcd_col = _resolve_first_existing(schema, ("SHRCD",), f"{metadata_hint} (SHRCD)")
     exchcd_col = _resolve_first_existing(schema, ("EXCHCD",), f"{metadata_hint} (EXCHCD)")
     vol_col = _resolve_first_existing(schema, ("VOL",), f"{metadata_hint} (VOL)")
-    market_cap_col = _resolve_first_existing(schema, ("MKT_CAP", "TCAP"), "concept filter input (market cap)")
+    market_cap_col = _resolve_first_existing(schema, ("TCAP",), "concept filter input (TCAP market cap)")
 
     price_ok = (pl.col(price_col).abs().cast(pl.Float64, strict=False) >= pl.lit(1.0)).fill_null(False)
     common_stock_ok = pl.col(shrcd_col).cast(pl.Int32, strict=False).is_in([10, 11]).fill_null(False)

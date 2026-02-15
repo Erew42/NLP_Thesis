@@ -8,6 +8,50 @@ import polars as pl
 
 STATUS_DTYPE = pl.UInt64
 
+EXCHCD_NAME_MAP: dict[int, str] = {
+    -2: "Halted by Primary Listing Exchange",
+    -1: "Suspended by Primary Listing Exchange",
+    0: "Not Trading on Primary Listing Exchange",
+    1: "NYSE",
+    2: "NYSE MKT",
+    3: "NASDAQ",
+    4: "Arca",
+    5: "BZX Exchange",
+    6: "Investors Exchange (IEX)",
+    10: "Boston Stock Exchange",
+    13: "Chicago Stock Exchange",
+    16: "Pacific Stock Exchange",
+    17: "Philadelphia Stock Exchange",
+    20: "Over-The-Counter (Non-NASDAQ Dealer Quotations)",
+    31: "When-Issued Trading on NYSE",
+    32: "When-Issued Trading on NYSE MKT",
+    33: "When-Issued Trading on NASDAQ",
+}
+
+SHRCD_FIRST_DIGIT_MAP: dict[int, str] = {
+    1: "Ordinary Common Shares",
+    2: "Certificates, Americus Trust Components (Prime, Score, & Units)",
+    3: "ADRs (American Depositary Receipts)",
+    4: "SBIs (Shares of Beneficial Interest)",
+    7: "Units / Depositary Units / Limited Partnership Interests / ETFs",
+}
+
+SHRCD_SECOND_DIGIT_MAP: dict[int, str] = {
+    0: "Securities which have not been further defined",
+    1: "Securities which need not be further defined",
+    2: "Companies incorporated outside the US",
+    3: "Americus Trust Components / ETFs",
+    4: "Closed-end funds",
+    5: "Closed-end fund companies incorporated outside the US",
+    8: "REITs (Real Estate Investment Trusts)",
+}
+
+SHRCD_NAME_MAP: dict[int, str] = {
+    first_digit * 10 + second_digit: f"{first_desc} | {second_desc}"
+    for first_digit, first_desc in SHRCD_FIRST_DIGIT_MAP.items()
+    for second_digit, second_desc in SHRCD_SECOND_DIGIT_MAP.items()
+}
+
 
 class DataStatus(IntFlag):
     """Bitmask for data availability, provenance, and join results."""
@@ -71,6 +115,11 @@ class DataStatus(IntFlag):
     # Convenience Combinations for Filtering
     FULL_PANEL_DATA = HAS_RET | HAS_BIDLO
     ANY_RET_DATA = HAS_RET | HAS_DLRET
+    # Convenience alias: rows where both common-stock and major-exchange pass bits are set.
+    SEC_CCM_FILTER_US_COMMON_STOCK_MAJOR_EXCHANGE_PASS = (
+        SEC_CCM_FILTER_COMMON_STOCK_PASS | SEC_CCM_FILTER_MAJOR_EXCHANGE_PASS
+    )
+    US_COMMON_STOCK_MAJOR_EXCHANGE = SEC_CCM_FILTER_US_COMMON_STOCK_MAJOR_EXCHANGE_PASS
 
 
 def _ensure_data_status(lf: pl.LazyFrame) -> pl.LazyFrame:
@@ -108,6 +157,105 @@ def _coerce_date(value: dt.date | dt.datetime | str) -> dt.date:
     if isinstance(value, dt.date):
         return value
     return dt.date.fromisoformat(str(value))
+
+
+def map_exchcd_to_name(code: int | None, *, unknown: str | None = None) -> str | None:
+    """Map a CRSP exchange code to a human-readable exchange name."""
+    if code is None:
+        return None
+    return EXCHCD_NAME_MAP.get(int(code), unknown)
+
+
+def exchcd_name_expr(code_col: str = "EXCHCD", *, unknown: str | None = None) -> pl.Expr:
+    """Return a Polars expression mapping EXCHCD values to exchange names."""
+    code_expr = pl.col(code_col).cast(pl.Int32, strict=False)
+    mapped = pl.when(code_expr.is_null()).then(pl.lit(None, dtype=pl.Utf8))
+    for exch_code, exch_name in sorted(EXCHCD_NAME_MAP.items()):
+        mapped = mapped.when(code_expr == pl.lit(exch_code)).then(pl.lit(exch_name, dtype=pl.Utf8))
+    if unknown is None:
+        return mapped.otherwise(pl.lit(None, dtype=pl.Utf8))
+    return mapped.otherwise(pl.lit(unknown, dtype=pl.Utf8))
+
+
+def add_exchcd_name(
+    lf: pl.LazyFrame,
+    *,
+    code_col: str = "EXCHCD",
+    out_col: str = "EXCHCD_NAME",
+    unknown: str | None = None,
+) -> pl.LazyFrame:
+    """Add a mapped exchange-name column derived from EXCHCD."""
+    return lf.with_columns(exchcd_name_expr(code_col, unknown=unknown).alias(out_col))
+
+
+def map_shrcd_to_name(code: int | None, *, unknown: str | None = None) -> str | None:
+    """Map a CRSP 2-digit share code to a human-readable description."""
+    if code is None:
+        return None
+    code_int = int(code)
+    return SHRCD_NAME_MAP.get(code_int, unknown)
+
+
+def shrcd_name_expr(code_col: str = "SHRCD", *, unknown: str | None = None) -> pl.Expr:
+    """Return a Polars expression mapping SHRCD values to a share-code description."""
+    code_expr = pl.col(code_col).cast(pl.Int32, strict=False)
+    first_digit = (code_expr // pl.lit(10)).cast(pl.Int32, strict=False)
+    second_digit = (code_expr % pl.lit(10)).cast(pl.Int32, strict=False)
+
+    first_desc = pl.when(first_digit == pl.lit(1)).then(pl.lit(SHRCD_FIRST_DIGIT_MAP[1], dtype=pl.Utf8))
+    for k in (2, 3, 4, 7):
+        first_desc = first_desc.when(first_digit == pl.lit(k)).then(pl.lit(SHRCD_FIRST_DIGIT_MAP[k], dtype=pl.Utf8))
+    first_desc = first_desc.otherwise(pl.lit(None, dtype=pl.Utf8))
+
+    second_desc = pl.when(second_digit == pl.lit(0)).then(pl.lit(SHRCD_SECOND_DIGIT_MAP[0], dtype=pl.Utf8))
+    for k in (1, 2, 3, 4, 5, 8):
+        second_desc = second_desc.when(second_digit == pl.lit(k)).then(
+            pl.lit(SHRCD_SECOND_DIGIT_MAP[k], dtype=pl.Utf8)
+        )
+    second_desc = second_desc.otherwise(pl.lit(None, dtype=pl.Utf8))
+
+    valid = first_desc.is_not_null() & second_desc.is_not_null()
+    combined = pl.concat_str([first_desc, second_desc], separator=" | ")
+    mapped = (
+        pl.when(code_expr.is_null())
+        .then(pl.lit(None, dtype=pl.Utf8))
+        .when(valid)
+        .then(combined)
+    )
+    if unknown is None:
+        return mapped.otherwise(pl.lit(None, dtype=pl.Utf8))
+    return mapped.otherwise(pl.lit(unknown, dtype=pl.Utf8))
+
+
+def add_shrcd_name(
+    lf: pl.LazyFrame,
+    *,
+    code_col: str = "SHRCD",
+    out_col: str = "SHRCD_NAME",
+    unknown: str | None = None,
+) -> pl.LazyFrame:
+    """Add a mapped share-code description column derived from SHRCD."""
+    return lf.with_columns(shrcd_name_expr(code_col, unknown=unknown).alias(out_col))
+
+
+def filter_us_common_major_exchange(
+    lf: pl.LazyFrame,
+    *,
+    status_col: str = "data_status",
+) -> pl.LazyFrame:
+    """
+    Keep rows where both US common-stock and major-exchange filter bits are set.
+
+    This uses the canonical concept-filter status bits:
+    - SEC_CCM_FILTER_COMMON_STOCK_PASS (SHRCD in {10, 11})
+    - SEC_CCM_FILTER_MAJOR_EXCHANGE_PASS (EXCHCD in {1, 2, 3})
+    """
+    normalized = _ensure_data_status(lf)
+    required_mask = int(DataStatus.US_COMMON_STOCK_MAJOR_EXCHANGE)
+    status_expr = pl.col(status_col).cast(STATUS_DTYPE).fill_null(int(DataStatus.NONE))
+    return normalized.filter(
+        (status_expr & pl.lit(required_mask, dtype=STATUS_DTYPE)) == pl.lit(required_mask, dtype=STATUS_DTYPE)
+    )
 
 
 def _require_columns(lf: pl.LazyFrame, required: tuple[str, ...], label: str) -> None:

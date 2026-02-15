@@ -212,7 +212,7 @@ def test_apply_concept_filter_flags_doc_sets_flags_with_complete_inputs():
             "SHRCD": [10, 12],
             "EXCHCD": [1, 4],
             "VOL": [1000.0, 0.0],
-            "MKT_CAP": [100_000_000.0, 10_000_000.0],
+            "TCAP": [100_000_000.0, 10_000_000.0],
         }
     )
     out = apply_concept_filter_flags_doc(base.lazy()).collect().sort("doc_id")
@@ -261,7 +261,7 @@ def test_end_to_end_pipeline_outputs_doc_grain_artifacts(tmp_path: Path):
             "SHRCD": [10],
             "EXCHCD": [1],
             "VOL": [1000.0],
-            "MKT_CAP": [100_000_000.0],
+            "TCAP": [100_000_000.0],
         }
     )
 

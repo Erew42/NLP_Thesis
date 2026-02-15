@@ -40,7 +40,6 @@ class SecCcmJoinSpecV1:
         "SHRCD",
         "EXCHCD",
         "VOL",
-        # "MKT_CAP",
         "TCAP",
     )
     required_daily_non_null_features: tuple[str, ...] = ()
