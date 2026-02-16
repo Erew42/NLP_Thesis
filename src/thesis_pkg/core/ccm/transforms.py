@@ -258,6 +258,60 @@ def filter_us_common_major_exchange(
     )
 
 
+def _resolve_first_existing(schema: pl.Schema, candidates: tuple[str, ...], label: str) -> str:
+    for candidate in candidates:
+        if candidate in schema:
+            return candidate
+    raise ValueError(f"{label} missing any of expected columns: {list(candidates)}")
+
+
+def apply_concept_filter_flags_doc(final_doc_lf: pl.LazyFrame) -> pl.LazyFrame:
+    """Apply concept-based filter flags without dropping rows."""
+    lf = _ensure_data_status(final_doc_lf)
+    schema = lf.collect_schema()
+    metadata_hint = (
+        "concept filter input (rebuild upstream CCM daily panel with sfz_nam/sfz_hdr enrichment, "
+        "and include canonical columns in daily_feature_columns)"
+    )
+
+    price_col = _resolve_first_existing(schema, ("FINAL_PRC", "PRC", "DLPRC"), "concept filter input (price)")
+    shrcd_col = _resolve_first_existing(schema, ("SHRCD",), f"{metadata_hint} (SHRCD)")
+    exchcd_col = _resolve_first_existing(schema, ("EXCHCD",), f"{metadata_hint} (EXCHCD)")
+    vol_col = _resolve_first_existing(schema, ("VOL",), f"{metadata_hint} (VOL)")
+    market_cap_col = _resolve_first_existing(schema, ("TCAP",), "concept filter input (TCAP market cap)")
+
+    price_ok = (pl.col(price_col).abs().cast(pl.Float64, strict=False) >= pl.lit(1.0)).fill_null(False)
+    common_stock_ok = pl.col(shrcd_col).cast(pl.Int32, strict=False).is_in([10, 11]).fill_null(False)
+    major_exchange_ok = pl.col(exchcd_col).cast(pl.Int32, strict=False).is_in([1, 2, 3]).fill_null(False)
+    liquidity_ok = (pl.col(vol_col).cast(pl.Float64, strict=False).fill_null(0.0) > pl.lit(0.0)).fill_null(False)
+    non_microcap_ok = (
+        pl.col(market_cap_col).cast(pl.Float64, strict=False).fill_null(0.0) >= pl.lit(50_000_000.0)
+    ).fill_null(False)
+    passes_all = price_ok & common_stock_ok & major_exchange_ok & liquidity_ok & non_microcap_ok
+
+    status = _update_data_status(
+        pl.col("data_status"),
+        conditional_flags=(
+            (price_ok, DataStatus.SEC_CCM_FILTER_PRICE_PASS),
+            (common_stock_ok, DataStatus.SEC_CCM_FILTER_COMMON_STOCK_PASS),
+            (major_exchange_ok, DataStatus.SEC_CCM_FILTER_MAJOR_EXCHANGE_PASS),
+            (liquidity_ok, DataStatus.SEC_CCM_FILTER_LIQUIDITY_PASS),
+            (non_microcap_ok, DataStatus.SEC_CCM_FILTER_NON_MICROCAP_PASS),
+            (passes_all, DataStatus.SEC_CCM_FILTER_ALL_PASS),
+        ),
+    ).alias("data_status")
+
+    return lf.with_columns(
+        price_ok.alias("filter_price_pass"),
+        common_stock_ok.alias("filter_common_stock_pass"),
+        major_exchange_ok.alias("filter_major_exchange_pass"),
+        liquidity_ok.alias("filter_liquidity_pass"),
+        non_microcap_ok.alias("filter_non_microcap_pass"),
+        passes_all.alias("passes_all_filters"),
+        status,
+    )
+
+
 def _require_columns(lf: pl.LazyFrame, required: tuple[str, ...], label: str) -> None:
     """Fail fast when an input frame is missing required columns."""
     schema = lf.collect_schema()
@@ -454,12 +508,13 @@ def build_price_panel(
     delist_cols = ["KYPERMNO", "MATCH_DATE", "DLSTDT", "DLSTCD", "DLPRC", "DLAMT", "DLRET", "DLRETX"]
     delist_final = delist_payload.select(delist_cols).unique(subset=["KYPERMNO", "MATCH_DATE"], keep="first")
 
-    return price.join(
+    panel = price.join(
         delist_final,
         left_on=["KYPERMNO", "CALDT"],
         right_on=["KYPERMNO", "MATCH_DATE"],
         how="left",
     )
+    return apply_concept_filter_flags_doc(panel)
 
 
 def add_final_returns(price_lf: pl.LazyFrame) -> pl.LazyFrame:

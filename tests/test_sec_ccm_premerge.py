@@ -11,14 +11,13 @@ import pytest
 from thesis_pkg.core.ccm.sec_ccm_contracts import MatchReasonCode, SecCcmJoinSpecV1
 from thesis_pkg.core.ccm.sec_ccm_premerge import (
     align_doc_dates_phase_b,
-    apply_concept_filter_flags_doc,
     apply_phase_b_reason_codes,
     build_match_status_doc,
     normalize_sec_filings_phase_a,
     resolve_links_phase_a,
     join_daily_phase_b,
 )
-from thesis_pkg.core.ccm.transforms import DataStatus, STATUS_DTYPE
+from thesis_pkg.core.ccm.transforms import DataStatus, STATUS_DTYPE, apply_concept_filter_flags_doc
 from thesis_pkg.pipelines.sec_ccm_pipeline import run_sec_ccm_premerge_pipeline
 
 

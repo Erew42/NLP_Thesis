@@ -3,7 +3,6 @@ from __future__ import annotations
 from thesis_pkg.core.ccm.sec_ccm_contracts import MatchReasonCode, SecCcmJoinSpecV1
 from thesis_pkg.core.ccm.sec_ccm_premerge import (
     align_doc_dates_phase_b,
-    apply_concept_filter_flags_doc,
     apply_phase_b_reason_codes,
     build_match_status_doc,
     build_unmatched_diagnostics_doc,
@@ -18,6 +17,7 @@ from thesis_pkg.core.ccm.transforms import (
     SHRCD_SECOND_DIGIT_MAP,
     add_exchcd_name,
     add_final_returns,
+    apply_concept_filter_flags_doc,
     filter_us_common_major_exchange,
     add_shrcd_name,
     attach_ccm_links,

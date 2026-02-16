@@ -94,16 +94,15 @@ def test_build_price_panel_merges_delistings_and_flags():
         start_date=dt.date(2024, 1, 2),
     ).collect()
 
-    flags = panel.select("CALDT", "data_status").to_dict(as_series=False)
-    assert flags == {
-        "CALDT": [dt.date(2024, 1, 2), dt.date(2024, 1, 3)],
-        "data_status": [
-            int(DataStatus.FULL_PANEL_DATA),
-            int(DataStatus.FULL_PANEL_DATA),
-        ],
-    }
+    statuses = panel.select("data_status").to_series().to_list()
+    for status in statuses:
+        assert status & int(DataStatus.FULL_PANEL_DATA) == int(DataStatus.FULL_PANEL_DATA)
+        assert status & int(DataStatus.SEC_CCM_FILTER_COMMON_STOCK_PASS)
+        assert status & int(DataStatus.SEC_CCM_FILTER_MAJOR_EXCHANGE_PASS)
+        assert status & int(DataStatus.SEC_CCM_FILTER_ALL_PASS)
 
     assert "price_status" not in panel.columns
+    assert panel.select("passes_all_filters").to_series().to_list() == [True, True]
     assert panel.filter(pl.col("CALDT") == dt.date(2024, 1, 2)).select("DLRET").item() is None
     assert panel.filter(pl.col("CALDT") == dt.date(2024, 1, 3)).select("DLRET").item() == -0.5
     assert panel.select("SHRCD").to_series().to_list() == [10, 10]

@@ -12,7 +12,6 @@ import polars as pl
 from thesis_pkg.core.ccm.sec_ccm_contracts import MatchReasonCode, SecCcmJoinSpecV1
 from thesis_pkg.core.ccm.sec_ccm_premerge import (
     align_doc_dates_phase_b,
-    apply_concept_filter_flags_doc,
     apply_phase_b_reason_codes,
     build_match_status_doc,
     build_unmatched_diagnostics_doc,
@@ -20,6 +19,7 @@ from thesis_pkg.core.ccm.sec_ccm_premerge import (
     resolve_links_phase_a,
     join_daily_phase_b,
 )
+from thesis_pkg.core.ccm.transforms import apply_concept_filter_flags_doc
 
 
 _FORM_COLUMNS = ("form_type", "document_type_filename", "SRCTYPE")
