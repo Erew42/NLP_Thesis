@@ -1,6 +1,12 @@
 from .pipeline import (
     MatchReasonCode,
+    PhaseBAlignmentMode,
+    PhaseBDailyJoinMode,
+    SecCcmJoinSpec,
     SecCcmJoinSpecV1,
+    SecCcmJoinSpecV2,
+    make_sec_ccm_join_spec_preset,
+    normalize_sec_ccm_join_spec,
     load_tables,
     build_price_panel,
     EXCHCD_NAME_MAP,
@@ -39,7 +45,13 @@ from .filing_text import (
 
 __all__ = [
     "MatchReasonCode",
+    "PhaseBAlignmentMode",
+    "PhaseBDailyJoinMode",
+    "SecCcmJoinSpec",
     "SecCcmJoinSpecV1",
+    "SecCcmJoinSpecV2",
+    "normalize_sec_ccm_join_spec",
+    "make_sec_ccm_join_spec_preset",
     "load_tables",
     "build_price_panel",
     "EXCHCD_NAME_MAP",

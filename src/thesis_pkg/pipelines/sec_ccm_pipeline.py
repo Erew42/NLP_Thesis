@@ -9,7 +9,12 @@ from typing import Any
 
 import polars as pl
 
-from thesis_pkg.core.ccm.sec_ccm_contracts import MatchReasonCode, SecCcmJoinSpecV1
+from thesis_pkg.core.ccm.sec_ccm_contracts import (
+    MatchReasonCode,
+    SecCcmJoinSpecV1,
+    SecCcmJoinSpecV2,
+    normalize_sec_ccm_join_spec,
+)
 from thesis_pkg.core.ccm.sec_ccm_premerge import (
     align_doc_dates_phase_b,
     apply_phase_b_reason_codes,
@@ -324,7 +329,7 @@ def _build_markdown_report(
     run_id: str,
     started_at_utc: dt.datetime,
     finished_at_utc: dt.datetime,
-    join_spec: SecCcmJoinSpecV1,
+    join_spec: SecCcmJoinSpecV2,
     summary: dict[str, object],
     steps_df: pl.DataFrame,
     paths: dict[str, Path],
@@ -359,7 +364,8 @@ def _build_markdown_report(
         "",
         f"- started_at_utc: `{_iso_utc(started_at_utc)}`",
         f"- finished_at_utc: `{_iso_utc(finished_at_utc)}`",
-        f"- alignment_policy: `{join_spec.alignment_policy}`",
+        f"- phase_b_alignment_mode: `{join_spec.phase_b_alignment_mode.value}`",
+        f"- phase_b_daily_join_mode: `{join_spec.phase_b_daily_join_mode.value}`",
         f"- daily_join_enabled: `{join_spec.daily_join_enabled}`",
         f"- daily_join_source: `{join_spec.daily_join_source}`",
         "",
@@ -418,7 +424,7 @@ def run_sec_ccm_premerge_pipeline(
     output_dir: Path,
     *,
     daily_lf: pl.LazyFrame | None = None,
-    join_spec: SecCcmJoinSpecV1 = SecCcmJoinSpecV1(),
+    join_spec: SecCcmJoinSpecV1 | SecCcmJoinSpecV2 = SecCcmJoinSpecV1(),
     emit_run_report: bool = True,
 ) -> dict[str, Path]:
     """
@@ -427,6 +433,7 @@ def run_sec_ccm_premerge_pipeline(
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    join_spec_v2 = normalize_sec_ccm_join_spec(join_spec)
 
     run_started_utc = dt.datetime.now(dt.timezone.utc)
     run_started_perf = time.perf_counter()
@@ -484,25 +491,25 @@ def run_sec_ccm_premerge_pipeline(
         rows_out=_count_parquet_rows(paths["sec_ccm_links_doc"]),
     )
 
-    phase_b_aligned = align_doc_dates_phase_b(phase_a_links, trading_calendar_lf, join_spec)
+    phase_b_aligned = align_doc_dates_phase_b(phase_a_links, trading_calendar_lf, join_spec_v2)
     _record_step("phase_b_align")
-    if join_spec.daily_join_enabled:
+    if join_spec_v2.daily_join_enabled:
         if daily_lf is None:
-            raise ValueError("daily_lf is required when join_spec.daily_join_enabled=True")
-        phase_b_joined = join_daily_phase_b(phase_b_aligned, daily_lf, join_spec)
+            raise ValueError("daily_lf is required when join_spec_v2.daily_join_enabled=True")
+        phase_b_joined = join_daily_phase_b(phase_b_aligned, daily_lf, join_spec_v2)
         diagnostics_daily_lf = daily_lf
         _record_step("phase_b_daily_join")
     else:
         phase_b_joined = join_daily_phase_b(
             phase_b_aligned,
             pl.DataFrame({"KYPERMNO": [], "CALDT": []}).lazy(),
-            join_spec,
+            join_spec_v2,
         )
         diagnostics_daily_lf = trading_calendar_lf
         _record_step("phase_b_daily_join", notes="daily_join_enabled=False")
 
-    final_doc = apply_phase_b_reason_codes(phase_a_links, phase_b_joined, join_spec)
-    if join_spec.daily_join_enabled:
+    final_doc = apply_phase_b_reason_codes(phase_a_links, phase_b_joined, join_spec_v2)
+    if join_spec_v2.daily_join_enabled:
         final_doc = apply_concept_filter_flags_doc(final_doc)
     else:
         # In no-daily mode we preserve doc rows and leave filter pass flags as explicit False.
@@ -586,7 +593,7 @@ def run_sec_ccm_premerge_pipeline(
         notes="matched_clean + matched_clean_filtered + analysis/diagnostic allowlists",
     )
 
-    paths["sec_ccm_join_spec_v1"] = join_spec.write_json(output_dir / "sec_ccm_join_spec_v1.json")
+    paths["sec_ccm_join_spec_v1"] = join_spec_v2.write_json(output_dir / "sec_ccm_join_spec_v1.json")
     _record_step(
         "write_join_spec",
         artifact_key="sec_ccm_join_spec_v1",
@@ -606,11 +613,11 @@ def run_sec_ccm_premerge_pipeline(
         }
         paths["sec_ccm_run_dag_mermaid"] = _write_text(
             output_dir / "sec_ccm_run_dag.mmd",
-            _build_dag_mermaid(step_duration_lookup, join_spec.daily_join_enabled),
+            _build_dag_mermaid(step_duration_lookup, join_spec_v2.daily_join_enabled),
         )
         paths["sec_ccm_run_dag_dot"] = _write_text(
             output_dir / "sec_ccm_run_dag.dot",
-            _build_dag_dot(step_duration_lookup, join_spec.daily_join_enabled),
+            _build_dag_dot(step_duration_lookup, join_spec_v2.daily_join_enabled),
         )
 
         summary = _build_summary_metrics(paths["sec_ccm_match_status"])
@@ -625,7 +632,7 @@ def run_sec_ccm_premerge_pipeline(
             "started_at_utc": _iso_utc(run_started_utc),
             "finished_at_utc": _iso_utc(run_finished_utc),
             "duration_ms": int(round((run_finished_perf - run_started_perf) * 1000.0)),
-            "join_spec": join_spec.to_dict(),
+            "join_spec": join_spec_v2.to_dict(),
             "summary": summary,
             "slowest_steps": (
                 steps_df.sort("duration_ms", descending=True)
@@ -644,7 +651,7 @@ def run_sec_ccm_premerge_pipeline(
             run_id,
             run_started_utc,
             run_finished_utc,
-            join_spec,
+            join_spec_v2,
             summary,
             steps_df,
             paths,

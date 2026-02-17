@@ -2,7 +2,15 @@ from __future__ import annotations
 
 import polars as pl
 
-from thesis_pkg.core.ccm.sec_ccm_contracts import MatchReasonCode, SecCcmJoinSpecV1
+from thesis_pkg.core.ccm.sec_ccm_contracts import (
+    MatchReasonCode,
+    PhaseBAlignmentMode,
+    PhaseBDailyJoinMode,
+    SecCcmJoinSpec,
+    SecCcmJoinSpecV1,
+    SecCcmJoinSpecV2,
+    normalize_sec_ccm_join_spec,
+)
 from thesis_pkg.core.ccm.transforms import DataStatus, STATUS_DTYPE, _ensure_data_status, _update_data_status
 
 
@@ -84,7 +92,13 @@ def _normalize_link_universe(link_universe_lf: pl.LazyFrame) -> pl.LazyFrame:
     )
 
 
-def _normalize_daily_join_input(daily_lf: pl.LazyFrame, join_spec: SecCcmJoinSpecV1) -> pl.LazyFrame:
+def _requested_alignment_policy_value(join_spec: SecCcmJoinSpec) -> str:
+    if isinstance(join_spec, SecCcmJoinSpecV1):
+        return join_spec.alignment_policy
+    return join_spec.phase_b_alignment_mode.value
+
+
+def _normalize_daily_join_input(daily_lf: pl.LazyFrame, join_spec: SecCcmJoinSpecV2) -> pl.LazyFrame:
     schema = daily_lf.collect_schema()
     perm_col = _resolve_first_existing(
         schema,
@@ -243,9 +257,12 @@ def resolve_links_phase_a(sec_norm_lf: pl.LazyFrame, link_universe_lf: pl.LazyFr
 def align_doc_dates_phase_b(
     links_doc_lf: pl.LazyFrame,
     trading_calendar_lf: pl.LazyFrame,
-    join_spec: SecCcmJoinSpecV1,
+    join_spec: SecCcmJoinSpec,
 ) -> pl.LazyFrame:
-    """Compute strict-next-trading-day alignment at doc grain."""
+    """Compute doc-date alignment at doc grain under the configured Phase B policy."""
+    join_spec_v2 = normalize_sec_ccm_join_spec(join_spec)
+    alignment_mode = join_spec_v2.phase_b_alignment_mode
+    requested_alignment_policy = _requested_alignment_policy_value(join_spec)
     _require_columns(
         links_doc_lf,
         ("doc_id", "filing_date", "kypermno", "phase_a_reason_code", "data_status"),
@@ -255,7 +272,13 @@ def align_doc_dates_phase_b(
     trading_schema = trading_calendar_lf.collect_schema()
     date_col = _resolve_first_existing(
         trading_schema,
-        (join_spec.daily_date_col, join_spec.daily_date_col.lower(), "CALDT", "caldt", "TRADING_DATE"),
+        (
+            join_spec_v2.daily_date_col,
+            join_spec_v2.daily_date_col.lower(),
+            "CALDT",
+            "caldt",
+            "TRADING_DATE",
+        ),
         "trading calendar",
     )
 
@@ -266,42 +289,63 @@ def align_doc_dates_phase_b(
         .sort("_calendar_date")
     )
 
+    if alignment_mode == PhaseBAlignmentMode.NEXT_TRADING_DAY_STRICT:
+        alignment_anchor_expr = pl.when(pl.col("filing_date").is_not_null()).then(
+            pl.col("filing_date") + pl.duration(days=1)
+        )
+    else:
+        alignment_anchor_expr = pl.when(pl.col("filing_date").is_not_null()).then(pl.col("filing_date"))
+
     base = _ensure_data_status(links_doc_lf).with_columns(
         pl.col("filing_date").cast(pl.Date, strict=False),
         pl.col("kypermno").cast(pl.Int32, strict=False),
-        pl.when(pl.col("filing_date").is_not_null())
-        .then(pl.col("filing_date") + pl.duration(days=1))
-        .otherwise(pl.lit(None))
-        .cast(pl.Date)
-        .alias("_alignment_anchor_date"),
-        pl.lit(join_spec.alignment_policy).alias("alignment_policy_requested"),
-        pl.lit("NEXT_TRADING_DAY_STRICT").alias("alignment_policy_effective"),
+        alignment_anchor_expr.otherwise(pl.lit(None)).cast(pl.Date).alias("_alignment_anchor_date"),
+        pl.lit(requested_alignment_policy).alias("alignment_policy_requested"),
+        pl.lit(alignment_mode.value).alias("alignment_policy_effective"),
     )
 
-    aligned = (
-        base.sort("_alignment_anchor_date")
-        .join_asof(
-            trading_calendar,
-            left_on="_alignment_anchor_date",
-            right_on="_calendar_date",
-            strategy="forward",
+    if alignment_mode == PhaseBAlignmentMode.FILING_DATE_EXACT_ONLY:
+        exact_calendar = trading_calendar.select(
+            pl.col("_calendar_date").alias("_alignment_anchor_date"),
+            pl.lit(True).alias("_is_trading_date"),
         )
-        .rename({"_calendar_date": "aligned_caldt"})
-        .with_columns(
-            pl.when(pl.col("kypermno").is_not_null())
-            .then(pl.col("aligned_caldt"))
-            .otherwise(pl.lit(None, dtype=pl.Date))
-            .alias("aligned_caldt"),
-            pl.when(pl.col("aligned_caldt").is_not_null() & pl.col("filing_date").is_not_null())
-            .then((pl.col("aligned_caldt") - pl.col("filing_date")).dt.total_days().cast(pl.Int32))
-            .otherwise(pl.lit(None, dtype=pl.Int32))
-            .alias("alignment_lag_days"),
+        aligned = (
+            base.join(exact_calendar, on="_alignment_anchor_date", how="left")
+            .with_columns(
+                pl.when(pl.col("kypermno").is_not_null() & pl.col("_is_trading_date").fill_null(False))
+                .then(pl.col("_alignment_anchor_date"))
+                .otherwise(pl.lit(None, dtype=pl.Date))
+                .alias("aligned_caldt")
+            )
         )
+    else:
+        aligned = (
+            base.sort("_alignment_anchor_date")
+            .join_asof(
+                trading_calendar,
+                left_on="_alignment_anchor_date",
+                right_on="_calendar_date",
+                strategy="forward",
+            )
+            .rename({"_calendar_date": "aligned_caldt"})
+            .with_columns(
+                pl.when(pl.col("kypermno").is_not_null())
+                .then(pl.col("aligned_caldt"))
+                .otherwise(pl.lit(None, dtype=pl.Date))
+                .alias("aligned_caldt")
+            )
+        )
+
+    aligned = aligned.with_columns(
+        pl.when(pl.col("aligned_caldt").is_not_null() & pl.col("filing_date").is_not_null())
+        .then((pl.col("aligned_caldt") - pl.col("filing_date")).dt.total_days().cast(pl.Int32))
+        .otherwise(pl.lit(None, dtype=pl.Int32))
+        .alias("alignment_lag_days")
     )
 
     phase_a_ok = pl.col("phase_a_reason_code") == pl.lit(MatchReasonCode.OK.value)
     alignment_attempted = phase_a_ok & pl.col("kypermno").is_not_null()
-    aligned_ok = alignment_attempted & pl.col("aligned_caldt").is_not_null() & (pl.col("alignment_lag_days") >= 1)
+    aligned_ok = alignment_attempted & pl.col("aligned_caldt").is_not_null()
 
     status = _update_data_status(
         pl.col("data_status"),
@@ -311,65 +355,88 @@ def align_doc_dates_phase_b(
         ),
     ).alias("data_status")
 
-    return aligned.with_columns(status).drop("_alignment_anchor_date", strict=False)
+    return aligned.with_columns(status).drop("_alignment_anchor_date", "_is_trading_date", strict=False)
 
 
 def join_daily_phase_b(
     aligned_doc_lf: pl.LazyFrame,
     daily_lf: pl.LazyFrame,
-    join_spec: SecCcmJoinSpecV1,
+    join_spec: SecCcmJoinSpec,
 ) -> pl.LazyFrame:
     """
     Join docs to CRSP daily (or merged daily panel) keyed by (kypermno, caldt)
-    using forward asof on aligned_caldt.
+    using the configured Phase B daily-join mode.
     """
+    join_spec_v2 = normalize_sec_ccm_join_spec(join_spec)
     _require_columns(
         aligned_doc_lf,
         ("doc_id", "kypermno", "aligned_caldt", "phase_a_reason_code", "data_status"),
         "Phase B aligned docs",
     )
 
-    if not join_spec.daily_join_enabled:
+    if not join_spec_v2.daily_join_enabled:
         return aligned_doc_lf.with_columns(
             pl.lit(None, dtype=pl.Date).alias("daily_join_caldt"),
+            pl.lit(None, dtype=pl.Int32).alias("daily_join_lag_days"),
             pl.lit(None, dtype=pl.Date).alias("key_min_caldt"),
             pl.lit(None, dtype=pl.Date).alias("key_max_caldt"),
             pl.lit(False).alias("_has_daily_row"),
             pl.lit(False).alias("_has_usable_daily_row"),
         )
 
-    daily = _normalize_daily_join_input(daily_lf, join_spec)
+    daily = _normalize_daily_join_input(daily_lf, join_spec_v2)
     coverage = daily.group_by("kypermno").agg(
         pl.col("daily_caldt").min().alias("key_min_caldt"),
         pl.col("daily_caldt").max().alias("key_max_caldt"),
     )
 
-    left_for_asof = (
+    left_base = (
         aligned_doc_lf
         .with_columns(pl.col("kypermno").cast(pl.Int32, strict=False))
         .join(coverage, on="kypermno", how="left")
-        .sort("kypermno", "aligned_caldt")
     )
-    right_for_asof = daily.sort("kypermno", "daily_caldt")
-
-    joined = (
-        left_for_asof
-        .join_asof(
-            right_for_asof,
-            left_on="aligned_caldt",
-            right_on="daily_caldt",
-            by="kypermno",
-            strategy="forward",
-            # We explicitly sort both sides by (group key, asof key) above.
-            # Polars cannot validate grouped sortedness and otherwise emits a warning.
-            check_sortedness=False,
+    if join_spec_v2.phase_b_daily_join_mode == PhaseBDailyJoinMode.ASOF_FORWARD:
+        left_for_asof = left_base.sort("kypermno", "aligned_caldt")
+        right_for_asof = daily.sort("kypermno", "daily_caldt")
+        joined = (
+            left_for_asof
+            .join_asof(
+                right_for_asof,
+                left_on="aligned_caldt",
+                right_on="daily_caldt",
+                by="kypermno",
+                strategy="forward",
+                # We explicitly sort both sides by (group key, asof key) above.
+                # Polars cannot validate grouped sortedness and otherwise emits a warning.
+                check_sortedness=False,
+            )
+            .rename({"daily_caldt": "daily_join_caldt"})
         )
-        .rename({"daily_caldt": "daily_join_caldt"})
-    )
+    elif join_spec_v2.phase_b_daily_join_mode == PhaseBDailyJoinMode.EXACT_ON_ALIGNED_DATE:
+        right_for_exact = (
+            daily
+            .with_columns(
+                pl.col("daily_caldt").alias("_join_caldt"),
+                pl.col("daily_caldt").alias("daily_join_caldt"),
+            )
+            .drop("daily_caldt")
+        )
+        joined = (
+            left_base
+            .with_columns(pl.col("aligned_caldt").alias("_join_caldt"))
+            .join(
+                right_for_exact,
+                on=["kypermno", "_join_caldt"],
+                how="left",
+            )
+            .drop("_join_caldt")
+        )
+    else:
+        raise ValueError(f"Unsupported phase_b_daily_join_mode: {join_spec_v2.phase_b_daily_join_mode.value}")
 
     has_daily_row = pl.col("daily_join_caldt").is_not_null()
     usable_expr = has_daily_row
-    for col in join_spec.required_daily_non_null_features:
+    for col in join_spec_v2.required_daily_non_null_features:
         usable_expr = usable_expr & pl.col(col).is_not_null()
 
     daily_attempted = (
@@ -389,6 +456,10 @@ def join_daily_phase_b(
     return joined.with_columns(
         has_daily_row.alias("_has_daily_row"),
         usable_expr.alias("_has_usable_daily_row"),
+        pl.when(pl.col("daily_join_caldt").is_not_null() & pl.col("aligned_caldt").is_not_null())
+        .then((pl.col("daily_join_caldt") - pl.col("aligned_caldt")).dt.total_days().cast(pl.Int32))
+        .otherwise(pl.lit(None, dtype=pl.Int32))
+        .alias("daily_join_lag_days"),
         status,
     )
 
@@ -396,9 +467,10 @@ def join_daily_phase_b(
 def apply_phase_b_reason_codes(
     phase_a_doc_lf: pl.LazyFrame,
     phase_b_joined_lf: pl.LazyFrame,
-    join_spec: SecCcmJoinSpecV1,
+    join_spec: SecCcmJoinSpec,
 ) -> pl.LazyFrame:
     """Apply Phase B reason codes, preserving non-OK Phase A outcomes."""
+    join_spec_v2 = normalize_sec_ccm_join_spec(join_spec)
     _require_columns(phase_a_doc_lf, ("doc_id", "phase_a_reason_code"), "Phase A docs")
     _require_columns(
         phase_b_joined_lf,
@@ -423,7 +495,7 @@ def apply_phase_b_reason_codes(
 
     phase_a_ok = pl.col("phase_a_reason_code") == pl.lit(MatchReasonCode.OK.value)
     base_coverage_miss = pl.col("aligned_caldt").is_null()
-    if join_spec.daily_join_enabled:
+    if join_spec_v2.daily_join_enabled:
         coverage_miss = (
             base_coverage_miss
             | pl.col("key_min_caldt").is_null()

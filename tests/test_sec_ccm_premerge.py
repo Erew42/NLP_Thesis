@@ -8,7 +8,15 @@ import warnings
 import polars as pl
 import pytest
 
-from thesis_pkg.core.ccm.sec_ccm_contracts import MatchReasonCode, SecCcmJoinSpecV1
+from thesis_pkg.core.ccm.sec_ccm_contracts import (
+    MatchReasonCode,
+    PhaseBAlignmentMode,
+    PhaseBDailyJoinMode,
+    SecCcmJoinSpecV1,
+    SecCcmJoinSpecV2,
+    make_sec_ccm_join_spec_preset,
+    normalize_sec_ccm_join_spec,
+)
 from thesis_pkg.core.ccm.sec_ccm_premerge import (
     align_doc_dates_phase_b,
     apply_phase_b_reason_codes,
@@ -19,6 +27,34 @@ from thesis_pkg.core.ccm.sec_ccm_premerge import (
 )
 from thesis_pkg.core.ccm.transforms import DataStatus, STATUS_DTYPE, apply_concept_filter_flags_doc
 from thesis_pkg.pipelines.sec_ccm_pipeline import run_sec_ccm_premerge_pipeline
+
+
+def test_join_spec_normalization_from_v1_and_presets():
+    v1 = SecCcmJoinSpecV1(
+        daily_join_source="MERGED_DAILY_PANEL",
+        required_daily_non_null_features=("RET",),
+    )
+    v2 = normalize_sec_ccm_join_spec(v1)
+    assert v2.version == "v2"
+    assert v2.phase_b_alignment_mode == PhaseBAlignmentMode.NEXT_TRADING_DAY_STRICT
+    assert v2.phase_b_daily_join_mode == PhaseBDailyJoinMode.ASOF_FORWARD
+    assert v2.daily_join_source == "MERGED_DAILY_PANEL"
+    assert v2.required_daily_non_null_features == ("RET",)
+
+    lm2011 = make_sec_ccm_join_spec_preset("lm2011_filing_date")
+    assert lm2011.phase_b_alignment_mode == PhaseBAlignmentMode.FILING_DATE_EXACT_OR_NEXT_TRADING
+    assert lm2011.phase_b_daily_join_mode == PhaseBDailyJoinMode.EXACT_ON_ALIGNED_DATE
+
+    strict = make_sec_ccm_join_spec_preset("strict_exact_diagnostic")
+    assert strict.phase_b_alignment_mode == PhaseBAlignmentMode.FILING_DATE_EXACT_ONLY
+    assert strict.phase_b_daily_join_mode == PhaseBDailyJoinMode.EXACT_ON_ALIGNED_DATE
+
+
+def test_first_close_after_acceptance_v1_is_rejected():
+    with pytest.raises(ValueError, match="FIRST_CLOSE_AFTER_ACCEPTANCE"):
+        normalize_sec_ccm_join_spec(
+            SecCcmJoinSpecV1(alignment_policy="FIRST_CLOSE_AFTER_ACCEPTANCE")
+        )
 
 
 def test_phase_a_reason_codes_and_doc_grain_invariants():
@@ -163,6 +199,120 @@ def test_grouped_asof_join_sorts_inputs_and_avoids_sortedness_warning():
         "Sortedness of columns cannot be checked when 'by' groups provided" in str(w.message)
         for w in caught
     )
+
+
+def test_alignment_mode_filing_date_exact_or_next_trading_supports_lag_zero_and_roll_forward():
+    sec = pl.DataFrame(
+        {
+            "doc_id": ["trade_day", "weekend_day"],
+            "cik_10": ["0000000001", "0000000002"],
+            "filing_date": [dt.date(2024, 1, 2), dt.date(2024, 1, 6)],
+        }
+    )
+    link_universe = pl.DataFrame(
+        {
+            "cik_10": ["0000000001", "0000000002"],
+            "gvkey": ["1000", "2000"],
+            "kypermno": [1, 2],
+            "link_rank": [0, 0],
+            "link_quality": [1.0, 1.0],
+        }
+    )
+    trading_calendar = pl.DataFrame(
+        {"CALDT": [dt.date(2024, 1, 2), dt.date(2024, 1, 3), dt.date(2024, 1, 8)]}
+    )
+    phase_a = resolve_links_phase_a(sec.lazy(), link_universe.lazy())
+    aligned = align_doc_dates_phase_b(
+        phase_a,
+        trading_calendar.lazy(),
+        SecCcmJoinSpecV2(
+            phase_b_alignment_mode=PhaseBAlignmentMode.FILING_DATE_EXACT_OR_NEXT_TRADING,
+        ),
+    ).collect()
+    rows = {row["doc_id"]: row for row in aligned.to_dicts()}
+
+    assert rows["trade_day"]["aligned_caldt"] == dt.date(2024, 1, 2)
+    assert rows["trade_day"]["alignment_lag_days"] == 0
+    assert rows["weekend_day"]["aligned_caldt"] == dt.date(2024, 1, 8)
+    assert rows["weekend_day"]["alignment_lag_days"] == 2
+
+
+def test_alignment_mode_filing_date_exact_only_leaves_non_trading_dates_unaligned():
+    sec = pl.DataFrame(
+        {
+            "doc_id": ["weekend_day"],
+            "cik_10": ["0000000001"],
+            "filing_date": [dt.date(2024, 1, 6)],
+        }
+    )
+    link_universe = pl.DataFrame(
+        {
+            "cik_10": ["0000000001"],
+            "gvkey": ["1000"],
+            "kypermno": [1],
+            "link_rank": [0],
+            "link_quality": [1.0],
+        }
+    )
+    trading_calendar = pl.DataFrame({"CALDT": [dt.date(2024, 1, 5), dt.date(2024, 1, 8)]})
+    phase_a = resolve_links_phase_a(sec.lazy(), link_universe.lazy())
+    aligned = align_doc_dates_phase_b(
+        phase_a,
+        trading_calendar.lazy(),
+        SecCcmJoinSpecV2(phase_b_alignment_mode=PhaseBAlignmentMode.FILING_DATE_EXACT_ONLY),
+    ).collect()
+    row = aligned.row(0, named=True)
+
+    assert row["aligned_caldt"] is None
+    assert row["alignment_lag_days"] is None
+    assert row["data_status"] & int(DataStatus.SEC_CCM_PHASE_B_ALIGNMENT_ATTEMPTED)
+    assert (row["data_status"] & int(DataStatus.SEC_CCM_PHASE_B_ALIGNED)) == 0
+
+
+def test_daily_join_mode_exact_vs_forward_controls_fallback_and_lag():
+    aligned = pl.DataFrame(
+        {
+            "doc_id": ["d1"],
+            "cik_10": ["0000000001"],
+            "filing_date": [dt.date(2024, 1, 2)],
+            "kypermno": [1],
+            "phase_a_reason_code": [MatchReasonCode.OK.value],
+            "data_status": [0],
+            "aligned_caldt": [dt.date(2024, 1, 3)],
+            "alignment_lag_days": [1],
+        }
+    ).lazy()
+    daily = pl.DataFrame(
+        {
+            "KYPERMNO": [1],
+            "CALDT": [dt.date(2024, 1, 4)],
+            "RET": [0.01],
+        }
+    ).lazy()
+
+    exact_out = join_daily_phase_b(
+        aligned,
+        daily,
+        SecCcmJoinSpecV2(
+            phase_b_daily_join_mode=PhaseBDailyJoinMode.EXACT_ON_ALIGNED_DATE,
+            required_daily_non_null_features=("RET",),
+        ),
+    ).collect().row(0, named=True)
+    assert exact_out["daily_join_caldt"] is None
+    assert exact_out["daily_join_lag_days"] is None
+    assert (exact_out["data_status"] & int(DataStatus.SEC_CCM_PHASE_B_DAILY_ROW_FOUND)) == 0
+
+    forward_out = join_daily_phase_b(
+        aligned,
+        daily,
+        SecCcmJoinSpecV2(
+            phase_b_daily_join_mode=PhaseBDailyJoinMode.ASOF_FORWARD,
+            required_daily_non_null_features=("RET",),
+        ),
+    ).collect().row(0, named=True)
+    assert forward_out["daily_join_caldt"] == dt.date(2024, 1, 4)
+    assert forward_out["daily_join_lag_days"] == 1
+    assert forward_out["data_status"] & int(DataStatus.SEC_CCM_PHASE_B_DAILY_ROW_FOUND)
 
 
 def test_acceptance_datetime_optional_and_not_default_coerced():
@@ -323,11 +473,21 @@ def test_end_to_end_pipeline_outputs_doc_grain_artifacts(tmp_path: Path):
     manifest = json.loads(Path(paths["sec_ccm_run_manifest"]).read_text(encoding="utf-8"))
     assert manifest["pipeline_name"] == "sec_ccm_premerge"
     assert manifest["summary"]["n_docs_total"] == sec.height
+    assert manifest["join_spec"]["version"] == "v2"
+    assert manifest["join_spec"]["phase_b_alignment_mode"] == "NEXT_TRADING_DAY_STRICT"
+    assert manifest["join_spec"]["phase_b_daily_join_mode"] == "ASOF_FORWARD"
     assert "sec_ccm_match_status" in manifest["artifacts"]
+
+    join_spec_payload = json.loads(Path(paths["sec_ccm_join_spec_v1"]).read_text(encoding="utf-8"))
+    assert join_spec_payload["version"] == "v2"
+    assert join_spec_payload["phase_b_alignment_mode"] == "NEXT_TRADING_DAY_STRICT"
+    assert join_spec_payload["phase_b_daily_join_mode"] == "ASOF_FORWARD"
 
     report_text = Path(paths["sec_ccm_run_report"]).read_text(encoding="utf-8")
     assert "SEC-CCM Pre-Merge Run Report" in report_text
     assert "Step Performance" in report_text
+    assert "phase_b_alignment_mode" in report_text
+    assert "phase_b_daily_join_mode" in report_text
 
 
 def test_end_to_end_pipeline_daily_join_disabled_sets_filter_columns_false(tmp_path: Path):
@@ -367,3 +527,37 @@ def test_end_to_end_pipeline_daily_join_disabled_sets_filter_columns_false(tmp_p
     assert final_df.select("filter_liquidity_pass").item() is False
     assert final_df.select("filter_non_microcap_pass").item() is False
     assert final_df.select("passes_all_filters").item() is False
+
+
+def test_pipeline_rejects_first_close_after_acceptance_v1(tmp_path: Path):
+    sec = pl.DataFrame(
+        {
+            "doc_id": ["d1"],
+            "cik_10": ["0000000001"],
+            "filing_date": [dt.date(2024, 1, 2)],
+        }
+    )
+    link_universe = pl.DataFrame(
+        {
+            "cik_10": ["0000000001"],
+            "gvkey": ["1000"],
+            "kypermno": [1],
+            "link_rank": [0],
+            "link_quality": [1.0],
+        }
+    )
+    trading_calendar = pl.DataFrame({"CALDT": [dt.date(2024, 1, 3)]})
+
+    with pytest.raises(ValueError, match="FIRST_CLOSE_AFTER_ACCEPTANCE"):
+        run_sec_ccm_premerge_pipeline(
+            sec.lazy(),
+            link_universe.lazy(),
+            trading_calendar.lazy(),
+            tmp_path,
+            daily_lf=None,
+            join_spec=SecCcmJoinSpecV1(
+                alignment_policy="FIRST_CLOSE_AFTER_ACCEPTANCE",
+                daily_join_enabled=False,
+            ),
+            emit_run_report=False,
+        )

@@ -1,6 +1,15 @@
 from __future__ import annotations
 
-from thesis_pkg.core.ccm.sec_ccm_contracts import MatchReasonCode, SecCcmJoinSpecV1
+from thesis_pkg.core.ccm.sec_ccm_contracts import (
+    MatchReasonCode,
+    PhaseBAlignmentMode,
+    PhaseBDailyJoinMode,
+    SecCcmJoinSpec,
+    SecCcmJoinSpecV1,
+    SecCcmJoinSpecV2,
+    make_sec_ccm_join_spec_preset,
+    normalize_sec_ccm_join_spec,
+)
 from thesis_pkg.core.ccm.sec_ccm_premerge import (
     align_doc_dates_phase_b,
     apply_phase_b_reason_codes,
@@ -56,7 +65,13 @@ __all__ = [
     "attach_company_description",
     "merge_histories",
     "MatchReasonCode",
+    "PhaseBAlignmentMode",
+    "PhaseBDailyJoinMode",
+    "SecCcmJoinSpec",
     "SecCcmJoinSpecV1",
+    "SecCcmJoinSpecV2",
+    "normalize_sec_ccm_join_spec",
+    "make_sec_ccm_join_spec_preset",
     "normalize_sec_filings_phase_a",
     "resolve_links_phase_a",
     "align_doc_dates_phase_b",
