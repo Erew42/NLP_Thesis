@@ -39,7 +39,7 @@ def parse_args() -> argparse.Namespace:
         "--parquet-dir",
         type=Path,
         default=DEFAULT_PARQUET_DIR,
-        help="Directory containing parquet batch files.",
+        help="Directory containing parquet input files (*_batch_*.parquet or YYYY.parquet).",
     )
     parser.add_argument(
         "--out-path",

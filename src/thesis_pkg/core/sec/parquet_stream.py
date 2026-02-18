@@ -2,10 +2,24 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from pathlib import Path
+import re
 
 import polars as pl
 import pyarrow as pa
 import pyarrow.parquet as pq
+
+
+def discover_input_parquet_files(parquet_dir: Path) -> list[Path]:
+    files_batch = sorted(parquet_dir.glob("*_batch_*.parquet"))
+    if files_batch:
+        return files_batch
+
+    files_year = sorted(
+        p
+        for p in parquet_dir.glob("*.parquet")
+        if p.is_file() and re.fullmatch(r"\d{4}", p.stem)
+    )
+    return files_year
 
 
 def iter_parquet_filing_texts(
@@ -17,7 +31,7 @@ def iter_parquet_filing_texts(
     if not doc_ids:
         return iter(())
 
-    files = sorted(parquet_dir.glob("*_batch_*.parquet"))
+    files = discover_input_parquet_files(parquet_dir)
     remaining = {str(doc_id) for doc_id in doc_ids if doc_id}
     if not remaining:
         return iter(())
@@ -56,4 +70,4 @@ def iter_parquet_filing_texts(
     return _iterator()
 
 
-__all__ = ["iter_parquet_filing_texts"]
+__all__ = ["discover_input_parquet_files", "iter_parquet_filing_texts"]

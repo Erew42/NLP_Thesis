@@ -10,10 +10,12 @@ from thesis_pkg.core.sec.extraction import extract_filing_items
 from thesis_pkg.core.sec.suspicious_boundary_diagnostics import (
     DiagnosticsConfig,
     InternalHeadingLeak,
+    RegressionConfig,
     _embedded_warn_v2,
     _should_escalate_internal_leak_v2,
     run_boundary_comparison,
     run_boundary_diagnostics,
+    run_boundary_regression,
 )
 from thesis_pkg.core.sec.extraction_utils import EmbeddedHeadingHit
 
@@ -41,6 +43,25 @@ def _write_parquet(tmp_path: Path, text: str) -> Path:
         ]
     )
     df.write_parquet(parquet_dir / "sample_batch_000.parquet")
+    return parquet_dir
+
+
+def _write_year_parquet(tmp_path: Path, text: str) -> Path:
+    parquet_dir = tmp_path / "parquet_year"
+    parquet_dir.mkdir(parents=True, exist_ok=True)
+    df = pl.DataFrame(
+        [
+            {
+                "doc_id": "0000000001:000000000000000001",
+                "cik": "0000000001",
+                "accession_number": "0000000000-00-000001",
+                "document_type_filename": "10-Q",
+                "file_date_filename": "20200131",
+                "full_text": text,
+            }
+        ]
+    )
+    df.write_parquet(parquet_dir / "2020.parquet")
     return parquet_dir
 
 
@@ -260,3 +281,80 @@ def test_run_boundary_comparison_smoke(tmp_path: Path) -> None:
     assert sum(result["legacy"]["status_counts"].values()) == 1
     assert sum(result["v2"]["status_counts"].values()) == 1
     assert result["delta"]["status_counts"].get("PASS", 0) == 0
+
+
+def test_run_boundary_diagnostics_accepts_yearly_parquet(tmp_path: Path) -> None:
+    text = _load_fixture("legacy_simple_10q.txt")
+    parquet_dir = _write_year_parquet(tmp_path, text)
+
+    out_path = tmp_path / "suspicious_year.csv"
+    report_path = tmp_path / "report_year.txt"
+    samples_dir = tmp_path / "samples_year"
+
+    config = DiagnosticsConfig(
+        parquet_dir=parquet_dir,
+        out_path=out_path,
+        report_path=report_path,
+        samples_dir=samples_dir,
+        batch_size=8,
+        max_files=0,
+        max_examples=5,
+        enable_embedded_verifier=True,
+        emit_manifest=False,
+        sample_pass=0,
+        sample_seed=42,
+        core_items=("1", "2"),
+        target_set=None,
+        emit_html=False,
+        html_out=tmp_path / "html_year",
+        html_scope="sample",
+        extraction_regime="legacy",
+        diagnostics_regime="legacy",
+    )
+    result = run_boundary_diagnostics(config)
+
+    assert out_path.exists()
+    assert report_path.exists()
+    assert result["total_filings"] >= 1
+
+
+def test_run_boundary_regression_accepts_yearly_parquet(tmp_path: Path) -> None:
+    # Build a baseline CSV from batch-style input.
+    baseline_text = _load_fixture("v2_missing_parts_10q.txt")
+    baseline_parquet_dir = _write_parquet(tmp_path / "baseline", baseline_text)
+    baseline_csv = tmp_path / "baseline_suspicious.csv"
+    run_boundary_diagnostics(
+        DiagnosticsConfig(
+            parquet_dir=baseline_parquet_dir,
+            out_path=baseline_csv,
+            report_path=tmp_path / "baseline_report.txt",
+            samples_dir=tmp_path / "baseline_samples",
+            batch_size=8,
+            max_files=0,
+            max_examples=5,
+            enable_embedded_verifier=True,
+            emit_manifest=False,
+            sample_pass=0,
+            sample_seed=42,
+            core_items=("1", "2"),
+            target_set=None,
+            emit_html=False,
+            html_out=tmp_path / "baseline_html",
+            html_scope="sample",
+            extraction_regime="legacy",
+            diagnostics_regime="legacy",
+        )
+    )
+
+    # Regression run uses yearly-style input naming.
+    compare_parquet_dir = _write_year_parquet(tmp_path / "compare", baseline_text)
+    result = run_boundary_regression(
+        RegressionConfig(
+            csv_path=baseline_csv,
+            parquet_dir=compare_parquet_dir,
+            sample_per_flag=1,
+            max_files=0,
+        )
+    )
+
+    assert result["total_filings"] >= 1

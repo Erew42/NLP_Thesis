@@ -105,7 +105,7 @@ from .html_audit import (
     write_html_audit,
     write_html_audit_root_index,
 )
-from .parquet_stream import iter_parquet_filing_texts
+from .parquet_stream import discover_input_parquet_files, iter_parquet_filing_texts
 
 
 ITEM_MENTION_PATTERN = re.compile(r"\bITEM\s+(?:\d+|[IVXLCDM]+)[A-Z]?\b", re.IGNORECASE)
@@ -2129,11 +2129,14 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
     if not parquet_dir.exists():
         raise SystemExit(f"parquet-dir not found: {parquet_dir}")
 
-    files = sorted(parquet_dir.glob("*_batch_*.parquet"))
+    files = discover_input_parquet_files(parquet_dir)
     if config.max_files and config.max_files > 0:
         files = files[: config.max_files]
     if not files:
-        raise SystemExit(f"No parquet batch files found in {parquet_dir}")
+        raise SystemExit(
+            "No parquet input files found in "
+            f"{parquet_dir} (expected *_batch_*.parquet or YYYY.parquet)"
+        )
 
     config.out_path.parent.mkdir(parents=True, exist_ok=True)
     config.report_path.parent.mkdir(parents=True, exist_ok=True)
@@ -3134,11 +3137,14 @@ def run_boundary_regression(config: RegressionConfig) -> dict[str, int]:
             if value:
                 before_first_embedded_counts[str(value)] += 1
 
-    files = sorted(parquet_dir.glob("*_batch_*.parquet"))
+    files = discover_input_parquet_files(parquet_dir)
     if config.max_files and config.max_files > 0:
         files = files[: config.max_files]
     if not files:
-        raise SystemExit(f"No parquet batch files found in {parquet_dir}")
+        raise SystemExit(
+            "No parquet input files found in "
+            f"{parquet_dir} (expected *_batch_*.parquet or YYYY.parquet)"
+        )
 
     after_counts: Counter[str] = Counter()
     examples_by_flag: dict[str, list[dict[str, str]]] = defaultdict(list)
@@ -3156,6 +3162,7 @@ def run_boundary_regression(config: RegressionConfig) -> dict[str, int]:
     embedded_warn_total = 0
     embedded_fail_total = 0
     embedded_classification_counts: Counter[str] = Counter()
+    embedded_fail_pos_buckets: Counter[str] = Counter()
     after_first_embedded_counts: Counter[str] = Counter()
     embedded_fail_examples: list[dict[str, str | int]] = []
 
@@ -3822,7 +3829,7 @@ def _build_parser() -> tuple[argparse.ArgumentParser, argparse.ArgumentParser]:
         "--parquet-dir",
         type=Path,
         default=DEFAULT_PARQUET_DIR,
-        help="Directory containing parquet batch files.",
+        help="Directory containing parquet input files (*_batch_*.parquet or YYYY.parquet).",
     )
     scan.add_argument(
         "--out-path",
@@ -4017,7 +4024,7 @@ def _build_parser() -> tuple[argparse.ArgumentParser, argparse.ArgumentParser]:
         "--parquet-dir",
         type=Path,
         default=DEFAULT_PARQUET_DIR,
-        help="Directory containing parquet batch files.",
+        help="Directory containing parquet input files (*_batch_*.parquet or YYYY.parquet).",
     )
     regress.add_argument(
         "--sample-per-flag",
