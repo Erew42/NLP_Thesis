@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import polars as pl
+import pytest
 
 from thesis_pkg.core.sec.parquet_stream import (
     discover_input_parquet_files,
@@ -97,3 +98,59 @@ def test_discover_input_parquet_files_ignores_non_year_fallback_names(
     rows = list(iter_parquet_filing_texts(parquet_dir, {"d_sample", "d_year"}))
     assert len(rows) == 1
     assert rows[0]["doc_id"] == "d_year"
+
+
+def test_iter_parquet_filing_texts_closes_parquet_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    parquet_dir = tmp_path / "parquet"
+    parquet_dir.mkdir(parents=True, exist_ok=True)
+    _write_parquet(
+        parquet_dir / "2021.parquet",
+        [
+            {
+                "doc_id": "d_2021",
+                "accession_number": "0000000000-00-000006",
+                "full_text": "Year 2021 text",
+            }
+        ],
+    )
+    _write_parquet(
+        parquet_dir / "2022.parquet",
+        [
+            {
+                "doc_id": "d_2022",
+                "accession_number": "0000000000-00-000007",
+                "full_text": "Year 2022 text",
+            }
+        ],
+    )
+
+    import thesis_pkg.core.sec.parquet_stream as parquet_stream_mod
+
+    real_parquet_file = parquet_stream_mod.pq.ParquetFile
+    closed: list[Path] = []
+
+    class _ParquetFileSpy:
+        def __init__(self, path: str | Path):
+            self._path = Path(path)
+            self._pf = real_parquet_file(path)
+
+        @property
+        def schema(self):
+            return self._pf.schema
+
+        def iter_batches(self, *args, **kwargs):
+            return self._pf.iter_batches(*args, **kwargs)
+
+        def close(self) -> None:
+            closed.append(self._path)
+            self._pf.close()
+
+    monkeypatch.setattr(parquet_stream_mod.pq, "ParquetFile", _ParquetFileSpy)
+
+    rows = list(iter_parquet_filing_texts(parquet_dir, {"missing_doc"}))
+    assert rows == []
+    assert set(closed) == {parquet_dir / "2021.parquet", parquet_dir / "2022.parquet"}
+    assert len(closed) == 2

@@ -148,16 +148,23 @@ def _to_markdown_table(df: pl.DataFrame, *, max_rows: int = 25) -> str:
     return out
 
 
-def _build_summary_metrics(match_status_path: Path) -> dict[str, object]:
-    match_status = pl.scan_parquet(match_status_path)
-    base = match_status.select(
+def _build_summary_metrics(final_doc_path: Path) -> dict[str, object]:
+    final_doc = pl.scan_parquet(final_doc_path)
+    schema = final_doc.collect_schema()
+    lag_rejected_expr = (
+        pl.col("daily_lag_gate_rejected").cast(pl.Int64).sum()
+        if "daily_lag_gate_rejected" in schema
+        else pl.lit(0, dtype=pl.Int64)
+    ).alias("n_daily_lag_gate_rejected")
+    base = final_doc.select(
         pl.len().cast(pl.Int64).alias("n_docs_total"),
-        pl.col("match_flag").cast(pl.Int64).sum().alias("n_docs_matched"),
+        (pl.col("match_reason_code") == pl.lit(MatchReasonCode.OK.value)).cast(pl.Int64).sum().alias("n_docs_matched"),
         pl.col("has_acceptance_datetime").cast(pl.Int64).sum().alias("n_docs_with_acceptance_datetime"),
         pl.col("aligned_caldt").is_not_null().cast(pl.Int64).sum().alias("n_docs_with_aligned_caldt"),
         pl.col("alignment_lag_days").min().alias("alignment_lag_days_min"),
         pl.col("alignment_lag_days").max().alias("alignment_lag_days_max"),
         pl.col("alignment_lag_days").mean().alias("alignment_lag_days_mean"),
+        lag_rejected_expr,
     ).collect().row(0, named=True)
 
     n_total = int(base["n_docs_total"] or 0)
@@ -165,6 +172,7 @@ def _build_summary_metrics(match_status_path: Path) -> dict[str, object]:
     n_unmatched = n_total - n_matched
     n_acceptance = int(base["n_docs_with_acceptance_datetime"] or 0)
     n_aligned = int(base["n_docs_with_aligned_caldt"] or 0)
+    n_lag_rejected = int(base["n_daily_lag_gate_rejected"] or 0)
     return {
         "n_docs_total": n_total,
         "n_docs_matched": n_matched,
@@ -178,6 +186,8 @@ def _build_summary_metrics(match_status_path: Path) -> dict[str, object]:
         "alignment_lag_days_min": base["alignment_lag_days_min"],
         "alignment_lag_days_max": base["alignment_lag_days_max"],
         "alignment_lag_days_mean": base["alignment_lag_days_mean"],
+        "n_daily_lag_gate_rejected": n_lag_rejected,
+        "daily_lag_gate_rejected_rate": (float(n_lag_rejected) / float(n_total)) if n_total > 0 else 0.0,
     }
 
 
@@ -620,7 +630,13 @@ def run_sec_ccm_premerge_pipeline(
             _build_dag_dot(step_duration_lookup, join_spec_v2.daily_join_enabled),
         )
 
-        summary = _build_summary_metrics(paths["sec_ccm_match_status"])
+        summary = _build_summary_metrics(paths["final_flagged_data"])
+        print(
+            "[sec_ccm] daily lag gate "
+            f"mode={join_spec_v2.phase_b_daily_join_mode.value} "
+            f"threshold_days={join_spec_v2.daily_join_max_forward_lag_days} "
+            f"rejected_rows={int(summary.get('n_daily_lag_gate_rejected', 0) or 0)}"
+        )
         reason_tables = _build_reason_count_tables(paths["sec_ccm_match_status"])
         unmatched_tables = _build_unmatched_tables(paths["sec_ccm_unmatched_diagnostics"])
         acceptance_by_year = _build_acceptance_coverage_by_year(paths["sec_ccm_match_status"])

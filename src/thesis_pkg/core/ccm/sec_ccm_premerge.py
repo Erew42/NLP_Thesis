@@ -111,10 +111,15 @@ def _normalize_daily_join_input(daily_lf: pl.LazyFrame, join_spec: SecCcmJoinSpe
         "daily join input",
     )
 
-    selected_features = [col for col in join_spec.daily_feature_columns if col in schema]
     required_missing = [col for col in join_spec.required_daily_non_null_features if col not in schema]
     if required_missing:
         raise ValueError(f"Daily join input missing required non-null feature columns: {required_missing}")
+    selected_features: list[str] = []
+    seen_features: set[str] = set()
+    for col in (*join_spec.daily_feature_columns, *join_spec.required_daily_non_null_features):
+        if col in schema and col not in seen_features:
+            selected_features.append(col)
+            seen_features.add(col)
 
     return (
         daily_lf.select(
@@ -378,6 +383,7 @@ def join_daily_phase_b(
         return aligned_doc_lf.with_columns(
             pl.lit(None, dtype=pl.Date).alias("daily_join_caldt"),
             pl.lit(None, dtype=pl.Int32).alias("daily_join_lag_days"),
+            pl.lit(False).alias("daily_lag_gate_rejected"),
             pl.lit(None, dtype=pl.Date).alias("key_min_caldt"),
             pl.lit(None, dtype=pl.Date).alias("key_max_caldt"),
             pl.lit(False).alias("_has_daily_row"),
@@ -385,6 +391,12 @@ def join_daily_phase_b(
         )
 
     daily = _normalize_daily_join_input(daily_lf, join_spec_v2)
+    required_features = tuple(join_spec_v2.required_daily_non_null_features)
+    if required_features:
+        daily_schema = daily.collect_schema()
+        missing_required = [col for col in required_features if col not in daily_schema]
+        if missing_required:
+            raise ValueError(f"Daily join normalized input missing required non-null feature columns: {missing_required}")
     coverage = daily.group_by("kypermno").agg(
         pl.col("daily_caldt").min().alias("key_min_caldt"),
         pl.col("daily_caldt").max().alias("key_max_caldt"),
@@ -435,9 +447,30 @@ def join_daily_phase_b(
         raise ValueError(f"Unsupported phase_b_daily_join_mode: {join_spec_v2.phase_b_daily_join_mode.value}")
 
     has_daily_row = pl.col("daily_join_caldt").is_not_null()
+    lag_days_expr = (
+        pl.when(pl.col("daily_join_caldt").is_not_null() & pl.col("aligned_caldt").is_not_null())
+        .then((pl.col("daily_join_caldt") - pl.col("aligned_caldt")).dt.total_days().cast(pl.Int32))
+        .otherwise(pl.lit(None, dtype=pl.Int32))
+    )
     usable_expr = has_daily_row
     for col in join_spec_v2.required_daily_non_null_features:
         usable_expr = usable_expr & pl.col(col).is_not_null()
+
+    lag_gate_rejected_expr = pl.lit(False)
+    max_forward_lag_days = join_spec_v2.daily_join_max_forward_lag_days
+    if (
+        join_spec_v2.phase_b_daily_join_mode == PhaseBDailyJoinMode.ASOF_FORWARD
+        and max_forward_lag_days is not None
+    ):
+        if max_forward_lag_days < 0:
+            raise ValueError(
+                "daily_join_max_forward_lag_days must be non-negative when provided; "
+                f"got {max_forward_lag_days}"
+            )
+        lag_gate_rejected_expr = has_daily_row & lag_days_expr.is_not_null() & (
+            lag_days_expr > pl.lit(int(max_forward_lag_days))
+        )
+        usable_expr = usable_expr & lag_gate_rejected_expr.not_()
 
     daily_attempted = (
         (pl.col("phase_a_reason_code") == pl.lit(MatchReasonCode.OK.value))
@@ -456,10 +489,8 @@ def join_daily_phase_b(
     return joined.with_columns(
         has_daily_row.alias("_has_daily_row"),
         usable_expr.alias("_has_usable_daily_row"),
-        pl.when(pl.col("daily_join_caldt").is_not_null() & pl.col("aligned_caldt").is_not_null())
-        .then((pl.col("daily_join_caldt") - pl.col("aligned_caldt")).dt.total_days().cast(pl.Int32))
-        .otherwise(pl.lit(None, dtype=pl.Int32))
-        .alias("daily_join_lag_days"),
+        lag_days_expr.alias("daily_join_lag_days"),
+        lag_gate_rejected_expr.alias("daily_lag_gate_rejected"),
         status,
     )
 
@@ -488,6 +519,8 @@ def apply_phase_b_reason_codes(
     schema = out.collect_schema()
     if "_has_usable_daily_row" not in schema:
         out = out.with_columns(pl.lit(False).alias("_has_usable_daily_row"))
+    if "daily_lag_gate_rejected" not in schema:
+        out = out.with_columns(pl.lit(False).alias("daily_lag_gate_rejected"))
     if "key_min_caldt" not in schema:
         out = out.with_columns(pl.lit(None, dtype=pl.Date).alias("key_min_caldt"))
     if "key_max_caldt" not in schema:

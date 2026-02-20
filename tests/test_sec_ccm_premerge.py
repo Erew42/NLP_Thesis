@@ -40,6 +40,7 @@ def test_join_spec_normalization_from_v1_and_presets():
     assert v2.phase_b_daily_join_mode == PhaseBDailyJoinMode.ASOF_FORWARD
     assert v2.daily_join_source == "MERGED_DAILY_PANEL"
     assert v2.required_daily_non_null_features == ("RET",)
+    assert v2.daily_join_max_forward_lag_days == 14
 
     lm2011 = make_sec_ccm_join_spec_preset("lm2011_filing_date")
     assert lm2011.phase_b_alignment_mode == PhaseBAlignmentMode.FILING_DATE_EXACT_OR_NEXT_TRADING
@@ -315,6 +316,130 @@ def test_daily_join_mode_exact_vs_forward_controls_fallback_and_lag():
     assert forward_out["data_status"] & int(DataStatus.SEC_CCM_PHASE_B_DAILY_ROW_FOUND)
 
 
+def test_required_feature_omitted_from_daily_feature_list_is_still_projected_and_enforced():
+    aligned = pl.DataFrame(
+        {
+            "doc_id": ["d1"],
+            "cik_10": ["0000000001"],
+            "filing_date": [dt.date(2024, 1, 2)],
+            "kypermno": [1],
+            "phase_a_reason_code": [MatchReasonCode.OK.value],
+            "data_status": [0],
+            "aligned_caldt": [dt.date(2024, 1, 3)],
+            "alignment_lag_days": [1],
+        }
+    ).lazy()
+    daily = pl.DataFrame(
+        {
+            "KYPERMNO": [1],
+            "CALDT": [dt.date(2024, 1, 3)],
+            "RET": [0.01],
+        }
+    ).lazy()
+    out = join_daily_phase_b(
+        aligned,
+        daily,
+        SecCcmJoinSpecV2(
+            daily_feature_columns=("PRC",),
+            required_daily_non_null_features=("RET",),
+        ),
+    ).collect().row(0, named=True)
+
+    assert out["daily_join_caldt"] == dt.date(2024, 1, 3)
+    assert out["_has_usable_daily_row"] is True
+    assert out["data_status"] & int(DataStatus.SEC_CCM_PHASE_B_DAILY_ROW_FOUND)
+
+
+def test_forward_asof_lag_gate_boundaries_and_reason_routing():
+    aligned = pl.DataFrame(
+        {
+            "doc_id": ["d13", "d14", "d15"],
+            "cik_10": ["0000000013", "0000000014", "0000000015"],
+            "filing_date": [dt.date(2024, 1, 1), dt.date(2024, 1, 1), dt.date(2024, 1, 1)],
+            "kypermno": [13, 14, 15],
+            "phase_a_reason_code": [MatchReasonCode.OK.value, MatchReasonCode.OK.value, MatchReasonCode.OK.value],
+            "data_status": [0, 0, 0],
+            "aligned_caldt": [dt.date(2024, 1, 1), dt.date(2024, 1, 1), dt.date(2024, 1, 1)],
+            "alignment_lag_days": [0, 0, 0],
+        }
+    ).lazy()
+    daily = pl.DataFrame(
+        {
+            "KYPERMNO": [13, 13, 14, 14, 15, 15],
+            "CALDT": [
+                dt.date(2023, 12, 25),
+                dt.date(2024, 1, 14),
+                dt.date(2023, 12, 25),
+                dt.date(2024, 1, 15),
+                dt.date(2023, 12, 25),
+                dt.date(2024, 1, 16),
+            ],
+            "RET": [0.0, 0.01, 0.0, 0.01, 0.0, 0.01],
+        }
+    ).lazy()
+    join_spec = SecCcmJoinSpecV2(
+        phase_b_daily_join_mode=PhaseBDailyJoinMode.ASOF_FORWARD,
+        required_daily_non_null_features=("RET",),
+        daily_join_max_forward_lag_days=14,
+    )
+
+    joined = join_daily_phase_b(aligned, daily, join_spec).collect().sort("doc_id")
+    by_doc = {row["doc_id"]: row for row in joined.to_dicts()}
+    assert by_doc["d13"]["daily_join_lag_days"] == 13
+    assert by_doc["d14"]["daily_join_lag_days"] == 14
+    assert by_doc["d15"]["daily_join_lag_days"] == 15
+    assert by_doc["d13"]["daily_lag_gate_rejected"] is False
+    assert by_doc["d14"]["daily_lag_gate_rejected"] is False
+    assert by_doc["d15"]["daily_lag_gate_rejected"] is True
+    assert by_doc["d13"]["_has_usable_daily_row"] is True
+    assert by_doc["d14"]["_has_usable_daily_row"] is True
+    assert by_doc["d15"]["_has_usable_daily_row"] is False
+
+    phase_a = aligned.select("doc_id", "phase_a_reason_code")
+    final = apply_phase_b_reason_codes(phase_a, joined.lazy(), join_spec).collect().sort("doc_id")
+    final_by_doc = {row["doc_id"]: row for row in final.to_dicts()}
+    assert final_by_doc["d13"]["match_reason_code"] == MatchReasonCode.OK.value
+    assert final_by_doc["d14"]["match_reason_code"] == MatchReasonCode.OK.value
+    assert final_by_doc["d15"]["match_reason_code"] == MatchReasonCode.NO_CCM_ROW_FOR_DATE.value
+
+
+def test_forward_asof_lag_gate_can_be_disabled_with_none():
+    aligned = pl.DataFrame(
+        {
+            "doc_id": ["d1"],
+            "cik_10": ["0000000001"],
+            "filing_date": [dt.date(2024, 1, 1)],
+            "kypermno": [1],
+            "phase_a_reason_code": [MatchReasonCode.OK.value],
+            "data_status": [0],
+            "aligned_caldt": [dt.date(2024, 1, 1)],
+            "alignment_lag_days": [0],
+        }
+    ).lazy()
+    daily = pl.DataFrame(
+        {
+            "KYPERMNO": [1, 1],
+            "CALDT": [dt.date(2023, 12, 25), dt.date(2024, 1, 16)],
+            "RET": [0.0, 0.01],
+        }
+    ).lazy()
+
+    out = join_daily_phase_b(
+        aligned,
+        daily,
+        SecCcmJoinSpecV2(
+            phase_b_daily_join_mode=PhaseBDailyJoinMode.ASOF_FORWARD,
+            required_daily_non_null_features=("RET",),
+            daily_join_max_forward_lag_days=None,
+        ),
+    ).collect().row(0, named=True)
+
+    assert out["daily_join_lag_days"] == 15
+    assert out["daily_lag_gate_rejected"] is False
+    assert out["_has_usable_daily_row"] is True
+    assert out["data_status"] & int(DataStatus.SEC_CCM_PHASE_B_DAILY_ROW_FOUND)
+
+
 def test_acceptance_datetime_optional_and_not_default_coerced():
     without_acceptance = pl.DataFrame(
         {
@@ -476,12 +601,15 @@ def test_end_to_end_pipeline_outputs_doc_grain_artifacts(tmp_path: Path):
     assert manifest["join_spec"]["version"] == "v2"
     assert manifest["join_spec"]["phase_b_alignment_mode"] == "NEXT_TRADING_DAY_STRICT"
     assert manifest["join_spec"]["phase_b_daily_join_mode"] == "ASOF_FORWARD"
+    assert manifest["join_spec"]["daily_join_max_forward_lag_days"] == 14
+    assert manifest["summary"]["n_daily_lag_gate_rejected"] == 0
     assert "sec_ccm_match_status" in manifest["artifacts"]
 
     join_spec_payload = json.loads(Path(paths["sec_ccm_join_spec_v1"]).read_text(encoding="utf-8"))
     assert join_spec_payload["version"] == "v2"
     assert join_spec_payload["phase_b_alignment_mode"] == "NEXT_TRADING_DAY_STRICT"
     assert join_spec_payload["phase_b_daily_join_mode"] == "ASOF_FORWARD"
+    assert join_spec_payload["daily_join_max_forward_lag_days"] == 14
 
     report_text = Path(paths["sec_ccm_run_report"]).read_text(encoding="utf-8")
     assert "SEC-CCM Pre-Merge Run Report" in report_text

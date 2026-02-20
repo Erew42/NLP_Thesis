@@ -19,6 +19,7 @@ results/
 reviews/
 diff_files/
 docs/
+site/
 
 # Repo-root files (ignore all except README.md)
 /AGENTS.md

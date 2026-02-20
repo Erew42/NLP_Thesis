@@ -93,6 +93,7 @@ class SecCcmJoinSpecV2:
         "TCAP",
     )
     required_daily_non_null_features: tuple[str, ...] = ()
+    daily_join_max_forward_lag_days: int | None = 14
 
     def to_dict(self) -> dict:
         payload = asdict(self)
@@ -133,6 +134,7 @@ def normalize_sec_ccm_join_spec(join_spec: SecCcmJoinSpec) -> SecCcmJoinSpecV2:
         daily_date_col=join_spec.daily_date_col,
         daily_feature_columns=join_spec.daily_feature_columns,
         required_daily_non_null_features=join_spec.required_daily_non_null_features,
+        daily_join_max_forward_lag_days=14,
     )
 
 
@@ -154,6 +156,7 @@ def make_sec_ccm_join_spec_preset(
             daily_date_col=seed.daily_date_col,
             daily_feature_columns=seed.daily_feature_columns,
             required_daily_non_null_features=seed.required_daily_non_null_features,
+            daily_join_max_forward_lag_days=seed.daily_join_max_forward_lag_days,
         )
     if preset_name == "lm2011_filing_date":
         return SecCcmJoinSpecV2(
@@ -166,6 +169,7 @@ def make_sec_ccm_join_spec_preset(
             daily_date_col=seed.daily_date_col,
             daily_feature_columns=seed.daily_feature_columns,
             required_daily_non_null_features=seed.required_daily_non_null_features,
+            daily_join_max_forward_lag_days=seed.daily_join_max_forward_lag_days,
         )
     if preset_name == "strict_exact_diagnostic":
         return SecCcmJoinSpecV2(
@@ -178,5 +182,6 @@ def make_sec_ccm_join_spec_preset(
             daily_date_col=seed.daily_date_col,
             daily_feature_columns=seed.daily_feature_columns,
             required_daily_non_null_features=seed.required_daily_non_null_features,
+            daily_join_max_forward_lag_days=seed.daily_join_max_forward_lag_days,
         )
     raise ValueError(f"Unknown join spec preset: {preset_name}")

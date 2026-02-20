@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 import polars as pl
+import pytest
 
 from thesis_pkg.core.sec.extraction import extract_filing_items
 from thesis_pkg.core.sec.suspicious_boundary_diagnostics import (
@@ -318,6 +319,59 @@ def test_run_boundary_diagnostics_accepts_yearly_parquet(tmp_path: Path) -> None
     assert result["total_filings"] >= 1
 
 
+def test_run_boundary_diagnostics_closes_parquet_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    text = _load_fixture("legacy_simple_10q.txt")
+    parquet_dir = _write_year_parquet(tmp_path, text)
+    out_path = tmp_path / "suspicious_year.csv"
+    report_path = tmp_path / "report_year.txt"
+    samples_dir = tmp_path / "samples_year"
+
+    import thesis_pkg.core.sec.suspicious_boundary_diagnostics as diag_mod
+
+    real_parquet_file = diag_mod.pq.ParquetFile
+    closed_count = 0
+
+    class _ParquetFileSpy:
+        def __init__(self, path: str | Path):
+            self._pf = real_parquet_file(path)
+
+        def iter_batches(self, *args, **kwargs):
+            return self._pf.iter_batches(*args, **kwargs)
+
+        def close(self) -> None:
+            nonlocal closed_count
+            closed_count += 1
+            self._pf.close()
+
+    monkeypatch.setattr(diag_mod.pq, "ParquetFile", _ParquetFileSpy)
+
+    config = DiagnosticsConfig(
+        parquet_dir=parquet_dir,
+        out_path=out_path,
+        report_path=report_path,
+        samples_dir=samples_dir,
+        batch_size=8,
+        max_files=0,
+        max_examples=5,
+        enable_embedded_verifier=True,
+        emit_manifest=False,
+        sample_pass=0,
+        sample_seed=42,
+        core_items=("1", "2"),
+        target_set=None,
+        emit_html=False,
+        html_out=tmp_path / "html_year",
+        html_scope="sample",
+        extraction_regime="legacy",
+        diagnostics_regime="legacy",
+    )
+    run_boundary_diagnostics(config)
+    assert closed_count == 1
+
+
 def test_run_boundary_regression_accepts_yearly_parquet(tmp_path: Path) -> None:
     # Build a baseline CSV from batch-style input.
     baseline_text = _load_fixture("v2_missing_parts_10q.txt")
@@ -358,3 +412,65 @@ def test_run_boundary_regression_accepts_yearly_parquet(tmp_path: Path) -> None:
     )
 
     assert result["total_filings"] >= 1
+
+
+def test_run_boundary_regression_closes_parquet_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    baseline_text = _load_fixture("v2_missing_parts_10q.txt")
+    baseline_parquet_dir = _write_parquet(tmp_path / "baseline", baseline_text)
+    baseline_csv = tmp_path / "baseline_suspicious.csv"
+    run_boundary_diagnostics(
+        DiagnosticsConfig(
+            parquet_dir=baseline_parquet_dir,
+            out_path=baseline_csv,
+            report_path=tmp_path / "baseline_report.txt",
+            samples_dir=tmp_path / "baseline_samples",
+            batch_size=8,
+            max_files=0,
+            max_examples=5,
+            enable_embedded_verifier=True,
+            emit_manifest=False,
+            sample_pass=0,
+            sample_seed=42,
+            core_items=("1", "2"),
+            target_set=None,
+            emit_html=False,
+            html_out=tmp_path / "baseline_html",
+            html_scope="sample",
+            extraction_regime="legacy",
+            diagnostics_regime="legacy",
+        )
+    )
+
+    compare_parquet_dir = _write_year_parquet(tmp_path / "compare", baseline_text)
+
+    import thesis_pkg.core.sec.suspicious_boundary_diagnostics as diag_mod
+
+    real_parquet_file = diag_mod.pq.ParquetFile
+    closed_count = 0
+
+    class _ParquetFileSpy:
+        def __init__(self, path: str | Path):
+            self._pf = real_parquet_file(path)
+
+        def iter_batches(self, *args, **kwargs):
+            return self._pf.iter_batches(*args, **kwargs)
+
+        def close(self) -> None:
+            nonlocal closed_count
+            closed_count += 1
+            self._pf.close()
+
+    monkeypatch.setattr(diag_mod.pq, "ParquetFile", _ParquetFileSpy)
+
+    run_boundary_regression(
+        RegressionConfig(
+            csv_path=baseline_csv,
+            parquet_dir=compare_parquet_dir,
+            sample_per_flag=1,
+            max_files=0,
+        )
+    )
+    assert closed_count == 1
