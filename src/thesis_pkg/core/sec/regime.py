@@ -145,6 +145,14 @@ if _ITEM_REGIME_SPEC:
 
 @dataclass(frozen=True)
 class RegimeSpec:
+    """Container for a parsed regime specification payload.
+
+    Attributes:
+        form: Form label from the spec payload.
+        spec_version: Integer spec version.
+        triggers: Trigger metadata block from the spec.
+        items: Item definition payload keyed by item slot.
+    """
     form: str
     spec_version: int
     triggers: dict
@@ -155,6 +163,16 @@ class RegimeSpec:
 
 @dataclass(frozen=True)
 class RegimeIndex:
+    """Compiled lookup structure derived from regime JSON.
+
+    Attributes:
+        form: Normalized form label used by the index.
+        items_by_key: Item definitions keyed by canonical item key.
+        requires_part: Whether part labels are required when validating items.
+        triggers: Trigger metadata copied from the source spec.
+        spec_version: Integer spec version.
+        items_by_id: Optional item-id lookup map (used for 10-K).
+    """
     form: str
     items_by_key: dict[str, dict] = field(default_factory=dict)
     requires_part: bool = False
@@ -174,6 +192,18 @@ def _is_amendment_form(form: str) -> bool:
 
 
 def normalize_form_type(form_type: str | None) -> str | None:
+    """
+    Normalize SEC form labels for regime lookup.
+
+    Supported outputs are ``"10-K"`` and ``"10-Q"``. Amendment forms
+    (for example ``10-K/A``) and unsupported forms return ``None``.
+
+    Args:
+        form_type: Raw form type string.
+
+    Returns:
+        str | None: ``"10-K"``, ``"10-Q"``, or ``None``.
+    """
     if not form_type:
         return None
     form = str(form_type).strip().upper()
@@ -189,6 +219,16 @@ def normalize_form_type(form_type: str | None) -> str | None:
 
 
 def load_regime_spec(form: str) -> dict | None:
+    """
+    Load packaged regime JSON for a normalized form.
+
+    Args:
+        form: Form type string accepted by :func:`normalize_form_type`.
+
+    Returns:
+        dict | None: Parsed regime payload, or ``None`` when form is unsupported
+        or packaged spec loading fails.
+    """
     normalized = normalize_form_type(form)
     if not normalized:
         return None
@@ -241,6 +281,18 @@ def _iter_spec_items(spec: dict) -> list[tuple[str, dict]]:
 
 
 def build_regime_index(spec: dict) -> RegimeIndex:
+    """
+    Compile a raw regime payload into a :class:`RegimeIndex`.
+
+    Args:
+        spec: Parsed regime dictionary.
+
+    Returns:
+        RegimeIndex: Compiled lookup object used by extraction heuristics.
+
+    Raises:
+        TypeError: If ``spec`` is not a dictionary.
+    """
     if not isinstance(spec, dict):
         raise TypeError("spec must be a dict")
     raw_form = spec.get("form")
@@ -284,6 +336,15 @@ def _get_regime_index_cached(normalized_form: str) -> RegimeIndex | None:
 
 
 def get_regime_index(form_type: str | None) -> RegimeIndex | None:
+    """
+    Return cached regime index for a form type.
+
+    Args:
+        form_type: Raw form type string.
+
+    Returns:
+        RegimeIndex | None: Cached compiled index, or ``None`` when no regime is available.
+    """
     normalized = normalize_form_type(form_type)
     if not normalized:
         return None

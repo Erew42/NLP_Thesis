@@ -18,8 +18,11 @@ visualize_*.py
 results/
 reviews/
 diff_files/
-docs/
 site/
+docs/other/
+docs_metadata/
+docs/reference/index.md
+docs/reference/**/*.md
 
 # Repo-root files (ignore all except README.md)
 /AGENTS.md

@@ -12,6 +12,17 @@ from .utilities import _normalize_newlines
 
 
 def normalize_extractor_body(text: str) -> str:
+    """Normalize raw filing text for extraction-offset-aware audit rendering.
+
+    This applies newline normalization, EDGAR metadata stripping, and wrapped
+    heading repair. It does not HTML-escape the text.
+
+    Args:
+        text: Raw filing text.
+
+    Returns:
+        str: Normalized extractor body text.
+    """
     return _repair_wrapped_headings(_strip_edgar_metadata(_normalize_newlines(text)))
 
 
@@ -189,6 +200,18 @@ def _asset_link(path: str, *, depth: int) -> str:
 
 
 def normalize_sample_weights(weights: dict[str, float] | None) -> dict[str, float]:
+    """Merge and sanitize per-status sampling weights.
+
+    Known status keys are ``pass``, ``warning``, and ``fail``. Missing keys use
+    defaults and negative values are clamped to ``0.0``. This function does not
+    renormalize weights to sum to 1.0.
+
+    Args:
+        weights: Optional caller overrides.
+
+    Returns:
+        dict[str, float]: Sanitized weight map for known status keys.
+    """
     merged = dict(DEFAULT_SAMPLE_WEIGHTS)
     if weights:
         for key, value in weights.items():
@@ -201,6 +224,18 @@ def normalize_sample_weights(weights: dict[str, float] | None) -> dict[str, floa
 
 
 def classify_filing_status(row: dict[str, object]) -> str:
+    """Classify a filing row into pass/warning/fail status.
+
+    Classification is field-driven:
+    fail if ``any_fail`` is truthy or ``filing_exclusion_reason`` is non-empty;
+    warning if ``any_warn`` is truthy; otherwise pass.
+
+    Args:
+        row: Filing-level diagnostics row.
+
+    Returns:
+        str: One of ``pass``, ``warning``, or ``fail``.
+    """
     any_fail = _parse_bool(row.get("any_fail"))
     exclusion = str(row.get("filing_exclusion_reason") or "").strip()
     if any_fail or exclusion:
@@ -346,6 +381,21 @@ def sample_filings_by_status(
     seed: int,
     weights: dict[str, float] | None = None,
 ) -> list[dict[str, object]]:
+    """Sample filing rows with status-stratified weighted allocation.
+
+    Target allocations are derived from status weights and adjusted for stratum
+    capacity. Remaining slots are filled pseudo-randomly among statuses that still
+    have available rows.
+
+    Args:
+        rows: Filing-level diagnostics rows.
+        sample_size: Requested sample size.
+        seed: Base random seed for deterministic sampling.
+        weights: Optional status weight overrides.
+
+    Returns:
+        list[dict[str, object]]: Sampled rows.
+    """
     if not rows or sample_size <= 0:
         return []
 
@@ -427,6 +477,21 @@ def write_html_audit(
     scope_label: str,
     metadata: dict[str, object],
 ) -> None:
+    """Write a form-level HTML audit bundle.
+
+    Writes ``index.html`` and per-filing pages under ``out_dir/filings`` using
+    item/filer metadata supplied by the caller.
+
+    Args:
+        index_rows: Filing-level rows for the index page.
+        items_by_filing: Mapping ``doc_id -> item rows`` used for filing detail pages.
+        out_dir: Output directory for generated HTML files.
+        scope_label: Human-readable sampling scope label rendered in summary.
+        metadata: Summary metadata rendered on index/detail pages.
+
+    Returns:
+        None
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
     filings_dir = out_dir / "filings"
     filings_dir.mkdir(parents=True, exist_ok=True)
@@ -712,6 +777,16 @@ def write_html_audit_root_index(
     out_dir: Path,
     metadata: dict[str, object],
 ) -> None:
+    """Write the root HTML index linking multiple form-level audit bundles.
+
+    Args:
+        form_entries: Per-form summary rows with relative links to form indices.
+        out_dir: Root output directory.
+        metadata: Root-level summary metadata rendered on the page.
+
+    Returns:
+        None
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
     style = _base_style()
     index_lines = [

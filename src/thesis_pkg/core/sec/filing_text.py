@@ -30,8 +30,16 @@ from .utilities import _cik_10, _digits_only, _make_doc_id
 
 def parse_filename_minimal(filename: str) -> dict:
     """
-    Parse all usable info from filename only.
-    Returns dict with parse_ok plus components.
+    Parse filing metadata from filename only.
+
+    Args:
+        filename: SEC source filename expected to match ``FILENAME_PATTERN``.
+
+    Returns:
+        dict: Parsed fields including ``filename_parse_ok``, ``file_date_filename``,
+        ``document_type_filename``, ``cik``, ``cik_10``, ``accession_number``,
+        ``accession_nodash``, and ``doc_id``. If parsing fails, values are returned
+        as ``None`` and ``filename_parse_ok`` is ``False``.
     """
     m = FILENAME_PATTERN.match(filename)
     if not m:
@@ -72,6 +80,12 @@ def parse_filename_minimal(filename: str) -> dict:
 
 @dataclass
 class RawTextSchema:
+    """
+    Polars schema definition for the raw, unparsed SEC filing text dataset.
+
+    Attributes:
+        schema: Column-to-dtype mapping used for raw text ingestion outputs.
+    """
     schema = {
         "doc_id": pl.Utf8,
         "cik": pl.Int64,
@@ -89,6 +103,12 @@ class RawTextSchema:
 
 @dataclass
 class ParsedFilingSchema:
+    """
+    Polars schema definition for filings that have had their EDGAR headers parsed.
+
+    Attributes:
+        schema: Column-to-dtype mapping used for parsed-header filing outputs.
+    """
     schema = {
         "doc_id": pl.Utf8,
         "cik": pl.Int64,
@@ -115,6 +135,12 @@ class ParsedFilingSchema:
 
 @dataclass
 class FilingItemSchema:
+    """
+    Polars schema definition for fully extracted SEC filing items.
+
+    Attributes:
+        schema: Column-to-dtype mapping used for extracted item outputs.
+    """
     schema = {
         "doc_id": pl.Utf8,
         "cik": pl.Int64,

@@ -8,6 +8,7 @@ import random
 import re
 import statistics
 import sys
+from collections.abc import Iterator
 from collections import Counter, defaultdict
 from contextlib import ExitStack
 from dataclasses import dataclass, field, replace
@@ -348,6 +349,28 @@ MANIFEST_FILING_FIELDS = [
 
 @dataclass(frozen=True)
 class DiagnosticsConfig:
+    """Configuration for bulk boundary diagnostics over parquet filing inputs.
+
+    Attributes:
+        parquet_dir: Input parquet directory.
+        out_path: Output CSV for flagged item-level rows.
+        report_path: Output text diagnostics report.
+        samples_dir: Directory for plain-text sample snippets.
+        batch_size: Parquet batch size used while scanning.
+        max_files: Optional cap on input parquet file count (0 means no cap).
+        max_examples: Max representative examples per flag in report output.
+        enable_embedded_verifier: Toggle embedded-heading verification checks.
+        emit_manifest: Whether to write filing/item manifests.
+        sample_pass: Number of pass filings to sample into dedicated outputs.
+        sample_seed: Base random seed for deterministic sampling.
+        core_items: Canonical item ids used in missing-core checks.
+        target_set: Optional target-set label for focused report sections.
+        emit_html: Whether HTML audit output is generated.
+        extraction_regime: Extractor mode used during scanning.
+        diagnostics_regime: Diagnostics logic mode applied to extracted rows.
+        focus_items: Optional explicit per-form focus item mapping.
+        report_item_scope: Report item-scope selector (all/target/focus).
+    """
     parquet_dir: Path = DEFAULT_PARQUET_DIR
     out_path: Path = DEFAULT_OUT_PATH
     report_path: Path = DEFAULT_REPORT_PATH
@@ -382,6 +405,14 @@ class DiagnosticsConfig:
 
 @dataclass(frozen=True)
 class RegressionConfig:
+    """Configuration for targeted regression replay runs.
+
+    Attributes:
+        csv_path: Baseline suspicious-boundaries CSV used to select doc_ids.
+        parquet_dir: Input parquet directory used for replay extraction.
+        sample_per_flag: Max examples printed per flag in textual summary.
+        max_files: Optional cap on scanned parquet files (0 means no cap).
+    """
     csv_path: Path = DEFAULT_CSV_PATH
     parquet_dir: Path = DEFAULT_PARQUET_DIR
     sample_per_flag: int = 3
@@ -390,6 +421,13 @@ class RegressionConfig:
 
 @dataclass(frozen=True)
 class InternalHeadingLeak:
+    """Internal heading leak candidate detected within extracted item text.
+
+    Attributes:
+        position: Character offset of the leaked heading candidate.
+        match_text: Matched heading text.
+        context: Local snippet around the match.
+    """
     position: int
     match_text: str
     context: str
@@ -397,6 +435,19 @@ class InternalHeadingLeak:
 
 @dataclass(frozen=True)
 class DiagnosticsRow:
+    """Canonical item-level diagnostics row used across CSV/report/html flows.
+
+    This dataclass is the single schema source for flagged item diagnostics.
+
+    Attributes:
+        doc_id: Canonical filing document id.
+        accession: Filing accession number.
+        form_type: Filing form label used by diagnostics.
+        item: Item key at item grain (for example ``I:1``).
+        flags: Flag tuple emitted for this row.
+        embedded_hits: Embedded heading detections captured for this item text.
+        item_full_text: Extracted item body text used for diagnostics.
+    """
     doc_id: str
     cik: str
     accession: str
@@ -458,6 +509,14 @@ class DiagnosticsRow:
     item_full_text: str
 
     def to_dict(self, provenance: dict[str, str]) -> dict[str, object]:
+        """Serialize this diagnostics row into the output CSV/report schema.
+
+        Args:
+            provenance: Provenance metadata appended to each output row.
+
+        Returns:
+            dict[str, object]: Serialized row aligned to ``CSV_FIELDS``.
+        """
         # Keep schema synchronized across CSV/report/sample outputs.
         def _csv_value(value: int | str | None) -> int | str:
             if value is None:
@@ -579,6 +638,25 @@ def _parse_date(value: str | date | datetime | None) -> date | None:
 
 def _normalized_form_type(form_type: str | None) -> str | None:
     return normalize_form_type(form_type)
+
+
+def _iter_parquet_batches(
+    file_path: Path,
+    *,
+    batch_size: int,
+    columns: list[str],
+) -> Iterator[pa.RecordBatch]:
+    pf: pq.ParquetFile | None = None
+    try:
+        pf = pq.ParquetFile(file_path)
+        for batch in pf.iter_batches(batch_size=batch_size, columns=columns):
+            yield batch
+    finally:
+        if pf is not None:
+            try:
+                pf.close()
+            except Exception:
+                pass
 
 
 def _is_10k(form_type: str | None) -> bool:
@@ -1026,6 +1104,15 @@ def _normalize_focus_item_key(form_type: str, token: str) -> str | None:
 
 
 def parse_focus_items(value: str | None) -> dict[str, set[str]] | None:
+    """Parse focus-item CLI text into normalized per-form item sets.
+
+    Args:
+        value: Semicolon-delimited spec, for example ``"10-K:1A,7;10-Q:2,1A"``.
+
+    Returns:
+        dict[str, set[str]] | None: Mapping ``normalized_form -> normalized_item_ids``,
+        or ``None`` when no valid focus tokens are present.
+    """
     if not value or not str(value).strip():
         return None
     focus: dict[str, set[str]] = {}
@@ -1609,6 +1696,19 @@ def _append_item_breakdown_sections(
 
 
 def load_root_causes_text(path: Path = DEFAULT_ROOT_CAUSES_PATH) -> str:
+    """Load archived root-cause notes appended to diagnostics reports.
+
+    Resolution order is ``path`` first, then ``path.parent / "archive" / path.name``.
+
+    Args:
+        path: Primary root-causes text path.
+
+    Returns:
+        str: Root-causes text payload.
+
+    Raises:
+        FileNotFoundError: If neither primary nor archive path exists.
+    """
     if path.exists():
         return path.read_text(encoding="utf-8")
     archive_path = path.parent / "archive" / path.name
@@ -2125,6 +2225,22 @@ def _build_diagnostics_report(
 
 
 def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
+    """Execute a bulk suspicious-boundary diagnostics scan.
+
+    Always writes item-level flagged CSV and text report outputs. Depending on
+    ``config``, this may also write manifests, pass-sample CSVs, and HTML audit pages.
+
+    Args:
+        config: Diagnostics run configuration.
+
+    Returns:
+        dict[str, int]: Aggregate counters containing ``total_filings``,
+        ``total_items``, ``total_flagged``, and ``total_internal_heading_leaks``.
+
+    Raises:
+        SystemExit: If input parquet directory is missing or no input files are found.
+        ValueError: For invalid scope/focus configuration combinations.
+    """
     parquet_dir = config.parquet_dir
     if not parquet_dir.exists():
         raise SystemExit(f"parquet-dir not found: {parquet_dir}")
@@ -2217,10 +2333,15 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
             manifest_filings_writer.writeheader()
 
         for file_path in files:
-            pf = pq.ParquetFile(file_path)
-            available = set(pf.schema.names)
+            available = set(pq.read_schema(file_path).names)
             columns = [c for c in want_cols if c in available]
-            for batch in pf.iter_batches(batch_size=config.batch_size, columns=columns):
+            if not columns:
+                continue
+            for batch in _iter_parquet_batches(
+                file_path,
+                batch_size=config.batch_size,
+                columns=columns,
+            ):
                 tbl = pa.Table.from_batches([batch])
                 df = pl.from_arrow(tbl)
                 for row in df.iter_rows(named=True):
@@ -3099,6 +3220,19 @@ def run_boundary_diagnostics(config: DiagnosticsConfig) -> dict[str, int]:
 
 
 def run_boundary_regression(config: RegressionConfig) -> dict[str, int]:
+    """Replay diagnostics for baseline doc_ids listed in a prior suspicious CSV.
+
+    Args:
+        config: Regression replay configuration.
+
+    Returns:
+        dict[str, int]: Aggregate counters containing ``total_filings``,
+        ``total_items``, and ``total_flagged`` for the replay.
+
+    Raises:
+        SystemExit: If baseline CSV or parquet directory is missing, or if no parquet
+            input files are found.
+    """
     csv_path = config.csv_path
     if not csv_path.exists():
         archive_path = csv_path.parent / "archive" / csv_path.name
@@ -3176,10 +3310,11 @@ def run_boundary_regression(config: RegressionConfig) -> dict[str, int]:
     ]
 
     for file_path in files:
-        pf = pq.ParquetFile(file_path)
-        available = set(pf.schema.names)
+        available = set(pq.read_schema(file_path).names)
         columns = [c for c in want_cols if c in available]
-        for batch in pf.iter_batches(batch_size=8, columns=columns):
+        if not columns:
+            continue
+        for batch in _iter_parquet_batches(file_path, batch_size=8, columns=columns):
             tbl = pa.Table.from_batches([batch])
             df = pl.from_arrow(tbl)
             for row in df.iter_rows(named=True):
@@ -3582,7 +3717,17 @@ def run_boundary_comparison(
     out_dir: Path | None = None,
 ) -> dict[str, dict[str, object]]:
     """
-    Run diagnostics twice (legacy vs v2) on the same inputs and return summary deltas.
+    Run diagnostics twice (legacy baseline vs alternate regime) and diff summaries.
+
+    Args:
+        base_config: Base diagnostics configuration used for the legacy run.
+        extraction_regime_b: Extraction regime for the second run.
+        diagnostics_regime_b: Diagnostics regime for the second run.
+        out_dir: Optional comparison output root directory.
+
+    Returns:
+        dict[str, dict[str, object]]: Comparison payload with ``legacy``, ``v2``,
+        and ``delta`` sections.
     """
     base_dir = out_dir or (base_config.out_path.parent / "boundary_compare")
     base_dir.mkdir(parents=True, exist_ok=True)
@@ -4043,6 +4188,19 @@ def _build_parser() -> tuple[argparse.ArgumentParser, argparse.ArgumentParser]:
 
 
 def main(argv: list[str] | None = None) -> None:
+    """CLI entrypoint for suspicious-boundary diagnostics.
+
+    Supported commands are ``scan`` and ``regress``.
+
+    Args:
+        argv: Optional argv override for programmatic invocation.
+
+    Returns:
+        None
+
+    Raises:
+        SystemExit: Propagated from argument parsing and scan/regression validation.
+    """
     parser, scan_parser = _build_parser()
     args = parser.parse_args(argv)
 

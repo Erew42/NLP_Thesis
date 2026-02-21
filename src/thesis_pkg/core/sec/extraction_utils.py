@@ -17,6 +17,18 @@ class _ItemBoundary:
 
 @dataclass(frozen=True)
 class EmbeddedHeadingHit:
+    """Diagnostic record for an embedded heading detection inside item text.
+
+    Attributes:
+        kind: Heading token family (for example ``item`` or ``part``).
+        classification: Hit classifier label (for example ``cross_ref`` or ``toc_row``).
+        item_id: Parsed item id when available.
+        part: Parsed part label when available.
+        line_idx: Zero-based line index within normalized extractor body.
+        char_pos: Character offset within normalized extractor body.
+        full_text_len: Full extracted item text length used for contextual bucketing.
+        snippet: Local text snippet around the hit.
+    """
     kind: str
     classification: str
     item_id: str | None

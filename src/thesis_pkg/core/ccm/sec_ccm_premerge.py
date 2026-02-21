@@ -133,7 +133,19 @@ def _normalize_daily_join_input(daily_lf: pl.LazyFrame, join_spec: SecCcmJoinSpe
 
 
 def normalize_sec_filings_phase_a(sec_filings_lf: pl.LazyFrame) -> pl.LazyFrame:
-    """Normalize SEC filing identifiers for Phase A linking."""
+    """Normalize SEC filing fields required for Phase A linking.
+
+    Args:
+        sec_filings_lf: Input filings at doc grain.
+
+    Returns:
+        pl.LazyFrame: Filings with normalized ``doc_id``, ``cik_10``, ``filing_date``,
+        optional ``acceptance_datetime``, boolean ``has_acceptance_datetime``,
+        and non-null ``data_status``.
+
+    Raises:
+        ValueError: If required columns ``doc_id``, ``cik_10``, or ``filing_date`` are missing.
+    """
     _require_columns(sec_filings_lf, ("doc_id", "cik_10", "filing_date"), "sec_filings")
     schema = sec_filings_lf.collect_schema()
     acceptance_col_present = "acceptance_datetime" in schema
@@ -156,7 +168,23 @@ def normalize_sec_filings_phase_a(sec_filings_lf: pl.LazyFrame) -> pl.LazyFrame:
 
 
 def resolve_links_phase_a(sec_norm_lf: pl.LazyFrame, link_universe_lf: pl.LazyFrame) -> pl.LazyFrame:
-    """Resolve doc_id to a single gvkey/kypermno candidate with conservative tie handling."""
+    """Resolve each filing to a single ``gvkey``/``kypermno`` candidate for Phase A.
+
+    Candidate selection is conservative:
+    minimum ``link_rank`` first, then maximum ``link_quality``. If more than one
+    candidate remains at top rank/quality, the filing is marked ambiguous.
+
+    Args:
+        sec_norm_lf: SEC filings input (doc grain).
+        link_universe_lf: CCM link universe.
+
+    Returns:
+        pl.LazyFrame: Phase A output containing reason codes, selected link identifiers,
+        link-candidate diagnostics, and updated ``data_status`` flags.
+
+    Raises:
+        ValueError: If required SEC or link-universe columns are missing.
+    """
     sec_base = normalize_sec_filings_phase_a(sec_norm_lf).with_columns(
         (
             pl.col("doc_id").is_not_null()
@@ -264,7 +292,26 @@ def align_doc_dates_phase_b(
     trading_calendar_lf: pl.LazyFrame,
     join_spec: SecCcmJoinSpec,
 ) -> pl.LazyFrame:
-    """Compute doc-date alignment at doc grain under the configured Phase B policy."""
+    """Compute Phase B document-date alignment at doc grain.
+
+    Alignment policy is controlled by ``join_spec``. The function adds
+    ``aligned_caldt`` and ``alignment_lag_days`` and records effective/requested
+    alignment policy labels.
+
+    Args:
+        links_doc_lf: Phase A link output.
+        trading_calendar_lf: Trading calendar input.
+        join_spec: Phase B alignment/join configuration.
+
+    Returns:
+        pl.LazyFrame: Input rows with alignment columns and updated ``data_status``
+        flags for alignment attempted/aligned outcomes.
+
+    Raises:
+        ValueError: If required columns are missing from ``links_doc_lf`` or
+            ``trading_calendar_lf``.
+        TypeError: If ``join_spec`` is an unsupported type.
+    """
     join_spec_v2 = normalize_sec_ccm_join_spec(join_spec)
     alignment_mode = join_spec_v2.phase_b_alignment_mode
     requested_alignment_policy = _requested_alignment_policy_value(join_spec)
@@ -369,8 +416,26 @@ def join_daily_phase_b(
     join_spec: SecCcmJoinSpec,
 ) -> pl.LazyFrame:
     """
-    Join docs to CRSP daily (or merged daily panel) keyed by (kypermno, caldt)
-    using the configured Phase B daily-join mode.
+    Join aligned docs to daily data under the configured Phase B daily-join mode.
+
+    When daily joining is enabled, the result includes:
+    ``daily_join_caldt``, ``daily_join_lag_days``, ``daily_lag_gate_rejected``,
+    key-date coverage bounds, helper booleans, and updated ``data_status`` flags.
+    ``daily_lag_gate_rejected`` is only applied as a usability gate for
+    ``ASOF_FORWARD`` mode when ``daily_join_max_forward_lag_days`` is not ``None``.
+
+    Args:
+        aligned_doc_lf: Phase B aligned doc-grain rows.
+        daily_lf: Daily input panel (CRSP or merged panel).
+        join_spec: Phase B join configuration.
+
+    Returns:
+        pl.LazyFrame: Joined rows with daily fields and join diagnostics.
+
+    Raises:
+        ValueError: If required columns are missing, if daily join mode is unsupported,
+            or if ``daily_join_max_forward_lag_days`` is negative.
+        TypeError: If ``join_spec`` is an unsupported type.
     """
     join_spec_v2 = normalize_sec_ccm_join_spec(join_spec)
     _require_columns(
@@ -500,7 +565,25 @@ def apply_phase_b_reason_codes(
     phase_b_joined_lf: pl.LazyFrame,
     join_spec: SecCcmJoinSpec,
 ) -> pl.LazyFrame:
-    """Apply Phase B reason codes, preserving non-OK Phase A outcomes."""
+    """Apply Phase B reason codes while preserving non-OK Phase A outcomes.
+
+    ``match_reason_code`` for rows that were not ``OK`` in Phase A is preserved
+    from ``phase_a_reason_code``. For Phase A ``OK`` rows, Phase B emits
+    ``OK``, ``OUT_OF_CCM_COVERAGE``, or ``NO_CCM_ROW_FOR_DATE``.
+
+    Args:
+        phase_a_doc_lf: Phase A output with at least ``doc_id`` and ``phase_a_reason_code``.
+        phase_b_joined_lf: Phase B output with alignment/daily join diagnostics.
+        join_spec: Phase B join configuration.
+
+    Returns:
+        pl.LazyFrame: Rows with ``phase_b_reason_code``, ``match_reason_code``,
+        and updated ``data_status`` flags.
+
+    Raises:
+        ValueError: If required columns are missing in either input frame.
+        TypeError: If ``join_spec`` is an unsupported type.
+    """
     join_spec_v2 = normalize_sec_ccm_join_spec(join_spec)
     _require_columns(phase_a_doc_lf, ("doc_id", "phase_a_reason_code"), "Phase A docs")
     _require_columns(
@@ -579,7 +662,18 @@ def apply_phase_b_reason_codes(
 
 
 def build_match_status_doc(final_doc_lf: pl.LazyFrame) -> pl.LazyFrame:
-    """Build canonical doc-grain match status table."""
+    """Build the canonical doc-grain match-status table.
+
+    Args:
+        final_doc_lf: Final Phase B doc output.
+
+    Returns:
+        pl.LazyFrame: Canonical status table with fixed column order and
+        ``match_flag`` derived from ``match_reason_code == 'OK'``.
+
+    Raises:
+        ValueError: If required columns are missing from ``final_doc_lf``.
+    """
     required = ("doc_id", "cik_10", "filing_date", "phase_a_reason_code", "match_reason_code", "data_status")
     _require_columns(final_doc_lf, required, "final doc output")
 
@@ -631,7 +725,20 @@ def build_unmatched_diagnostics_doc(
     link_universe_lf: pl.LazyFrame,
     daily_lf: pl.LazyFrame,
 ) -> pl.LazyFrame:
-    """Build doc-grain diagnostics for unmatched filings."""
+    """Build doc-grain diagnostics for unmatched filings.
+
+    Args:
+        final_doc_lf: Final Phase B doc output.
+        link_universe_lf: CCM link universe used for enrichment diagnostics.
+        daily_lf: Reserved for compatibility with earlier pipeline signatures;
+            currently not used in this function.
+
+    Returns:
+        pl.LazyFrame: Unmatched filings enriched with CIK/link-coverage diagnostics.
+
+    Raises:
+        ValueError: If required columns are missing from input frames.
+    """
     _require_columns(final_doc_lf, ("doc_id", "cik_10", "filing_date", "match_reason_code"), "final docs")
     link_universe = _normalize_link_universe(link_universe_lf).select(
         "cik_10",

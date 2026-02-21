@@ -438,8 +438,32 @@ def run_sec_ccm_premerge_pipeline(
     emit_run_report: bool = True,
 ) -> dict[str, Path]:
     """
-    Run two-phase SEC-CCM pre-merge at doc grain and persist canonical artifacts.
-    Optionally writes automatic run diagnostics/performance artifacts.
+    Run the two-phase SEC-CCM pre-merge pipeline and persist canonical artifacts.
+
+    Pipeline stages:
+    1. Phase A filing normalization and link resolution.
+    2. Phase B date alignment and optional daily join.
+    3. Reason-code assignment, filter flags, and artifact materialization.
+
+    Args:
+        sec_filings_lf: SEC filings input at doc grain.
+        link_universe_lf: CCM link universe input.
+        trading_calendar_lf: Trading calendar input for date alignment.
+        output_dir: Directory where parquet/json/report artifacts are written.
+        daily_lf: Daily panel input required when daily join is enabled.
+        join_spec: Join configuration (V1 or V2; normalized internally to V2).
+        emit_run_report: Whether run-step artifacts, manifest, and markdown report
+            are generated.
+
+    Returns:
+        dict[str, Path]: Artifact-key to output-path mapping. Keys include
+        canonical outputs such as ``final_flagged_data``, ``sec_ccm_match_status``,
+        matched/unmatched partitions, and join-spec/report artifacts.
+
+    Raises:
+        ValueError: If ``daily_lf`` is missing while daily join is enabled, or if
+            upstream stage validations fail.
+        TypeError: If ``join_spec`` has an unsupported type.
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)

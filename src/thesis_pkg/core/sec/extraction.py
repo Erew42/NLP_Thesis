@@ -118,6 +118,12 @@ def _warn_fastpath_failure_once(kind: str, exc: Exception) -> None:
 
 
 def get_extraction_fastpath_metrics() -> dict[str, int | str | bool | None]:
+    """Return counters and availability metadata for fast-path extraction calls.
+
+    Returns:
+        dict[str, int | str | bool | None]: Snapshot of fast-path counters plus:
+        ``fastpath_extension_available`` and ``fastpath_import_error``.
+    """
     metrics: dict[str, int | str | bool | None] = dict(_FASTPATH_METRICS)
     metrics["fastpath_extension_available"] = _extraction_fast is not None
     metrics["fastpath_import_error"] = _FASTPATH_IMPORT_ERROR
@@ -125,6 +131,11 @@ def get_extraction_fastpath_metrics() -> dict[str, int | str | bool | None]:
 
 
 def reset_extraction_fastpath_metrics() -> None:
+    """Reset in-memory fast-path counters and one-time warning state.
+
+    Returns:
+        None
+    """
     for key in _FASTPATH_METRICS:
         _FASTPATH_METRICS[key] = 0
     for key in _FASTPATH_WARNING_EMITTED:
@@ -818,24 +829,30 @@ def extract_filing_items(
     max_item_number: int = 20,
     extraction_regime: Literal["legacy", "v2"] = "legacy",
 ) -> list[dict[str, str | bool | None]]:
-    """
-    Extract filing item sections from `full_text`.
+    """Extract SEC filing item sections from a raw filing body.
 
-    Returns a list of dicts with:
-      - item_part: roman numeral part when detected (e.g., 'I', 'II'); may be None
-      - item_id: normalized item id (e.g., '1', '1A')
-      - item: combined key '<part>:<id>' when part exists; for 10-Q without part uses '?:<id>' placeholder
-      - full_text: extracted text for the item (pagination artifacts removed)
-      - canonical_item: regime-stable meaning when available
-      - exists_by_regime: True/False when regime rules can be evaluated, else None
-      - item_status: active/reserved/optional/unknown
-      - _heading_line (clean) / _heading_line_raw / _heading_line_index / _heading_offset when diagnostics=True
-      - _heading_start/_heading_end/_content_start/_content_end offsets in extractor body when diagnostics=True
-      - when drop_impossible=True, items with exists_by_regime == False are dropped
-      - when repair_boundaries=True, high-confidence end-boundary truncation is applied
-      - extraction_regime controls legacy vs v2-only behaviors (default legacy)
+    Args:
+        full_text: Raw filing text.
+        form_type: Filing form type (for example ``10-K`` or ``10-Q``).
+        filing_date: Filing date used by regime-aware title logic.
+        period_end: Period end date used by regime-aware title logic.
+        regime: Whether regime-aware canonical item metadata is enabled.
+        drop_impossible: If ``True``, drop items with ``exists_by_regime is False``.
+        diagnostics: If ``True``, emit heading/boundary diagnostics fields.
+        repair_boundaries: If ``True``, apply high-confidence end-boundary truncation.
+        max_item_number: Maximum numeric item id considered by fallback scans.
+        extraction_regime: Extraction path selector (``legacy`` or ``v2``).
 
-    The function does not emit TOC rows; TOC is only used internally to avoid false starts.
+    Returns:
+        list[dict[str, str | bool | None]]: Extracted items in document order.
+        Each item includes at least ``item_part``, ``item_id``, ``item``,
+        ``full_text``, ``canonical_item``, ``exists_by_regime``, and ``item_status``.
+        When ``diagnostics`` is enabled, heading and boundary offset metadata is
+        also included.
+
+    Notes:
+        10-K/A and 10-Q/A inputs are skipped and return an empty list.
+        TOC detections are used to avoid false starts and are not emitted as items.
     """
     if not full_text:
         return []
@@ -1176,8 +1193,16 @@ def extract_filing_items(
     return out_items
 
 def parse_header(full_text: str, header_search_limit: int = HEADER_SEARCH_LIMIT_DEFAULT) -> dict:
-    """
-    Extract header metadata (CIKs, accession, filing date, period end) from the top of a filing.
+    """Extract EDGAR-style header metadata from the leading header window.
+
+    Args:
+        full_text: Raw filing text.
+        header_search_limit: Maximum number of leading characters scanned.
+
+    Returns:
+        dict: Header fields containing ``header_ciks_int_set``,
+        ``header_filing_date_str``, ``header_period_end_str``,
+        ``header_accession_str``, ``primary_header_cik``, and ``secondary_ciks``.
     """
     header = full_text[:header_search_limit]
 
