@@ -5,6 +5,7 @@ import csv
 import datetime as dt
 import json
 import random
+import shutil
 import sys
 import time
 from collections import Counter
@@ -16,6 +17,7 @@ from typing import Any
 DEFAULT_TRACE_SCOPE = "both"
 DEFAULT_TRACE_SEED = 42
 DEFAULT_BEHAVIOR_PAGE_REL = Path("docs/reference/behavior_evidence.md")
+DEFAULT_PUBLISH_DIR_REL = Path("docs/assets/behavior")
 
 
 def _ensure_src_on_sys_path(repo_root: Path) -> None:
@@ -51,6 +53,84 @@ def _rel_path(repo_root: Path, path: Path) -> str:
         except ValueError:
             return path.resolve().as_posix()
     return path.as_posix()
+
+
+def _is_within(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def _resolve_repo_path(repo_root: Path, path_value: str) -> Path:
+    path = Path(path_value)
+    return path if path.is_absolute() else (repo_root / path)
+
+
+def _doc_relative_path(path: Path, docs_dir: Path) -> str:
+    if _is_within(path, docs_dir):
+        return path.resolve().relative_to(docs_dir.resolve()).as_posix()
+
+    parts = list(path.resolve().parts)
+    doc_indexes = [idx for idx, part in enumerate(parts) if part.lower() == "docs"]
+    if not doc_indexes:
+        return ""
+    start = doc_indexes[-1] + 1
+    if start >= len(parts):
+        return ""
+    return Path(*parts[start:]).as_posix()
+
+
+def _is_outward_facing_function(function_key: str) -> bool:
+    _, _, func_name = function_key.partition(":")
+    if not func_name:
+        return False
+    if func_name.startswith("<") and func_name.endswith(">"):
+        return False
+    return not func_name.startswith("_")
+
+
+def _copy_publish_artifacts(
+    *,
+    repo_root: Path,
+    out_dir: Path,
+    docs_dir: Path,
+    publish_dir: Path,
+    artifacts: list[dict[str, Any]],
+    overwrite: bool,
+) -> list[dict[str, Any]]:
+    if publish_dir.exists() and overwrite:
+        shutil.rmtree(publish_dir)
+    publish_dir.mkdir(parents=True, exist_ok=True)
+
+    published_rows: list[dict[str, Any]] = []
+    for row in artifacts:
+        canonical = str(row.get("canonical_path", ""))
+        if not canonical:
+            continue
+        canonical_abs = _resolve_repo_path(repo_root, canonical)
+        if not canonical_abs.exists() or not canonical_abs.is_file():
+            continue
+
+        if _is_within(canonical_abs, out_dir):
+            rel_in_trace = canonical_abs.resolve().relative_to(out_dir.resolve())
+        else:
+            workload = str(row.get("workload", "misc")) or "misc"
+            rel_in_trace = Path(workload) / canonical_abs.name
+
+        published_abs = publish_dir / rel_in_trace
+        published_abs.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(canonical_abs, published_abs)
+
+        published_doc_rel = _doc_relative_path(published_abs, docs_dir)
+
+        row_copy = dict(row)
+        row_copy["published_path"] = _rel_path(repo_root, published_abs)
+        row_copy["published_doc_path"] = published_doc_rel
+        published_rows.append(row_copy)
+
+    return published_rows
 
 
 class _CallProfiler:
@@ -157,7 +237,7 @@ def _run_sec_ccm_workload(repo_root: Path, output_dir: Path) -> dict[str, Any]:
             {
                 "workload": "sec_ccm",
                 "artifact_key": key,
-                "path": _rel_path(repo_root, artifact_path),
+                "canonical_path": _rel_path(repo_root, artifact_path),
                 "size_bytes": artifact_path.stat().st_size if artifact_path.exists() else 0,
             }
         )
@@ -282,7 +362,7 @@ def _run_boundary_workload(repo_root: Path, output_dir: Path, seed: int) -> dict
             {
                 "workload": "boundary",
                 "artifact_key": key,
-                "path": _rel_path(repo_root, path),
+                "canonical_path": _rel_path(repo_root, path),
                 "size_bytes": path.stat().st_size if path.exists() else 0,
             }
         )
@@ -321,7 +401,8 @@ def _render_placeholder() -> str:
 def _render_behavior_markdown(manifest: dict[str, Any]) -> str:
     workloads = manifest.get("workloads", [])
     top_modules = manifest.get("top_modules", [])
-    top_functions = manifest.get("top_functions", [])
+    top_outward_functions = manifest.get("top_outward_functions", [])
+    top_internal_functions = manifest.get("top_internal_functions", [])
     artifacts = manifest.get("artifacts", [])
 
     lines: list[str] = [
@@ -358,14 +439,23 @@ def _render_behavior_markdown(manifest: dict[str, Any]) -> str:
     else:
         lines.append("- No module touch data found.")
 
-    lines.extend(["", "## Top Function Touches", ""])
-    if isinstance(top_functions, list) and top_functions:
-        for row in top_functions[:20]:
+    lines.extend(["", "## Top Outward-Facing Function Touches", ""])
+    if isinstance(top_outward_functions, list) and top_outward_functions:
+        for row in top_outward_functions[:20]:
             if not isinstance(row, dict):
                 continue
             lines.append(f"- `{row.get('function', '')}`: `{row.get('call_count', 0)}` calls")
     else:
-        lines.append("- No function touch data found.")
+        lines.append("- No outward-facing function touch data found.")
+
+    lines.extend(["", "## Top Internal Function Touches", ""])
+    if isinstance(top_internal_functions, list) and top_internal_functions:
+        for row in top_internal_functions[:20]:
+            if not isinstance(row, dict):
+                continue
+            lines.append(f"- `{row.get('function', '')}`: `{row.get('call_count', 0)}` calls")
+    else:
+        lines.append("- No internal function touch data found.")
 
     lines.extend(["", "## Artifact Manifest", ""])
     if isinstance(artifacts, list) and artifacts:
@@ -373,8 +463,18 @@ def _render_behavior_markdown(manifest: dict[str, Any]) -> str:
             if not isinstance(row, dict):
                 continue
             key = row.get("artifact_key", "")
-            path = row.get("path", "")
-            lines.append(f"- `{key}`: [{path}](../../{path})")
+            published_doc_path = str(row.get("published_doc_path", ""))
+            published_path = str(row.get("published_path", ""))
+            if published_doc_path:
+                link_target = f"../{published_doc_path}"
+                lines.append(
+                    f"- `{key}`: [{published_doc_path}]({link_target})"
+                )
+            elif published_path:
+                lines.append(f"- `{key}`: `{published_path}`")
+            else:
+                canonical_path = str(row.get("canonical_path", ""))
+                lines.append(f"- `{key}`: `{canonical_path}`")
     else:
         lines.append("- No artifact references found.")
 
@@ -386,12 +486,15 @@ def run_traces(
     *,
     repo_root: Path,
     out_dir: Path,
+    publish_dir: Path,
     trace_scope: str,
     seed: int,
     overwrite: bool,
 ) -> dict[str, Any]:
     repo_root = repo_root.resolve()
     out_dir = out_dir.resolve()
+    publish_dir = publish_dir.resolve()
+    docs_dir = (repo_root / "docs").resolve()
     random.seed(seed)
 
     run_manifest_path = out_dir / "run_manifest.json"
@@ -450,6 +553,8 @@ def run_traces(
             key=lambda item: (-item[1], item[0]),
         )
     ]
+    outward_function_rows = [row for row in function_rows if _is_outward_facing_function(str(row["function"]))]
+    internal_function_rows = [row for row in function_rows if not _is_outward_facing_function(str(row["function"]))]
 
     artifact_manifest_path = out_dir / "artifact_manifest.csv"
     step_timings_path = out_dir / "step_timings.csv"
@@ -458,7 +563,14 @@ def run_traces(
 
     _write_csv(
         artifact_manifest_path,
-        ["workload", "artifact_key", "path", "size_bytes"],
+        [
+            "workload",
+            "artifact_key",
+            "canonical_path",
+            "published_path",
+            "published_doc_path",
+            "size_bytes",
+        ],
         artifact_rows,
     )
     _write_csv(
@@ -469,31 +581,57 @@ def run_traces(
     _write_csv(module_touch_path, ["module", "call_count"], module_rows)
     _write_csv(function_touch_path, ["function", "call_count"], function_rows)
 
-    artifacts_for_manifest = list(artifact_rows)
-    artifacts_for_manifest.extend(
+    artifacts_for_publish = list(artifact_rows)
+    artifacts_for_publish.extend(
         [
             {
                 "workload": "trace",
                 "artifact_key": "artifact_manifest_csv",
-                "path": _rel_path(repo_root, artifact_manifest_path),
+                "canonical_path": _rel_path(repo_root, artifact_manifest_path),
             },
             {
                 "workload": "trace",
                 "artifact_key": "step_timings_csv",
-                "path": _rel_path(repo_root, step_timings_path),
+                "canonical_path": _rel_path(repo_root, step_timings_path),
             },
             {
                 "workload": "trace",
                 "artifact_key": "module_touch_counts_csv",
-                "path": _rel_path(repo_root, module_touch_path),
+                "canonical_path": _rel_path(repo_root, module_touch_path),
             },
             {
                 "workload": "trace",
                 "artifact_key": "function_call_counts_csv",
-                "path": _rel_path(repo_root, function_touch_path),
+                "canonical_path": _rel_path(repo_root, function_touch_path),
             },
         ]
     )
+
+    artifacts_for_manifest = _copy_publish_artifacts(
+        repo_root=repo_root,
+        out_dir=out_dir,
+        docs_dir=docs_dir,
+        publish_dir=publish_dir,
+        artifacts=artifacts_for_publish,
+        overwrite=overwrite,
+    )
+
+    # Rewrite artifact manifest with published-path columns now populated.
+    _write_csv(
+        artifact_manifest_path,
+        [
+            "workload",
+            "artifact_key",
+            "canonical_path",
+            "published_path",
+            "published_doc_path",
+            "size_bytes",
+        ],
+        artifacts_for_manifest,
+    )
+    published_artifact_manifest = publish_dir / "artifact_manifest.csv"
+    published_artifact_manifest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(artifact_manifest_path, published_artifact_manifest)
 
     manifest = {
         "schema_version": "v1",
@@ -503,6 +641,8 @@ def run_traces(
         "workloads": workload_results,
         "top_modules": module_rows[:100],
         "top_functions": function_rows[:100],
+        "top_outward_functions": outward_function_rows[:100],
+        "top_internal_functions": internal_function_rows[:100],
         "artifacts": artifacts_for_manifest,
     }
     _write_json(run_manifest_path, manifest)
@@ -532,6 +672,7 @@ def _build_parser() -> argparse.ArgumentParser:
     def _add_common_args(target: argparse.ArgumentParser) -> None:
         target.add_argument("--repo-root", type=Path, default=Path("."))
         target.add_argument("--out-dir", type=Path, default=Path("docs_metadata/behavior"))
+        target.add_argument("--publish-dir", type=Path, default=DEFAULT_PUBLISH_DIR_REL)
         target.add_argument("--behavior-page", type=Path, default=DEFAULT_BEHAVIOR_PAGE_REL)
         target.add_argument(
             "--trace-scope",
@@ -559,6 +700,7 @@ def main() -> int:
 
     repo_root = args.repo_root.resolve()
     out_dir = args.out_dir if args.out_dir.is_absolute() else (repo_root / args.out_dir)
+    publish_dir = args.publish_dir if args.publish_dir.is_absolute() else (repo_root / args.publish_dir)
     behavior_page = (
         args.behavior_page if args.behavior_page.is_absolute() else (repo_root / args.behavior_page)
     )
@@ -567,6 +709,7 @@ def main() -> int:
         manifest = run_traces(
             repo_root=repo_root,
             out_dir=out_dir,
+            publish_dir=publish_dir,
             trace_scope=args.trace_scope,
             seed=int(args.seed),
             overwrite=bool(args.overwrite),
@@ -586,6 +729,7 @@ def main() -> int:
         manifest = run_traces(
             repo_root=repo_root,
             out_dir=out_dir,
+            publish_dir=publish_dir,
             trace_scope=args.trace_scope,
             seed=int(args.seed),
             overwrite=bool(args.overwrite),

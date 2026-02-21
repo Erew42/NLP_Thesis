@@ -41,6 +41,10 @@ class PipelinePaths:
     def behavior_page_path(self) -> Path:
         return self.docs_dir / "reference" / "behavior_evidence.md"
 
+    @property
+    def behavior_publish_dir(self) -> Path:
+        return self.docs_dir / "assets" / "behavior"
+
 
 def build_subprocess_env(
     *,
@@ -135,6 +139,8 @@ def run_trace(
         str(paths.repo_root),
         "--out-dir",
         str(paths.behavior_trace_dir),
+        "--publish-dir",
+        str(paths.behavior_publish_dir),
         "--behavior-page",
         str(paths.behavior_page_path),
         "--trace-scope",

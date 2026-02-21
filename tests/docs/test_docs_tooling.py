@@ -27,10 +27,12 @@ def _build_sample_layout(tmp_path: Path) -> dict[str, Path]:
     docs_dir = repo_root / "docs"
     metadata_dir = repo_root / "docs_metadata"
     trace_dir = metadata_dir / "behavior"
+    publish_dir = docs_dir / "assets" / "behavior"
     src_dir = repo_root / "src" / "thesis_pkg"
     docs_dir.mkdir(parents=True, exist_ok=True)
     metadata_dir.mkdir(parents=True, exist_ok=True)
     trace_dir.mkdir(parents=True, exist_ok=True)
+    publish_dir.mkdir(parents=True, exist_ok=True)
     src_dir.mkdir(parents=True, exist_ok=True)
     (src_dir / "__init__.py").write_text("# sample\n", encoding="utf-8")
     (src_dir / "pipeline.py").write_text("def run() -> None:\n    return None\n", encoding="utf-8")
@@ -96,6 +98,7 @@ nav:
         "docs_dir": docs_dir,
         "metadata_dir": metadata_dir,
         "trace_dir": trace_dir,
+        "publish_dir": publish_dir,
         "src_dir": src_dir,
         "mkdocs": repo_root / "mkdocs.yml",
     }
@@ -242,13 +245,17 @@ def test_require_trace_passes_with_manifest_and_artifacts(tmp_path: Path) -> Non
     layout = _build_sample_layout(tmp_path)
     trace_artifact = layout["trace_dir"] / "artifact_manifest.csv"
     trace_artifact.write_text("k,v\n", encoding="utf-8")
+    published_artifact = layout["publish_dir"] / "artifact_manifest.csv"
+    published_artifact.write_text("k,v\n", encoding="utf-8")
     _write_json(
         layout["trace_dir"] / "run_manifest.json",
         {
             "artifacts": [
                 {
                     "artifact_key": "artifact_manifest_csv",
-                    "path": str(trace_artifact.relative_to(layout["repo_root"])).replace("\\", "/"),
+                    "canonical_path": str(trace_artifact.relative_to(layout["repo_root"])).replace("\\", "/"),
+                    "published_path": str(published_artifact.relative_to(layout["repo_root"])).replace("\\", "/"),
+                    "published_doc_path": "assets/behavior/artifact_manifest.csv",
                 }
             ]
         },
@@ -269,6 +276,62 @@ def test_require_trace_passes_with_manifest_and_artifacts(tmp_path: Path) -> Non
         require_trace=True,
     )
 
+    assert errors == []
+
+
+def test_behavior_page_link_check_rejects_docs_metadata_links(tmp_path: Path) -> None:
+    layout = _build_sample_layout(tmp_path)
+    (layout["docs_dir"] / "reference" / "behavior_evidence.md").write_text(
+        (
+            "# Behavior Evidence\n\n"
+            "- bad: [docs_metadata/behavior/run_manifest.json](../../docs_metadata/behavior/run_manifest.json)\n"
+        ),
+        encoding="utf-8",
+    )
+
+    errors = docs_check.check_docs(
+        repo_root=layout["repo_root"],
+        src_dir=layout["src_dir"],
+        inventory_path=layout["metadata_dir"] / "inventory.json",
+        outward_api_path=layout["metadata_dir"] / "outward_api.json",
+        import_evidence_path=layout["metadata_dir"] / "import_evidence.json",
+        nav_fragment_path=layout["metadata_dir"] / "reference_nav.yml",
+        mkdocs_config_path=layout["mkdocs"],
+        docs_dir=layout["docs_dir"],
+        trace_dir=layout["trace_dir"],
+        package_root="thesis_pkg",
+        run_build=False,
+        require_trace=False,
+    )
+    assert any("targets docs_metadata" in message for message in errors)
+
+
+def test_behavior_page_link_check_accepts_assets_links(tmp_path: Path) -> None:
+    layout = _build_sample_layout(tmp_path)
+    asset = layout["publish_dir"] / "artifact_manifest.csv"
+    asset.write_text("k,v\n", encoding="utf-8")
+    (layout["docs_dir"] / "reference" / "behavior_evidence.md").write_text(
+        (
+            "# Behavior Evidence\n\n"
+            "- ok: [assets/behavior/artifact_manifest.csv](../assets/behavior/artifact_manifest.csv)\n"
+        ),
+        encoding="utf-8",
+    )
+
+    errors = docs_check.check_docs(
+        repo_root=layout["repo_root"],
+        src_dir=layout["src_dir"],
+        inventory_path=layout["metadata_dir"] / "inventory.json",
+        outward_api_path=layout["metadata_dir"] / "outward_api.json",
+        import_evidence_path=layout["metadata_dir"] / "import_evidence.json",
+        nav_fragment_path=layout["metadata_dir"] / "reference_nav.yml",
+        mkdocs_config_path=layout["mkdocs"],
+        docs_dir=layout["docs_dir"],
+        trace_dir=layout["trace_dir"],
+        package_root="thesis_pkg",
+        run_build=False,
+        require_trace=False,
+    )
     assert errors == []
 
 

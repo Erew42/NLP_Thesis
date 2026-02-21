@@ -176,23 +176,95 @@ def _metadata_stale_files(*, latest_source_mtime: float, metadata_paths: list[Pa
     return stale
 
 
-def _load_trace_artifacts_from_manifest(manifest_payload: dict[str, Any]) -> list[str]:
-    artifacts: list[str] = []
-    raw = manifest_payload.get("artifacts", [])
-    if isinstance(raw, dict):
-        artifacts.extend(str(value) for value in raw.values())
-    elif isinstance(raw, list):
-        for row in raw:
-            if isinstance(row, dict) and "path" in row:
-                artifacts.append(str(row["path"]))
-            elif isinstance(row, str):
-                artifacts.append(row)
-    return sorted({path for path in artifacts if path})
-
-
 def _resolve_artifact_path(repo_root: Path, artifact_path: str) -> Path:
     path = Path(artifact_path)
     return path if path.is_absolute() else (repo_root / path)
+
+
+def _is_within(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def _extract_markdown_links(markdown_text: str) -> list[str]:
+    links: list[str] = []
+    for raw in re.findall(r"\[[^\]]*\]\(([^)]+)\)", markdown_text):
+        target = raw.strip().split()[0].strip()
+        if target.startswith("<") and target.endswith(">"):
+            target = target[1:-1]
+        if target:
+            links.append(target)
+    return links
+
+
+def _validate_behavior_page_links(*, behavior_page: Path, docs_dir: Path) -> list[str]:
+    if not behavior_page.exists():
+        return []
+    errors: list[str] = []
+    markdown_text = behavior_page.read_text(encoding="utf-8")
+    links = _extract_markdown_links(markdown_text)
+    for link in links:
+        normalized = link.replace("\\", "/")
+        if normalized.startswith(("#", "http://", "https://", "mailto:", "tel:")):
+            continue
+        if "docs_metadata/" in normalized:
+            errors.append(
+                f"Behavior evidence link targets docs_metadata and will break in site output: {link}"
+            )
+            continue
+
+        target_path = (behavior_page.parent / link).resolve()
+        if not _is_within(target_path, docs_dir):
+            errors.append(
+                f"Behavior evidence link points outside docs directory: {link}"
+            )
+            continue
+        if not target_path.exists():
+            errors.append(
+                f"Behavior evidence link target does not exist: {link}"
+            )
+    return errors
+
+
+def _load_trace_artifact_rows(manifest_payload: dict[str, Any]) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    raw = manifest_payload.get("artifacts", [])
+    if isinstance(raw, dict):
+        for value in raw.values():
+            rows.append(
+                {
+                    "canonical_path": str(value),
+                    "published_path": "",
+                    "published_doc_path": "",
+                }
+            )
+        return rows
+    if not isinstance(raw, list):
+        return rows
+
+    for row in raw:
+        if isinstance(row, str):
+            rows.append(
+                {
+                    "canonical_path": row,
+                    "published_path": "",
+                    "published_doc_path": "",
+                }
+            )
+            continue
+        if not isinstance(row, dict):
+            continue
+        rows.append(
+            {
+                "canonical_path": str(row.get("canonical_path") or row.get("path") or ""),
+                "published_path": str(row.get("published_path") or ""),
+                "published_doc_path": str(row.get("published_doc_path") or ""),
+            }
+        )
+    return rows
 
 
 def check_docs(
@@ -274,6 +346,8 @@ def check_docs(
     behavior_page = docs_dir / Path(BEHAVIOR_EVIDENCE_REL_PATH)
     if not behavior_page.exists():
         errors.append(f"Missing behavior evidence page: {behavior_page}")
+    else:
+        errors.extend(_validate_behavior_page_links(behavior_page=behavior_page, docs_dir=docs_dir.resolve()))
 
     fragment_nav = _normalize_nav_value(_load_yaml_file(nav_fragment_path))
     managed_nav = _normalize_nav_value(_load_managed_nav_block(mkdocs_config_path))
@@ -301,22 +375,54 @@ def check_docs(
         else:
             payload_raw = _load_json(run_manifest_path)
             payload = payload_raw if isinstance(payload_raw, dict) else {}
-            artifact_paths = _load_trace_artifacts_from_manifest(payload)
-            if not artifact_paths:
+            artifact_rows = _load_trace_artifact_rows(payload)
+            if not artifact_rows:
                 errors.append(
                     f"Trace manifest does not contain artifact references: {run_manifest_path}"
                 )
             else:
-                missing_trace = [
-                    artifact
-                    for artifact in artifact_paths
-                    if not _resolve_artifact_path(repo_root, artifact).exists()
-                ]
+                missing_trace = []
+                missing_published = []
+                invalid_published = []
+                for row in artifact_rows:
+                    canonical = row.get("canonical_path", "")
+                    published = row.get("published_path", "")
+                    published_doc = row.get("published_doc_path", "")
+
+                    if canonical and not _resolve_artifact_path(repo_root, canonical).exists():
+                        missing_trace.append(canonical)
+
+                    if published:
+                        published_abs = _resolve_artifact_path(repo_root, published)
+                    elif published_doc:
+                        published_abs = (docs_dir / published_doc).resolve()
+                    else:
+                        invalid_published.append(str(row))
+                        continue
+
+                    if not _is_within(published_abs, docs_dir):
+                        invalid_published.append(published_abs.as_posix())
+                        continue
+                    if not published_abs.exists():
+                        missing_published.append(published_abs.as_posix())
+
                 if missing_trace:
                     errors.append(
                         "Trace manifest references missing artifacts: "
                         + ", ".join(missing_trace[:20])
                         + (" ..." if len(missing_trace) > 20 else "")
+                    )
+                if missing_published:
+                    errors.append(
+                        "Trace manifest references missing published artifacts under docs/: "
+                        + ", ".join(missing_published[:20])
+                        + (" ..." if len(missing_published) > 20 else "")
+                    )
+                if invalid_published:
+                    errors.append(
+                        "Trace manifest contains invalid published artifact references: "
+                        + ", ".join(invalid_published[:20])
+                        + (" ..." if len(invalid_published) > 20 else "")
                     )
 
     if run_build:
