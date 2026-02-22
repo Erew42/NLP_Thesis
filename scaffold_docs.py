@@ -2,12 +2,20 @@ from __future__ import annotations
 
 import argparse
 import json
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
 AUTO_NAV_BEGIN = "# BEGIN AUTO-REFERENCE-NAV"
 AUTO_NAV_END = "# END AUTO-REFERENCE-NAV"
 BEHAVIOR_EVIDENCE_REL_PATH = "reference/behavior_evidence.md"
+
+
+@dataclass
+class _NavNode:
+    overview_path: str | None = None
+    packages: dict[str, _NavNode] = field(default_factory=dict)
+    modules: dict[str, str] = field(default_factory=dict)
 
 
 def _load_json(path: Path) -> dict:
@@ -34,10 +42,27 @@ def _mkdocstrings_target(module_name: str) -> str:
     return module_name
 
 
-def _nav_label(module_name: str) -> str:
-    if module_name.endswith(".__init__"):
-        return module_name[: -len(".__init__")]
-    return module_name
+def _module_parts_relative_to_package(module_name: str, package_root: str) -> list[str]:
+    parts = module_name.split(".")
+    if parts and parts[0] == package_root:
+        return parts[1:]
+    return parts
+
+
+def _emit_nav_node_lines(node: _NavNode, *, indent: int) -> list[str]:
+    lines: list[str] = []
+    prefix = " " * indent
+    if node.overview_path:
+        lines.append(f"{prefix}- Overview: {node.overview_path}")
+
+    for package_name in sorted(node.packages.keys()):
+        lines.append(f"{prefix}- {package_name}:")
+        lines.extend(_emit_nav_node_lines(node.packages[package_name], indent=indent + 2))
+
+    for module_name in sorted(node.modules.keys()):
+        lines.append(f"{prefix}- {module_name}: {node.modules[module_name]}")
+
+    return lines
 
 
 def _render_module_page(
@@ -183,19 +208,47 @@ def _render_reference_index(
     return "\n".join(lines)
 
 
-def _build_auto_nav_lines(modules: list[str], module_to_relpath: dict[str, str]) -> list[str]:
+def _build_auto_nav_lines(
+    modules: list[str],
+    module_to_relpath: dict[str, str],
+    package_root: str,
+) -> list[str]:
     """Build the managed reference nav block for MkDocs.
 
     WHY (TODO by Erik): Keep a single generated nav contract so reference pages
     stay discoverable without manual `mkdocs.yml` maintenance.
     """
+    nav_tree = _NavNode()
+    root_package_path: str | None = None
+
+    for module_name in modules:
+        rel_path = module_to_relpath[module_name]
+        relative_parts = _module_parts_relative_to_package(module_name, package_root=package_root)
+
+        if not relative_parts or relative_parts == ["__init__"]:
+            root_package_path = rel_path
+            continue
+
+        if relative_parts[-1] == "__init__":
+            node = nav_tree
+            for package_name in relative_parts[:-1]:
+                node = node.packages.setdefault(package_name, _NavNode())
+            node.overview_path = rel_path
+            continue
+
+        node = nav_tree
+        for package_name in relative_parts[:-1]:
+            node = node.packages.setdefault(package_name, _NavNode())
+        node.modules[relative_parts[-1]] = rel_path
+
     nav_lines = [
         "  - Reference:",
         "    - Overview: reference/index.md",
         f"    - Behavior Evidence: {BEHAVIOR_EVIDENCE_REL_PATH}",
     ]
-    for module in modules:
-        nav_lines.append(f"    - {_nav_label(module)}: {module_to_relpath[module]}")
+    if root_package_path:
+        nav_lines.append(f"    - {package_root}: {root_package_path}")
+    nav_lines.extend(_emit_nav_node_lines(nav_tree, indent=4))
     return nav_lines
 
 
@@ -332,7 +385,11 @@ def main() -> None:
         package_root=args.package_root,
     )
 
-    nav_lines = _build_auto_nav_lines(modules=modules, module_to_relpath=module_to_relpath)
+    nav_lines = _build_auto_nav_lines(
+        modules=modules,
+        module_to_relpath=module_to_relpath,
+        package_root=args.package_root,
+    )
     args.nav_fragment_out.parent.mkdir(parents=True, exist_ok=True)
     args.nav_fragment_out.write_text("\n".join(nav_lines) + "\n", encoding="utf-8")
 

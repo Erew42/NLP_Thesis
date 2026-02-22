@@ -74,8 +74,10 @@ def _build_sample_layout(tmp_path: Path) -> dict[str, Path]:
   - Overview: reference/index.md
   - Behavior Evidence: reference/behavior_evidence.md
   - thesis_pkg: reference/__init__.md
-  - thesis_pkg.pipeline: reference/pipeline.md
-  - thesis_pkg.core.sec.patterns: reference/core/sec/patterns.md
+  - core:
+      - sec:
+          - patterns: reference/core/sec/patterns.md
+  - pipeline: reference/pipeline.md
 """
     (metadata_dir / "reference_nav.yml").write_text(nav_fragment, encoding="utf-8")
 
@@ -87,8 +89,10 @@ nav:
       - Overview: reference/index.md
       - Behavior Evidence: reference/behavior_evidence.md
       - thesis_pkg: reference/__init__.md
-      - thesis_pkg.pipeline: reference/pipeline.md
-      - thesis_pkg.core.sec.patterns: reference/core/sec/patterns.md
+      - core:
+          - sec:
+              - patterns: reference/core/sec/patterns.md
+      - pipeline: reference/pipeline.md
   # END AUTO-REFERENCE-NAV
 """
     (repo_root / "mkdocs.yml").write_text(mkdocs_text, encoding="utf-8")
@@ -132,9 +136,13 @@ nav:
   - Home: index.md
   # BEGIN AUTO-REFERENCE-NAV
   - Reference:
-    - Overview: reference/index.md
-    - thesis_pkg: reference/__init__.md
-    - thesis_pkg.pipeline: reference/pipeline.md
+      - Overview: reference/index.md
+      - Behavior Evidence: reference/behavior_evidence.md
+      - thesis_pkg: reference/__init__.md
+      - core:
+          - sec:
+              - wrong_label: reference/core/sec/patterns.md
+      - pipeline: reference/pipeline.md
   # END AUTO-REFERENCE-NAV
 """
     layout["mkdocs"].write_text(mkdocs_mismatch, encoding="utf-8")
@@ -162,8 +170,10 @@ def test_nav_fragment_requires_behavior_evidence_entry(tmp_path: Path) -> None:
     nav_fragment_without_behavior = """- Reference:
   - Overview: reference/index.md
   - thesis_pkg: reference/__init__.md
-  - thesis_pkg.pipeline: reference/pipeline.md
-  - thesis_pkg.core.sec.patterns: reference/core/sec/patterns.md
+  - core:
+      - sec:
+          - patterns: reference/core/sec/patterns.md
+  - pipeline: reference/pipeline.md
 """
     (layout["metadata_dir"] / "reference_nav.yml").write_text(nav_fragment_without_behavior, encoding="utf-8")
 

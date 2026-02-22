@@ -8,6 +8,9 @@ theme:
     - navigation.tabs
     - navigation.indexes
     - navigation.top
+    - navigation.sections
+    - navigation.instant
+    - navigation.tracking
 
 plugins:
   - mkdocstrings:
@@ -42,35 +45,43 @@ nav:
     - Overview: reference/index.md
     - Behavior Evidence: reference/behavior_evidence.md
     - thesis_pkg: reference/__init__.md
-    - thesis_pkg.analysis: reference/analysis/__init__.md
-    - thesis_pkg.api: reference/api.md
-    - thesis_pkg.cleaning: reference/cleaning/__init__.md
-    - thesis_pkg.cleaning.ccm_cleaning: reference/cleaning/ccm_cleaning.md
-    - thesis_pkg.core: reference/core/__init__.md
-    - thesis_pkg.core.ccm: reference/core/ccm/__init__.md
-    - thesis_pkg.core.ccm.sec_ccm_contracts: reference/core/ccm/sec_ccm_contracts.md
-    - thesis_pkg.core.ccm.sec_ccm_premerge: reference/core/ccm/sec_ccm_premerge.md
-    - thesis_pkg.core.ccm.transforms: reference/core/ccm/transforms.md
-    - thesis_pkg.core.sec: reference/core/sec/__init__.md
-    - thesis_pkg.core.sec.embedded_headings: reference/core/sec/embedded_headings.md
-    - thesis_pkg.core.sec.extraction: reference/core/sec/extraction.md
-    - thesis_pkg.core.sec.extraction_utils: reference/core/sec/extraction_utils.md
-    - thesis_pkg.core.sec.filing_text: reference/core/sec/filing_text.md
-    - thesis_pkg.core.sec.heuristics: reference/core/sec/heuristics.md
-    - thesis_pkg.core.sec.html_audit: reference/core/sec/html_audit.md
-    - thesis_pkg.core.sec.parquet_stream: reference/core/sec/parquet_stream.md
-    - thesis_pkg.core.sec.patterns: reference/core/sec/patterns.md
-    - thesis_pkg.core.sec.regime: reference/core/sec/regime.md
-    - thesis_pkg.core.sec.suspicious_boundary_diagnostics: reference/core/sec/suspicious_boundary_diagnostics.md
-    - thesis_pkg.core.sec.utilities: reference/core/sec/utilities.md
-    - thesis_pkg.features: reference/features/__init__.md
-    - thesis_pkg.filing_text: reference/filing_text.md
-    - thesis_pkg.io: reference/io/__init__.md
-    - thesis_pkg.io.parquet: reference/io/parquet.md
-    - thesis_pkg.pipeline: reference/pipeline.md
-    - thesis_pkg.pipelines: reference/pipelines/__init__.md
-    - thesis_pkg.pipelines.ccm_pipeline: reference/pipelines/ccm_pipeline.md
-    - thesis_pkg.pipelines.sec_ccm_pipeline: reference/pipelines/sec_ccm_pipeline.md
-    - thesis_pkg.pipelines.sec_pipeline: reference/pipelines/sec_pipeline.md
-    - thesis_pkg.settings: reference/settings.md
+    - analysis:
+      - Overview: reference/analysis/__init__.md
+    - cleaning:
+      - Overview: reference/cleaning/__init__.md
+      - ccm_cleaning: reference/cleaning/ccm_cleaning.md
+    - core:
+      - Overview: reference/core/__init__.md
+      - ccm:
+        - Overview: reference/core/ccm/__init__.md
+        - sec_ccm_contracts: reference/core/ccm/sec_ccm_contracts.md
+        - sec_ccm_premerge: reference/core/ccm/sec_ccm_premerge.md
+        - transforms: reference/core/ccm/transforms.md
+      - sec:
+        - Overview: reference/core/sec/__init__.md
+        - embedded_headings: reference/core/sec/embedded_headings.md
+        - extraction: reference/core/sec/extraction.md
+        - extraction_utils: reference/core/sec/extraction_utils.md
+        - filing_text: reference/core/sec/filing_text.md
+        - heuristics: reference/core/sec/heuristics.md
+        - html_audit: reference/core/sec/html_audit.md
+        - parquet_stream: reference/core/sec/parquet_stream.md
+        - patterns: reference/core/sec/patterns.md
+        - regime: reference/core/sec/regime.md
+        - suspicious_boundary_diagnostics: reference/core/sec/suspicious_boundary_diagnostics.md
+        - utilities: reference/core/sec/utilities.md
+    - features:
+      - Overview: reference/features/__init__.md
+    - io:
+      - Overview: reference/io/__init__.md
+      - parquet: reference/io/parquet.md
+    - pipelines:
+      - Overview: reference/pipelines/__init__.md
+      - ccm_pipeline: reference/pipelines/ccm_pipeline.md
+      - sec_ccm_pipeline: reference/pipelines/sec_ccm_pipeline.md
+      - sec_pipeline: reference/pipelines/sec_pipeline.md
+    - api: reference/api.md
+    - filing_text: reference/filing_text.md
+    - pipeline: reference/pipeline.md
+    - settings: reference/settings.md
   # END AUTO-REFERENCE-NAV
