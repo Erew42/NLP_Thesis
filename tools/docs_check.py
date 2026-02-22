@@ -16,6 +16,10 @@ AUTO_NAV_BEGIN = "# BEGIN AUTO-REFERENCE-NAV"
 AUTO_NAV_END = "# END AUTO-REFERENCE-NAV"
 NOT_IN_NAV_HEADER = 'pages exist in the docs directory, but are not included in the "nav" configuration'
 BEHAVIOR_EVIDENCE_REL_PATH = "reference/behavior_evidence.md"
+PUBLISH_STATUS_PUBLISHED = "published"
+PUBLISH_STATUS_TRUNCATED = "truncated"
+PUBLISH_STATUS_OMITTED = "omitted_size_limit"
+PUBLISH_NOTE_MISSING_ALLOWED = "MISSING_CANONICAL_ALLOWED"
 
 
 def canonicalize_json_text(text: str) -> str:
@@ -201,6 +205,11 @@ def _extract_markdown_links(markdown_text: str) -> list[str]:
 
 
 def _validate_behavior_page_links(*, behavior_page: Path, docs_dir: Path) -> list[str]:
+    """Validate behavior page links resolve to published docs assets.
+
+    WHY (TODO by Erik): trace links must remain publishable in MkDocs output,
+    so links to docs_metadata/ are rejected even if local files exist.
+    """
     if not behavior_page.exists():
         return []
     errors: list[str] = []
@@ -239,6 +248,10 @@ def _load_trace_artifact_rows(manifest_payload: dict[str, Any]) -> list[dict[str
                     "canonical_path": str(value),
                     "published_path": "",
                     "published_doc_path": "",
+                    "preview_path": "",
+                    "preview_doc_path": "",
+                    "publish_status": "",
+                    "publish_note": "",
                 }
             )
         return rows
@@ -252,6 +265,10 @@ def _load_trace_artifact_rows(manifest_payload: dict[str, Any]) -> list[dict[str
                     "canonical_path": row,
                     "published_path": "",
                     "published_doc_path": "",
+                    "preview_path": "",
+                    "preview_doc_path": "",
+                    "publish_status": "",
+                    "publish_note": "",
                 }
             )
             continue
@@ -262,9 +279,27 @@ def _load_trace_artifact_rows(manifest_payload: dict[str, Any]) -> list[dict[str
                 "canonical_path": str(row.get("canonical_path") or row.get("path") or ""),
                 "published_path": str(row.get("published_path") or ""),
                 "published_doc_path": str(row.get("published_doc_path") or ""),
+                "preview_path": str(row.get("preview_path") or ""),
+                "preview_doc_path": str(row.get("preview_doc_path") or ""),
+                "publish_status": str(row.get("publish_status") or ""),
+                "publish_note": str(row.get("publish_note") or ""),
             }
         )
     return rows
+
+
+def _resolve_doc_or_repo_path(
+    *,
+    repo_root: Path,
+    docs_dir: Path,
+    repo_rel: str,
+    docs_rel: str,
+) -> Path | None:
+    if repo_rel:
+        return _resolve_artifact_path(repo_root, repo_rel)
+    if docs_rel:
+        return (docs_dir / docs_rel).resolve()
+    return None
 
 
 def check_docs(
@@ -282,6 +317,11 @@ def check_docs(
     trace_dir: Path,
     require_trace: bool,
 ) -> list[str]:
+    """Validate generated docs metadata, nav integrity, and optional trace outputs.
+
+    WHY (TODO by Erik): docs generation is automation-heavy, so checks fail fast
+    when generated contracts drift (nav fragment, trace publish semantics, staleness).
+    """
     errors: list[str] = []
 
     required_files = [
@@ -375,6 +415,12 @@ def check_docs(
         else:
             payload_raw = _load_json(run_manifest_path)
             payload = payload_raw if isinstance(payload_raw, dict) else {}
+            trace_generation = payload.get("trace_generation", {})
+            allow_missing_canonical = bool(
+                trace_generation.get("allow_missing_canonical", False)
+                if isinstance(trace_generation, dict)
+                else False
+            )
             artifact_rows = _load_trace_artifact_rows(payload)
             if not artifact_rows:
                 errors.append(
@@ -384,27 +430,59 @@ def check_docs(
                 missing_trace = []
                 missing_published = []
                 invalid_published = []
+                invalid_status = []
+                missing_preview = []
+                invalid_preview = []
                 for row in artifact_rows:
                     canonical = row.get("canonical_path", "")
                     published = row.get("published_path", "")
                     published_doc = row.get("published_doc_path", "")
+                    preview = row.get("preview_path", "")
+                    preview_doc = row.get("preview_doc_path", "")
+                    publish_status = row.get("publish_status", "")
+                    publish_note = row.get("publish_note", "")
 
-                    if canonical and not _resolve_artifact_path(repo_root, canonical).exists():
-                        missing_trace.append(canonical)
+                    canonical_abs = _resolve_artifact_path(repo_root, canonical) if canonical else None
+                    if canonical_abs is not None and not canonical_abs.exists():
+                        if allow_missing_canonical and publish_note == PUBLISH_NOTE_MISSING_ALLOWED:
+                            pass
+                        else:
+                            missing_trace.append(canonical)
 
-                    if published:
-                        published_abs = _resolve_artifact_path(repo_root, published)
-                    elif published_doc:
-                        published_abs = (docs_dir / published_doc).resolve()
-                    else:
-                        invalid_published.append(str(row))
+                    if publish_status not in {
+                        PUBLISH_STATUS_PUBLISHED,
+                        PUBLISH_STATUS_TRUNCATED,
+                        PUBLISH_STATUS_OMITTED,
+                    }:
+                        invalid_status.append(str(row))
                         continue
 
-                    if not _is_within(published_abs, docs_dir):
-                        invalid_published.append(published_abs.as_posix())
-                        continue
-                    if not published_abs.exists():
-                        missing_published.append(published_abs.as_posix())
+                    published_abs = _resolve_doc_or_repo_path(
+                        repo_root=repo_root,
+                        docs_dir=docs_dir,
+                        repo_rel=published,
+                        docs_rel=published_doc,
+                    )
+                    if publish_status in {PUBLISH_STATUS_PUBLISHED, PUBLISH_STATUS_TRUNCATED}:
+                        if published_abs is None:
+                            invalid_published.append(str(row))
+                        else:
+                            if not _is_within(published_abs, docs_dir):
+                                invalid_published.append(published_abs.as_posix())
+                            elif not published_abs.exists():
+                                missing_published.append(published_abs.as_posix())
+
+                    preview_abs = _resolve_doc_or_repo_path(
+                        repo_root=repo_root,
+                        docs_dir=docs_dir,
+                        repo_rel=preview,
+                        docs_rel=preview_doc,
+                    )
+                    if preview_abs is not None:
+                        if not _is_within(preview_abs, docs_dir):
+                            invalid_preview.append(preview_abs.as_posix())
+                        elif not preview_abs.exists():
+                            missing_preview.append(preview_abs.as_posix())
 
                 if missing_trace:
                     errors.append(
@@ -423,6 +501,24 @@ def check_docs(
                         "Trace manifest contains invalid published artifact references: "
                         + ", ".join(invalid_published[:20])
                         + (" ..." if len(invalid_published) > 20 else "")
+                    )
+                if invalid_status:
+                    errors.append(
+                        "Trace manifest contains invalid publish status values: "
+                        + ", ".join(invalid_status[:20])
+                        + (" ..." if len(invalid_status) > 20 else "")
+                    )
+                if missing_preview:
+                    errors.append(
+                        "Trace manifest references missing preview artifacts under docs/: "
+                        + ", ".join(missing_preview[:20])
+                        + (" ..." if len(missing_preview) > 20 else "")
+                    )
+                if invalid_preview:
+                    errors.append(
+                        "Trace manifest contains invalid preview artifact references: "
+                        + ", ".join(invalid_preview[:20])
+                        + (" ..." if len(invalid_preview) > 20 else "")
                     )
 
     if run_build:

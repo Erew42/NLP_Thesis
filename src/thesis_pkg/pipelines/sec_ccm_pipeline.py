@@ -347,6 +347,11 @@ def _build_markdown_report(
     unmatched_tables: dict[str, pl.DataFrame],
     acceptance_by_year: pl.DataFrame,
 ) -> str:
+    """Render a human-readable run report from persisted SEC-CCM artifacts.
+
+    WHY (TODO by Erik): The report preserves run intent and diagnostics context
+    for thesis auditability without re-running the pipeline.
+    """
     artifact_df = pl.DataFrame(
         {
             "artifact_key": list(paths.keys()),

@@ -247,15 +247,32 @@ def test_require_trace_passes_with_manifest_and_artifacts(tmp_path: Path) -> Non
     trace_artifact.write_text("k,v\n", encoding="utf-8")
     published_artifact = layout["publish_dir"] / "artifact_manifest.csv"
     published_artifact.write_text("k,v\n", encoding="utf-8")
+    preview_artifact = layout["publish_dir"] / "artifact_manifest.csv.preview.html"
+    preview_artifact.write_text("<html></html>\n", encoding="utf-8")
     _write_json(
         layout["trace_dir"] / "run_manifest.json",
         {
+            "trace_generation": {"allow_missing_canonical": False},
             "artifacts": [
                 {
                     "artifact_key": "artifact_manifest_csv",
                     "canonical_path": str(trace_artifact.relative_to(layout["repo_root"])).replace("\\", "/"),
                     "published_path": str(published_artifact.relative_to(layout["repo_root"])).replace("\\", "/"),
                     "published_doc_path": "assets/behavior/artifact_manifest.csv",
+                    "preview_path": str(preview_artifact.relative_to(layout["repo_root"])).replace("\\", "/"),
+                    "preview_doc_path": "assets/behavior/artifact_manifest.csv.preview.html",
+                    "publish_status": "published",
+                    "publish_note": "",
+                },
+                {
+                    "artifact_key": "omitted_non_tabular",
+                    "canonical_path": str(trace_artifact.relative_to(layout["repo_root"])).replace("\\", "/"),
+                    "published_path": "",
+                    "published_doc_path": "",
+                    "preview_path": "",
+                    "preview_doc_path": "",
+                    "publish_status": "omitted_size_limit",
+                    "publish_note": "OMITTED_SIZE_LIMIT",
                 }
             ]
         },
@@ -277,6 +294,97 @@ def test_require_trace_passes_with_manifest_and_artifacts(tmp_path: Path) -> Non
     )
 
     assert errors == []
+
+
+def test_require_trace_respects_missing_canonical_override(tmp_path: Path) -> None:
+    layout = _build_sample_layout(tmp_path)
+    published_artifact = layout["publish_dir"] / "artifact_manifest.csv"
+    published_artifact.write_text("k,v\n", encoding="utf-8")
+    _write_json(
+        layout["trace_dir"] / "run_manifest.json",
+        {
+            "trace_generation": {"allow_missing_canonical": True},
+            "artifacts": [
+                {
+                    "artifact_key": "missing_canonical_allowed",
+                    "canonical_path": "docs_metadata/behavior/does_not_exist.csv",
+                    "published_path": "",
+                    "published_doc_path": "",
+                    "preview_path": "",
+                    "preview_doc_path": "",
+                    "publish_status": "omitted_size_limit",
+                    "publish_note": "MISSING_CANONICAL_ALLOWED",
+                },
+                {
+                    "artifact_key": "published_ok",
+                    "canonical_path": str((layout["trace_dir"] / "dummy.csv").relative_to(layout["repo_root"])).replace("\\", "/"),
+                    "published_path": str(published_artifact.relative_to(layout["repo_root"])).replace("\\", "/"),
+                    "published_doc_path": "assets/behavior/artifact_manifest.csv",
+                    "preview_path": "",
+                    "preview_doc_path": "",
+                    "publish_status": "published",
+                    "publish_note": "",
+                },
+            ],
+        },
+    )
+    (layout["trace_dir"] / "dummy.csv").write_text("k,v\n", encoding="utf-8")
+
+    errors = docs_check.check_docs(
+        repo_root=layout["repo_root"],
+        src_dir=layout["src_dir"],
+        inventory_path=layout["metadata_dir"] / "inventory.json",
+        outward_api_path=layout["metadata_dir"] / "outward_api.json",
+        import_evidence_path=layout["metadata_dir"] / "import_evidence.json",
+        nav_fragment_path=layout["metadata_dir"] / "reference_nav.yml",
+        mkdocs_config_path=layout["mkdocs"],
+        docs_dir=layout["docs_dir"],
+        trace_dir=layout["trace_dir"],
+        package_root="thesis_pkg",
+        run_build=False,
+        require_trace=True,
+    )
+    assert errors == []
+
+
+def test_require_trace_fails_when_published_status_missing_target(tmp_path: Path) -> None:
+    layout = _build_sample_layout(tmp_path)
+    trace_artifact = layout["trace_dir"] / "artifact_manifest.csv"
+    trace_artifact.write_text("k,v\n", encoding="utf-8")
+    _write_json(
+        layout["trace_dir"] / "run_manifest.json",
+        {
+            "trace_generation": {"allow_missing_canonical": False},
+            "artifacts": [
+                {
+                    "artifact_key": "bad_published",
+                    "canonical_path": str(trace_artifact.relative_to(layout["repo_root"])).replace("\\", "/"),
+                    "published_path": "",
+                    "published_doc_path": "",
+                    "preview_path": "",
+                    "preview_doc_path": "",
+                    "publish_status": "published",
+                    "publish_note": "",
+                }
+            ],
+        },
+    )
+
+    errors = docs_check.check_docs(
+        repo_root=layout["repo_root"],
+        src_dir=layout["src_dir"],
+        inventory_path=layout["metadata_dir"] / "inventory.json",
+        outward_api_path=layout["metadata_dir"] / "outward_api.json",
+        import_evidence_path=layout["metadata_dir"] / "import_evidence.json",
+        nav_fragment_path=layout["metadata_dir"] / "reference_nav.yml",
+        mkdocs_config_path=layout["mkdocs"],
+        docs_dir=layout["docs_dir"],
+        trace_dir=layout["trace_dir"],
+        package_root="thesis_pkg",
+        run_build=False,
+        require_trace=True,
+    )
+    assert any("invalid published artifact references" in message for message in errors)
 
 
 def test_behavior_page_link_check_rejects_docs_metadata_links(tmp_path: Path) -> None:

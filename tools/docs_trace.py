@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 import datetime as dt
+import html
 import json
 import random
 import shutil
@@ -18,6 +19,32 @@ DEFAULT_TRACE_SCOPE = "both"
 DEFAULT_TRACE_SEED = 42
 DEFAULT_BEHAVIOR_PAGE_REL = Path("docs/reference/behavior_evidence.md")
 DEFAULT_PUBLISH_DIR_REL = Path("docs/assets/behavior")
+DEFAULT_DOCS_DIR_REL = Path("docs")
+DEFAULT_OUTWARD_API_MANIFEST_REL = Path("docs_metadata/outward_api.json")
+DEFAULT_IMPORT_EVIDENCE_MANIFEST_REL = Path("docs_metadata/import_evidence.json")
+DEFAULT_MAX_PUBLISH_SIZE_MB = 5.0
+DEFAULT_MAX_PREVIEW_ROWS = 500
+DEFAULT_MAX_PUBLISH_ROWS = 10_000
+
+PUBLISH_STATUS_PUBLISHED = "published"
+PUBLISH_STATUS_TRUNCATED = "truncated"
+PUBLISH_STATUS_OMITTED = "omitted_size_limit"
+PUBLISH_NOTE_TRUNCATED = "TRUNCATED_FOR_PUBLISHING"
+PUBLISH_NOTE_OMITTED = "OMITTED_SIZE_LIMIT"
+PUBLISH_NOTE_MISSING_ALLOWED = "MISSING_CANONICAL_ALLOWED"
+
+ARTIFACT_FIELDNAMES = [
+    "workload",
+    "artifact_key",
+    "canonical_path",
+    "published_path",
+    "published_doc_path",
+    "preview_path",
+    "preview_doc_path",
+    "publish_status",
+    "publish_note",
+    "size_bytes",
+]
 
 
 def _ensure_src_on_sys_path(repo_root: Path) -> None:
@@ -82,13 +109,146 @@ def _doc_relative_path(path: Path, docs_dir: Path) -> str:
     return Path(*parts[start:]).as_posix()
 
 
-def _is_outward_facing_function(function_key: str) -> bool:
-    _, _, func_name = function_key.partition(":")
-    if not func_name:
+def _load_json(path: Path) -> dict[str, Any]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        return {}
+    return payload
+
+
+def _md_asset_publish_rel_path(rel_path: Path) -> Path:
+    if rel_path.suffix.lower() != ".md":
+        return rel_path
+    return rel_path.with_name(f"{rel_path.name}.txt")
+
+
+def _is_tabular_path(path: Path) -> bool:
+    return path.suffix.lower() in {".csv", ".parquet"}
+
+
+def _read_tabular(path: Path):
+    import polars as pl
+
+    suffix = path.suffix.lower()
+    if suffix == ".csv":
+        return pl.read_csv(path)
+    if suffix == ".parquet":
+        return pl.read_parquet(path)
+    raise ValueError(f"Unsupported tabular artifact type: {path}")
+
+
+def _write_tabular(df, path: Path) -> None:
+    suffix = path.suffix.lower()
+    if suffix == ".csv":
+        df.write_csv(path)
+        return
+    if suffix == ".parquet":
+        df.write_parquet(path)
+        return
+    raise ValueError(f"Unsupported tabular artifact type: {path}")
+
+
+def _render_preview_html(path: Path, *, artifact_key: str, max_preview_rows: int) -> str:
+    df = _read_tabular(path).head(max_preview_rows)
+    columns = list(df.columns)
+    header = "".join(f"<th>{html.escape(col)}</th>" for col in columns)
+    rows: list[str] = []
+    for row in df.iter_rows(named=True):
+        cells = "".join(
+            f"<td>{html.escape('' if row[col] is None else str(row[col]))}</td>"
+            for col in columns
+        )
+        rows.append(f"<tr>{cells}</tr>")
+    body = "\n".join(rows) if rows else "<tr><td colspan='1'><em>No rows.</em></td></tr>"
+    return (
+        "<!doctype html>\n"
+        "<html lang='en'>\n"
+        "<head>\n"
+        "  <meta charset='utf-8'>\n"
+        f"  <title>Preview: {html.escape(artifact_key)}</title>\n"
+        "  <style>body{font-family:Arial,sans-serif;margin:1rem;}table{border-collapse:collapse;width:100%;}"
+        "th,td{border:1px solid #ccc;padding:0.35rem;font-size:0.85rem;text-align:left;vertical-align:top;}"
+        "thead{background:#f5f5f5;}code{background:#f0f0f0;padding:0.1rem 0.2rem;}</style>\n"
+        "</head>\n"
+        "<body>\n"
+        f"<h1>{html.escape(artifact_key)}</h1>\n"
+        f"<p>Preview rows shown: <code>{max_preview_rows}</code> (or fewer if source is smaller).</p>\n"
+        "<table>\n"
+        f"<thead><tr>{header}</tr></thead>\n"
+        f"<tbody>{body}</tbody>\n"
+        "</table>\n"
+        "</body>\n"
+        "</html>\n"
+    )
+
+
+def _symbol_evidence_map(import_evidence: dict[str, Any]) -> tuple[dict[str, set[str]], set[str]]:
+    module_symbols: dict[str, set[str]] = {}
+    modules_with_symbol_evidence: set[str] = set()
+    modules_payload = import_evidence.get("modules", {})
+    if not isinstance(modules_payload, dict):
+        return module_symbols, modules_with_symbol_evidence
+
+    for module_name, payload in modules_payload.items():
+        if not isinstance(payload, dict):
+            continue
+        imported_by_symbols = payload.get("imported_by_symbols", [])
+        if not isinstance(imported_by_symbols, list) or not imported_by_symbols:
+            continue
+        modules_with_symbol_evidence.add(str(module_name))
+        module_symbols[str(module_name)] = {
+            str(row.get("symbol"))
+            for row in imported_by_symbols
+            if isinstance(row, dict) and row.get("symbol")
+        }
+    return module_symbols, modules_with_symbol_evidence
+
+
+def _build_outward_classifier(
+    *,
+    outward_api_manifest: Path,
+    import_evidence_manifest: Path,
+) -> tuple[set[str], dict[str, set[str]], set[str]]:
+    """Load outward-facing module/symbol evidence from extractor metadata.
+
+    WHY (TODO by Erik): The function-touch split should follow import evidence,
+    not just underscore naming, so behavior evidence reflects externally used API.
+    """
+    outward_api = _load_json(outward_api_manifest)
+    import_evidence = _load_json(import_evidence_manifest)
+
+    outward_modules: set[str] = set()
+    all_outward = outward_api.get("all_outward_modules", [])
+    if isinstance(all_outward, list):
+        outward_modules.update(str(value) for value in all_outward)
+    modules_payload = outward_api.get("modules", {})
+    if isinstance(modules_payload, dict):
+        outward_modules.update(str(module_name) for module_name in modules_payload.keys())
+
+    module_symbols, modules_with_symbol_evidence = _symbol_evidence_map(import_evidence)
+    return outward_modules, module_symbols, modules_with_symbol_evidence
+
+
+def _is_outward_facing_function(
+    function_key: str,
+    *,
+    outward_modules: set[str],
+    module_symbols: dict[str, set[str]],
+    modules_with_symbol_evidence: set[str],
+) -> bool:
+    """Classify function touches using module + symbol import evidence."""
+    module_name, sep, function_name = function_key.partition(":")
+    if not sep or not module_name or not function_name:
         return False
-    if func_name.startswith("<") and func_name.endswith(">"):
+    if function_name.startswith("<") and function_name.endswith(">"):
         return False
-    return not func_name.startswith("_")
+    if function_name.startswith("_"):
+        return False
+    if module_name not in outward_modules:
+        return False
+    if module_name in modules_with_symbol_evidence:
+        return function_name in module_symbols.get(module_name, set())
+    return True
 
 
 def _copy_publish_artifacts(
@@ -99,10 +259,20 @@ def _copy_publish_artifacts(
     publish_dir: Path,
     artifacts: list[dict[str, Any]],
     overwrite: bool,
+    max_publish_size_mb: float,
+    max_preview_rows: int,
+    max_publish_rows: int,
+    allow_missing_canonical: bool,
 ) -> list[dict[str, Any]]:
+    """Copy/cap artifacts for MkDocs publishing and emit publish metadata.
+
+    WHY (TODO by Erik): Keep canonical machine artifacts unchanged in
+    `docs_metadata/behavior`, while producing publish-safe assets under docs/.
+    """
     if publish_dir.exists() and overwrite:
         shutil.rmtree(publish_dir)
     publish_dir.mkdir(parents=True, exist_ok=True)
+    max_publish_size_bytes = int(max_publish_size_mb * 1024 * 1024)
 
     published_rows: list[dict[str, Any]] = []
     for row in artifacts:
@@ -110,7 +280,18 @@ def _copy_publish_artifacts(
         if not canonical:
             continue
         canonical_abs = _resolve_repo_path(repo_root, canonical)
+        row_copy = dict(row)
+        row_copy["published_path"] = ""
+        row_copy["published_doc_path"] = ""
+        row_copy["preview_path"] = ""
+        row_copy["preview_doc_path"] = ""
+        row_copy["publish_status"] = PUBLISH_STATUS_OMITTED
+        row_copy["publish_note"] = ""
         if not canonical_abs.exists() or not canonical_abs.is_file():
+            if not allow_missing_canonical:
+                raise FileNotFoundError(f"Missing canonical artifact: {canonical_abs}")
+            row_copy["publish_note"] = PUBLISH_NOTE_MISSING_ALLOWED
+            published_rows.append(row_copy)
             continue
 
         if _is_within(canonical_abs, out_dir):
@@ -119,15 +300,40 @@ def _copy_publish_artifacts(
             workload = str(row.get("workload", "misc")) or "misc"
             rel_in_trace = Path(workload) / canonical_abs.name
 
-        published_abs = publish_dir / rel_in_trace
+        rel_for_publish = _md_asset_publish_rel_path(rel_in_trace)
+        published_abs = publish_dir / rel_for_publish
         published_abs.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(canonical_abs, published_abs)
+        size_bytes = int(canonical_abs.stat().st_size)
+        row_copy["size_bytes"] = size_bytes
+        is_tabular = _is_tabular_path(canonical_abs)
+        if is_tabular and size_bytes > max_publish_size_bytes:
+            tabular_df = _read_tabular(canonical_abs).head(max_publish_rows)
+            _write_tabular(tabular_df, published_abs)
+            row_copy["publish_status"] = PUBLISH_STATUS_TRUNCATED
+            row_copy["publish_note"] = PUBLISH_NOTE_TRUNCATED
+        elif (not is_tabular) and size_bytes > max_publish_size_bytes:
+            row_copy["publish_status"] = PUBLISH_STATUS_OMITTED
+            row_copy["publish_note"] = PUBLISH_NOTE_OMITTED
+            published_rows.append(row_copy)
+            continue
+        else:
+            shutil.copy2(canonical_abs, published_abs)
+            row_copy["publish_status"] = PUBLISH_STATUS_PUBLISHED
 
-        published_doc_rel = _doc_relative_path(published_abs, docs_dir)
-
-        row_copy = dict(row)
         row_copy["published_path"] = _rel_path(repo_root, published_abs)
-        row_copy["published_doc_path"] = published_doc_rel
+        row_copy["published_doc_path"] = _doc_relative_path(published_abs, docs_dir)
+        if is_tabular:
+            preview_abs = published_abs.with_suffix(published_abs.suffix + ".preview.html")
+            preview_abs.write_text(
+                _render_preview_html(
+                    canonical_abs,
+                    artifact_key=str(row.get("artifact_key", "")),
+                    max_preview_rows=max_preview_rows,
+                ),
+                encoding="utf-8",
+            )
+            row_copy["preview_path"] = _rel_path(repo_root, preview_abs)
+            row_copy["preview_doc_path"] = _doc_relative_path(preview_abs, docs_dir)
         published_rows.append(row_copy)
 
     return published_rows
@@ -459,22 +665,24 @@ def _render_behavior_markdown(manifest: dict[str, Any]) -> str:
 
     lines.extend(["", "## Artifact Manifest", ""])
     if isinstance(artifacts, list) and artifacts:
-        for row in artifacts[:200]:
+        for row in artifacts[:300]:
             if not isinstance(row, dict):
                 continue
-            key = row.get("artifact_key", "")
+            key = str(row.get("artifact_key", ""))
+            publish_status = str(row.get("publish_status", ""))
+            publish_note = str(row.get("publish_note", ""))
+            preview_doc_path = str(row.get("preview_doc_path", ""))
             published_doc_path = str(row.get("published_doc_path", ""))
-            published_path = str(row.get("published_path", ""))
+            parts = [f"`{key}`", f"status=`{publish_status}`"]
+            if preview_doc_path:
+                parts.append(f"[Preview](../{preview_doc_path})")
             if published_doc_path:
-                link_target = f"../{published_doc_path}"
-                lines.append(
-                    f"- `{key}`: [{published_doc_path}]({link_target})"
-                )
-            elif published_path:
-                lines.append(f"- `{key}`: `{published_path}`")
-            else:
-                canonical_path = str(row.get("canonical_path", ""))
-                lines.append(f"- `{key}`: `{canonical_path}`")
+                parts.append(f"[Download](../{published_doc_path})")
+            if publish_note:
+                parts.append(f"note=`{publish_note}`")
+            if not preview_doc_path and not published_doc_path:
+                parts.append("_No published artifact link available._")
+            lines.append(f"- {' | '.join(parts)}")
     else:
         lines.append("- No artifact references found.")
 
@@ -487,14 +695,26 @@ def run_traces(
     repo_root: Path,
     out_dir: Path,
     publish_dir: Path,
+    docs_dir: Path,
     trace_scope: str,
     seed: int,
     overwrite: bool,
+    outward_api_manifest: Path,
+    import_evidence_manifest: Path,
+    max_publish_size_mb: float,
+    max_preview_rows: int,
+    max_publish_rows: int,
+    allow_missing_canonical: bool,
 ) -> dict[str, Any]:
+    """Run deterministic trace workloads and produce docs behavior evidence.
+
+    WHY (TODO by Erik): This binds reproducible runtime evidence to docs while
+    separating canonical machine artifacts from publish-safe site assets.
+    """
     repo_root = repo_root.resolve()
     out_dir = out_dir.resolve()
     publish_dir = publish_dir.resolve()
-    docs_dir = (repo_root / "docs").resolve()
+    docs_dir = docs_dir.resolve()
     random.seed(seed)
 
     run_manifest_path = out_dir / "run_manifest.json"
@@ -502,6 +722,11 @@ def run_traces(
         raise FileExistsError(
             f"Trace outputs already exist at {out_dir}. Pass --overwrite to replace them."
         )
+
+    outward_modules, module_symbols, modules_with_symbol_evidence = _build_outward_classifier(
+        outward_api_manifest=outward_api_manifest,
+        import_evidence_manifest=import_evidence_manifest,
+    )
 
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -553,8 +778,26 @@ def run_traces(
             key=lambda item: (-item[1], item[0]),
         )
     ]
-    outward_function_rows = [row for row in function_rows if _is_outward_facing_function(str(row["function"]))]
-    internal_function_rows = [row for row in function_rows if not _is_outward_facing_function(str(row["function"]))]
+    outward_function_rows = [
+        row
+        for row in function_rows
+        if _is_outward_facing_function(
+            str(row["function"]),
+            outward_modules=outward_modules,
+            module_symbols=module_symbols,
+            modules_with_symbol_evidence=modules_with_symbol_evidence,
+        )
+    ]
+    internal_function_rows = [
+        row
+        for row in function_rows
+        if not _is_outward_facing_function(
+            str(row["function"]),
+            outward_modules=outward_modules,
+            module_symbols=module_symbols,
+            modules_with_symbol_evidence=modules_with_symbol_evidence,
+        )
+    ]
 
     artifact_manifest_path = out_dir / "artifact_manifest.csv"
     step_timings_path = out_dir / "step_timings.csv"
@@ -563,14 +806,7 @@ def run_traces(
 
     _write_csv(
         artifact_manifest_path,
-        [
-            "workload",
-            "artifact_key",
-            "canonical_path",
-            "published_path",
-            "published_doc_path",
-            "size_bytes",
-        ],
+        ARTIFACT_FIELDNAMES,
         artifact_rows,
     )
     _write_csv(
@@ -614,19 +850,16 @@ def run_traces(
         publish_dir=publish_dir,
         artifacts=artifacts_for_publish,
         overwrite=overwrite,
+        max_publish_size_mb=max_publish_size_mb,
+        max_preview_rows=max_preview_rows,
+        max_publish_rows=max_publish_rows,
+        allow_missing_canonical=allow_missing_canonical,
     )
 
     # Rewrite artifact manifest with published-path columns now populated.
     _write_csv(
         artifact_manifest_path,
-        [
-            "workload",
-            "artifact_key",
-            "canonical_path",
-            "published_path",
-            "published_doc_path",
-            "size_bytes",
-        ],
+        ARTIFACT_FIELDNAMES,
         artifacts_for_manifest,
     )
     published_artifact_manifest = publish_dir / "artifact_manifest.csv"
@@ -634,10 +867,17 @@ def run_traces(
     shutil.copy2(artifact_manifest_path, published_artifact_manifest)
 
     manifest = {
-        "schema_version": "v1",
+        "schema_version": "v2",
         "generated_at_utc": _iso_utc_now(),
         "trace_scope": trace_scope,
         "seed": seed,
+        "trace_generation": {
+            "allow_missing_canonical": allow_missing_canonical,
+            "max_publish_size_mb": max_publish_size_mb,
+            "max_preview_rows": max_preview_rows,
+            "max_publish_rows": max_publish_rows,
+            "docs_dir": _rel_path(repo_root, docs_dir),
+        },
         "workloads": workload_results,
         "top_modules": module_rows[:100],
         "top_functions": function_rows[:100],
@@ -656,9 +896,7 @@ def render_behavior_page(*, repo_root: Path, out_dir: Path, behavior_page: Path)
 
     run_manifest_path = out_dir / "run_manifest.json"
     if run_manifest_path.exists():
-        payload = json.loads(run_manifest_path.read_text(encoding="utf-8"))
-        if not isinstance(payload, dict):
-            payload = {}
+        payload = _load_json(run_manifest_path)
         content = _render_behavior_markdown(payload)
     else:
         content = _render_placeholder()
@@ -673,7 +911,14 @@ def _build_parser() -> argparse.ArgumentParser:
         target.add_argument("--repo-root", type=Path, default=Path("."))
         target.add_argument("--out-dir", type=Path, default=Path("docs_metadata/behavior"))
         target.add_argument("--publish-dir", type=Path, default=DEFAULT_PUBLISH_DIR_REL)
+        target.add_argument("--docs-dir", type=Path, default=DEFAULT_DOCS_DIR_REL)
         target.add_argument("--behavior-page", type=Path, default=DEFAULT_BEHAVIOR_PAGE_REL)
+        target.add_argument("--outward-api-manifest", type=Path, default=DEFAULT_OUTWARD_API_MANIFEST_REL)
+        target.add_argument(
+            "--import-evidence-manifest",
+            type=Path,
+            default=DEFAULT_IMPORT_EVIDENCE_MANIFEST_REL,
+        )
         target.add_argument(
             "--trace-scope",
             type=str,
@@ -681,6 +926,10 @@ def _build_parser() -> argparse.ArgumentParser:
             default=DEFAULT_TRACE_SCOPE,
         )
         target.add_argument("--seed", type=int, default=DEFAULT_TRACE_SEED)
+        target.add_argument("--max-publish-size-mb", type=float, default=DEFAULT_MAX_PUBLISH_SIZE_MB)
+        target.add_argument("--max-preview-rows", type=int, default=DEFAULT_MAX_PREVIEW_ROWS)
+        target.add_argument("--max-publish-rows", type=int, default=DEFAULT_MAX_PUBLISH_ROWS)
+        target.add_argument("--allow-missing-canonical", action="store_true")
         target.add_argument("--overwrite", action="store_true")
 
     parser = argparse.ArgumentParser(description="Generate dynamic behavior-evidence artifacts for docs.")
@@ -694,25 +943,37 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _resolve_path(repo_root: Path, value: Path) -> Path:
+    return value if value.is_absolute() else (repo_root / value)
+
+
 def main() -> int:
     parser = _build_parser()
     args = parser.parse_args()
 
     repo_root = args.repo_root.resolve()
-    out_dir = args.out_dir if args.out_dir.is_absolute() else (repo_root / args.out_dir)
-    publish_dir = args.publish_dir if args.publish_dir.is_absolute() else (repo_root / args.publish_dir)
-    behavior_page = (
-        args.behavior_page if args.behavior_page.is_absolute() else (repo_root / args.behavior_page)
-    )
+    out_dir = _resolve_path(repo_root, args.out_dir)
+    publish_dir = _resolve_path(repo_root, args.publish_dir)
+    docs_dir = _resolve_path(repo_root, args.docs_dir)
+    behavior_page = _resolve_path(repo_root, args.behavior_page)
+    outward_api_manifest = _resolve_path(repo_root, args.outward_api_manifest)
+    import_evidence_manifest = _resolve_path(repo_root, args.import_evidence_manifest)
 
     if args.command == "run":
         manifest = run_traces(
             repo_root=repo_root,
             out_dir=out_dir,
             publish_dir=publish_dir,
+            docs_dir=docs_dir,
             trace_scope=args.trace_scope,
             seed=int(args.seed),
             overwrite=bool(args.overwrite),
+            outward_api_manifest=outward_api_manifest,
+            import_evidence_manifest=import_evidence_manifest,
+            max_publish_size_mb=float(args.max_publish_size_mb),
+            max_preview_rows=int(args.max_preview_rows),
+            max_publish_rows=int(args.max_publish_rows),
+            allow_missing_canonical=bool(args.allow_missing_canonical),
         )
         print(
             f"Wrote trace manifest to {out_dir / 'run_manifest.json'} "
@@ -730,9 +991,16 @@ def main() -> int:
             repo_root=repo_root,
             out_dir=out_dir,
             publish_dir=publish_dir,
+            docs_dir=docs_dir,
             trace_scope=args.trace_scope,
             seed=int(args.seed),
             overwrite=bool(args.overwrite),
+            outward_api_manifest=outward_api_manifest,
+            import_evidence_manifest=import_evidence_manifest,
+            max_publish_size_mb=float(args.max_publish_size_mb),
+            max_preview_rows=int(args.max_preview_rows),
+            max_publish_rows=int(args.max_publish_rows),
+            allow_missing_canonical=bool(args.allow_missing_canonical),
         )
         path = render_behavior_page(repo_root=repo_root, out_dir=out_dir, behavior_page=behavior_page)
         print(

@@ -130,7 +130,16 @@ def run_trace(
     trace_scope: str,
     seed: int,
     overwrite: bool,
+    max_publish_size_mb: float,
+    max_preview_rows: int,
+    max_publish_rows: int,
+    allow_missing_canonical: bool,
 ) -> int:
+    """Run the behavior-trace generator with explicit publish policy controls.
+
+    WHY (TODO by Erik): Keep docs-trace execution reproducible and bounded from
+    one pipeline entrypoint so local runs and CI use the same contract.
+    """
     command = [
         sys.executable,
         "tools/docs_trace.py",
@@ -141,13 +150,27 @@ def run_trace(
         str(paths.behavior_trace_dir),
         "--publish-dir",
         str(paths.behavior_publish_dir),
+        "--docs-dir",
+        str(paths.docs_dir),
         "--behavior-page",
         str(paths.behavior_page_path),
+        "--outward-api-manifest",
+        str(paths.outward_api_path),
+        "--import-evidence-manifest",
+        str(paths.import_evidence_path),
         "--trace-scope",
         trace_scope,
         "--seed",
         str(seed),
+        "--max-publish-size-mb",
+        str(max_publish_size_mb),
+        "--max-preview-rows",
+        str(max_preview_rows),
+        "--max-publish-rows",
+        str(max_publish_rows),
     ]
+    if allow_missing_canonical:
+        command.append("--allow-missing-canonical")
     if overwrite:
         command.append("--overwrite")
     return _run_command(repo_root=paths.repo_root, command=command)
@@ -209,6 +232,29 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Trace workload scope.",
     )
     trace_parser.add_argument("--seed", type=int, default=42, help="Deterministic seed for trace sampling.")
+    trace_parser.add_argument(
+        "--max-publish-size-mb",
+        type=float,
+        default=5.0,
+        help="Max size in MB for direct published artifact copies.",
+    )
+    trace_parser.add_argument(
+        "--max-preview-rows",
+        type=int,
+        default=500,
+        help="Row cap for generated tabular previews.",
+    )
+    trace_parser.add_argument(
+        "--max-publish-rows",
+        type=int,
+        default=10000,
+        help="Row cap when truncating oversized tabular artifacts.",
+    )
+    trace_parser.add_argument(
+        "--allow-missing-canonical",
+        action="store_true",
+        help="Allow missing canonical artifacts in trace publish step.",
+    )
     trace_parser.add_argument("--overwrite", action="store_true", help="Allow overwriting existing trace outputs.")
 
     check_parser = subparsers.add_parser("check", help="Run docs checks.")
@@ -225,6 +271,29 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Trace workload scope when --with-trace is enabled.",
     )
     all_parser.add_argument("--seed", type=int, default=42, help="Deterministic seed for trace sampling.")
+    all_parser.add_argument(
+        "--max-publish-size-mb",
+        type=float,
+        default=5.0,
+        help="Max size in MB for direct published artifact copies.",
+    )
+    all_parser.add_argument(
+        "--max-preview-rows",
+        type=int,
+        default=500,
+        help="Row cap for generated tabular previews.",
+    )
+    all_parser.add_argument(
+        "--max-publish-rows",
+        type=int,
+        default=10000,
+        help="Row cap when truncating oversized tabular artifacts.",
+    )
+    all_parser.add_argument(
+        "--allow-missing-canonical",
+        action="store_true",
+        help="Allow missing canonical artifacts in trace publish step.",
+    )
     all_parser.add_argument("--overwrite", action="store_true", help="Allow overwriting existing trace outputs.")
     all_parser.add_argument("--require-trace", action="store_true", help="Require trace artifacts during check.")
 
@@ -257,6 +326,10 @@ def main() -> int:
             trace_scope=str(args.trace_scope),
             seed=int(args.seed),
             overwrite=bool(args.overwrite),
+            max_publish_size_mb=float(args.max_publish_size_mb),
+            max_preview_rows=int(args.max_preview_rows),
+            max_publish_rows=int(args.max_publish_rows),
+            allow_missing_canonical=bool(args.allow_missing_canonical),
         )
     if args.command == "check":
         return run_check(
@@ -281,6 +354,10 @@ def main() -> int:
                 trace_scope=str(args.trace_scope),
                 seed=int(args.seed),
                 overwrite=bool(args.overwrite),
+                max_publish_size_mb=float(args.max_publish_size_mb),
+                max_preview_rows=int(args.max_preview_rows),
+                max_publish_rows=int(args.max_publish_rows),
+                allow_missing_canonical=bool(args.allow_missing_canonical),
             )
             if trace_rc != 0:
                 return trace_rc

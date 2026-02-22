@@ -141,6 +141,11 @@ def count_standard_item_tokens(line: str) -> int:
 
 
 def is_item_run_line(line: str) -> bool:
+    """Return whether a line looks like a compact run of multiple ITEM headings.
+
+    WHY (TODO by Erik): This isolates TOC-like heading clusters so boundary
+    diagnostics can reject index rows before overlap decisions.
+    """
     if not line or not line.strip():
         return False
     matches = [
@@ -166,6 +171,11 @@ def is_item_run_line(line: str) -> bool:
 
 
 def is_empty_section_line(line: str) -> bool:
+    """Return whether a line is an explicit empty-section marker.
+
+    WHY (TODO by Erik): Empty-section stubs should be detected early so they do
+    not get interpreted as substantive extracted item content.
+    """
     if not line:
         return False
     return bool(EMPTY_SECTION_LINE_RE.match(line))
@@ -807,6 +817,11 @@ def find_strong_leak(
     next_part: str | None,
     max_hits: int = EMBEDDED_MAX_HITS,
 ) -> EmbeddedHeadingHit | None:
+    """Find the first strong embedded heading leak matching the expected successor.
+
+    WHY (TODO by Erik): Downstream boundary checks only escalate high-confidence
+    successor leaks to avoid false alarms from TOC/cross-reference noise.
+    """
     if not full_text:
         return None
     hits = _find_embedded_heading_hits(

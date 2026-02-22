@@ -184,6 +184,11 @@ def _render_reference_index(
 
 
 def _build_auto_nav_lines(modules: list[str], module_to_relpath: dict[str, str]) -> list[str]:
+    """Build the managed reference nav block for MkDocs.
+
+    WHY (TODO by Erik): Keep a single generated nav contract so reference pages
+    stay discoverable without manual `mkdocs.yml` maintenance.
+    """
     nav_lines = [
         "  - Reference:",
         "    - Overview: reference/index.md",
@@ -231,6 +236,10 @@ def _bootstrap_top_level_docs(docs_dir: Path) -> None:
 
 
 def _ensure_behavior_evidence_placeholder(docs_dir: Path) -> None:
+    """Ensure the behavior evidence page always exists as a nav-safe target.
+
+    WHY (TODO by Erik): MkDocs nav should be stable even before traces are run.
+    """
     path = docs_dir / Path(BEHAVIOR_EVIDENCE_REL_PATH)
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():

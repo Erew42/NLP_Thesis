@@ -189,6 +189,9 @@ SecCcmJoinSpec = SecCcmJoinSpecV1 | SecCcmJoinSpecV2
 def normalize_sec_ccm_join_spec(join_spec: SecCcmJoinSpec) -> SecCcmJoinSpecV2:
     """Normalize a V1 or V2 join specification to canonical V2.
 
+    WHY (TODO by Erik): Persisting one canonical spec shape avoids downstream
+    branching when reports and artifact manifests are compared across runs.
+
     Args:
         join_spec: Input join specification.
 
