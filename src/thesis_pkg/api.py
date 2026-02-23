@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from thesis_pkg.core.ccm.canonical_links import build_canonical_link_table
 from thesis_pkg.core.ccm.sec_ccm_contracts import (
     MatchReasonCode,
     PhaseBAlignmentMode,
@@ -72,6 +73,7 @@ __all__ = [
     "SecCcmJoinSpecV2",
     "normalize_sec_ccm_join_spec",
     "make_sec_ccm_join_spec_preset",
+    "build_canonical_link_table",
     "normalize_sec_filings_phase_a",
     "resolve_links_phase_a",
     "align_doc_dates_phase_b",

@@ -24,7 +24,35 @@ from thesis_pkg.pipeline import (
     shrcd_name_expr,
     map_exchcd_to_name,
     merge_histories,
+    resolve_links_phase_a,
 )
+
+
+def _canonical_links(rows: list[dict[str, object]]) -> pl.DataFrame:
+    base = {
+        "cik_10": "0000000000",
+        "gvkey": "0",
+        "kypermno": 0,
+        "lpermco": None,
+        "liid": "01",
+        "valid_start": dt.date(1900, 1, 1),
+        "valid_end": None,
+        "link_start": dt.date(1900, 1, 1),
+        "link_end": None,
+        "cik_start": None,
+        "cik_end": None,
+        "linktype": "LC",
+        "linkprim": "P",
+        "link_rank_raw": None,
+        "link_rank_effective": 90,
+        "link_quality": 4.0,
+        "link_source": "linkhistory",
+        "source_priority": 1,
+        "row_quality_tier": 10,
+        "has_window": True,
+        "is_sparse_fallback": False,
+    }
+    return pl.DataFrame([{**base, **row} for row in rows])
 
 
 def test_build_price_panel_merges_delistings_and_flags():
@@ -513,16 +541,35 @@ def test_attach_ccm_links_prefers_canonical_primary_link():
         }
     )
 
-    links = pl.DataFrame(
-        {
-            "KYGVKEY": ["1000", "2000"],
-            "LPERMNO": [1, 1],
-            "LIID": ["A", "B"],
-            "LINKDT": [dt.date(2023, 12, 31), dt.date(2023, 12, 31)],
-            "LINKENDDT": [dt.date(2024, 12, 31), dt.date(2024, 12, 31)],
-            "LINKTYPE": ["LC", "LU"],
-            "LINKPRIM": ["P", "P"],
-        }
+    links = _canonical_links(
+        [
+            {
+                "cik_10": "0000001000",
+                "gvkey": "1000",
+                "kypermno": 1,
+                "liid": "A",
+                "valid_start": dt.date(2023, 12, 31),
+                "valid_end": dt.date(2024, 12, 31),
+                "link_start": dt.date(2023, 12, 31),
+                "link_end": dt.date(2024, 12, 31),
+                "linktype": "LC",
+                "linkprim": "P",
+                "link_quality": 4.0,
+            },
+            {
+                "cik_10": "0000002000",
+                "gvkey": "2000",
+                "kypermno": 1,
+                "liid": "B",
+                "valid_start": dt.date(2023, 12, 31),
+                "valid_end": dt.date(2024, 12, 31),
+                "link_start": dt.date(2023, 12, 31),
+                "link_end": dt.date(2024, 12, 31),
+                "linktype": "LU",
+                "linkprim": "P",
+                "link_quality": 3.0,
+            },
+        ]
     )
 
     attached = attach_ccm_links(price.lazy(), links.lazy()).collect()
@@ -532,6 +579,51 @@ def test_attach_ccm_links_prefers_canonical_primary_link():
 
     assert chosen[attached.columns.index("KYGVKEY_final")] == "1000"
     assert link_flag == ["canonical_primary_LC", "no_ccm_link"]
+
+
+def test_attach_ccm_links_consistent_with_phase_a_for_same_canonical_table():
+    sec = pl.DataFrame(
+        {
+            "doc_id": ["d1"],
+            "cik_10": ["0000001000"],
+            "filing_date": [dt.date(2024, 1, 2)],
+        }
+    )
+    price = pl.DataFrame(
+        {
+            "KYPERMNO": [1],
+            "CALDT": [dt.date(2024, 1, 2)],
+            "KYGVKEY_final": [None],
+        }
+    )
+    links = _canonical_links(
+        [
+            {
+                "cik_10": "0000001000",
+                "gvkey": "1000",
+                "kypermno": 1,
+                "link_source": "linkhistory",
+                "source_priority": 1,
+                "link_rank_effective": 90,
+                "link_quality": 4.0,
+            },
+            {
+                "cik_10": "0000001000",
+                "gvkey": "9000",
+                "kypermno": 1,
+                "link_source": "linkfiscalperiodall",
+                "source_priority": 2,
+                "link_rank_effective": 1,
+                "link_quality": 4.0,
+            },
+        ]
+    )
+
+    phase_a = resolve_links_phase_a(sec.lazy(), links.lazy()).collect().row(0, named=True)
+    attached = attach_ccm_links(price.lazy(), links.lazy()).collect().row(0, named=True)
+
+    assert phase_a["phase_a_reason_code"] == "OK"
+    assert phase_a["gvkey"] == attached["KYGVKEY_ccm"]
 
 
 def test_attach_company_description_coalesces_and_flags():

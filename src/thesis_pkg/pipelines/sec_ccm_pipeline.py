@@ -452,7 +452,7 @@ def run_sec_ccm_premerge_pipeline(
 
     Args:
         sec_filings_lf: SEC filings input at doc grain.
-        link_universe_lf: CCM link universe input.
+        link_universe_lf: Canonical SEC<->CCM time-sliced link table input.
         trading_calendar_lf: Trading calendar input for date alignment.
         output_dir: Directory where parquet/json/report artifacts are written.
         daily_lf: Daily panel input required when daily join is enabled.

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from thesis_pkg.core.ccm.canonical_links import build_canonical_link_table
 from thesis_pkg.core.ccm.sec_ccm_contracts import (
     MatchReasonCode,
     PhaseBAlignmentMode,

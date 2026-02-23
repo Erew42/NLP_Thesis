@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import datetime as dt
+
 import polars as pl
 
+from thesis_pkg.core.ccm.canonical_links import normalize_canonical_link_table
 from thesis_pkg.core.ccm.sec_ccm_contracts import (
     MatchReasonCode,
     PhaseBAlignmentMode,
@@ -43,53 +46,8 @@ def _normalized_cik10_expr(col_name: str) -> pl.Expr:
     )
 
 
-def _normalize_link_universe(link_universe_lf: pl.LazyFrame) -> pl.LazyFrame:
-    schema = link_universe_lf.collect_schema()
-    cik_col = _resolve_first_existing(schema, ("cik_10", "CIK_10", "CIK", "cik"), "link_universe")
-    gvkey_col = _resolve_first_existing(schema, ("gvkey", "GVKEY", "KYGVKEY"), "link_universe")
-    permno_col = _resolve_first_existing(
-        schema,
-        ("kypermno", "KYPERMNO", "LPERMNO", "PERMNO"),
-        "link_universe",
-    )
-
-    link_quality_col = None
-    for candidate in ("link_quality", "LINK_QUALITY", "link_score", "score"):
-        if candidate in schema:
-            link_quality_col = candidate
-            break
-
-    link_rank_col = None
-    for candidate in ("link_rank", "LINK_RANK", "rank"):
-        if candidate in schema:
-            link_rank_col = candidate
-            break
-
-    selected = link_universe_lf.select(
-        _normalized_cik10_expr(cik_col).alias("cik_10"),
-        pl.col(gvkey_col).cast(pl.Utf8, strict=False).alias("gvkey"),
-        pl.col(permno_col).cast(pl.Int32, strict=False).alias("kypermno"),
-        (
-            pl.col(link_quality_col).cast(pl.Float64, strict=False)
-            if link_quality_col is not None
-            else pl.lit(0.0, dtype=pl.Float64)
-        ).alias("link_quality"),
-        (
-            pl.col(link_rank_col).cast(pl.Int32, strict=False)
-            if link_rank_col is not None
-            else pl.lit(0, dtype=pl.Int32)
-        ).alias("link_rank"),
-    )
-
-    return (
-        selected
-        .drop_nulls(subset=["cik_10"])
-        .with_columns(
-            pl.col("link_quality").fill_null(0.0),
-            pl.col("link_rank").fill_null(0).cast(pl.Int32),
-        )
-        .unique(subset=["cik_10", "gvkey", "kypermno", "link_quality", "link_rank"])
-    )
+def _normalize_link_universe(link_universe_lf: pl.LazyFrame, *, strict: bool = True) -> pl.LazyFrame:
+    return normalize_canonical_link_table(link_universe_lf, strict=strict)
 
 
 def _requested_alignment_policy_value(join_spec: SecCcmJoinSpec) -> str:
@@ -170,9 +128,15 @@ def normalize_sec_filings_phase_a(sec_filings_lf: pl.LazyFrame) -> pl.LazyFrame:
 def resolve_links_phase_a(sec_norm_lf: pl.LazyFrame, link_universe_lf: pl.LazyFrame) -> pl.LazyFrame:
     """Resolve each filing to a single ``gvkey``/``kypermno`` candidate for Phase A.
 
-    Candidate selection is conservative:
-    minimum ``link_rank`` first, then maximum ``link_quality``. If more than one
-    candidate remains at top rank/quality, the filing is marked ambiguous.
+    Candidate selection is conservative and date-valid:
+    1) filter to rows valid on ``filing_date``;
+    2) prefer Stage-1 rows (positive permno, non-sparse, has link window),
+       otherwise Stage-2 sparse fallback rows;
+    3) order by ``row_quality_tier``, ``source_priority``,
+       ``link_rank_effective``, and ``link_quality`` with deterministic
+       suffix ordering.
+    If multiple distinct IDs share the top rank tuple, the filing is marked
+    ambiguous.
 
     Args:
         sec_norm_lf: SEC filings input (doc grain).
@@ -192,44 +156,120 @@ def resolve_links_phase_a(sec_norm_lf: pl.LazyFrame, link_universe_lf: pl.LazyFr
             & pl.col("filing_date").is_not_null()
         ).alias("_valid_input")
     )
-    links = _normalize_link_universe(link_universe_lf)
+    links = _normalize_link_universe(link_universe_lf, strict=True)
 
-    candidate_scored = (
+    date_valid_expr = (
+        (pl.col("valid_start").is_null() | (pl.col("filing_date") >= pl.col("valid_start")))
+        & (pl.col("valid_end").is_null() | (pl.col("filing_date") <= pl.col("valid_end")))
+    )
+
+    candidate_base = (
         sec_base.filter(pl.col("_valid_input"))
-        .select("doc_id", "cik_10")
+        .select("doc_id", "cik_10", "filing_date")
         .join(links, on="cik_10", how="left")
         .drop_nulls(subset=["gvkey", "kypermno"])
         .with_columns(
-            pl.col("link_rank").fill_null(0).cast(pl.Int32).alias("_link_rank"),
-            pl.col("link_quality").fill_null(0.0).cast(pl.Float64).alias("_link_quality"),
+            date_valid_expr.alias("_date_valid"),
+            (pl.col("kypermno") > pl.lit(0)).alias("_permno_positive"),
+        )
+        .filter(pl.col("_date_valid"))
+        .with_columns(
+            (
+                pl.col("_permno_positive")
+                & pl.col("has_window")
+                & pl.col("is_sparse_fallback").not_()
+            ).alias("_is_stage1"),
+            (
+                pl.col("_permno_positive")
+                & pl.col("is_sparse_fallback")
+            ).alias("_is_stage2"),
         )
     )
 
-    candidate_counts = candidate_scored.group_by("doc_id").agg(
+    stage_presence = candidate_base.group_by("doc_id").agg(
+        pl.col("_is_stage1").any().alias("_has_stage1")
+    )
+    eligible_candidates = (
+        candidate_base
+        .join(stage_presence, on="doc_id", how="left")
+        .filter(pl.col("_is_stage1") | (pl.col("_has_stage1").not_() & pl.col("_is_stage2")))
+    )
+
+    candidate_counts = eligible_candidates.group_by("doc_id").agg(
         pl.len().cast(pl.Int32).alias("link_candidate_count")
     )
-    best_rank = candidate_scored.group_by("doc_id").agg(pl.col("_link_rank").min().alias("_best_rank"))
-    top_rank = candidate_scored.join(best_rank, on="doc_id", how="inner").filter(
-        pl.col("_link_rank") == pl.col("_best_rank")
+
+    best_tier = eligible_candidates.group_by("doc_id").agg(
+        pl.col("row_quality_tier").min().alias("_best_row_quality_tier")
     )
-    best_quality = top_rank.group_by("doc_id").agg(pl.col("_link_quality").max().alias("_best_quality"))
+    top_tier = eligible_candidates.join(best_tier, on="doc_id", how="inner").filter(
+        pl.col("row_quality_tier") == pl.col("_best_row_quality_tier")
+    )
+
+    best_source = top_tier.group_by("doc_id").agg(
+        pl.col("source_priority").min().alias("_best_source_priority")
+    )
+    top_source = top_tier.join(best_source, on="doc_id", how="inner").filter(
+        pl.col("source_priority") == pl.col("_best_source_priority")
+    )
+
+    best_rank = top_source.group_by("doc_id").agg(
+        pl.col("link_rank_effective").min().alias("_best_link_rank_effective")
+    )
+    top_rank = top_source.join(best_rank, on="doc_id", how="inner").filter(
+        pl.col("link_rank_effective") == pl.col("_best_link_rank_effective")
+    )
+
+    best_quality = top_rank.group_by("doc_id").agg(
+        pl.col("link_quality").max().alias("_best_link_quality")
+    )
     top_candidates = top_rank.join(best_quality, on="doc_id", how="inner").filter(
-        pl.col("_link_quality") == pl.col("_best_quality")
+        pl.col("link_quality") == pl.col("_best_link_quality")
     )
+
     tie_stats = top_candidates.group_by("doc_id").agg(
         pl.len().cast(pl.Int32).alias("top_rank_tie_count"),
-        pl.col("gvkey").first().alias("_top_gvkey"),
-        pl.col("kypermno").first().cast(pl.Int32).alias("_top_kypermno"),
-        pl.col("_link_quality").first().cast(pl.Float64).alias("_top_link_quality"),
+        pl.struct(["gvkey", "kypermno"]).n_unique().cast(pl.Int32).alias("_top_distinct_id_count"),
+    )
+
+    top_choice = (
+        top_candidates.with_columns(
+            pl.col("valid_start").fill_null(dt.date(1, 1, 1)).alias("_sort_valid_start"),
+            pl.col("valid_end").fill_null(dt.date(9999, 12, 31)).alias("_sort_valid_end"),
+            pl.col("liid").fill_null("").alias("_sort_liid"),
+        )
+        .sort(
+            [
+                "doc_id",
+                "row_quality_tier",
+                "source_priority",
+                "link_rank_effective",
+                "link_quality",
+                "_sort_valid_start",
+                "_sort_valid_end",
+                "gvkey",
+                "kypermno",
+                "_sort_liid",
+            ],
+            descending=[False, False, False, False, True, True, False, False, False, False],
+        )
+        .group_by("doc_id", maintain_order=True)
+        .agg(
+            pl.first("gvkey").alias("_top_gvkey"),
+            pl.first("kypermno").cast(pl.Int32).alias("_top_kypermno"),
+            pl.first("link_quality").cast(pl.Float64).alias("_top_link_quality"),
+        )
     )
 
     enriched = (
         sec_base
         .join(candidate_counts, on="doc_id", how="left")
         .join(tie_stats, on="doc_id", how="left")
+        .join(top_choice, on="doc_id", how="left")
         .with_columns(
             pl.col("link_candidate_count").fill_null(0).cast(pl.Int32),
             pl.col("top_rank_tie_count").fill_null(0).cast(pl.Int32),
+            pl.col("_top_distinct_id_count").fill_null(0).cast(pl.Int32),
         )
     )
 
@@ -238,7 +278,7 @@ def resolve_links_phase_a(sec_norm_lf: pl.LazyFrame, link_universe_lf: pl.LazyFr
         .then(pl.lit(MatchReasonCode.BAD_INPUT.value))
         .when(pl.col("link_candidate_count") == 0)
         .then(pl.lit(MatchReasonCode.CIK_NOT_IN_LINK_UNIVERSE.value))
-        .when(pl.col("top_rank_tie_count") > 1)
+        .when((pl.col("top_rank_tie_count") > 1) & (pl.col("_top_distinct_id_count") > 1))
         .then(pl.lit(MatchReasonCode.AMBIGUOUS_LINK.value))
         .otherwise(pl.lit(MatchReasonCode.OK.value))
     )
@@ -280,6 +320,7 @@ def resolve_links_phase_a(sec_norm_lf: pl.LazyFrame, link_universe_lf: pl.LazyFr
 
     return out.with_columns(status).drop(
         "_valid_input",
+        "_top_distinct_id_count",
         "_top_gvkey",
         "_top_kypermno",
         "_top_link_quality",
@@ -740,13 +781,44 @@ def build_unmatched_diagnostics_doc(
         ValueError: If required columns are missing from input frames.
     """
     _require_columns(final_doc_lf, ("doc_id", "cik_10", "filing_date", "match_reason_code"), "final docs")
-    link_universe = _normalize_link_universe(link_universe_lf).select(
+    link_universe = _normalize_link_universe(link_universe_lf, strict=True)
+    cik_presence = link_universe.select(
         "cik_10",
         pl.lit(True).alias("diag_cik_in_link_universe"),
     ).unique(subset=["cik_10"])
 
     matched_counts = final_doc_lf.group_by("cik_10").agg(
         ((pl.col("match_reason_code") == pl.lit(MatchReasonCode.OK.value)).cast(pl.Int32)).sum().alias("diag_n_matched_for_cik")
+    )
+
+    date_valid_expr = (
+        (pl.col("valid_start").is_null() | (pl.col("filing_date") >= pl.col("valid_start")))
+        & (pl.col("valid_end").is_null() | (pl.col("filing_date") <= pl.col("valid_end")))
+    )
+    valid_candidate_stats = (
+        final_doc_lf.select("doc_id", "cik_10", "filing_date")
+        .unique(subset=["doc_id"])
+        .join(
+            link_universe.select(
+                "cik_10",
+                "kypermno",
+                "has_window",
+                "is_sparse_fallback",
+                "valid_start",
+                "valid_end",
+            ),
+            on="cik_10",
+            how="left",
+        )
+        .with_columns(date_valid_expr.alias("_date_valid"))
+        .filter(pl.col("_date_valid") & (pl.col("kypermno") > pl.lit(0)))
+        .group_by("doc_id")
+        .agg(
+            pl.len().cast(pl.Int32).alias("diag_valid_candidate_count"),
+            (
+                pl.col("has_window") & pl.col("is_sparse_fallback").not_()
+            ).cast(pl.Int32).sum().cast(pl.Int32).alias("diag_stage1_candidate_count"),
+        )
     )
 
     form_col = None
@@ -759,12 +831,16 @@ def build_unmatched_diagnostics_doc(
     diag = (
         final_doc_lf
         .filter(pl.col("match_reason_code") != pl.lit(MatchReasonCode.OK.value))
-        .join(link_universe, on="cik_10", how="left")
+        .join(cik_presence, on="cik_10", how="left")
         .join(matched_counts, on="cik_10", how="left")
+        .join(valid_candidate_stats, on="doc_id", how="left")
         .with_columns(
             pl.col("diag_cik_in_link_universe").fill_null(False),
             pl.col("diag_n_matched_for_cik").fill_null(0).cast(pl.Int32),
+            pl.col("diag_valid_candidate_count").fill_null(0).cast(pl.Int32),
+            pl.col("diag_stage1_candidate_count").fill_null(0).cast(pl.Int32),
             (pl.col("diag_n_matched_for_cik") > 0).alias("has_other_filings_matched_for_cik"),
+            (pl.col("diag_valid_candidate_count") > 0).alias("diag_has_date_valid_candidate"),
         )
     )
 
@@ -810,6 +886,9 @@ def build_unmatched_diagnostics_doc(
             "diag_n_matched_for_cik",
             "diag_date_before_key_coverage",
             "diag_date_after_key_coverage",
+            "diag_valid_candidate_count",
+            "diag_stage1_candidate_count",
+            "diag_has_date_valid_candidate",
             "aligned_caldt",
             "alignment_lag_days",
             "acceptance_datetime",

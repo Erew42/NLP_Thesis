@@ -5,6 +5,8 @@ from enum import IntFlag
 
 import polars as pl
 
+from thesis_pkg.core.ccm.canonical_links import normalize_canonical_link_table
+
 
 STATUS_DTYPE = pl.UInt64
 
@@ -651,58 +653,133 @@ def attach_filings(price_lf: pl.LazyFrame, filings_lf: pl.LazyFrame, keep_forms:
 
 
 def attach_ccm_links(price_filings_lf: pl.LazyFrame, link_lf: pl.LazyFrame) -> pl.LazyFrame:
-    """Select best CCM link per permno/date with ranking and masking."""
-    link_annotated = (
-        link_lf
-        .with_columns([
-            pl.col("LINKENDDT").fill_null(dt.date(9999, 12, 31)).alias("LINKENDDT"),
-            (pl.col("LINKTYPE").is_in(["LC", "LU"]) & pl.col("LINKPRIM").is_in(["P", "C"])).alias("is_canonical_link"),
-        ])
-        .select(
-            pl.col("KYGVKEY"),
-            pl.col("LPERMNO").alias("KYPERMNO"),
-            "LIID", "LINKDT", "LINKENDDT", "LINKTYPE", "LINKPRIM", "is_canonical_link",
+    """Select best CCM link per permno/date from canonical time-sliced rows."""
+    base = price_filings_lf.with_columns(
+        pl.col("KYPERMNO").cast(pl.Int32, strict=False),
+        pl.col("CALDT").cast(pl.Date, strict=False),
+    )
+    links = normalize_canonical_link_table(link_lf, strict=True).select(
+        "gvkey",
+        "kypermno",
+        "liid",
+        "link_start",
+        "link_end",
+        "valid_start",
+        "valid_end",
+        "linktype",
+        "linkprim",
+        "link_rank_effective",
+        "link_quality",
+        "source_priority",
+        "row_quality_tier",
+        "has_window",
+        "is_sparse_fallback",
+    ).rename({"kypermno": "KYPERMNO"})
+
+    date_valid_expr = (
+        (pl.col("valid_start").is_null() | (pl.col("CALDT") >= pl.col("valid_start")))
+        & (pl.col("valid_end").is_null() | (pl.col("CALDT") <= pl.col("valid_end")))
+    )
+    candidate_base = (
+        base.select("KYPERMNO", "CALDT")
+        .join(links, on="KYPERMNO", how="left")
+        .drop_nulls(subset=["gvkey", "KYPERMNO"])
+        .with_columns(
+            date_valid_expr.alias("_date_valid"),
+            (pl.col("KYPERMNO") > pl.lit(0)).alias("_permno_positive"),
+        )
+        .filter(pl.col("_date_valid"))
+        .with_columns(
+            (
+                pl.col("_permno_positive")
+                & pl.col("has_window")
+                & pl.col("is_sparse_fallback").not_()
+            ).alias("_is_stage1"),
+            (
+                pl.col("_permno_positive")
+                & pl.col("is_sparse_fallback")
+            ).alias("_is_stage2"),
+        )
+    )
+    stage_presence = candidate_base.group_by(["KYPERMNO", "CALDT"]).agg(
+        pl.col("_is_stage1").any().alias("_has_stage1")
+    )
+    eligible = (
+        candidate_base
+        .join(stage_presence, on=["KYPERMNO", "CALDT"], how="left")
+        .filter(pl.col("_is_stage1") | (pl.col("_has_stage1").not_() & pl.col("_is_stage2")))
+    )
+    selected = (
+        eligible.with_columns(
+            pl.col("valid_start").fill_null(dt.date(1, 1, 1)).alias("_sort_valid_start"),
+            pl.col("valid_end").fill_null(dt.date(9999, 12, 31)).alias("_sort_valid_end"),
+            pl.col("liid").fill_null("").alias("_sort_liid"),
+        )
+        .sort(
+            [
+                "KYPERMNO",
+                "CALDT",
+                "row_quality_tier",
+                "source_priority",
+                "link_rank_effective",
+                "link_quality",
+                "_sort_valid_start",
+                "_sort_valid_end",
+                "gvkey",
+                "KYPERMNO",
+                "_sort_liid",
+            ],
+            descending=[False, False, False, False, False, True, True, False, False, False, False],
+        )
+        .group_by(["KYPERMNO", "CALDT"], maintain_order=True)
+        .agg(
+            pl.first("gvkey").alias("_sel_gvkey"),
+            pl.first("liid").alias("_sel_liid"),
+            pl.first("link_start").alias("_sel_link_start"),
+            pl.first("link_end").alias("_sel_link_end"),
+            pl.first("linktype").alias("_sel_linktype"),
+            pl.first("linkprim").alias("_sel_linkprim"),
+            pl.first("link_rank_effective").cast(pl.Int32).alias("_sel_link_rank"),
         )
     )
 
-    joined = price_filings_lf.join(link_annotated, on="KYPERMNO", how="left").with_columns(
+    selected_joined = base.join(selected, on=["KYPERMNO", "CALDT"], how="left").with_columns(
+        pl.col("_sel_gvkey").is_not_null().alias("valid_link"),
+        pl.col("_sel_linktype").cast(pl.Utf8, strict=False).str.to_uppercase().alias("_sel_linktype_upper"),
+        pl.col("_sel_linkprim").cast(pl.Utf8, strict=False).str.to_uppercase().alias("_sel_linkprim_upper"),
         (
-            pl.col("LINKDT").is_not_null()
-            & (pl.col("CALDT") >= pl.col("LINKDT"))
-            & (pl.col("CALDT") <= pl.col("LINKENDDT"))
-        ).alias("valid_link")
+            pl.col("_sel_linktype").cast(pl.Utf8, strict=False).str.to_uppercase().is_in(["LC", "LU"])
+            & pl.col("_sel_linkprim").cast(pl.Utf8, strict=False).str.to_uppercase().is_in(["P", "C"])
+        ).fill_null(False).alias("is_canonical_link"),
     )
 
-    ranked = joined.with_columns(
-        pl.when(pl.col("is_canonical_link") & (pl.col("LINKTYPE") == "LC") & (pl.col("LINKPRIM") == "P"))
-        .then(1)
-        .when(pl.col("is_canonical_link") & (pl.col("LINKPRIM") == "P"))
-        .then(2)
+    link_rank_base = (
+        pl.when(
+            pl.col("is_canonical_link")
+            & (pl.col("_sel_linktype_upper") == pl.lit("LC"))
+            & (pl.col("_sel_linkprim_upper") == pl.lit("P"))
+        )
+        .then(pl.lit(1, dtype=pl.Int32))
+        .when(pl.col("is_canonical_link") & (pl.col("_sel_linkprim_upper") == pl.lit("P")))
+        .then(pl.lit(2, dtype=pl.Int32))
         .when(pl.col("is_canonical_link"))
-        .then(3)
-        .otherwise(4)
-        .alias("link_rank_base")
-    ).with_columns(
-        pl.when(pl.col("valid_link")).then(pl.col("link_rank_base")).otherwise(9).alias("link_rank")
+        .then(pl.lit(3, dtype=pl.Int32))
+        .otherwise(pl.lit(4, dtype=pl.Int32))
     )
 
-    dedup = (
-        ranked
-        .sort(["KYPERMNO", "CALDT", "link_rank", "LINKDT"])
-        .group_by(["KYPERMNO", "CALDT"], maintain_order=True)
-        .agg([
-            pl.all().exclude(["KYPERMNO", "CALDT"]).first()
-        ])
-    )
-
-    masked = dedup.with_columns(
-        pl.when(pl.col("valid_link")).then(pl.col("KYGVKEY")).otherwise(pl.lit(None)).alias("KYGVKEY_ccm"),
-        pl.when(pl.col("valid_link")).then(pl.col("LIID")).otherwise(pl.lit(None)).alias("LIID"),
-        pl.when(pl.col("valid_link")).then(pl.col("LINKDT")).otherwise(pl.lit(None)).alias("LINKDT"),
-        pl.when(pl.col("valid_link")).then(pl.col("LINKENDDT")).otherwise(pl.lit(None)).alias("LINKENDDT"),
-        pl.when(pl.col("valid_link")).then(pl.col("LINKTYPE")).otherwise(pl.lit(None)).alias("LINKTYPE"),
-        pl.when(pl.col("valid_link")).then(pl.col("LINKPRIM")).otherwise(pl.lit(None)).alias("LINKPRIM"),
-        pl.when(pl.col("valid_link")).then(pl.col("is_canonical_link")).otherwise(pl.lit(None)).alias("is_canonical_link"),
+    masked = selected_joined.with_columns(
+        pl.when(pl.col("valid_link")).then(pl.col("_sel_gvkey")).otherwise(pl.lit(None, dtype=pl.Utf8)).alias("KYGVKEY_ccm"),
+        pl.when(pl.col("valid_link")).then(pl.col("_sel_liid")).otherwise(pl.lit(None, dtype=pl.Utf8)).alias("LIID"),
+        pl.when(pl.col("valid_link")).then(pl.col("_sel_link_start")).otherwise(pl.lit(None, dtype=pl.Date)).alias("LINKDT"),
+        pl.when(pl.col("valid_link")).then(pl.col("_sel_link_end")).otherwise(pl.lit(None, dtype=pl.Date)).alias("LINKENDDT"),
+        pl.when(pl.col("valid_link")).then(pl.col("_sel_linktype_upper")).otherwise(pl.lit(None, dtype=pl.Utf8)).alias("LINKTYPE"),
+        pl.when(pl.col("valid_link")).then(pl.col("_sel_linkprim_upper")).otherwise(pl.lit(None, dtype=pl.Utf8)).alias("LINKPRIM"),
+        pl.when(pl.col("valid_link")).then(pl.col("is_canonical_link")).otherwise(pl.lit(None, dtype=pl.Boolean)).alias("is_canonical_link"),
+        link_rank_base.alias("link_rank_base"),
+        pl.when(pl.col("valid_link"))
+        .then(pl.col("_sel_link_rank"))
+        .otherwise(pl.lit(9, dtype=pl.Int32))
+        .alias("link_rank"),
     )
 
     return masked.with_columns(
@@ -717,6 +794,17 @@ def attach_ccm_links(price_filings_lf: pl.LazyFrame, link_lf: pl.LazyFrame) -> p
         .then(pl.lit("canonical_other"))
         .otherwise(pl.lit("noncanonical"))
         .alias("link_quality_flag"),
+    ).drop(
+        "_sel_gvkey",
+        "_sel_liid",
+        "_sel_link_start",
+        "_sel_link_end",
+        "_sel_linktype",
+        "_sel_linktype_upper",
+        "_sel_linkprim",
+        "_sel_linkprim_upper",
+        "_sel_link_rank",
+        strict=False,
     )
 
 

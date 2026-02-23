@@ -29,6 +29,33 @@ from thesis_pkg.core.ccm.transforms import DataStatus, STATUS_DTYPE, apply_conce
 from thesis_pkg.pipelines.sec_ccm_pipeline import run_sec_ccm_premerge_pipeline
 
 
+def _canonical_links(rows: list[dict[str, object]]) -> pl.DataFrame:
+    base = {
+        "cik_10": "0000000000",
+        "gvkey": "0",
+        "kypermno": 0,
+        "lpermco": None,
+        "liid": "01",
+        "valid_start": dt.date(1900, 1, 1),
+        "valid_end": None,
+        "link_start": dt.date(1900, 1, 1),
+        "link_end": None,
+        "cik_start": None,
+        "cik_end": None,
+        "linktype": "LC",
+        "linkprim": "P",
+        "link_rank_raw": None,
+        "link_rank_effective": 90,
+        "link_quality": 4.0,
+        "link_source": "linkhistory",
+        "source_priority": 1,
+        "row_quality_tier": 10,
+        "has_window": True,
+        "is_sparse_fallback": False,
+    }
+    return pl.DataFrame([{**base, **row} for row in rows])
+
+
 def test_join_spec_normalization_from_v1_and_presets():
     v1 = SecCcmJoinSpecV1(
         daily_join_source="MERGED_DAILY_PANEL",
@@ -68,14 +95,12 @@ def test_phase_a_reason_codes_and_doc_grain_invariants():
         }
     )
 
-    link_universe = pl.DataFrame(
-        {
-            "cik_10": ["0000000001", "0000000004", "0000000004"],
-            "gvkey": ["1000", "4000", "4001"],
-            "kypermno": [1, 4, 5],
-            "link_rank": [0, 0, 0],
-            "link_quality": [0.9, 0.8, 0.8],
-        }
+    link_universe = _canonical_links(
+        [
+            {"cik_10": "0000000001", "gvkey": "1000", "kypermno": 1, "link_quality": 3.0},
+            {"cik_10": "0000000004", "gvkey": "4000", "kypermno": 4, "link_quality": 2.0},
+            {"cik_10": "0000000004", "gvkey": "4001", "kypermno": 5, "link_quality": 2.0},
+        ]
     )
 
     phase_a = resolve_links_phase_a(sec.lazy(), link_universe.lazy()).collect().sort("doc_id")
@@ -109,14 +134,14 @@ def test_phase_b_strict_next_day_alignment_and_reason_scoping():
             ],
         }
     )
-    link_universe = pl.DataFrame(
-        {
-            "cik_10": ["0000000001", "0000000002", "0000000003", "0000000003", "0000000004"],
-            "gvkey": ["1000", "2000", "3000", "3001", "4000"],
-            "kypermno": [1, 2, 3, 4, 5],
-            "link_rank": [0, 0, 0, 0, 0],
-            "link_quality": [1.0, 1.0, 0.9, 0.9, 1.0],
-        }
+    link_universe = _canonical_links(
+        [
+            {"cik_10": "0000000001", "gvkey": "1000", "kypermno": 1, "link_quality": 4.0},
+            {"cik_10": "0000000002", "gvkey": "2000", "kypermno": 2, "link_quality": 4.0},
+            {"cik_10": "0000000003", "gvkey": "3000", "kypermno": 3, "link_quality": 3.0},
+            {"cik_10": "0000000003", "gvkey": "3001", "kypermno": 4, "link_quality": 3.0},
+            {"cik_10": "0000000004", "gvkey": "4000", "kypermno": 5, "link_quality": 4.0},
+        ]
     )
     trading_calendar = pl.DataFrame({"CALDT": [dt.date(2024, 1, 3), dt.date(2024, 1, 4)]})
     daily = pl.DataFrame(
@@ -169,14 +194,11 @@ def test_grouped_asof_join_sorts_inputs_and_avoids_sortedness_warning():
             "filing_date": [dt.date(2024, 1, 2), dt.date(2024, 1, 2)],
         }
     )
-    link_universe = pl.DataFrame(
-        {
-            "cik_10": ["0000000001", "0000000002"],
-            "gvkey": ["1000", "2000"],
-            "kypermno": [1, 2],
-            "link_rank": [0, 0],
-            "link_quality": [1.0, 1.0],
-        }
+    link_universe = _canonical_links(
+        [
+            {"cik_10": "0000000001", "gvkey": "1000", "kypermno": 1},
+            {"cik_10": "0000000002", "gvkey": "2000", "kypermno": 2},
+        ]
     )
     trading_calendar = pl.DataFrame({"CALDT": [dt.date(2024, 1, 3), dt.date(2024, 1, 4)]})
     # Intentionally unsorted to verify the function's internal sort path.
@@ -210,14 +232,11 @@ def test_alignment_mode_filing_date_exact_or_next_trading_supports_lag_zero_and_
             "filing_date": [dt.date(2024, 1, 2), dt.date(2024, 1, 6)],
         }
     )
-    link_universe = pl.DataFrame(
-        {
-            "cik_10": ["0000000001", "0000000002"],
-            "gvkey": ["1000", "2000"],
-            "kypermno": [1, 2],
-            "link_rank": [0, 0],
-            "link_quality": [1.0, 1.0],
-        }
+    link_universe = _canonical_links(
+        [
+            {"cik_10": "0000000001", "gvkey": "1000", "kypermno": 1},
+            {"cik_10": "0000000002", "gvkey": "2000", "kypermno": 2},
+        ]
     )
     trading_calendar = pl.DataFrame(
         {"CALDT": [dt.date(2024, 1, 2), dt.date(2024, 1, 3), dt.date(2024, 1, 8)]}
@@ -246,14 +265,10 @@ def test_alignment_mode_filing_date_exact_only_leaves_non_trading_dates_unaligne
             "filing_date": [dt.date(2024, 1, 6)],
         }
     )
-    link_universe = pl.DataFrame(
-        {
-            "cik_10": ["0000000001"],
-            "gvkey": ["1000"],
-            "kypermno": [1],
-            "link_rank": [0],
-            "link_quality": [1.0],
-        }
+    link_universe = _canonical_links(
+        [
+            {"cik_10": "0000000001", "gvkey": "1000", "kypermno": 1},
+        ]
     )
     trading_calendar = pl.DataFrame({"CALDT": [dt.date(2024, 1, 5), dt.date(2024, 1, 8)]})
     phase_a = resolve_links_phase_a(sec.lazy(), link_universe.lazy())
@@ -513,14 +528,11 @@ def test_end_to_end_pipeline_outputs_doc_grain_artifacts(tmp_path: Path):
             "document_type_filename": ["10-K", "10-K", "10-K"],
         }
     )
-    link_universe = pl.DataFrame(
-        {
-            "cik_10": ["0000000001", "0000000002"],
-            "gvkey": ["1000", "2000"],
-            "kypermno": [1, 2],
-            "link_rank": [0, 0],
-            "link_quality": [1.0, 1.0],
-        }
+    link_universe = _canonical_links(
+        [
+            {"cik_10": "0000000001", "gvkey": "1000", "kypermno": 1},
+            {"cik_10": "0000000002", "gvkey": "2000", "kypermno": 2},
+        ]
     )
     trading_calendar = pl.DataFrame({"CALDT": [dt.date(2024, 1, 3), dt.date(2024, 1, 4)]})
     daily = pl.DataFrame(
@@ -627,14 +639,10 @@ def test_end_to_end_pipeline_daily_join_disabled_sets_filter_columns_false(tmp_p
             "document_type_filename": ["10-K"],
         }
     )
-    link_universe = pl.DataFrame(
-        {
-            "cik_10": ["0000000001"],
-            "gvkey": ["1000"],
-            "kypermno": [1],
-            "link_rank": [0],
-            "link_quality": [1.0],
-        }
+    link_universe = _canonical_links(
+        [
+            {"cik_10": "0000000001", "gvkey": "1000", "kypermno": 1},
+        ]
     )
     trading_calendar = pl.DataFrame({"CALDT": [dt.date(2024, 1, 3)]})
 
@@ -665,14 +673,10 @@ def test_pipeline_rejects_first_close_after_acceptance_v1(tmp_path: Path):
             "filing_date": [dt.date(2024, 1, 2)],
         }
     )
-    link_universe = pl.DataFrame(
-        {
-            "cik_10": ["0000000001"],
-            "gvkey": ["1000"],
-            "kypermno": [1],
-            "link_rank": [0],
-            "link_quality": [1.0],
-        }
+    link_universe = _canonical_links(
+        [
+            {"cik_10": "0000000001", "gvkey": "1000", "kypermno": 1},
+        ]
     )
     trading_calendar = pl.DataFrame({"CALDT": [dt.date(2024, 1, 3)]})
 
