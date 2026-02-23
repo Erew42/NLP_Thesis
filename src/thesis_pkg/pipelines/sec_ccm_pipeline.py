@@ -1,3 +1,5 @@
+"""Artifact-producing SEC<->CCM pre-merge pipeline orchestration."""
+
 from __future__ import annotations
 
 import datetime as dt
@@ -31,10 +33,12 @@ _FORM_COLUMNS = ("form_type", "document_type_filename", "SRCTYPE")
 
 
 def _iso_utc(ts: dt.datetime) -> str:
+    """Format a timestamp as ISO-8601 UTC with millisecond precision."""
     return ts.astimezone(dt.timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
 def _write_lazy_parquet(lf: pl.LazyFrame, path: Path, compression: str = "zstd") -> Path:
+    """Materialize a lazy frame to parquet and ensure parent directories exist."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     lf.sink_parquet(path, compression=compression)
@@ -42,6 +46,7 @@ def _write_lazy_parquet(lf: pl.LazyFrame, path: Path, compression: str = "zstd")
 
 
 def _write_text(path: Path, text: str) -> Path:
+    """Write UTF-8 text, creating parent directories when needed."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
@@ -49,6 +54,7 @@ def _write_text(path: Path, text: str) -> Path:
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> Path:
+    """Serialize JSON payload to disk with stable formatting."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
@@ -56,10 +62,12 @@ def _write_json(path: Path, payload: dict[str, Any]) -> Path:
 
 
 def _count_parquet_rows(path: Path) -> int:
+    """Return parquet row count without reading all columns into memory."""
     return int(pl.scan_parquet(path).select(pl.len().alias("n_rows")).collect().item())
 
 
 def _assert_unique_doc_id(lf: pl.LazyFrame, label: str) -> None:
+    """Fail fast if doc-level grain is violated."""
     dup = (
         lf.group_by("doc_id")
         .agg(pl.len().alias("n_rows"))
@@ -73,6 +81,7 @@ def _assert_unique_doc_id(lf: pl.LazyFrame, label: str) -> None:
 
 
 def _step_events_to_frame(run_id: str, events: list[dict[str, Any]]) -> pl.DataFrame:
+    """Convert in-memory step timing events to a typed dataframe."""
     if not events:
         return pl.DataFrame(
             schema={
@@ -119,6 +128,7 @@ def _step_events_to_frame(run_id: str, events: list[dict[str, Any]]) -> pl.DataF
 
 
 def _fmt_markdown_value(value: object) -> str:
+    """Format scalar values for markdown table rendering."""
     if value is None:
         return ""
     if isinstance(value, float):
@@ -133,6 +143,7 @@ def _fmt_markdown_value(value: object) -> str:
 
 
 def _to_markdown_table(df: pl.DataFrame, *, max_rows: int = 25) -> str:
+    """Render a dataframe as a bounded markdown table."""
     if df.height == 0:
         return "_No rows._"
     clipped = df.head(max_rows)
@@ -149,6 +160,7 @@ def _to_markdown_table(df: pl.DataFrame, *, max_rows: int = 25) -> str:
 
 
 def _build_summary_metrics(final_doc_path: Path) -> dict[str, object]:
+    """Build top-line run metrics from final doc output parquet."""
     final_doc = pl.scan_parquet(final_doc_path)
     schema = final_doc.collect_schema()
     lag_rejected_expr = (
@@ -192,6 +204,7 @@ def _build_summary_metrics(final_doc_path: Path) -> dict[str, object]:
 
 
 def _build_reason_count_tables(match_status_path: Path) -> dict[str, pl.DataFrame]:
+    """Aggregate count tables for final/phase-A/phase-B reason codes."""
     match_status = pl.scan_parquet(match_status_path)
     return {
         "match_reason_counts": match_status.group_by("match_reason_code").agg(pl.len().alias("n_docs")).sort(
@@ -207,6 +220,7 @@ def _build_reason_count_tables(match_status_path: Path) -> dict[str, pl.DataFram
 
 
 def _build_unmatched_tables(unmatched_diag_path: Path) -> dict[str, pl.DataFrame]:
+    """Build grouped unmatched-diagnostics summary tables."""
     unmatched = pl.scan_parquet(unmatched_diag_path)
     schema = unmatched.collect_schema()
     form_col = next((col for col in _FORM_COLUMNS if col in schema), None)
@@ -253,6 +267,7 @@ def _build_unmatched_tables(unmatched_diag_path: Path) -> dict[str, pl.DataFrame
 
 
 def _build_acceptance_coverage_by_year(match_status_path: Path) -> pl.DataFrame:
+    """Compute acceptance-datetime coverage by filing year."""
     return (
         pl.scan_parquet(match_status_path)
         .with_columns(pl.col("filing_date").dt.year().alias("filing_year"))
@@ -274,6 +289,7 @@ def _build_acceptance_coverage_by_year(match_status_path: Path) -> pl.DataFrame:
 
 
 def _build_dag_mermaid(step_durations_ms: dict[str, int], daily_join_enabled: bool) -> str:
+    """Render a Mermaid DAG with per-step timing labels."""
     def _dur(step_name: str) -> str:
         return f"{step_durations_ms.get(step_name, 0)} ms"
 
@@ -307,6 +323,7 @@ def _build_dag_mermaid(step_durations_ms: dict[str, int], daily_join_enabled: bo
 
 
 def _build_dag_dot(step_durations_ms: dict[str, int], daily_join_enabled: bool) -> str:
+    """Render a Graphviz DOT DAG with per-step timing labels."""
     def _dur(step_name: str) -> str:
         return f"{step_durations_ms.get(step_name, 0)} ms"
 

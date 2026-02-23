@@ -1,3 +1,12 @@
+"""SEC<->CCM pre-merge logic for Phase A linking and Phase B date alignment.
+
+The module exposes doc-grain functions used by the SEC-CCM pipeline:
+- normalize filings and enforce required keys,
+- resolve canonical links with staged candidate rules,
+- align filings to trading dates and optional daily rows,
+- assign stable reason codes and unmatched diagnostics outputs.
+"""
+
 from __future__ import annotations
 
 import datetime as dt
@@ -18,6 +27,7 @@ from thesis_pkg.core.ccm.transforms import DataStatus, STATUS_DTYPE, _ensure_dat
 
 
 def _require_columns(lf: pl.LazyFrame, required: tuple[str, ...], label: str) -> None:
+    """Raise when required input columns are missing."""
     schema = lf.collect_schema()
     missing = [name for name in required if name not in schema]
     if missing:
@@ -25,6 +35,7 @@ def _require_columns(lf: pl.LazyFrame, required: tuple[str, ...], label: str) ->
 
 
 def _resolve_first_existing(schema: pl.Schema, candidates: tuple[str, ...], label: str) -> str:
+    """Return first existing name from a set of accepted aliases."""
     for candidate in candidates:
         if candidate in schema:
             return candidate
@@ -32,6 +43,7 @@ def _resolve_first_existing(schema: pl.Schema, candidates: tuple[str, ...], labe
 
 
 def _normalized_cik10_expr(col_name: str) -> pl.Expr:
+    """Normalize a CIK-like column to a 10-digit zero-padded string."""
     digits = (
         pl.col(col_name)
         .cast(pl.Utf8, strict=False)
@@ -47,16 +59,19 @@ def _normalized_cik10_expr(col_name: str) -> pl.Expr:
 
 
 def _normalize_link_universe(link_universe_lf: pl.LazyFrame, *, strict: bool = True) -> pl.LazyFrame:
+    """Validate/cast canonical link-universe input for Phase A/diagnostics."""
     return normalize_canonical_link_table(link_universe_lf, strict=strict)
 
 
 def _requested_alignment_policy_value(join_spec: SecCcmJoinSpec) -> str:
+    """Extract the caller-requested policy label for traceability."""
     if isinstance(join_spec, SecCcmJoinSpecV1):
         return join_spec.alignment_policy
     return join_spec.phase_b_alignment_mode.value
 
 
 def _normalize_daily_join_input(daily_lf: pl.LazyFrame, join_spec: SecCcmJoinSpecV2) -> pl.LazyFrame:
+    """Normalize daily panel keys/features to canonical Phase-B join columns."""
     schema = daily_lf.collect_schema()
     perm_col = _resolve_first_existing(
         schema,

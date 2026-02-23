@@ -1,3 +1,11 @@
+"""Build deterministic stratified LinkData samples for local/regression testing.
+
+The sampler preserves:
+1) overlap pairs across linkhistory and linkfiscalperiodall,
+2) time coverage across decades, and
+3) disagreement-heavy edge cases (large window mismatches, sparse fiscal rows).
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -12,6 +20,8 @@ import polars as pl
 
 @dataclass(frozen=True)
 class SampleConfig:
+    """Config for reproducible stratified LinkData sample generation."""
+
     linkdata_dir: Path
     output_dir: Path
     seed: int
@@ -26,12 +36,14 @@ class SampleConfig:
 
 
 def _decade_label(year: int | None) -> str:
+    """Map a year to a decade label, using ``unknown`` for null."""
     if year is None:
         return "unknown"
     return f"{(year // 10) * 10}s"
 
 
 def _row_is_sparse_fiscal(row: dict[str, object]) -> bool:
+    """Return True when a fiscal row matches the sparse-fallback signature."""
     return (
         row.get("liid") is None
         and row.get("linktype") is None
@@ -49,6 +61,7 @@ def _sample_by_strata(
     rng: random.Random,
     min_per_stratum: int,
 ) -> list[dict[str, object]]:
+    """Weighted stratified sampler with minimum-per-stratum guarantees."""
     if target <= 0 or not rows:
         return []
 
@@ -79,6 +92,7 @@ def _sample_by_strata(
 
 
 def _read_pair_profiles(linkdata_dir: Path) -> pl.DataFrame:
+    """Build pair-level overlap and window-disagreement profiles from full LinkData."""
     history = (
         pl.scan_parquet(str(linkdata_dir / "linkhistory.parquet"))
         .select(
@@ -170,6 +184,7 @@ def _read_pair_profiles(linkdata_dir: Path) -> pl.DataFrame:
 
 
 def _pick_sample_pairs(profile: pl.DataFrame, cfg: SampleConfig) -> pl.DataFrame:
+    """Select target overlap/history-only/fiscal-only pair sample with stratification."""
     rng = random.Random(cfg.seed)
     rows = profile.to_dicts()
 
@@ -227,6 +242,7 @@ def _pick_sample_pairs(profile: pl.DataFrame, cfg: SampleConfig) -> pl.DataFrame
 
 
 def _sample_history_rows(cfg: SampleConfig, sample_pairs: pl.DataFrame) -> pl.DataFrame:
+    """Extract history rows for sampled pairs with optional per-pair cap."""
     pair_lf = sample_pairs.select(["KYGVKEY", "permno"]).lazy()
     hist = (
         pl.scan_parquet(str(cfg.linkdata_dir / "linkhistory.parquet"))
@@ -249,6 +265,7 @@ def _sample_history_rows(cfg: SampleConfig, sample_pairs: pl.DataFrame) -> pl.Da
 
 
 def _sample_fiscal_rows(cfg: SampleConfig, sample_pairs: pl.DataFrame) -> pl.DataFrame:
+    """Extract fiscal rows for sampled pairs, preserving sparse fallback examples."""
     pair_lf = sample_pairs.select(["KYGVKEY", "permno"]).lazy()
     fiscal_cols = list(
         pl.scan_parquet(str(cfg.linkdata_dir / "linkfiscalperiodall.parquet")).collect_schema().names()
@@ -320,6 +337,7 @@ def _sample_fiscal_rows(cfg: SampleConfig, sample_pairs: pl.DataFrame) -> pl.Dat
 
 
 def _sample_company_tables(cfg: SampleConfig, sample_pairs: pl.DataFrame) -> tuple[pl.DataFrame, pl.DataFrame]:
+    """Extract companyhistory/companydescription subsets for sampled GVKEYs."""
     gvkeys = sample_pairs.select("KYGVKEY").unique().lazy()
     company_history = (
         pl.scan_parquet(str(cfg.linkdata_dir / "companyhistory.parquet"))
@@ -345,6 +363,7 @@ def _build_manifest(
     companyhistory_sample: pl.DataFrame,
     companydescription_sample: pl.DataFrame,
 ) -> dict[str, object]:
+    """Assemble sample composition/coverage metadata for reproducibility."""
     pair_counts_full = (
         pair_profile.group_by("pair_class")
         .agg(pl.len().alias("n"))
@@ -424,6 +443,7 @@ def _build_manifest(
 
 
 def _parse_args() -> SampleConfig:
+    """Parse CLI arguments and return a normalized sampling config."""
     parser = argparse.ArgumentParser(
         description=(
             "Build deterministic, stratified LinkData parquet samples with "
@@ -474,6 +494,7 @@ def _parse_args() -> SampleConfig:
 
 
 def main() -> None:
+    """Run full sample build and persist parquet outputs plus manifest."""
     cfg = _parse_args()
     cfg.output_dir.mkdir(parents=True, exist_ok=True)
 

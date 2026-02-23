@@ -25,6 +25,12 @@ docs/assets/behavior/
 docs/reference/index.md
 docs/reference/**/*.md
 
+# Agent ephemeral state and memory
+.agent/logs/
+.agent/cache/
+.agent/memory/
+.agent/artifacts/
+
 # Repo-root files (ignore all except README.md)
 /AGENTS.md
 /agents_spec_nlp_thesis.md

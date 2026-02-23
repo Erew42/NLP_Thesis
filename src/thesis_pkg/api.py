@@ -1,6 +1,12 @@
+"""Public API surface for thesis_pkg convenience imports."""
+
 from __future__ import annotations
 
-from thesis_pkg.core.ccm.canonical_links import build_canonical_link_table
+from thesis_pkg.core.ccm.canonical_links import (
+    build_canonical_link_table,
+    canonical_link_coverage_metrics,
+    normalize_canonical_link_table,
+)
 from thesis_pkg.core.ccm.sec_ccm_contracts import (
     MatchReasonCode,
     PhaseBAlignmentMode,
@@ -74,6 +80,8 @@ __all__ = [
     "normalize_sec_ccm_join_spec",
     "make_sec_ccm_join_spec_preset",
     "build_canonical_link_table",
+    "canonical_link_coverage_metrics",
+    "normalize_canonical_link_table",
     "normalize_sec_filings_phase_a",
     "resolve_links_phase_a",
     "align_doc_dates_phase_b",

@@ -54,6 +54,7 @@ nav:
       - Overview: reference/core/__init__.md
       - ccm:
         - Overview: reference/core/ccm/__init__.md
+        - canonical_links: reference/core/ccm/canonical_links.md
         - sec_ccm_contracts: reference/core/ccm/sec_ccm_contracts.md
         - sec_ccm_premerge: reference/core/ccm/sec_ccm_premerge.md
         - transforms: reference/core/ccm/transforms.md

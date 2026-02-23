@@ -1,3 +1,14 @@
+"""Canonical SEC<->CCM link-table construction helpers.
+
+This module builds a single time-sliced link universe that combines:
+1) GVKEY<->PERMNO windows from CCM link sources, and
+2) GVKEY<->CIK windows from company history/description sources.
+
+The resulting rows carry a final ``valid_start``/``valid_end`` window that can
+be used directly by date-valid consumers (SEC Phase A, attach paths, and
+diagnostics) without re-implementing window intersection logic.
+"""
+
 from __future__ import annotations
 
 import polars as pl
@@ -29,6 +40,7 @@ CANONICAL_LINK_COLUMNS: tuple[str, ...] = (
 
 
 def _require_columns(lf: pl.LazyFrame, required: tuple[str, ...], label: str) -> None:
+    """Raise when required columns are missing from an input frame."""
     schema = lf.collect_schema()
     missing = [name for name in required if name not in schema]
     if missing:
@@ -36,6 +48,7 @@ def _require_columns(lf: pl.LazyFrame, required: tuple[str, ...], label: str) ->
 
 
 def _resolve_first_existing(schema: pl.Schema, candidates: tuple[str, ...], label: str) -> str:
+    """Return the first available column name from a list of aliases."""
     for candidate in candidates:
         if candidate in schema:
             return candidate
@@ -43,6 +56,10 @@ def _resolve_first_existing(schema: pl.Schema, candidates: tuple[str, ...], labe
 
 
 def _normalized_cik10_expr(col_name: str) -> pl.Expr:
+    """Normalize CIK-like input to a zero-padded 10-digit string.
+
+    Non-digits are removed first. Empty outputs become null.
+    """
     digits = (
         pl.col(col_name)
         .cast(pl.Utf8, strict=False)
@@ -54,6 +71,10 @@ def _normalized_cik10_expr(col_name: str) -> pl.Expr:
 
 
 def _open_max(left: str, right: str) -> pl.Expr:
+    """Return max(left, right) with open-bound semantics for nulls.
+
+    If one bound is null, the other side is returned unchanged.
+    """
     return (
         pl.when(pl.col(left).is_null())
         .then(pl.col(right))
@@ -64,6 +85,10 @@ def _open_max(left: str, right: str) -> pl.Expr:
 
 
 def _open_min(left: str, right: str) -> pl.Expr:
+    """Return min(left, right) with open-bound semantics for nulls.
+
+    If one bound is null, the other side is returned unchanged.
+    """
     return (
         pl.when(pl.col(left).is_null())
         .then(pl.col(right))
@@ -74,6 +99,7 @@ def _open_min(left: str, right: str) -> pl.Expr:
 
 
 def _linktype_bucket_expr() -> pl.Expr:
+    """Bucket LINKTYPE values into deterministic fallback-rank offsets."""
     linktype = pl.col("linktype").cast(pl.Utf8, strict=False).str.to_uppercase()
     return (
         pl.when(linktype == pl.lit("LC"))
@@ -93,6 +119,7 @@ def _linktype_bucket_expr() -> pl.Expr:
 
 
 def _linkprim_bucket_expr() -> pl.Expr:
+    """Bucket LINKPRIM values into deterministic fallback-rank offsets."""
     linkprim = pl.col("linkprim").cast(pl.Utf8, strict=False).str.to_uppercase()
     return (
         pl.when(linkprim == pl.lit("P"))
@@ -108,6 +135,7 @@ def _linkprim_bucket_expr() -> pl.Expr:
 
 
 def _normalize_linkhistory(linkhistory_lf: pl.LazyFrame) -> pl.LazyFrame:
+    """Map linkhistory columns into canonical link-column names and dtypes."""
     schema = linkhistory_lf.collect_schema()
     gvkey_col = _resolve_first_existing(schema, ("KYGVKEY", "gvkey", "GVKEY"), "linkhistory")
     permno_col = _resolve_first_existing(schema, ("LPERMNO", "lpermno", "KYPERMNO"), "linkhistory")
@@ -135,6 +163,12 @@ def _normalize_linkhistory(linkhistory_lf: pl.LazyFrame) -> pl.LazyFrame:
 
 
 def _normalize_linkfiscal(linkfiscal_lf: pl.LazyFrame) -> pl.LazyFrame:
+    """Map fiscal-period link rows into canonical link-column names and dtypes.
+
+    ``link_start``/``link_end`` are derived via:
+    - link_start = coalesce(linkdt, FiscalPeriodCRSPStartDt)
+    - link_end   = coalesce(linkenddt, FiscalPeriodCRSPEndDt)
+    """
     schema = linkfiscal_lf.collect_schema()
     gvkey_col = _resolve_first_existing(schema, ("KYGVKEY", "gvkey", "GVKEY"), "linkfiscalperiodall")
     permno_col = _resolve_first_existing(schema, ("lpermno", "LPERMNO", "kypermno"), "linkfiscalperiodall")
@@ -194,6 +228,12 @@ def _build_cik_windows(
     companyhistory_lf: pl.LazyFrame,
     companydescription_lf: pl.LazyFrame,
 ) -> pl.LazyFrame:
+    """Build GVKEY<->CIK windows with companyhistory primary and description fallback.
+
+    - ``companyhistory`` contributes explicit ``cik_start``/``cik_end`` windows.
+    - ``companydescription`` contributes open-interval windows only for GVKEYs
+      not present in non-null companyhistory CIK rows.
+    """
     companyhistory_schema = companyhistory_lf.collect_schema()
     companydescription_schema = companydescription_lf.collect_schema()
 
@@ -246,7 +286,19 @@ def build_canonical_link_table(
     companyhistory_lf: pl.LazyFrame,
     companydescription_lf: pl.LazyFrame,
 ) -> pl.LazyFrame:
-    """Build the canonical SEC<->CCM time-sliced link table."""
+    """Build the canonical SEC<->CCM time-sliced link table.
+
+    Key rules:
+    - Deduplicate link rows before CIK join to avoid row explosion.
+    - Join links to CIK windows with LEFT join so non-SEC rows are retained.
+    - Compute final validity by open-interval intersection:
+      ``valid_start=max_open(link_start, cik_start)``,
+      ``valid_end=min_open(link_end, cik_end)``.
+    - Drop only invalid closed intersections (both bounds present and
+      ``valid_start > valid_end``).
+    - Compute deterministic quality/rank/source/tier fields for downstream
+      selection logic.
+    """
     linkhistory = _normalize_linkhistory(linkhistory_lf)
     linkfiscal = _normalize_linkfiscal(linkfiscalperiodall_lf)
 
@@ -340,7 +392,10 @@ def build_canonical_link_table(
 
 
 def canonical_link_coverage_metrics(canonical_lf: pl.LazyFrame) -> pl.LazyFrame:
-    """Summarize CIK coverage for canonical links, including non-SEC rows."""
+    """Summarize CIK coverage for canonical links, including non-SEC rows.
+
+    Returns one-row metrics including row- and GVKEY-level CIK coverage ratios.
+    """
     return canonical_lf.select(
         pl.len().alias("rows_total"),
         pl.col("cik_10").is_null().sum().cast(pl.Int64).alias("rows_missing_cik"),
@@ -369,7 +424,17 @@ def canonical_link_coverage_metrics(canonical_lf: pl.LazyFrame) -> pl.LazyFrame:
 
 
 def normalize_canonical_link_table(link_lf: pl.LazyFrame, *, strict: bool = True) -> pl.LazyFrame:
-    """Validate/cast canonical link-table schema for downstream consumers."""
+    """Validate/cast canonical link-table schema for downstream consumers.
+
+    In ``strict`` mode this enforces required canonical columns and raises when
+    missing. The output is normalized to canonical dtypes and includes a
+    guaranteed non-zero ``link_rank_effective`` fallback.
+
+    Note:
+        This normalizer is intended for SEC/date-valid consumers and drops rows
+        with null/invalid ``cik_10`` because those rows cannot be joined from
+        SEC filings.
+    """
     schema = link_lf.collect_schema()
     required = (
         "cik_10",
