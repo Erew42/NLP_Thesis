@@ -36,6 +36,7 @@ from .pipeline import (
     build_unmatched_diagnostics_doc,
     apply_concept_filter_flags_doc,
     run_sec_ccm_premerge_pipeline,
+    build_or_reuse_ccm_daily_stage,
     merge_histories,
 )
 from .filing_text import (
@@ -84,6 +85,7 @@ __all__ = [
     "build_unmatched_diagnostics_doc",
     "apply_concept_filter_flags_doc",
     "run_sec_ccm_premerge_pipeline",
+    "build_or_reuse_ccm_daily_stage",
     "merge_histories",
     "parse_filename_minimal",
     "process_zip_year_raw_text",

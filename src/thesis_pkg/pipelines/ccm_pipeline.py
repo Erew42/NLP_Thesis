@@ -1,10 +1,112 @@
 from __future__ import annotations
 
+import datetime as dt
 from pathlib import Path
 
 import polars as pl
 
-from thesis_pkg.core.ccm.transforms import DataStatus, STATUS_DTYPE, _ensure_data_status, _update_data_status
+from thesis_pkg.core.ccm.canonical_links import build_canonical_link_table
+from thesis_pkg.core.ccm.transforms import (
+    STATUS_DTYPE,
+    DataStatus,
+    _ensure_data_status,
+    _update_data_status,
+    add_final_returns,
+    attach_ccm_links,
+    attach_company_description,
+    attach_filings,
+    build_price_panel,
+)
+from thesis_pkg.io.parquet import load_tables
+
+
+def build_or_reuse_ccm_daily_stage(
+    run_mode: str,
+    ccm_base_dir: Path,
+    ccm_derived_dir: Path,
+    ccm_reuse_daily_path: Path,
+    forms_10k_10q: list[str] | tuple[str, ...],
+    *,
+    start_date: dt.date | dt.datetime | str = "1990-01-01",
+    canonical_name: str = "canonical_link_table.parquet",
+    daily_name: str = "final_flagged_data_compdesc_added.parquet",
+    verbose: int = 0,
+) -> dict[str, Path]:
+    """Build or reuse CCM daily artifacts with canonical link-table wiring."""
+    mode = run_mode.strip().upper()
+    ccm_base_dir = Path(ccm_base_dir)
+    ccm_derived_dir = Path(ccm_derived_dir)
+    ccm_reuse_daily_path = Path(ccm_reuse_daily_path)
+    ccm_derived_dir.mkdir(parents=True, exist_ok=True)
+
+    canonical_link_path = ccm_derived_dir / canonical_name
+    ccm_daily_path: Path
+
+    if mode == "REBUILD":
+        wanted = {
+            "filingdates",
+            "linkhistory",
+            "linkfiscalperiodall",
+            "companydescription",
+            "companyhistory",
+            "securityheaderhistory",
+            "sfz_ds_dly",
+            "sfz_dp_dly",
+            "sfz_del",
+            "sfz_nam",
+            "sfz_hdr",
+        }
+        tables = load_tables([ccm_base_dir], wanted=wanted)
+        missing = sorted(wanted - set(tables))
+        if missing:
+            raise ValueError(f"Missing tables for rebuild: {missing}")
+
+        canonical_lf = build_canonical_link_table(
+            tables["linkhistory"],
+            tables["linkfiscalperiodall"],
+            tables["companyhistory"],
+            tables["companydescription"],
+        )
+        canonical_lf.sink_parquet(canonical_link_path, compression="zstd")
+        canonical_for_attach = pl.scan_parquet(canonical_link_path)
+
+        price_lf = build_price_panel(
+            tables["sfz_ds_dly"],
+            tables["sfz_dp_dly"],
+            tables["sfz_del"],
+            tables["sfz_nam"],
+            tables["sfz_hdr"],
+            start_date,
+        )
+        price_returns_lf = add_final_returns(price_lf)
+        price_filings_lf = attach_filings(price_returns_lf, tables["filingdates"], list(forms_10k_10q))
+        price_linked_lf = attach_ccm_links(price_filings_lf, canonical_for_attach)
+        merged_path = merge_histories(
+            price_linked_lf,
+            tables["securityheaderhistory"],
+            tables["companyhistory"],
+            output_dir=ccm_derived_dir,
+            final_name="final_flagged_data.parquet",
+            verbose=verbose,
+        )
+
+        merged_with_desc_lf = attach_company_description(pl.scan_parquet(merged_path), tables["companydescription"])
+        ccm_daily_path = ccm_derived_dir / daily_name
+        merged_with_desc_lf.sink_parquet(ccm_daily_path, compression="zstd")
+    elif mode == "REUSE":
+        ccm_daily_path = ccm_reuse_daily_path
+    else:
+        raise ValueError(f"run_mode must be 'REBUILD' or 'REUSE'; got: {run_mode!r}")
+
+    if not canonical_link_path.exists():
+        raise FileNotFoundError(f"CCM canonical link parquet not found: {canonical_link_path}")
+    if not ccm_daily_path.exists():
+        raise FileNotFoundError(f"CCM daily parquet not found: {ccm_daily_path}")
+
+    return {
+        "ccm_daily_path": ccm_daily_path,
+        "canonical_link_path": canonical_link_path,
+    }
 
 
 def merge_histories(

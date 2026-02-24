@@ -48,5 +48,5 @@ from thesis_pkg.core.ccm.transforms import (
     map_exchcd_to_name,
 )
 from thesis_pkg.io.parquet import load_tables, sink_exact_firm_sample_from_parquet
-from thesis_pkg.pipelines.ccm_pipeline import merge_histories
+from thesis_pkg.pipelines.ccm_pipeline import build_or_reuse_ccm_daily_stage, merge_histories
 from thesis_pkg.pipelines.sec_ccm_pipeline import run_sec_ccm_premerge_pipeline

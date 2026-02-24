@@ -24,6 +24,7 @@ docs_metadata/
 docs/assets/behavior/
 docs/reference/index.md
 docs/reference/**/*.md
+docs/architecture/
 
 # Agent ephemeral state and memory
 .agent/logs/
