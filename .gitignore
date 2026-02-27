@@ -25,6 +25,7 @@ docs/assets/behavior/
 docs/reference/index.md
 docs/reference/**/*.md
 docs/architecture/
+full_data_run/
 
 # Agent ephemeral state and memory
 .agent/logs/

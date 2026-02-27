@@ -11,6 +11,8 @@ diagnostics) without re-implementing window intersection logic.
 
 from __future__ import annotations
 
+from enum import Enum
+
 import polars as pl
 
 
@@ -37,6 +39,13 @@ CANONICAL_LINK_COLUMNS: tuple[str, ...] = (
     "has_window",
     "is_sparse_fallback",
 )
+
+
+class CikHistoryWindowPolicy(str, Enum):
+    """Policy for transforming companyhistory CIK windows before link joins."""
+
+    HISTORY_OPEN_START_EARLIEST_PER_GVKEY = "HISTORY_OPEN_START_EARLIEST_PER_GVKEY"
+    HISTORY_STRICT = "HISTORY_STRICT"
 
 
 def _require_columns(lf: pl.LazyFrame, required: tuple[str, ...], label: str) -> None:
@@ -68,6 +77,23 @@ def _normalized_cik10_expr(col_name: str) -> pl.Expr:
         .str.replace_all(r"\D", "")
     )
     return pl.when(digits.str.len_chars() > 0).then(digits.str.zfill(10)).otherwise(None)
+
+
+def _normalize_cik_history_window_policy(
+    policy: CikHistoryWindowPolicy | str,
+) -> CikHistoryWindowPolicy:
+    """Normalize a CIK window policy value to a canonical enum."""
+    if isinstance(policy, CikHistoryWindowPolicy):
+        return policy
+
+    candidate = str(policy).strip().upper()
+    try:
+        return CikHistoryWindowPolicy(candidate)
+    except ValueError as exc:
+        allowed = ", ".join(member.value for member in CikHistoryWindowPolicy)
+        raise ValueError(
+            f"Unsupported cik_history_window_policy={policy!r}. Expected one of: {allowed}"
+        ) from exc
 
 
 def _open_max(left: str, right: str) -> pl.Expr:
@@ -227,6 +253,8 @@ def _normalize_linkfiscal(linkfiscal_lf: pl.LazyFrame) -> pl.LazyFrame:
 def _build_cik_windows(
     companyhistory_lf: pl.LazyFrame,
     companydescription_lf: pl.LazyFrame,
+    *,
+    cik_history_window_policy: CikHistoryWindowPolicy,
 ) -> pl.LazyFrame:
     """Build GVKEY<->CIK windows with companyhistory primary and description fallback.
 
@@ -260,6 +288,28 @@ def _build_cik_windows(
         .unique(subset=["gvkey", "cik_10", "cik_start", "cik_end"])
     )
 
+    if cik_history_window_policy == CikHistoryWindowPolicy.HISTORY_OPEN_START_EARLIEST_PER_GVKEY:
+        earliest_non_null_start = (
+            hist_windows.drop_nulls(subset=["cik_start"])
+            .group_by("gvkey")
+            .agg(pl.col("cik_start").min().alias("_min_cik_start_non_null"))
+        )
+        hist_windows = (
+            hist_windows.join(earliest_non_null_start, on="gvkey", how="left")
+            .with_columns(
+                pl.when(
+                    pl.col("cik_start").is_not_null()
+                    & pl.col("_min_cik_start_non_null").is_not_null()
+                    & (pl.col("cik_start") == pl.col("_min_cik_start_non_null"))
+                )
+                .then(pl.lit(None, dtype=pl.Date))
+                .otherwise(pl.col("cik_start"))
+                .alias("cik_start")
+            )
+            .drop("_min_cik_start_non_null")
+            .unique(subset=["gvkey", "cik_10", "cik_start", "cik_end"])
+        )
+
     hist_gvkeys = hist_windows.select("gvkey").unique()
 
     desc_windows = (
@@ -285,6 +335,8 @@ def build_canonical_link_table(
     linkfiscalperiodall_lf: pl.LazyFrame,
     companyhistory_lf: pl.LazyFrame,
     companydescription_lf: pl.LazyFrame,
+    *,
+    cik_history_window_policy: CikHistoryWindowPolicy | str = CikHistoryWindowPolicy.HISTORY_OPEN_START_EARLIEST_PER_GVKEY,
 ) -> pl.LazyFrame:
     """Build the canonical SEC<->CCM time-sliced link table.
 
@@ -317,7 +369,12 @@ def build_canonical_link_table(
     )
     links_deduped = pl.concat([linkhistory, linkfiscal], how="vertical_relaxed").unique(subset=dedupe_cols)
 
-    cik_windows = _build_cik_windows(companyhistory_lf, companydescription_lf)
+    normalized_window_policy = _normalize_cik_history_window_policy(cik_history_window_policy)
+    cik_windows = _build_cik_windows(
+        companyhistory_lf,
+        companydescription_lf,
+        cik_history_window_policy=normalized_window_policy,
+    )
     # Keep all link rows even when CIK metadata is missing for non-SEC usage.
     # LEFT join avoids dropping valid GVKEY<->PERMNO windows without CIK.
     merged = links_deduped.join(cik_windows, on="gvkey", how="left")

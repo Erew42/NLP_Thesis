@@ -5,7 +5,10 @@ from pathlib import Path
 
 import polars as pl
 
-from thesis_pkg.core.ccm.canonical_links import build_canonical_link_table
+from thesis_pkg.core.ccm.canonical_links import (
+    CikHistoryWindowPolicy,
+    build_canonical_link_table,
+)
 from thesis_pkg.core.ccm.transforms import (
     STATUS_DTYPE,
     DataStatus,
@@ -30,6 +33,7 @@ def build_or_reuse_ccm_daily_stage(
     start_date: dt.date | dt.datetime | str = "1990-01-01",
     canonical_name: str = "canonical_link_table.parquet",
     daily_name: str = "final_flagged_data_compdesc_added.parquet",
+    cik_history_window_policy: CikHistoryWindowPolicy | str = CikHistoryWindowPolicy.HISTORY_OPEN_START_EARLIEST_PER_GVKEY,
     verbose: int = 0,
 ) -> dict[str, Path]:
     """Build or reuse CCM daily artifacts with canonical link-table wiring."""
@@ -66,6 +70,7 @@ def build_or_reuse_ccm_daily_stage(
             tables["linkfiscalperiodall"],
             tables["companyhistory"],
             tables["companydescription"],
+            cik_history_window_policy=cik_history_window_policy,
         )
         canonical_lf.sink_parquet(canonical_link_path, compression="zstd")
         canonical_for_attach = pl.scan_parquet(canonical_link_path)

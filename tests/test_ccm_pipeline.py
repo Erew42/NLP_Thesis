@@ -6,6 +6,7 @@ from pathlib import Path
 import polars as pl
 import pytest
 
+from thesis_pkg.core.ccm.canonical_links import CikHistoryWindowPolicy
 from thesis_pkg.pipeline import build_or_reuse_ccm_daily_stage
 
 
@@ -214,3 +215,33 @@ def test_build_or_reuse_ccm_daily_stage_reuse_raises_when_canonical_missing(tmp_
             ccm_reuse_daily_path=reuse_daily_path,
             forms_10k_10q=["10-K"],
         )
+
+
+def test_build_or_reuse_ccm_daily_stage_policy_pass_through_controls_cik_start(tmp_path: Path) -> None:
+    base_dir = tmp_path / "base_policy"
+    _write_required_ccm_tables(base_dir, include_linkfiscal=True)
+
+    default_out = build_or_reuse_ccm_daily_stage(
+        run_mode="REBUILD",
+        ccm_base_dir=base_dir,
+        ccm_derived_dir=tmp_path / "derived_default",
+        ccm_reuse_daily_path=tmp_path / "reuse" / "unused_default.parquet",
+        forms_10k_10q=["10-K"],
+    )
+    strict_out = build_or_reuse_ccm_daily_stage(
+        run_mode="REBUILD",
+        ccm_base_dir=base_dir,
+        ccm_derived_dir=tmp_path / "derived_strict",
+        ccm_reuse_daily_path=tmp_path / "reuse" / "unused_strict.parquet",
+        forms_10k_10q=["10-K"],
+        cik_history_window_policy=CikHistoryWindowPolicy.HISTORY_STRICT,
+    )
+
+    default_canonical = pl.read_parquet(default_out["canonical_link_path"])
+    strict_canonical = pl.read_parquet(strict_out["canonical_link_path"])
+
+    default_row = default_canonical.filter(pl.col("gvkey") == "1000").row(0, named=True)
+    strict_row = strict_canonical.filter(pl.col("gvkey") == "1000").row(0, named=True)
+
+    assert default_row["cik_start"] is None
+    assert strict_row["cik_start"] == dt.date(2020, 1, 1)

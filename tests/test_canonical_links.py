@@ -5,6 +5,7 @@ import datetime as dt
 import polars as pl
 
 from thesis_pkg.core.ccm.canonical_links import (
+    CikHistoryWindowPolicy,
     build_canonical_link_table,
     canonical_link_coverage_metrics,
 )
@@ -386,3 +387,115 @@ def test_phase_a_for_cik_present_rows_unchanged_when_cik_missing_rows_exist():
     assert out["phase_a_reason_code"] == MatchReasonCode.OK.value
     assert out["gvkey"] == "1000"
     assert out["kypermno"] == 1
+
+
+def test_default_policy_nulls_only_earliest_cik_start_rows_per_gvkey():
+    linkhistory = pl.DataFrame(
+        {
+            "KYGVKEY": ["7000", "8000"],
+            "LPERMNO": [70, 80],
+            "LPERMCO": [700, 800],
+            "LIID": ["01", "01"],
+            "LINKDT": [dt.date(1990, 1, 1), dt.date(1990, 1, 1)],
+            "LINKENDDT": [None, None],
+            "LINKTYPE": ["LC", "LC"],
+            "LINKPRIM": ["P", "P"],
+        }
+    )
+    companyhistory = pl.DataFrame(
+        {
+            "KYGVKEY": ["7000", "7000", "8000", "8000", "8000"],
+            "HCHGDT": [
+                dt.date(2005, 1, 1),
+                dt.date(2011, 1, 1),
+                dt.date(2000, 1, 1),
+                dt.date(2000, 1, 1),
+                dt.date(2005, 1, 1),
+            ],
+            "HCHGENDDT": [
+                dt.date(2010, 12, 31),
+                None,
+                dt.date(2002, 12, 31),
+                dt.date(2004, 12, 31),
+                None,
+            ],
+            "HCIK": ["111", "222", "333", "444", "555"],
+        }
+    )
+
+    canonical = build_canonical_link_table(
+        linkhistory.lazy(),
+        _empty_linkfiscalperiodall().lazy(),
+        companyhistory.lazy(),
+        _empty_companydescription().lazy(),
+    ).collect()
+
+    by_key = {
+        (row["gvkey"], row["cik_10"]): row
+        for row in canonical.select("gvkey", "cik_10", "cik_start", "cik_end").to_dicts()
+    }
+
+    assert by_key[("7000", "0000000111")]["cik_start"] is None
+    assert by_key[("7000", "0000000111")]["cik_end"] == dt.date(2010, 12, 31)
+    assert by_key[("7000", "0000000222")]["cik_start"] == dt.date(2011, 1, 1)
+    assert by_key[("8000", "0000000333")]["cik_start"] is None
+    assert by_key[("8000", "0000000444")]["cik_start"] is None
+    assert by_key[("8000", "0000000555")]["cik_start"] == dt.date(2005, 1, 1)
+
+
+def test_strict_policy_keeps_starts_and_pre_start_match_only_for_earliest_cik_under_default():
+    linkhistory = pl.DataFrame(
+        {
+            "KYGVKEY": ["9000"],
+            "LPERMNO": [99],
+            "LPERMCO": [999],
+            "LIID": ["01"],
+            "LINKDT": [dt.date(1990, 1, 1)],
+            "LINKENDDT": [None],
+            "LINKTYPE": ["LC"],
+            "LINKPRIM": ["P"],
+        }
+    )
+    companyhistory = pl.DataFrame(
+        {
+            "KYGVKEY": ["9000", "9000"],
+            "HCHGDT": [dt.date(2000, 1, 1), dt.date(2011, 1, 1)],
+            "HCHGENDDT": [dt.date(2010, 12, 31), None],
+            "HCIK": ["111", "222"],
+        }
+    )
+
+    canonical_default = build_canonical_link_table(
+        linkhistory.lazy(),
+        _empty_linkfiscalperiodall().lazy(),
+        companyhistory.lazy(),
+        _empty_companydescription().lazy(),
+    )
+    canonical_strict = build_canonical_link_table(
+        linkhistory.lazy(),
+        _empty_linkfiscalperiodall().lazy(),
+        companyhistory.lazy(),
+        _empty_companydescription().lazy(),
+        cik_history_window_policy=CikHistoryWindowPolicy.HISTORY_STRICT,
+    )
+
+    sec = pl.DataFrame(
+        {
+            "doc_id": ["pre_old", "pre_new", "in_new"],
+            "cik_10": ["0000000111", "0000000222", "0000000222"],
+            "filing_date": [dt.date(1995, 1, 1), dt.date(2005, 1, 1), dt.date(2015, 1, 1)],
+        }
+    )
+
+    out_default = resolve_links_phase_a(sec.lazy(), canonical_default).collect().sort("doc_id")
+    out_strict = resolve_links_phase_a(sec.lazy(), canonical_strict).collect().sort("doc_id")
+    by_doc_default = {row["doc_id"]: row for row in out_default.to_dicts()}
+    by_doc_strict = {row["doc_id"]: row for row in out_strict.to_dicts()}
+
+    assert by_doc_default["pre_old"]["phase_a_reason_code"] == MatchReasonCode.OK.value
+    assert by_doc_default["pre_new"]["phase_a_reason_code"] == MatchReasonCode.CIK_NOT_IN_LINK_UNIVERSE.value
+    assert by_doc_default["in_new"]["phase_a_reason_code"] == MatchReasonCode.OK.value
+
+    assert by_doc_strict["pre_old"]["phase_a_reason_code"] == MatchReasonCode.CIK_NOT_IN_LINK_UNIVERSE.value
+    assert by_doc_strict["pre_new"]["phase_a_reason_code"] == MatchReasonCode.CIK_NOT_IN_LINK_UNIVERSE.value
+    assert by_doc_strict["in_new"]["phase_a_reason_code"] == MatchReasonCode.OK.value
