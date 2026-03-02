@@ -14,16 +14,24 @@ class MatchReasonCode(str, Enum):
         OK: Phase A and Phase B completed successfully.
         BAD_INPUT: Required filing identifiers/dates were invalid or missing.
         CIK_NOT_IN_LINK_UNIVERSE: Filing CIK was not present in the CCM link universe.
+        CIK_PRESENT_NO_POSITIVE_LINK: Filing CIK exists, but only non-positive key rows exist.
+        NO_DATE_VALID_POSITIVE_LINK: Positive-key rows exist, but none are valid on filing date.
+        NO_ELIGIBLE_LINK_CANDIDATE: Date-valid positive-key rows exist, but none survive Phase A stage rules.
         AMBIGUOUS_LINK: Multiple equally ranked link candidates remained after tie handling.
-        NO_CCM_ROW_FOR_DATE: Link exists, but no usable daily row was available at aligned date.
+        NO_CCM_ROW_FOR_DATE: Link exists, but no daily row was joined at aligned date.
+        REQUIRED_DAILY_FEATURE_MISSING: A daily row was joined, but required features were null.
         OUT_OF_CCM_COVERAGE: Filing date/aligned date was outside covered daily date range.
     """
 
     OK = "OK"
     BAD_INPUT = "BAD_INPUT"
     CIK_NOT_IN_LINK_UNIVERSE = "CIK_NOT_IN_LINK_UNIVERSE"
+    CIK_PRESENT_NO_POSITIVE_LINK = "CIK_PRESENT_NO_POSITIVE_LINK"
+    NO_DATE_VALID_POSITIVE_LINK = "NO_DATE_VALID_POSITIVE_LINK"
+    NO_ELIGIBLE_LINK_CANDIDATE = "NO_ELIGIBLE_LINK_CANDIDATE"
     AMBIGUOUS_LINK = "AMBIGUOUS_LINK"
     NO_CCM_ROW_FOR_DATE = "NO_CCM_ROW_FOR_DATE"
+    REQUIRED_DAILY_FEATURE_MISSING = "REQUIRED_DAILY_FEATURE_MISSING"
     OUT_OF_CCM_COVERAGE = "OUT_OF_CCM_COVERAGE"
 
 

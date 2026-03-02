@@ -249,8 +249,12 @@ def _build_unmatched_tables(unmatched_diag_path: Path) -> dict[str, pl.DataFrame
         pl.len().alias("n_unmatched_docs"),
         pl.col("diag_cik_in_link_universe").cast(pl.Int64).sum().alias("n_cik_in_link_universe"),
         pl.col("has_other_filings_matched_for_cik").cast(pl.Int64).sum().alias("n_has_other_filings_matched_for_cik"),
-        pl.col("diag_date_before_key_coverage").cast(pl.Int64).sum().alias("n_before_key_coverage"),
-        pl.col("diag_date_after_key_coverage").cast(pl.Int64).sum().alias("n_after_key_coverage"),
+        pl.col("diag_aligned_before_key_coverage").cast(pl.Int64).sum().alias("n_aligned_before_key_coverage"),
+        pl.col("diag_aligned_after_key_coverage").cast(pl.Int64).sum().alias("n_aligned_after_key_coverage"),
+        pl.col("diag_has_daily_row").cast(pl.Int64).sum().alias("n_daily_row_present"),
+        pl.col("diag_daily_row_failed_required_features").cast(pl.Int64).sum().alias(
+            "n_daily_row_failed_required_features"
+        ),
     ).collect().row(0, named=True)
 
     diag_signals_df = pl.DataFrame(

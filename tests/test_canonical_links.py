@@ -219,7 +219,7 @@ def test_cik_window_mismatch_blocks_out_of_window_filings():
 
     assert by_doc["old_ok"]["phase_a_reason_code"] == MatchReasonCode.OK.value
     assert by_doc["old_ok"]["kypermno"] == 55
-    assert by_doc["old_bad"]["phase_a_reason_code"] == MatchReasonCode.CIK_NOT_IN_LINK_UNIVERSE.value
+    assert by_doc["old_bad"]["phase_a_reason_code"] == MatchReasonCode.NO_DATE_VALID_POSITIVE_LINK.value
     assert by_doc["new_ok"]["phase_a_reason_code"] == MatchReasonCode.OK.value
     assert by_doc["new_ok"]["kypermno"] == 55
 
@@ -302,7 +302,7 @@ def test_kypermno_zero_rows_never_win_phase_a():
     )
 
     out = resolve_links_phase_a(sec.lazy(), links.lazy()).collect().row(0, named=True)
-    assert out["phase_a_reason_code"] == MatchReasonCode.CIK_NOT_IN_LINK_UNIVERSE.value
+    assert out["phase_a_reason_code"] == MatchReasonCode.CIK_PRESENT_NO_POSITIVE_LINK.value
     assert out["kypermno"] is None
 
 
@@ -493,9 +493,9 @@ def test_strict_policy_keeps_starts_and_pre_start_match_only_for_earliest_cik_un
     by_doc_strict = {row["doc_id"]: row for row in out_strict.to_dicts()}
 
     assert by_doc_default["pre_old"]["phase_a_reason_code"] == MatchReasonCode.OK.value
-    assert by_doc_default["pre_new"]["phase_a_reason_code"] == MatchReasonCode.CIK_NOT_IN_LINK_UNIVERSE.value
+    assert by_doc_default["pre_new"]["phase_a_reason_code"] == MatchReasonCode.NO_DATE_VALID_POSITIVE_LINK.value
     assert by_doc_default["in_new"]["phase_a_reason_code"] == MatchReasonCode.OK.value
 
-    assert by_doc_strict["pre_old"]["phase_a_reason_code"] == MatchReasonCode.CIK_NOT_IN_LINK_UNIVERSE.value
-    assert by_doc_strict["pre_new"]["phase_a_reason_code"] == MatchReasonCode.CIK_NOT_IN_LINK_UNIVERSE.value
+    assert by_doc_strict["pre_old"]["phase_a_reason_code"] == MatchReasonCode.NO_DATE_VALID_POSITIVE_LINK.value
+    assert by_doc_strict["pre_new"]["phase_a_reason_code"] == MatchReasonCode.NO_DATE_VALID_POSITIVE_LINK.value
     assert by_doc_strict["in_new"]["phase_a_reason_code"] == MatchReasonCode.OK.value

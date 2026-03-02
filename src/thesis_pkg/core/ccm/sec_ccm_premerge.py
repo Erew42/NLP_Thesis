@@ -172,6 +172,10 @@ def resolve_links_phase_a(sec_norm_lf: pl.LazyFrame, link_universe_lf: pl.LazyFr
         ).alias("_valid_input")
     )
     links = _normalize_link_universe(link_universe_lf, strict=True)
+    cik_link_stats = links.group_by("cik_10").agg(
+        pl.len().gt(0).alias("_cik_has_any_link_row"),
+        (pl.col("kypermno") > pl.lit(0)).any().alias("_cik_has_any_positive_permno"),
+    )
 
     date_valid_expr = (
         (pl.col("valid_start").is_null() | (pl.col("filing_date") >= pl.col("valid_start")))
@@ -199,6 +203,9 @@ def resolve_links_phase_a(sec_norm_lf: pl.LazyFrame, link_universe_lf: pl.LazyFr
                 & pl.col("is_sparse_fallback")
             ).alias("_is_stage2"),
         )
+    )
+    date_valid_positive_stats = candidate_base.group_by("doc_id").agg(
+        pl.col("_permno_positive").any().alias("_has_any_date_valid_positive_row")
     )
 
     stage_presence = candidate_base.group_by("doc_id").agg(
@@ -278,21 +285,33 @@ def resolve_links_phase_a(sec_norm_lf: pl.LazyFrame, link_universe_lf: pl.LazyFr
 
     enriched = (
         sec_base
+        .join(cik_link_stats, on="cik_10", how="left")
+        .join(date_valid_positive_stats, on="doc_id", how="left")
         .join(candidate_counts, on="doc_id", how="left")
         .join(tie_stats, on="doc_id", how="left")
         .join(top_choice, on="doc_id", how="left")
         .with_columns(
+            pl.col("_cik_has_any_link_row").fill_null(False),
+            pl.col("_cik_has_any_positive_permno").fill_null(False),
+            pl.col("_has_any_date_valid_positive_row").fill_null(False),
             pl.col("link_candidate_count").fill_null(0).cast(pl.Int32),
             pl.col("top_rank_tie_count").fill_null(0).cast(pl.Int32),
             pl.col("_top_distinct_id_count").fill_null(0).cast(pl.Int32),
+            (pl.col("link_candidate_count").fill_null(0).cast(pl.Int32) > pl.lit(0)).alias("_has_any_eligible_candidate"),
         )
     )
 
     phase_a_reason = (
         pl.when(pl.col("_valid_input").not_())
         .then(pl.lit(MatchReasonCode.BAD_INPUT.value))
-        .when(pl.col("link_candidate_count") == 0)
+        .when(pl.col("_cik_has_any_link_row").not_())
         .then(pl.lit(MatchReasonCode.CIK_NOT_IN_LINK_UNIVERSE.value))
+        .when(pl.col("_cik_has_any_positive_permno").not_())
+        .then(pl.lit(MatchReasonCode.CIK_PRESENT_NO_POSITIVE_LINK.value))
+        .when(pl.col("_has_any_date_valid_positive_row").not_())
+        .then(pl.lit(MatchReasonCode.NO_DATE_VALID_POSITIVE_LINK.value))
+        .when(pl.col("_has_any_eligible_candidate").not_())
+        .then(pl.lit(MatchReasonCode.NO_ELIGIBLE_LINK_CANDIDATE.value))
         .when((pl.col("top_rank_tie_count") > 1) & (pl.col("_top_distinct_id_count") > 1))
         .then(pl.lit(MatchReasonCode.AMBIGUOUS_LINK.value))
         .otherwise(pl.lit(MatchReasonCode.OK.value))
@@ -325,6 +344,18 @@ def resolve_links_phase_a(sec_norm_lf: pl.LazyFrame, link_universe_lf: pl.LazyFr
                 DataStatus.SEC_CCM_CIK_NOT_IN_LINK_UNIVERSE,
             ),
             (
+                pl.col("phase_a_reason_code") == pl.lit(MatchReasonCode.CIK_PRESENT_NO_POSITIVE_LINK.value),
+                DataStatus.SEC_CCM_CIK_PRESENT_NO_POSITIVE_LINK,
+            ),
+            (
+                pl.col("phase_a_reason_code") == pl.lit(MatchReasonCode.NO_DATE_VALID_POSITIVE_LINK.value),
+                DataStatus.SEC_CCM_NO_DATE_VALID_POSITIVE_LINK,
+            ),
+            (
+                pl.col("phase_a_reason_code") == pl.lit(MatchReasonCode.NO_ELIGIBLE_LINK_CANDIDATE.value),
+                DataStatus.SEC_CCM_NO_ELIGIBLE_LINK_CANDIDATE,
+            ),
+            (
                 pl.col("phase_a_reason_code") == pl.lit(MatchReasonCode.AMBIGUOUS_LINK.value),
                 DataStatus.SEC_CCM_AMBIGUOUS_LINK,
             ),
@@ -339,6 +370,10 @@ def resolve_links_phase_a(sec_norm_lf: pl.LazyFrame, link_universe_lf: pl.LazyFr
         "_top_gvkey",
         "_top_kypermno",
         "_top_link_quality",
+        "_cik_has_any_link_row",
+        "_cik_has_any_positive_permno",
+        "_has_any_date_valid_positive_row",
+        "_has_any_eligible_candidate",
         strict=False,
     )
 
@@ -508,6 +543,9 @@ def join_daily_phase_b(
             pl.lit(None, dtype=pl.Date).alias("key_min_caldt"),
             pl.lit(None, dtype=pl.Date).alias("key_max_caldt"),
             pl.lit(False).alias("_has_daily_row"),
+            pl.lit(True).alias("_required_daily_features_ok"),
+            pl.lit(False).alias("_daily_row_failed_required_features"),
+            pl.lit(0, dtype=pl.Int32).alias("_missing_required_daily_feature_count"),
             pl.lit(False).alias("_has_usable_daily_row"),
         )
 
@@ -573,9 +611,23 @@ def join_daily_phase_b(
         .then((pl.col("daily_join_caldt") - pl.col("aligned_caldt")).dt.total_days().cast(pl.Int32))
         .otherwise(pl.lit(None, dtype=pl.Int32))
     )
-    usable_expr = has_daily_row
-    for col in join_spec_v2.required_daily_non_null_features:
-        usable_expr = usable_expr & pl.col(col).is_not_null()
+    if required_features:
+        missing_required_feature_count_expr = (
+            pl.when(has_daily_row)
+            .then(pl.sum_horizontal([pl.col(col).is_null().cast(pl.Int32) for col in required_features]))
+            .otherwise(pl.lit(0, dtype=pl.Int32))
+            .cast(pl.Int32)
+        )
+        required_features_ok_expr = (
+            pl.when(has_daily_row)
+            .then(pl.all_horizontal([pl.col(col).is_not_null() for col in required_features]))
+            .otherwise(pl.lit(True))
+        )
+    else:
+        missing_required_feature_count_expr = pl.lit(0, dtype=pl.Int32)
+        required_features_ok_expr = pl.lit(True)
+    daily_row_failed_required_features_expr = has_daily_row & (missing_required_feature_count_expr > pl.lit(0))
+    usable_expr = has_daily_row & required_features_ok_expr
 
     lag_gate_rejected_expr = pl.lit(False)
     max_forward_lag_days = join_spec_v2.daily_join_max_forward_lag_days
@@ -609,6 +661,9 @@ def join_daily_phase_b(
 
     return joined.with_columns(
         has_daily_row.alias("_has_daily_row"),
+        required_features_ok_expr.alias("_required_daily_features_ok"),
+        daily_row_failed_required_features_expr.alias("_daily_row_failed_required_features"),
+        missing_required_feature_count_expr.alias("_missing_required_daily_feature_count"),
         usable_expr.alias("_has_usable_daily_row"),
         lag_days_expr.alias("daily_join_lag_days"),
         lag_gate_rejected_expr.alias("daily_lag_gate_rejected"),
@@ -625,7 +680,8 @@ def apply_phase_b_reason_codes(
 
     ``match_reason_code`` for rows that were not ``OK`` in Phase A is preserved
     from ``phase_a_reason_code``. For Phase A ``OK`` rows, Phase B emits
-    ``OK``, ``OUT_OF_CCM_COVERAGE``, or ``NO_CCM_ROW_FOR_DATE``.
+    ``OK``, ``OUT_OF_CCM_COVERAGE``, ``REQUIRED_DAILY_FEATURE_MISSING``,
+    or ``NO_CCM_ROW_FOR_DATE``.
 
     Args:
         phase_a_doc_lf: Phase A output with at least ``doc_id`` and ``phase_a_reason_code``.
@@ -656,8 +712,14 @@ def apply_phase_b_reason_codes(
         ).drop("phase_a_reason_code_phase_a")
 
     schema = out.collect_schema()
+    if "_has_daily_row" not in schema:
+        out = out.with_columns(pl.lit(False).alias("_has_daily_row"))
     if "_has_usable_daily_row" not in schema:
         out = out.with_columns(pl.lit(False).alias("_has_usable_daily_row"))
+    if "_daily_row_failed_required_features" not in schema:
+        out = out.with_columns(pl.lit(False).alias("_daily_row_failed_required_features"))
+    if "_missing_required_daily_feature_count" not in schema:
+        out = out.with_columns(pl.lit(0, dtype=pl.Int32).alias("_missing_required_daily_feature_count"))
     if "daily_lag_gate_rejected" not in schema:
         out = out.with_columns(pl.lit(False).alias("daily_lag_gate_rejected"))
     if "key_min_caldt" not in schema:
@@ -675,14 +737,28 @@ def apply_phase_b_reason_codes(
             | (pl.col("aligned_caldt") < pl.col("key_min_caldt"))
             | (pl.col("aligned_caldt") > pl.col("key_max_caldt"))
         )
-        no_row_for_date = phase_a_ok & coverage_miss.not_() & pl.col("_has_usable_daily_row").not_()
+        required_daily_feature_missing = (
+            phase_a_ok
+            & coverage_miss.not_()
+            & pl.col("_has_daily_row")
+            & pl.col("_daily_row_failed_required_features")
+        )
+        no_row_for_date = (
+            phase_a_ok
+            & coverage_miss.not_()
+            & required_daily_feature_missing.not_()
+            & pl.col("_has_usable_daily_row").not_()
+        )
     else:
         coverage_miss = base_coverage_miss
+        required_daily_feature_missing = pl.lit(False)
         no_row_for_date = pl.lit(False)
 
     phase_b_reason = (
         pl.when(phase_a_ok & coverage_miss)
         .then(pl.lit(MatchReasonCode.OUT_OF_CCM_COVERAGE.value))
+        .when(required_daily_feature_missing)
+        .then(pl.lit(MatchReasonCode.REQUIRED_DAILY_FEATURE_MISSING.value))
         .when(no_row_for_date)
         .then(pl.lit(MatchReasonCode.NO_CCM_ROW_FOR_DATE.value))
         .when(phase_a_ok)
@@ -707,6 +783,10 @@ def apply_phase_b_reason_codes(
                 phase_a_ok & (phase_b_reason == pl.lit(MatchReasonCode.NO_CCM_ROW_FOR_DATE.value)),
                 DataStatus.SEC_CCM_PHASE_B_NO_CCM_ROW_FOR_DATE,
             ),
+            (
+                phase_a_ok & (phase_b_reason == pl.lit(MatchReasonCode.REQUIRED_DAILY_FEATURE_MISSING.value)),
+                DataStatus.SEC_CCM_PHASE_B_REQUIRED_DAILY_FEATURE_MISSING,
+            ),
         ),
     ).alias("data_status")
 
@@ -714,7 +794,7 @@ def apply_phase_b_reason_codes(
         phase_b_reason.alias("phase_b_reason_code"),
         match_reason.alias("match_reason_code"),
         status,
-    ).drop("_has_daily_row", "_has_usable_daily_row", strict=False)
+    )
 
 
 def build_match_status_doc(final_doc_lf: pl.LazyFrame) -> pl.LazyFrame:
@@ -860,20 +940,45 @@ def build_unmatched_diagnostics_doc(
     )
 
     diag_schema = diag.collect_schema()
-    if "key_min_caldt" in diag_schema and "key_max_caldt" in diag_schema:
+    if "aligned_caldt" in diag_schema and "key_min_caldt" in diag_schema and "key_max_caldt" in diag_schema:
         diag = diag.with_columns(
             (
-                pl.col("key_min_caldt").is_not_null() & (pl.col("filing_date") < pl.col("key_min_caldt"))
-            ).alias("diag_date_before_key_coverage"),
+                pl.col("aligned_caldt").is_not_null()
+                & pl.col("key_min_caldt").is_not_null()
+                & (pl.col("aligned_caldt") < pl.col("key_min_caldt"))
+            ).alias("diag_aligned_before_key_coverage"),
             (
-                pl.col("key_max_caldt").is_not_null() & (pl.col("filing_date") > pl.col("key_max_caldt"))
-            ).alias("diag_date_after_key_coverage"),
+                pl.col("aligned_caldt").is_not_null()
+                & pl.col("key_max_caldt").is_not_null()
+                & (pl.col("aligned_caldt") > pl.col("key_max_caldt"))
+            ).alias("diag_aligned_after_key_coverage"),
         )
     else:
         diag = diag.with_columns(
-            pl.lit(False).alias("diag_date_before_key_coverage"),
-            pl.lit(False).alias("diag_date_after_key_coverage"),
+            pl.lit(False).alias("diag_aligned_before_key_coverage"),
+            pl.lit(False).alias("diag_aligned_after_key_coverage"),
         )
+    diag_schema = diag.collect_schema()
+    if "_has_daily_row" in diag_schema:
+        diag = diag.with_columns(pl.col("_has_daily_row").fill_null(False).alias("diag_has_daily_row"))
+    else:
+        diag = diag.with_columns(pl.lit(False).alias("diag_has_daily_row"))
+    diag_schema = diag.collect_schema()
+    if "_daily_row_failed_required_features" in diag_schema:
+        diag = diag.with_columns(
+            pl.col("_daily_row_failed_required_features").fill_null(False).alias("diag_daily_row_failed_required_features")
+        )
+    else:
+        diag = diag.with_columns(pl.lit(False).alias("diag_daily_row_failed_required_features"))
+    diag_schema = diag.collect_schema()
+    if "_missing_required_daily_feature_count" in diag_schema:
+        diag = diag.with_columns(
+            pl.col("_missing_required_daily_feature_count").fill_null(0).cast(pl.Int32).alias(
+                "diag_missing_required_daily_feature_count"
+            )
+        )
+    else:
+        diag = diag.with_columns(pl.lit(0, dtype=pl.Int32).alias("diag_missing_required_daily_feature_count"))
 
     if "acceptance_datetime" not in diag_schema:
         diag = diag.with_columns(pl.lit(None, dtype=pl.Datetime).alias("acceptance_datetime"))
@@ -899,11 +1004,14 @@ def build_unmatched_diagnostics_doc(
             "diag_cik_in_link_universe",
             "has_other_filings_matched_for_cik",
             "diag_n_matched_for_cik",
-            "diag_date_before_key_coverage",
-            "diag_date_after_key_coverage",
+            "diag_aligned_before_key_coverage",
+            "diag_aligned_after_key_coverage",
             "diag_valid_candidate_count",
             "diag_stage1_candidate_count",
             "diag_has_date_valid_candidate",
+            "diag_has_daily_row",
+            "diag_daily_row_failed_required_features",
+            "diag_missing_required_daily_feature_count",
             "aligned_caldt",
             "alignment_lag_days",
             "acceptance_datetime",

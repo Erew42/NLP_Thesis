@@ -21,6 +21,7 @@ from thesis_pkg.core.ccm.sec_ccm_premerge import (
     align_doc_dates_phase_b,
     apply_phase_b_reason_codes,
     build_match_status_doc,
+    build_unmatched_diagnostics_doc,
     normalize_sec_filings_phase_a,
     resolve_links_phase_a,
     join_daily_phase_b,
@@ -88,10 +89,10 @@ def test_first_close_after_acceptance_v1_is_rejected():
 def test_phase_a_reason_codes_and_doc_grain_invariants():
     sec = pl.DataFrame(
         {
-            "doc_id": ["d1", "d2", "d3", "d4"],
-            "cik_10": ["0000000001", "bad_cik", "0000000003", "0000000004"],
-            "filing_date": [dt.date(2024, 1, 2), dt.date(2024, 1, 2), dt.date(2024, 1, 2), dt.date(2024, 1, 2)],
-            "acceptance_datetime": [dt.datetime(2024, 1, 2, 16, 0), None, None, None],
+            "doc_id": ["d1", "d2", "d3", "d4", "d5", "d6", "d7"],
+            "cik_10": ["0000000001", "bad_cik", "0000000003", "0000000004", "0000000005", "0000000006", "0000000007"],
+            "filing_date": [dt.date(2024, 1, 2)] * 7,
+            "acceptance_datetime": [dt.datetime(2024, 1, 2, 16, 0), None, None, None, None, None, None],
         }
     )
 
@@ -100,11 +101,28 @@ def test_phase_a_reason_codes_and_doc_grain_invariants():
             {"cik_10": "0000000001", "gvkey": "1000", "kypermno": 1, "link_quality": 3.0},
             {"cik_10": "0000000004", "gvkey": "4000", "kypermno": 4, "link_quality": 2.0},
             {"cik_10": "0000000004", "gvkey": "4001", "kypermno": 5, "link_quality": 2.0},
+            {"cik_10": "0000000005", "gvkey": "5000", "kypermno": 0, "link_quality": 1.0},
+            {
+                "cik_10": "0000000006",
+                "gvkey": "6000",
+                "kypermno": 6,
+                "link_quality": 3.0,
+                "valid_start": dt.date(2024, 2, 1),
+            },
+            {
+                "cik_10": "0000000007",
+                "gvkey": "7000",
+                "kypermno": 7,
+                "link_quality": 3.0,
+                "has_window": False,
+                "is_sparse_fallback": False,
+            },
         ]
     )
 
     phase_a = resolve_links_phase_a(sec.lazy(), link_universe.lazy()).collect().sort("doc_id")
-    reasons = dict(zip(phase_a["doc_id"], phase_a["phase_a_reason_code"]))
+    by_doc = {row["doc_id"]: row for row in phase_a.to_dicts()}
+    reasons = {doc_id: row["phase_a_reason_code"] for doc_id, row in by_doc.items()}
 
     assert phase_a.height == sec.height
     assert phase_a["doc_id"].n_unique() == sec.height
@@ -112,10 +130,13 @@ def test_phase_a_reason_codes_and_doc_grain_invariants():
     assert reasons["d2"] == MatchReasonCode.BAD_INPUT.value
     assert reasons["d3"] == MatchReasonCode.CIK_NOT_IN_LINK_UNIVERSE.value
     assert reasons["d4"] == MatchReasonCode.AMBIGUOUS_LINK.value
-    assert (
-        phase_a.filter(pl.col("doc_id") == "d4").select("kypermno").item()
-        is None
-    )
+    assert reasons["d5"] == MatchReasonCode.CIK_PRESENT_NO_POSITIVE_LINK.value
+    assert reasons["d6"] == MatchReasonCode.NO_DATE_VALID_POSITIVE_LINK.value
+    assert reasons["d7"] == MatchReasonCode.NO_ELIGIBLE_LINK_CANDIDATE.value
+    assert by_doc["d4"]["kypermno"] is None
+    assert by_doc["d5"]["data_status"] & int(DataStatus.SEC_CCM_CIK_PRESENT_NO_POSITIVE_LINK)
+    assert by_doc["d6"]["data_status"] & int(DataStatus.SEC_CCM_NO_DATE_VALID_POSITIVE_LINK)
+    assert by_doc["d7"]["data_status"] & int(DataStatus.SEC_CCM_NO_ELIGIBLE_LINK_CANDIDATE)
     assert phase_a.schema["kypermno"] == pl.Int32
     assert phase_a.schema["data_status"] == STATUS_DTYPE
     assert phase_a.select(pl.col("data_status").is_null().any()).item() is False
@@ -180,7 +201,10 @@ def test_phase_b_strict_next_day_alignment_and_reason_scoping():
     by_doc = {row["doc_id"]: row for row in final.to_dicts()}
     assert by_doc["ok"]["match_reason_code"] == MatchReasonCode.OK.value
     assert by_doc["out_cov"]["match_reason_code"] == MatchReasonCode.OUT_OF_CCM_COVERAGE.value
-    assert by_doc["no_row"]["match_reason_code"] == MatchReasonCode.NO_CCM_ROW_FOR_DATE.value
+    assert by_doc["no_row"]["match_reason_code"] == MatchReasonCode.REQUIRED_DAILY_FEATURE_MISSING.value
+    assert by_doc["no_row"]["phase_b_reason_code"] == MatchReasonCode.REQUIRED_DAILY_FEATURE_MISSING.value
+    assert by_doc["no_row"]["_daily_row_failed_required_features"] is True
+    assert by_doc["no_row"]["data_status"] & int(DataStatus.SEC_CCM_PHASE_B_REQUIRED_DAILY_FEATURE_MISSING)
     assert by_doc["ambig"]["phase_a_reason_code"] == MatchReasonCode.AMBIGUOUS_LINK.value
     assert by_doc["ambig"]["match_reason_code"] == MatchReasonCode.AMBIGUOUS_LINK.value
     assert by_doc["ambig"]["phase_b_reason_code"] is None
@@ -455,6 +479,83 @@ def test_forward_asof_lag_gate_can_be_disabled_with_none():
     assert out["data_status"] & int(DataStatus.SEC_CCM_PHASE_B_DAILY_ROW_FOUND)
 
 
+def test_unmatched_diagnostics_use_aligned_date_for_key_coverage_flags():
+    final_doc = pl.DataFrame(
+        {
+            "doc_id": ["d1"],
+            "cik_10": ["0000000001"],
+            "filing_date": [dt.date(2024, 1, 1)],
+            "match_reason_code": [MatchReasonCode.OUT_OF_CCM_COVERAGE.value],
+            "phase_a_reason_code": [MatchReasonCode.OK.value],
+            "phase_b_reason_code": [MatchReasonCode.OUT_OF_CCM_COVERAGE.value],
+            "gvkey": ["1000"],
+            "kypermno": [1],
+            "link_candidate_count": [1],
+            "top_rank_tie_count": [1],
+            "aligned_caldt": [dt.date(2024, 1, 10)],
+            "alignment_lag_days": [9],
+            "key_min_caldt": [dt.date(2024, 1, 1)],
+            "key_max_caldt": [dt.date(2024, 1, 5)],
+            "_has_daily_row": [False],
+            "_daily_row_failed_required_features": [False],
+            "_missing_required_daily_feature_count": [0],
+        }
+    )
+    link_universe = _canonical_links(
+        [
+            {"cik_10": "0000000001", "gvkey": "1000", "kypermno": 1},
+        ]
+    )
+
+    out = build_unmatched_diagnostics_doc(
+        final_doc.lazy(),
+        link_universe.lazy(),
+        pl.DataFrame(schema={"KYPERMNO": pl.Int32, "CALDT": pl.Date}).lazy(),
+    ).collect().row(0, named=True)
+
+    assert out["diag_aligned_before_key_coverage"] is False
+    assert out["diag_aligned_after_key_coverage"] is True
+
+
+def test_unmatched_diagnostics_surface_daily_row_feature_failures():
+    final_doc = pl.DataFrame(
+        {
+            "doc_id": ["d1"],
+            "cik_10": ["0000000001"],
+            "filing_date": [dt.date(2024, 1, 2)],
+            "match_reason_code": [MatchReasonCode.REQUIRED_DAILY_FEATURE_MISSING.value],
+            "phase_a_reason_code": [MatchReasonCode.OK.value],
+            "phase_b_reason_code": [MatchReasonCode.REQUIRED_DAILY_FEATURE_MISSING.value],
+            "gvkey": ["1000"],
+            "kypermno": [1],
+            "link_candidate_count": [1],
+            "top_rank_tie_count": [1],
+            "aligned_caldt": [dt.date(2024, 1, 3)],
+            "alignment_lag_days": [1],
+            "key_min_caldt": [dt.date(2024, 1, 3)],
+            "key_max_caldt": [dt.date(2024, 1, 3)],
+            "_has_daily_row": [True],
+            "_daily_row_failed_required_features": [True],
+            "_missing_required_daily_feature_count": [1],
+        }
+    )
+    link_universe = _canonical_links(
+        [
+            {"cik_10": "0000000001", "gvkey": "1000", "kypermno": 1},
+        ]
+    )
+
+    out = build_unmatched_diagnostics_doc(
+        final_doc.lazy(),
+        link_universe.lazy(),
+        pl.DataFrame(schema={"KYPERMNO": pl.Int32, "CALDT": pl.Date}).lazy(),
+    ).collect().row(0, named=True)
+
+    assert out["diag_has_daily_row"] is True
+    assert out["diag_daily_row_failed_required_features"] is True
+    assert out["diag_missing_required_daily_feature_count"] == 1
+
+
 def test_acceptance_datetime_optional_and_not_default_coerced():
     without_acceptance = pl.DataFrame(
         {
@@ -584,6 +685,7 @@ def test_end_to_end_pipeline_outputs_doc_grain_artifacts(tmp_path: Path):
 
     final_df = pl.read_parquet(paths["final_flagged_data"])
     status_df = pl.read_parquet(paths["sec_ccm_match_status"])
+    unmatched_diag_df = pl.read_parquet(paths["sec_ccm_unmatched_diagnostics"])
 
     assert final_df.height == sec.height
     assert final_df["doc_id"].n_unique() == sec.height
@@ -596,6 +698,13 @@ def test_end_to_end_pipeline_outputs_doc_grain_artifacts(tmp_path: Path):
     actual_status = status_df.sort("doc_id")
     assert expected_status.columns == actual_status.columns
     assert expected_status.to_dicts() == actual_status.to_dicts()
+    assert {
+        "diag_aligned_before_key_coverage",
+        "diag_aligned_after_key_coverage",
+        "diag_has_daily_row",
+        "diag_daily_row_failed_required_features",
+        "diag_missing_required_daily_feature_count",
+    }.issubset(set(unmatched_diag_df.columns))
 
     run_steps_df = pl.read_parquet(paths["sec_ccm_run_steps"]).sort("step_order")
     assert run_steps_df.height > 0
