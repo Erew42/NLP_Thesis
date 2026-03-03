@@ -53,6 +53,7 @@ def build_or_reuse_ccm_daily_stage(
             "linkfiscalperiodall",
             "companydescription",
             "companyhistory",
+            "securityheader",
             "securityheaderhistory",
             "sfz_ds_dly",
             "sfz_dp_dly",
@@ -89,6 +90,7 @@ def build_or_reuse_ccm_daily_stage(
         merged_path = merge_histories(
             price_linked_lf,
             tables["securityheaderhistory"],
+            tables["securityheader"],
             tables["companyhistory"],
             output_dir=ccm_derived_dir,
             final_name="final_flagged_data.parquet",
@@ -117,6 +119,7 @@ def build_or_reuse_ccm_daily_stage(
 def merge_histories(
     price_lf: pl.LazyFrame,
     sec_hist_lf: pl.LazyFrame,
+    sec_header_lf: pl.LazyFrame,
     comp_hist_lf: pl.LazyFrame,
     output_dir: Path,
     temp_name: str = "temp_step1_sec_merge.parquet",
@@ -158,11 +161,16 @@ def merge_histories(
         return lf.select(exprs)
 
     sec_schema = sec_hist_lf.collect_schema()
+    sec_header_schema = sec_header_lf.collect_schema()
     comp_schema = comp_hist_lf.collect_schema()
-    ky_dtype = sec_schema.get("KYGVKEY", comp_schema.get("KYGVKEY", pl.Utf8))
-    liid_dtype = sec_schema.get("KYIID", pl.Utf8)
+    ky_dtype = sec_schema.get("KYGVKEY", sec_header_schema.get("KYGVKEY", comp_schema.get("KYGVKEY", pl.Utf8)))
+    liid_dtype = sec_schema.get("KYIID", sec_header_schema.get("KYIID", pl.Utf8))
     htpi_dtype = sec_schema.get("HTPCI", pl.String)
     hexcntry_dtype = sec_schema.get("HEXCNTRY", pl.String)
+    hscusip_dtype = sec_schema.get("HSCUSIP", pl.Utf8)
+    hisin_dtype = sec_schema.get("HISIN", pl.Utf8)
+    scusip_dtype = sec_header_schema.get("SCUSIP", pl.Utf8)
+    isin_dtype = sec_header_schema.get("ISIN", pl.Utf8)
 
     base = _ensure_data_status(price_lf).with_columns(
         pl.col("CALDT").cast(pl.Date, strict=False).alias("CALDT"),
@@ -185,6 +193,16 @@ def merge_histories(
         pl.col("HSCHGENDDT").cast(pl.Date, strict=False).alias("HCHGENDDT_SEC"),
         pl.col("HTPCI").cast(htpi_dtype).alias("HTPCI"),
         pl.col("HEXCNTRY").cast(hexcntry_dtype).alias("HEXCNTRY"),
+        (
+            pl.col("HSCUSIP").cast(hscusip_dtype, strict=False)
+            if "HSCUSIP" in sec_schema
+            else pl.lit(None, dtype=hscusip_dtype)
+        ).alias("HSCUSIP"),
+        (
+            pl.col("HISIN").cast(hisin_dtype, strict=False)
+            if "HISIN" in sec_schema
+            else pl.lit(None, dtype=hisin_dtype)
+        ).alias("HISIN"),
     ).sort("KYGVKEY", "KYIID", "HIST_START_DATE_SEC")
 
     comp_hist = comp_hist_lf.select(
@@ -236,6 +254,8 @@ def merge_histories(
         sec_status,
         pl.when(sec_valid).then(pl.col("HTPCI")).otherwise(pl.lit(None, dtype=htpi_dtype)).alias("HTPCI"),
         pl.when(sec_valid).then(pl.col("HEXCNTRY")).otherwise(pl.lit(None, dtype=hexcntry_dtype)).alias("HEXCNTRY"),
+        pl.when(sec_valid).then(pl.col("HSCUSIP")).otherwise(pl.lit(None, dtype=hscusip_dtype)).alias("HSCUSIP"),
+        pl.when(sec_valid).then(pl.col("HISIN")).otherwise(pl.lit(None, dtype=hisin_dtype)).alias("HISIN"),
         pl.when(sec_valid).then(pl.col("HIST_START_DATE_SEC")).otherwise(pl.lit(None).cast(pl.Date)).alias("HIST_START_DATE_SEC"),
         pl.when(sec_valid).then(pl.col("HCHGENDDT_SEC")).otherwise(pl.lit(None).cast(pl.Date)).alias("HCHGENDDT_SEC"),
     )
@@ -246,6 +266,8 @@ def merge_histories(
         pl.lit(None).cast(pl.Date).alias("HCHGENDDT_SEC"),
         pl.lit(None, dtype=htpi_dtype).alias("HTPCI"),
         pl.lit(None, dtype=hexcntry_dtype).alias("HEXCNTRY"),
+        pl.lit(None, dtype=hscusip_dtype).alias("HSCUSIP"),
+        pl.lit(None, dtype=hisin_dtype).alias("HISIN"),
     ).drop("KYGVKEY", strict=False)  # drop raw KYGVKEY to match sec_joined schema
 
     _debug_concat("sec_concat", sec_joined, sec_missing)
@@ -264,9 +286,90 @@ def merge_histories(
         pl.col("LIID").cast(liid_dtype),
     )
 
+    sec_header = sec_header_lf.select(
+        pl.col("KYGVKEY").cast(ky_dtype).alias("KYGVKEY"),
+        pl.col("KYIID").cast(liid_dtype).alias("KYIID"),
+        pl.col("SBEGDT").cast(pl.Date, strict=False).alias("HIST_START_DATE_HDR"),
+        pl.col("SENDDT").cast(pl.Date, strict=False).alias("HCHGENDDT_HDR"),
+        (
+            pl.col("SCUSIP").cast(scusip_dtype, strict=False)
+            if "SCUSIP" in sec_header_schema
+            else pl.lit(None, dtype=scusip_dtype)
+        ).alias("_HDR_SCUSIP"),
+        (
+            pl.col("ISIN").cast(isin_dtype, strict=False)
+            if "ISIN" in sec_header_schema
+            else pl.lit(None, dtype=isin_dtype)
+        ).alias("_HDR_ISIN"),
+    ).sort("KYGVKEY", "KYIID", "HIST_START_DATE_HDR")
+
+    header_keys = pl.col("KYGVKEY_final").is_not_null() & pl.col("LIID").is_not_null()
+    header_candidates = sec_loaded.filter(header_keys)
+
+    header_joined = (
+        header_candidates.sort("KYGVKEY_final", "LIID", "CALDT")
+        .join_asof(
+            sec_header,
+            left_on="CALDT",
+            right_on="HIST_START_DATE_HDR",
+            by_left=["KYGVKEY_final", "LIID"],
+            by_right=["KYGVKEY", "KYIID"],
+            strategy="backward",
+            check_sortedness=False,
+        )
+        .select(pl.all().exclude(["KYGVKEY", "KYIID"]))
+    )
+
+    header_matched = pl.col("HIST_START_DATE_HDR").is_not_null()
+    header_valid = header_matched & (pl.col("HCHGENDDT_HDR").is_null() | (pl.col("CALDT") <= pl.col("HCHGENDDT_HDR")))
+
+    header_joined = (
+        header_joined.with_columns(
+            pl.when(header_valid)
+            .then(pl.col("HIST_START_DATE_HDR"))
+            .otherwise(pl.lit(None).cast(pl.Date))
+            .alias("HIST_START_DATE_HDR"),
+            pl.when(header_valid)
+            .then(pl.col("HCHGENDDT_HDR"))
+            .otherwise(pl.lit(None).cast(pl.Date))
+            .alias("HCHGENDDT_HDR"),
+            pl.when(header_valid)
+            .then(pl.col("_HDR_SCUSIP"))
+            .otherwise(pl.lit(None, dtype=scusip_dtype))
+            .alias("_HDR_SCUSIP"),
+            pl.when(header_valid)
+            .then(pl.col("_HDR_ISIN"))
+            .otherwise(pl.lit(None, dtype=isin_dtype))
+            .alias("_HDR_ISIN"),
+        )
+        .with_columns(
+            pl.coalesce([pl.col("HSCUSIP"), pl.col("_HDR_SCUSIP")]).alias("CUSIP"),
+            pl.coalesce([pl.col("HISIN"), pl.col("_HDR_ISIN")]).alias("ISIN"),
+        )
+    )
+
+    header_missing = sec_loaded.filter(header_keys.not_()).with_columns(
+        pl.col("data_status").cast(STATUS_DTYPE),
+        pl.lit(None).cast(pl.Date).alias("HIST_START_DATE_HDR"),
+        pl.lit(None).cast(pl.Date).alias("HCHGENDDT_HDR"),
+        pl.lit(None, dtype=scusip_dtype).alias("_HDR_SCUSIP"),
+        pl.lit(None, dtype=isin_dtype).alias("_HDR_ISIN"),
+        pl.lit(None, dtype=scusip_dtype).alias("CUSIP"),
+        pl.lit(None, dtype=isin_dtype).alias("ISIN"),
+    )
+
+    _debug_concat("header_concat", header_joined, header_missing)
+    header_target = header_joined.collect_schema()
+    header_combined = pl.concat(
+        [_align_to_schema(header_joined, header_target), _align_to_schema(header_missing, header_target)],
+        how="vertical",
+    ).with_columns(
+        pl.col("data_status").cast(STATUS_DTYPE)
+    )
+
     # Company history join (requires GVKEY only)
     comp_keys = pl.col("KYGVKEY_final").is_not_null()
-    comp_candidates = sec_loaded.filter(comp_keys)
+    comp_candidates = header_combined.filter(comp_keys)
 
     hcik_dtype = comp_schema.get("HCIK", pl.String)
     hsic_dtype = comp_schema.get("HSIC", pl.Int32)
@@ -314,7 +417,7 @@ def merge_histories(
         pl.when(comp_valid).then(pl.col("HCHGENDDT_COMP")).otherwise(pl.lit(None).cast(pl.Date)).alias("HCHGENDDT_COMP"),
     )
 
-    comp_missing = sec_loaded.filter(comp_keys.not_()).with_columns(
+    comp_missing = header_combined.filter(comp_keys.not_()).with_columns(
         pl.col("data_status").cast(STATUS_DTYPE),
         pl.lit(None).cast(pl.Date).alias("HIST_START_DATE_COMP"),
         pl.lit(None).cast(pl.Date).alias("HCHGENDDT_COMP"),
@@ -331,7 +434,7 @@ def merge_histories(
         how="vertical",
     ).with_columns(
         pl.col("data_status").cast(STATUS_DTYPE)
-    )
+    ).drop(["HIST_START_DATE_HDR", "HCHGENDDT_HDR", "_HDR_SCUSIP", "_HDR_ISIN"], strict=False)
 
     final_output.sink_parquet(final_path, compression="zstd")
 

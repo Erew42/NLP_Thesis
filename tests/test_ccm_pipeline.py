@@ -28,7 +28,12 @@ def _empty_linkfiscalperiodall() -> pl.DataFrame:
     )
 
 
-def _write_required_ccm_tables(base_dir: Path, *, include_linkfiscal: bool = True) -> None:
+def _write_required_ccm_tables(
+    base_dir: Path,
+    *,
+    include_linkfiscal: bool = True,
+    include_securityheader: bool = True,
+) -> None:
     base_dir.mkdir(parents=True, exist_ok=True)
     tables: dict[str, pl.DataFrame] = {
         "filingdates": pl.DataFrame(
@@ -76,6 +81,8 @@ def _write_required_ccm_tables(base_dir: Path, *, include_linkfiscal: bool = Tru
                 "HSCHGENDDT": [None],
                 "HTPCI": ["USA"],
                 "HEXCNTRY": ["US"],
+                "HSCUSIP": ["22222222"],
+                "HISIN": ["US2222222222"],
             }
         ),
         "sfz_ds_dly": pl.DataFrame(
@@ -135,6 +142,17 @@ def _write_required_ccm_tables(base_dir: Path, *, include_linkfiscal: bool = Tru
     }
     if include_linkfiscal:
         tables["linkfiscalperiodall"] = _empty_linkfiscalperiodall()
+    if include_securityheader:
+        tables["securityheader"] = pl.DataFrame(
+            {
+                "KYGVKEY": ["1000"],
+                "KYIID": ["A"],
+                "SBEGDT": [dt.date(2020, 1, 1)],
+                "SENDDT": [None],
+                "SCUSIP": ["11111111"],
+                "ISIN": ["US1111111111"],
+            }
+        )
 
     for name, table in tables.items():
         table.write_parquet(base_dir / f"{name}.parquet", compression="zstd")
@@ -160,6 +178,13 @@ def test_build_or_reuse_ccm_daily_stage_rebuild_writes_daily_and_canonical(tmp_p
     assert out["ccm_daily_path"].exists()
     assert out["canonical_link_path"].exists()
     assert pl.scan_parquet(out["canonical_link_path"]).select(pl.len()).collect().item() > 0
+    daily_df = pl.read_parquet(out["ccm_daily_path"])
+    assert {"HSCUSIP", "HISIN", "CUSIP", "ISIN"}.issubset(set(daily_df.columns))
+    row = daily_df.row(0, named=True)
+    assert row["HSCUSIP"] == "22222222"
+    assert row["HISIN"] == "US2222222222"
+    assert row["CUSIP"] == "22222222"
+    assert row["ISIN"] == "US2222222222"
 
 
 def test_build_or_reuse_ccm_daily_stage_rebuild_raises_when_linkfiscalperiodall_missing(tmp_path: Path) -> None:
@@ -169,6 +194,22 @@ def test_build_or_reuse_ccm_daily_stage_rebuild_raises_when_linkfiscalperiodall_
     _write_required_ccm_tables(base_dir, include_linkfiscal=False)
 
     with pytest.raises(ValueError, match="linkfiscalperiodall"):
+        build_or_reuse_ccm_daily_stage(
+            run_mode="REBUILD",
+            ccm_base_dir=base_dir,
+            ccm_derived_dir=derived_dir,
+            ccm_reuse_daily_path=reuse_daily_path,
+            forms_10k_10q=["10-K"],
+        )
+
+
+def test_build_or_reuse_ccm_daily_stage_rebuild_raises_when_securityheader_missing(tmp_path: Path) -> None:
+    base_dir = tmp_path / "base_missing_securityheader"
+    derived_dir = tmp_path / "derived_missing_securityheader"
+    reuse_daily_path = tmp_path / "reuse" / "unused.parquet"
+    _write_required_ccm_tables(base_dir, include_linkfiscal=True, include_securityheader=False)
+
+    with pytest.raises(ValueError, match="securityheader"):
         build_or_reuse_ccm_daily_stage(
             run_mode="REBUILD",
             ccm_base_dir=base_dir,

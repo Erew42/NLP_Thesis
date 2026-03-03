@@ -658,6 +658,52 @@ def test_attach_company_description_coalesces_and_flags():
     )
 
 
+def _sec_hist_frame(
+    *,
+    gvkey: str = "1000",
+    iid: str = "A",
+    start: dt.date,
+    end: dt.date | None,
+    htpci: str = "USA",
+    hexcntry: str = "US",
+    hscusip: str = "HISTCUSIP",
+    hisin: str = "HISTISIN",
+) -> pl.DataFrame:
+    return pl.DataFrame(
+        {
+            "KYGVKEY": [gvkey],
+            "KYIID": [iid],
+            "HSCHGDT": [start],
+            "HSCHGENDDT": [end],
+            "HTPCI": [htpci],
+            "HEXCNTRY": [hexcntry],
+            "HSCUSIP": [hscusip],
+            "HISIN": [hisin],
+        }
+    )
+
+
+def _sec_header_frame(
+    *,
+    gvkey: str = "1000",
+    iid: str = "A",
+    start: dt.date,
+    end: dt.date | None,
+    scusip: str = "HDRCUSIP",
+    isin: str = "HDRISIN",
+) -> pl.DataFrame:
+    return pl.DataFrame(
+        {
+            "KYGVKEY": [gvkey],
+            "KYIID": [iid],
+            "SBEGDT": [start],
+            "SENDDT": [end],
+            "SCUSIP": [scusip],
+            "ISIN": [isin],
+        }
+    )
+
+
 def test_merge_histories_keeps_rows_and_sets_attempt_bits(tmp_path: Path):
     price = pl.DataFrame(
         {
@@ -669,16 +715,11 @@ def test_merge_histories_keeps_rows_and_sets_attempt_bits(tmp_path: Path):
         }
     )
 
-    sec_hist = pl.DataFrame(
-        {
-            "KYGVKEY": ["1000"],
-            "KYIID": ["A"],
-            "HSCHGDT": [dt.date(2023, 12, 31)],
-            "HSCHGENDDT": [dt.date(2025, 1, 1)],
-            "HTPCI": ["USA"],
-            "HEXCNTRY": ["US"],
-        }
+    sec_hist = _sec_hist_frame(
+        start=dt.date(2023, 12, 31),
+        end=dt.date(2025, 1, 1),
     )
+    sec_header = _sec_header_frame(start=dt.date(2023, 12, 31), end=dt.date(2025, 1, 1))
 
     comp_hist = pl.DataFrame(
         {
@@ -692,7 +733,7 @@ def test_merge_histories_keeps_rows_and_sets_attempt_bits(tmp_path: Path):
         }
     )
 
-    output_path = merge_histories(price.lazy(), sec_hist.lazy(), comp_hist.lazy(), tmp_path)
+    output_path = merge_histories(price.lazy(), sec_hist.lazy(), sec_header.lazy(), comp_hist.lazy(), tmp_path)
     merged = pl.read_parquet(output_path).sort("KYPERMNO")
 
     assert "join1_status" not in merged.columns
@@ -706,6 +747,8 @@ def test_merge_histories_keeps_rows_and_sets_attempt_bits(tmp_path: Path):
     assert with_keys & int(DataStatus.SECHIST_ATTEMPTED)
     assert with_keys & int(DataStatus.COMPHIST_ATTEMPTED)
     assert without_keys == int(DataStatus.NONE)
+    assert merged.filter(pl.col("KYGVKEY_final").is_not_null()).select("CUSIP").item() == "HISTCUSIP"
+    assert merged.filter(pl.col("KYGVKEY_final").is_null()).select("CUSIP").item() is None
 
 
 def test_merge_histories_open_ended_segments_are_valid(tmp_path: Path):
@@ -718,16 +761,8 @@ def test_merge_histories_open_ended_segments_are_valid(tmp_path: Path):
         }
     )
 
-    sec_hist = pl.DataFrame(
-        {
-            "KYGVKEY": ["1000"],
-            "KYIID": ["A"],
-            "HSCHGDT": [dt.date(2024, 1, 1)],
-            "HSCHGENDDT": [None],
-            "HTPCI": ["USA"],
-            "HEXCNTRY": ["US"],
-        }
-    )
+    sec_hist = _sec_hist_frame(start=dt.date(2024, 1, 1), end=None)
+    sec_header = _sec_header_frame(start=dt.date(2024, 1, 1), end=None)
 
     comp_hist = pl.DataFrame(
         {
@@ -741,7 +776,7 @@ def test_merge_histories_open_ended_segments_are_valid(tmp_path: Path):
         }
     )
 
-    output_path = merge_histories(price.lazy(), sec_hist.lazy(), comp_hist.lazy(), tmp_path)
+    output_path = merge_histories(price.lazy(), sec_hist.lazy(), sec_header.lazy(), comp_hist.lazy(), tmp_path)
     merged = pl.read_parquet(output_path)
     status = merged.select("data_status").item()
 
@@ -749,6 +784,8 @@ def test_merge_histories_open_ended_segments_are_valid(tmp_path: Path):
     assert status & int(DataStatus.SECHIST_VALID)
     assert merged.select("HCIK").item() == "CIK1"
     assert merged.select("HTPCI").item() == "USA"
+    assert merged.select("CUSIP").item() == "HISTCUSIP"
+    assert merged.select("ISIN").item() == "HISTISIN"
 
 
 def test_merge_histories_masks_stale_segments(tmp_path: Path):
@@ -761,16 +798,11 @@ def test_merge_histories_masks_stale_segments(tmp_path: Path):
         }
     )
 
-    sec_hist = pl.DataFrame(
-        {
-            "KYGVKEY": ["1000"],
-            "KYIID": ["A"],
-            "HSCHGDT": [dt.date(2024, 1, 1)],
-            "HSCHGENDDT": [dt.date(2024, 1, 15)],
-            "HTPCI": ["USA"],
-            "HEXCNTRY": ["US"],
-        }
+    sec_hist = _sec_hist_frame(
+        start=dt.date(2024, 1, 1),
+        end=dt.date(2024, 1, 15),
     )
+    sec_header = _sec_header_frame(start=dt.date(2024, 1, 1), end=dt.date(2024, 12, 31))
 
     comp_hist = pl.DataFrame(
         {
@@ -784,7 +816,7 @@ def test_merge_histories_masks_stale_segments(tmp_path: Path):
         }
     )
 
-    output_path = merge_histories(price.lazy(), sec_hist.lazy(), comp_hist.lazy(), tmp_path)
+    output_path = merge_histories(price.lazy(), sec_hist.lazy(), sec_header.lazy(), comp_hist.lazy(), tmp_path)
     merged = pl.read_parquet(output_path)
     status = merged.select("data_status").item()
 
@@ -797,6 +829,10 @@ def test_merge_histories_masks_stale_segments(tmp_path: Path):
     assert merged.select("HCIK").item() is None
     assert merged.select("HTPCI").item() is None
     assert merged.select("HEXCNTRY").item() is None
+    assert merged.select("HSCUSIP").item() is None
+    assert merged.select("HISIN").item() is None
+    assert merged.select("CUSIP").item() == "HDRCUSIP"
+    assert merged.select("ISIN").item() == "HDRISIN"
 
 
 def test_merge_histories_still_joins_comp_history_without_liid(tmp_path: Path):
@@ -809,16 +845,8 @@ def test_merge_histories_still_joins_comp_history_without_liid(tmp_path: Path):
         }
     )
 
-    sec_hist = pl.DataFrame(
-        {
-            "KYGVKEY": ["1000"],
-            "KYIID": ["A"],
-            "HSCHGDT": [dt.date(2024, 1, 1)],
-            "HSCHGENDDT": [dt.date(2024, 12, 31)],
-            "HTPCI": ["USA"],
-            "HEXCNTRY": ["US"],
-        }
-    )
+    sec_hist = _sec_hist_frame(start=dt.date(2024, 1, 1), end=dt.date(2024, 12, 31))
+    sec_header = _sec_header_frame(start=dt.date(2024, 1, 1), end=dt.date(2024, 12, 31))
 
     comp_hist = pl.DataFrame(
         {
@@ -832,7 +860,7 @@ def test_merge_histories_still_joins_comp_history_without_liid(tmp_path: Path):
         }
     )
 
-    output_path = merge_histories(price.lazy(), sec_hist.lazy(), comp_hist.lazy(), tmp_path)
+    output_path = merge_histories(price.lazy(), sec_hist.lazy(), sec_header.lazy(), comp_hist.lazy(), tmp_path)
     merged = pl.read_parquet(output_path)
     status = merged.select("data_status").item()
 
@@ -842,6 +870,8 @@ def test_merge_histories_still_joins_comp_history_without_liid(tmp_path: Path):
     assert merged.select("HCIK").item() == "CIK1"
     assert merged.select("HNAICS").item() == "1111"
     assert merged.select("HTPCI").item() is None
+    assert merged.select("CUSIP").item() is None
+    assert merged.select("ISIN").item() is None
 
 
 def test_merge_histories_preserves_uint64_roundtrip(tmp_path: Path):
@@ -855,16 +885,8 @@ def test_merge_histories_preserves_uint64_roundtrip(tmp_path: Path):
         }
     )
 
-    sec_hist = pl.DataFrame(
-        {
-            "KYGVKEY": ["1000"],
-            "KYIID": ["A"],
-            "HSCHGDT": [dt.date(2023, 12, 31)],
-            "HSCHGENDDT": [dt.date(2025, 1, 1)],
-            "HTPCI": ["USA"],
-            "HEXCNTRY": ["US"],
-        }
-    )
+    sec_hist = _sec_hist_frame(start=dt.date(2023, 12, 31), end=dt.date(2025, 1, 1))
+    sec_header = _sec_header_frame(start=dt.date(2023, 12, 31), end=dt.date(2025, 1, 1))
 
     comp_hist = pl.DataFrame(
         {
@@ -878,7 +900,7 @@ def test_merge_histories_preserves_uint64_roundtrip(tmp_path: Path):
         }
     )
 
-    output_path = merge_histories(price.lazy(), sec_hist.lazy(), comp_hist.lazy(), tmp_path)
+    output_path = merge_histories(price.lazy(), sec_hist.lazy(), sec_header.lazy(), comp_hist.lazy(), tmp_path)
 
     loaded_schema = pl.scan_parquet(output_path).collect_schema()
     assert loaded_schema["data_status"] == pl.UInt64
@@ -904,6 +926,18 @@ def test_merge_histories_grouped_asof_paths_do_not_emit_sortedness_warning(tmp_p
             "HSCHGENDDT": [dt.date(2025, 1, 1), dt.date(2025, 1, 1)],
             "HTPCI": ["US", "US"],
             "HEXCNTRY": ["US", "US"],
+            "HSCUSIP": ["CUSIP2", "CUSIP1"],
+            "HISIN": ["ISIN2", "ISIN1"],
+        }
+    )
+    sec_header = pl.DataFrame(
+        {
+            "KYGVKEY": ["2000", "1000"],
+            "KYIID": ["B", "A"],
+            "SBEGDT": [dt.date(2023, 12, 31), dt.date(2023, 12, 31)],
+            "SENDDT": [dt.date(2025, 1, 1), dt.date(2025, 1, 1)],
+            "SCUSIP": ["HDR2", "HDR1"],
+            "ISIN": ["HDRISIN2", "HDRISIN1"],
         }
     )
 
@@ -921,9 +955,175 @@ def test_merge_histories_grouped_asof_paths_do_not_emit_sortedness_warning(tmp_p
 
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        merge_histories(price.lazy(), sec_hist.lazy(), comp_hist.lazy(), tmp_path)
+        merge_histories(price.lazy(), sec_hist.lazy(), sec_header.lazy(), comp_hist.lazy(), tmp_path)
 
     assert not any(
         "Sortedness of columns cannot be checked when 'by' groups provided" in str(w.message)
         for w in caught
     )
+
+
+def test_merge_histories_prefers_security_header_history_ids(tmp_path: Path):
+    price = pl.DataFrame(
+        {
+            "KYPERMNO": [1],
+            "CALDT": [dt.date(2024, 1, 2)],
+            "KYGVKEY_final": ["1000"],
+            "LIID": ["A"],
+        }
+    )
+    sec_hist = _sec_hist_frame(
+        start=dt.date(2023, 12, 31),
+        end=dt.date(2025, 1, 1),
+        hscusip="HISTCUSIP",
+        hisin="HISTISIN",
+    )
+    sec_header = _sec_header_frame(
+        start=dt.date(2023, 12, 31),
+        end=dt.date(2025, 1, 1),
+        scusip="HDRCUSIP",
+        isin="HDRISIN",
+    )
+    comp_hist = pl.DataFrame(
+        {
+            "KYGVKEY": ["1000"],
+            "HCHGDT": [dt.date(2023, 1, 1)],
+            "HCHGENDDT": [None],
+            "HCIK": ["CIK1"],
+            "HSIC": [100],
+            "HNAICS": ["1111"],
+            "HGSUBIND": ["Sub"],
+        }
+    )
+
+    output_path = merge_histories(price.lazy(), sec_hist.lazy(), sec_header.lazy(), comp_hist.lazy(), tmp_path)
+    merged = pl.read_parquet(output_path)
+
+    assert merged.select("CUSIP").item() == "HISTCUSIP"
+    assert merged.select("ISIN").item() == "HISTISIN"
+
+
+def test_merge_histories_backfills_ids_from_security_header_when_history_missing(tmp_path: Path):
+    price = pl.DataFrame(
+        {
+            "KYPERMNO": [1],
+            "CALDT": [dt.date(2024, 1, 2)],
+            "KYGVKEY_final": ["1000"],
+            "LIID": ["A"],
+        }
+    )
+    sec_hist = _sec_hist_frame(
+        start=dt.date(2025, 1, 1),
+        end=dt.date(2025, 12, 31),
+        hscusip="FUTURECUSIP",
+        hisin="FUTUREISIN",
+    )
+    sec_header = _sec_header_frame(
+        start=dt.date(2023, 12, 31),
+        end=dt.date(2025, 1, 1),
+        scusip="HDRCUSIP",
+        isin="HDRISIN",
+    )
+    comp_hist = pl.DataFrame(
+        {
+            "KYGVKEY": ["1000"],
+            "HCHGDT": [dt.date(2023, 1, 1)],
+            "HCHGENDDT": [None],
+            "HCIK": ["CIK1"],
+            "HSIC": [100],
+            "HNAICS": ["1111"],
+            "HGSUBIND": ["Sub"],
+        }
+    )
+
+    output_path = merge_histories(price.lazy(), sec_hist.lazy(), sec_header.lazy(), comp_hist.lazy(), tmp_path)
+    merged = pl.read_parquet(output_path)
+    status = merged.select("data_status").item()
+
+    assert status & int(DataStatus.SECHIST_NO_MATCH)
+    assert merged.select("CUSIP").item() == "HDRCUSIP"
+    assert merged.select("ISIN").item() == "HDRISIN"
+
+
+def test_merge_histories_backfills_ids_from_security_header_when_history_stale(tmp_path: Path):
+    price = pl.DataFrame(
+        {
+            "KYPERMNO": [1],
+            "CALDT": [dt.date(2024, 2, 1)],
+            "KYGVKEY_final": ["1000"],
+            "LIID": ["A"],
+        }
+    )
+    sec_hist = _sec_hist_frame(
+        start=dt.date(2024, 1, 1),
+        end=dt.date(2024, 1, 15),
+        hscusip="HISTCUSIP",
+        hisin="HISTISIN",
+    )
+    sec_header = _sec_header_frame(
+        start=dt.date(2024, 1, 1),
+        end=dt.date(2024, 12, 31),
+        scusip="HDRCUSIP",
+        isin="HDRISIN",
+    )
+    comp_hist = pl.DataFrame(
+        {
+            "KYGVKEY": ["1000"],
+            "HCHGDT": [dt.date(2023, 1, 1)],
+            "HCHGENDDT": [None],
+            "HCIK": ["CIK1"],
+            "HSIC": [100],
+            "HNAICS": ["1111"],
+            "HGSUBIND": ["Sub"],
+        }
+    )
+
+    output_path = merge_histories(price.lazy(), sec_hist.lazy(), sec_header.lazy(), comp_hist.lazy(), tmp_path)
+    merged = pl.read_parquet(output_path)
+    status = merged.select("data_status").item()
+
+    assert status & int(DataStatus.SECHIST_STALE)
+    assert merged.select("HSCUSIP").item() is None
+    assert merged.select("HISIN").item() is None
+    assert merged.select("CUSIP").item() == "HDRCUSIP"
+    assert merged.select("ISIN").item() == "HDRISIN"
+
+
+def test_merge_histories_leaves_ids_null_when_both_sources_invalid(tmp_path: Path):
+    price = pl.DataFrame(
+        {
+            "KYPERMNO": [1],
+            "CALDT": [dt.date(2024, 2, 1)],
+            "KYGVKEY_final": ["1000"],
+            "LIID": ["A"],
+        }
+    )
+    sec_hist = _sec_hist_frame(
+        start=dt.date(2024, 1, 1),
+        end=dt.date(2024, 1, 15),
+        hscusip="HISTCUSIP",
+        hisin="HISTISIN",
+    )
+    sec_header = _sec_header_frame(
+        start=dt.date(2024, 1, 1),
+        end=dt.date(2024, 1, 15),
+        scusip="HDRCUSIP",
+        isin="HDRISIN",
+    )
+    comp_hist = pl.DataFrame(
+        {
+            "KYGVKEY": ["1000"],
+            "HCHGDT": [dt.date(2023, 1, 1)],
+            "HCHGENDDT": [None],
+            "HCIK": ["CIK1"],
+            "HSIC": [100],
+            "HNAICS": ["1111"],
+            "HGSUBIND": ["Sub"],
+        }
+    )
+
+    output_path = merge_histories(price.lazy(), sec_hist.lazy(), sec_header.lazy(), comp_hist.lazy(), tmp_path)
+    merged = pl.read_parquet(output_path)
+
+    assert merged.select("CUSIP").item() is None
+    assert merged.select("ISIN").item() is None
