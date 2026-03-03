@@ -26,6 +26,7 @@ docs/reference/index.md
 docs/reference/**/*.md
 docs/architecture/
 full_data_run/
+specs_drafts/
 
 # Agent ephemeral state and memory
 .agent/logs/
