@@ -2,6 +2,8 @@
 
 Python package for my NLP thesis (SEC filings, CRSP/Compustat, etc.).
 
+SEC and CCM use different raw naming conventions for filing forms. SEC text and filename metadata generally use hyphenated labels such as `10-K`, `10-Q`, and `10-K/A`, while CCM `filingdates.SRCTYPE` commonly uses compact labels such as `10K`, `10Q`, and `10K/A`. Any filter or join that crosses those sources should normalize form labels first rather than relying on raw string equality.
+
 ## SEC-CCM Pre-Merge (Doc Grain)
 
 The repository includes a two-phase SEC-CCM pre-merge pipeline:

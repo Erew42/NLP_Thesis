@@ -128,6 +128,43 @@ class DataStatus(IntFlag):
     US_COMMON_STOCK_MAJOR_EXCHANGE = SEC_CCM_FILTER_US_COMMON_STOCK_MAJOR_EXCHANGE_PASS
 
 
+def _normalize_form_for_match(expr: pl.Expr) -> pl.Expr:
+    """Normalize SEC and CCM raw form labels to a shared match key."""
+    normalized = (
+        expr.cast(pl.String, strict=False)
+        .str.strip_chars()
+        .str.to_uppercase()
+        .str.replace_all(r"[\s-]+", "")
+    )
+    return (
+        pl.when(normalized == "10KA").then(pl.lit("10K/A"))
+        .when(normalized == "10QA").then(pl.lit("10Q/A"))
+        .when(normalized == "10KTA").then(pl.lit("10KT/A"))
+        .when(normalized == "10QTA").then(pl.lit("10QT/A"))
+        .when(normalized == "10K405A").then(pl.lit("10K405/A"))
+        .otherwise(normalized)
+    )
+
+
+def _normalize_form_token_for_match(value: str | None) -> str | None:
+    """Normalize a Python form token using the same rules as the Polars expression helper."""
+    if value is None:
+        return None
+    normalized = value.strip().upper().replace(" ", "").replace("-", "")
+    if not normalized:
+        return None
+    if normalized == "10KA":
+        return "10K/A"
+    if normalized == "10QA":
+        return "10Q/A"
+    if normalized == "10KTA":
+        return "10KT/A"
+    if normalized == "10QTA":
+        return "10QT/A"
+    if normalized == "10K405A":
+        return "10K405/A"
+    return normalized
+
 def _ensure_data_status(lf: pl.LazyFrame) -> pl.LazyFrame:
     """Guarantee presence and dtype of the shared status column."""
     schema = lf.collect_schema()
@@ -569,6 +606,11 @@ def add_final_returns(price_lf: pl.LazyFrame) -> pl.LazyFrame:
 
 def attach_filings(price_lf: pl.LazyFrame, filings_lf: pl.LazyFrame, keep_forms: list[str]) -> pl.LazyFrame:
     """Map filings to the next trading day and align as arrays on the price panel."""
+    normalized_keep_forms = [
+        form
+        for form in {_normalize_form_token_for_match(form) for form in keep_forms}
+        if form is not None
+    ]
     trading_calendar = (
         price_lf
         .with_columns(pl.col("CALDT").cast(pl.Date, strict=False).alias("TRADING_DATE"))
@@ -582,7 +624,8 @@ def attach_filings(price_lf: pl.LazyFrame, filings_lf: pl.LazyFrame, keep_forms:
 
     filings = (
         filings_lf
-        .filter(pl.col("SRCTYPE").is_in(keep_forms))
+        .with_columns(_normalize_form_for_match(pl.col("SRCTYPE")).alias("_SRCTYPE_MATCH"))
+        .filter(pl.col("_SRCTYPE_MATCH").is_in(normalized_keep_forms))
         .with_columns([
             pl.col("LPERMNO").cast(pl.Int32),
             pl.col("FILEDATE").cast(pl.Date),
@@ -600,6 +643,7 @@ def attach_filings(price_lf: pl.LazyFrame, filings_lf: pl.LazyFrame, keep_forms:
             .otherwise(pl.lit(None, dtype=pl.Datetime(time_zone="America/New_York")))
             .alias("FILEDATETIME_ET"),
         ])
+        .drop("_SRCTYPE_MATCH")
         .select(["LPERMNO", "SRCTYPE", "FILEDATE", "FILEDATETIME_ET"])
         .filter(pl.col("FILEDATE") >= pl.lit(tmin))
     )

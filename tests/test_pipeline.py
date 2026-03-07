@@ -532,6 +532,64 @@ def test_attach_filings_aligns_to_trading_days_and_orders():
     )
 
 
+def test_attach_filings_matches_hyphenated_and_compact_form_aliases():
+    price = pl.DataFrame(
+        {
+            "KYPERMNO": [1, 1, 1],
+            "CALDT": [dt.date(2024, 1, 2), dt.date(2024, 1, 3), dt.date(2024, 1, 4)],
+        }
+    )
+
+    filings = pl.DataFrame(
+        {
+            "LPERMNO": [1, 1, 1, 1],
+            "SRCTYPE": ["10K", "10K/A", "10Q", "8K"],
+            "FILEDATE": [
+                dt.date(2024, 1, 2),
+                dt.date(2024, 1, 3),
+                dt.date(2024, 1, 4),
+                dt.date(2024, 1, 4),
+            ],
+            "FILEDATETIME": ["09:30:00", None, "16:01:00", "07:00:00"],
+        }
+    )
+
+    attached = attach_filings(
+        price.lazy(),
+        filings.lazy(),
+        ["10-K", "10-KA", "10-Q"],
+    ).collect()
+
+    assert (
+        attached
+        .filter((pl.col("KYPERMNO") == 1) & (pl.col("CALDT") == dt.date(2024, 1, 2)))
+        .select("SRCTYPE_all")
+        .row(0)[0]
+        == ["10K"]
+    )
+    assert (
+        attached
+        .filter((pl.col("KYPERMNO") == 1) & (pl.col("CALDT") == dt.date(2024, 1, 3)))
+        .select("SRCTYPE_all")
+        .row(0)[0]
+        == ["10K/A"]
+    )
+    assert (
+        attached
+        .filter((pl.col("KYPERMNO") == 1) & (pl.col("CALDT") == dt.date(2024, 1, 4)))
+        .select("SRCTYPE_all")
+        .row(0)[0]
+        == ["10Q"]
+    )
+    assert (
+        attached
+        .filter((pl.col("KYPERMNO") == 1) & (pl.col("CALDT") == dt.date(2024, 1, 3)))
+        .select("FILEDATETIME_all")
+        .row(0)[0]
+        == [None]
+    )
+
+
 def test_attach_ccm_links_prefers_canonical_primary_link():
     price = pl.DataFrame(
         {

@@ -191,8 +191,8 @@ def main() -> None:
             ),
             "CANONICAL_LINK_NAME": "canonical_link_table_after_startdate_change.parquet",
             "CCM_DAILY_NAME": "final_flagged_data_compdesc_added.parquet",
-            "RUN_CCM_MODE": "REUSE",
-            "RUN_SEC_PARSE": False,
+            "RUN_CCM_MODE": "REBUILD",
+            "RUN_SEC_PARSE": True,
             "RUN_SEC_YEARLY_MERGE": True,
         },
     }
@@ -230,7 +230,7 @@ def main() -> None:
         RUN_SEC_YEARLY_MERGE = bool(profile["RUN_SEC_YEARLY_MERGE"])
     RUN_SEC_CCM_PREMERGE = True
     RUN_GATED_ITEM_EXTRACTION = True
-    RUN_UNMATCHED_DIAGNOSTIC_TRACK = False
+    RUN_UNMATCHED_DIAGNOSTIC_TRACK = True
     RUN_NO_ITEM_DIAGNOSTICS = True
     RUN_BOUNDARY_DIAGNOSTICS = True
     RUN_VALIDATION_CHECKS = True
