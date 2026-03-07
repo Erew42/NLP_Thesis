@@ -7,11 +7,14 @@ import math
 import random
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import date
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 import polars as pl
+
+from thesis_pkg.core.ccm.canonical_links import normalize_canonical_link_table
+from thesis_pkg.core.ccm.sec_ccm_premerge import normalize_sec_filings_phase_a
 
 
 PERMNO_CANDIDATES: tuple[str, ...] = ("KYPERMNO", "LPERMNO", "lpermno", "PERMNO")
@@ -90,6 +93,23 @@ class SampleConfig:
         return list(range(self.start_year, self.end_year + 1))
 
 
+@dataclass(frozen=True)
+class CoverageCandidate:
+    permno: int
+    year_mask: int
+    doc_mask: int
+    year_count: int
+    doc_count: int
+
+
+@dataclass(frozen=True)
+class AnchorSelectionResult:
+    selected_permnos: list[int]
+    strategy: str
+    greedy_count: int
+    pruned_candidate_count: int
+
+
 def _parse_args() -> SampleConfig:
     parser = argparse.ArgumentParser(
         description="Build overlap-constrained 5%% CCM sample with SEC filing overlap and time-horizon constraints."
@@ -132,15 +152,6 @@ def _parse_args() -> SampleConfig:
         start_year=args.start_year,
         end_year=args.end_year,
         compression=args.compression,
-    )
-
-
-def _normalize_cik10_expr(col_name: str) -> pl.Expr:
-    return (
-        pl.col(col_name)
-        .cast(pl.Utf8, strict=False)
-        .str.replace_all(r"\D+", "")
-        .str.zfill(10)
     )
 
 
@@ -280,7 +291,7 @@ def _build_pipeline_inventory(cfg: SampleConfig) -> dict[str, Any]:
     return payload
 
 
-def _load_filing_ciks(cfg: SampleConfig) -> pl.DataFrame:
+def _load_sec_filings(cfg: SampleConfig) -> pl.LazyFrame:
     year_files = sorted(
         p for p in cfg.year_merged_dir.glob("*.parquet") if p.stem.isdigit() and len(p.stem) == 4
     )
@@ -289,45 +300,56 @@ def _load_filing_ciks(cfg: SampleConfig) -> pl.DataFrame:
 
     sec_lf = pl.scan_parquet([str(p) for p in year_files])
     schema = sec_lf.collect_schema()
+    if "doc_id" not in schema:
+        raise ValueError("SEC year_merged files missing doc_id column.")
     if "cik_10" in schema:
-        cik_expr = _normalize_cik10_expr("cik_10").alias("cik_10")
+        cik_expr = pl.col("cik_10").cast(pl.Utf8, strict=False).alias("cik_10")
     elif "cik" in schema:
-        cik_expr = _normalize_cik10_expr("cik").alias("cik_10")
+        cik_expr = pl.col("cik").cast(pl.Utf8, strict=False).alias("cik_10")
     else:
         raise ValueError("SEC year_merged files missing cik_10 and cik columns.")
 
-    ciks = (
-        sec_lf.select(cik_expr)
-        .drop_nulls(subset=["cik_10"])
-        .filter(pl.col("cik_10").str.len_chars() == 10)
-        .unique(subset=["cik_10"])
-        .sort("cik_10")
-        .collect()
+    if "filing_date" in schema and "file_date_filename" in schema:
+        filing_date_expr = pl.coalesce(
+            [
+                pl.col("filing_date").cast(pl.Date, strict=False),
+                pl.col("file_date_filename").cast(pl.Date, strict=False),
+            ]
+        ).alias("filing_date")
+    elif "filing_date" in schema:
+        filing_date_expr = pl.col("filing_date").cast(pl.Date, strict=False).alias("filing_date")
+    elif "file_date_filename" in schema:
+        filing_date_expr = pl.col("file_date_filename").cast(pl.Date, strict=False).alias("filing_date")
+    else:
+        raise ValueError("SEC year_merged files missing both filing_date and file_date_filename.")
+
+    sec_minimal = sec_lf.select(
+        pl.col("doc_id").cast(pl.Utf8, strict=False).alias("doc_id"),
+        cik_expr,
+        filing_date_expr,
     )
-    return ciks
+    return (
+        normalize_sec_filings_phase_a(sec_minimal)
+        .select("doc_id", "cik_10", "filing_date")
+        .filter(
+            pl.col("doc_id").is_not_null()
+            & pl.col("filing_date").is_not_null()
+            & pl.col("cik_10").str.contains(r"^\d{10}$").fill_null(False)
+        )
+    )
 
 
 def _load_canonical_links(cfg: SampleConfig) -> pl.LazyFrame:
     if not cfg.canonical_link_path.exists():
         raise FileNotFoundError(f"Canonical link file not found: {cfg.canonical_link_path}")
-
-    return (
-        pl.scan_parquet(cfg.canonical_link_path)
-        .with_columns(
-            _normalize_cik10_expr("cik_10").alias("cik_10"),
-            pl.col("gvkey").cast(pl.Utf8, strict=False).alias("gvkey"),
-            pl.col("kypermno").cast(pl.Int32, strict=False).alias("kypermno"),
-            pl.col("valid_start").cast(pl.Date, strict=False).alias("valid_start"),
-            pl.col("valid_end").cast(pl.Date, strict=False).alias("valid_end"),
-        )
-        .filter(pl.col("cik_10").str.len_chars() == 10)
-    )
+    return normalize_canonical_link_table(pl.scan_parquet(cfg.canonical_link_path), strict=True)
 
 
-def _build_year_anchor_map(cfg: SampleConfig, permno_universe: set[int]) -> dict[int, set[int]]:
+def _build_year_mask_map(cfg: SampleConfig, permno_universe: set[int]) -> dict[int, int]:
     if not cfg.ccm_daily_path.exists():
         raise FileNotFoundError(f"CCM daily file not found: {cfg.ccm_daily_path}")
 
+    year_bits = {year: 1 << idx for idx, year in enumerate(cfg.years)}
     year_pairs = (
         pl.scan_parquet(cfg.ccm_daily_path)
         .select(
@@ -344,109 +366,290 @@ def _build_year_anchor_map(cfg: SampleConfig, permno_universe: set[int]) -> dict
         .collect()
     )
 
-    by_permno: dict[int, set[int]] = defaultdict(set)
+    by_permno: dict[int, int] = defaultdict(int)
     for row in year_pairs.iter_rows(named=True):
         permno = int(row["kypermno"])
         year = int(row["year"])
         if permno in permno_universe:
-            by_permno[permno].add(year)
+            by_permno[permno] |= year_bits[year]
     return dict(by_permno)
 
 
-def _greedy_year_anchors(target_years: set[int], by_permno: dict[int, set[int]]) -> list[int]:
-    uncovered = set(target_years)
-    selected: list[int] = []
-
-    while uncovered:
-        best_permno: int | None = None
-        best_gain = 0
-        for permno, years in by_permno.items():
-            gain = len(years & uncovered)
-            if gain > best_gain or (gain == best_gain and gain > 0 and best_permno is not None and permno < best_permno):
-                best_permno = permno
-                best_gain = gain
-            elif gain > 0 and best_permno is None:
-                best_permno = permno
-                best_gain = gain
-
-        if best_permno is None or best_gain <= 0:
-            raise ValueError(
-                f"Cannot cover target years. Uncovered years: {sorted(uncovered)}"
-            )
-        selected.append(best_permno)
-        uncovered -= by_permno.get(best_permno, set())
-    return selected
-
-
-def _build_filing_link_maps(
-    filing_ciks: pl.DataFrame, links_lf: pl.LazyFrame
-) -> tuple[pl.DataFrame, dict[int, set[str]], int]:
-    link_pairs = (
-        links_lf.select("cik_10", "gvkey", "kypermno")
-        .unique(subset=["cik_10", "gvkey", "kypermno"])
-        .collect()
+def _build_filing_doc_link_maps(
+    sec_filings_lf: pl.LazyFrame,
+    links_lf: pl.LazyFrame,
+) -> tuple[pl.DataFrame, dict[int, set[str]], int, dict[int, set[str]]]:
+    date_valid_expr = (
+        (pl.col("valid_start").is_null() | (pl.col("filing_date") >= pl.col("valid_start")))
+        & (pl.col("valid_end").is_null() | (pl.col("filing_date") <= pl.col("valid_end")))
     )
-
     long_df = (
-        filing_ciks.lazy()
-        .join(link_pairs.lazy(), on="cik_10", how="left")
-        .sort(["cik_10", "kypermno", "gvkey"], nulls_last=True)
+        sec_filings_lf.join(
+            links_lf.select("cik_10", "gvkey", "kypermno", "valid_start", "valid_end"),
+            on="cik_10",
+            how="inner",
+        )
+        .filter(date_valid_expr & (pl.col("kypermno") > 0))
+        .select("doc_id", "cik_10", "filing_date", "gvkey", "kypermno")
+        .unique(subset=["doc_id", "gvkey", "kypermno"])
+        .sort(["doc_id", "kypermno", "gvkey"], nulls_last=True)
         .collect()
     )
 
-    linked = long_df.filter(pl.col("kypermno") > 0)
+    permno_to_doc_ids: dict[int, set[str]] = defaultdict(set)
     permno_to_ciks: dict[int, set[str]] = defaultdict(set)
-    for row in linked.select("cik_10", "kypermno").iter_rows(named=True):
-        permno_to_ciks[int(row["kypermno"])].add(str(row["cik_10"]))
+    for row in long_df.iter_rows(named=True):
+        permno = int(row["kypermno"])
+        permno_to_doc_ids[permno].add(str(row["doc_id"]))
+        permno_to_ciks[permno].add(str(row["cik_10"]))
 
-    linked_cik_count = int(
-        linked.select(pl.col("cik_10").n_unique().alias("n")).item()
+    linked_doc_count = (
+        int(long_df.select(pl.col("doc_id").n_unique().alias("n")).item()) if long_df.height else 0
     )
-    return long_df, dict(permno_to_ciks), linked_cik_count
+    return long_df, dict(permno_to_doc_ids), linked_doc_count, dict(permno_to_ciks)
 
 
-def _greedy_filing_anchors(
-    permno_to_ciks: dict[int, set[str]],
-    linked_target_count: int,
-) -> tuple[list[int], set[str]]:
-    if linked_target_count <= 0:
-        return [], set()
+def _build_doc_mask_map(permno_to_doc_ids: dict[int, set[str]]) -> tuple[dict[int, int], list[str]]:
+    ordered_doc_ids = sorted({doc_id for doc_ids in permno_to_doc_ids.values() for doc_id in doc_ids})
+    doc_index = {doc_id: idx for idx, doc_id in enumerate(ordered_doc_ids)}
 
-    covered: set[str] = set()
+    doc_mask_by_permno: dict[int, int] = {}
+    for permno, doc_ids in permno_to_doc_ids.items():
+        mask = 0
+        for doc_id in doc_ids:
+            mask |= 1 << doc_index[doc_id]
+        if mask:
+            doc_mask_by_permno[permno] = mask
+    return doc_mask_by_permno, ordered_doc_ids
+
+
+def _prune_candidates(
+    year_mask_by_permno: dict[int, int],
+    doc_mask_by_permno: dict[int, int],
+) -> list[CoverageCandidate]:
+    best_by_coverage: dict[tuple[int, int], int] = {}
+    all_permnos = set(year_mask_by_permno) | set(doc_mask_by_permno)
+    for permno in all_permnos:
+        year_mask = year_mask_by_permno.get(permno, 0)
+        doc_mask = doc_mask_by_permno.get(permno, 0)
+        if year_mask == 0 and doc_mask == 0:
+            continue
+        coverage = (year_mask, doc_mask)
+        previous = best_by_coverage.get(coverage)
+        if previous is None or permno < previous:
+            best_by_coverage[coverage] = permno
+
+    candidates = [
+        CoverageCandidate(
+            permno=permno,
+            year_mask=year_mask,
+            doc_mask=doc_mask,
+            year_count=year_mask.bit_count(),
+            doc_count=doc_mask.bit_count(),
+        )
+        for (year_mask, doc_mask), permno in best_by_coverage.items()
+    ]
+    candidates.sort(key=lambda candidate: (-candidate.year_count, -candidate.doc_count, candidate.permno))
+
+    pruned: list[CoverageCandidate] = []
+    for candidate in candidates:
+        dominated = False
+        for kept in pruned:
+            if (
+                (candidate.year_mask | kept.year_mask) == kept.year_mask
+                and (candidate.doc_mask | kept.doc_mask) == kept.doc_mask
+            ):
+                dominated = True
+                break
+        if not dominated:
+            pruned.append(candidate)
+    return pruned
+
+
+def _combined_greedy_candidates(
+    candidates: list[CoverageCandidate],
+    target_year_mask: int,
+    target_doc_count: int,
+) -> tuple[list[int], int, int]:
+    uncovered_year_mask = target_year_mask
+    covered_doc_mask = 0
+    remaining = list(candidates)
     selected: list[int] = []
-    available = dict(permno_to_ciks)
 
-    while len(covered) < linked_target_count:
-        best_permno: int | None = None
-        best_gain = 0
-        for permno, ciks in available.items():
-            gain = len(ciks - covered)
-            if gain > best_gain or (gain == best_gain and gain > 0 and best_permno is not None and permno < best_permno):
-                best_permno = permno
-                best_gain = gain
-            elif gain > 0 and best_permno is None:
-                best_permno = permno
-                best_gain = gain
+    while uncovered_year_mask != 0 or covered_doc_mask.bit_count() < target_doc_count:
+        docs_remaining = max(target_doc_count - covered_doc_mask.bit_count(), 0)
+        best_index: int | None = None
+        best_score = 0
+        for index, candidate in enumerate(remaining):
+            new_year_count = (candidate.year_mask & uncovered_year_mask).bit_count()
+            new_doc_count = (candidate.doc_mask & ~covered_doc_mask).bit_count()
+            score = new_year_count * (target_doc_count + 1) + min(new_doc_count, docs_remaining)
+            if score > best_score:
+                best_index = index
+                best_score = score
+                continue
+            if score == best_score and score > 0 and best_index is not None:
+                current_best = remaining[best_index]
+                if candidate.permno < current_best.permno:
+                    best_index = index
 
-        if best_permno is None or best_gain <= 0:
-            raise ValueError(
-                "Unable to satisfy filing overlap target with available permno->cik links."
-            )
-        selected.append(best_permno)
-        covered |= available.get(best_permno, set())
-        available.pop(best_permno, None)
+        if best_index is None or best_score <= 0:
+            break
 
-    return selected, covered
+        chosen = remaining.pop(best_index)
+        selected.append(chosen.permno)
+        uncovered_year_mask &= ~chosen.year_mask
+        covered_doc_mask |= chosen.doc_mask
+
+    return selected, target_year_mask & ~uncovered_year_mask, covered_doc_mask
+
+
+def _ceil_div(numerator: int, denominator: int) -> int:
+    return (numerator + denominator - 1) // denominator
+
+
+def _find_exact_feasible_subset(
+    candidates: list[CoverageCandidate],
+    target_year_mask: int,
+    target_doc_count: int,
+    budget_k: int,
+) -> list[int] | None:
+    ordered = sorted(
+        candidates,
+        key=lambda candidate: (
+            -(
+                candidate.year_count * (target_doc_count + 1)
+                + min(candidate.doc_count, target_doc_count)
+            ),
+            -candidate.year_count,
+            -candidate.doc_count,
+            candidate.permno,
+        ),
+    )
+    n_candidates = len(ordered)
+    suffix_year_union = [0] * (n_candidates + 1)
+    suffix_doc_union = [0] * (n_candidates + 1)
+    suffix_max_year = [0] * (n_candidates + 1)
+    suffix_max_doc = [0] * (n_candidates + 1)
+    for idx in range(n_candidates - 1, -1, -1):
+        candidate = ordered[idx]
+        suffix_year_union[idx] = suffix_year_union[idx + 1] | candidate.year_mask
+        suffix_doc_union[idx] = suffix_doc_union[idx + 1] | candidate.doc_mask
+        suffix_max_year[idx] = max(suffix_max_year[idx + 1], candidate.year_count)
+        suffix_max_doc[idx] = max(suffix_max_doc[idx + 1], candidate.doc_count)
+
+    def dfs(
+        idx: int,
+        selected: list[int],
+        covered_year_mask: int,
+        covered_doc_mask: int,
+    ) -> list[int] | None:
+        if covered_year_mask == target_year_mask and covered_doc_mask.bit_count() >= target_doc_count:
+            return list(selected)
+        if idx >= n_candidates or len(selected) >= budget_k:
+            return None
+        if (covered_year_mask | suffix_year_union[idx]) != target_year_mask:
+            return None
+        if (covered_doc_mask | suffix_doc_union[idx]).bit_count() < target_doc_count:
+            return None
+
+        uncovered_years = (target_year_mask & ~covered_year_mask).bit_count()
+        docs_remaining = max(target_doc_count - covered_doc_mask.bit_count(), 0)
+        lower_bounds: list[int] = []
+        if uncovered_years > 0:
+            max_year_gain = suffix_max_year[idx]
+            if max_year_gain <= 0:
+                return None
+            lower_bounds.append(_ceil_div(uncovered_years, max_year_gain))
+        if docs_remaining > 0:
+            max_doc_gain = suffix_max_doc[idx]
+            if max_doc_gain <= 0:
+                return None
+            lower_bounds.append(_ceil_div(docs_remaining, max_doc_gain))
+        min_needed = max(lower_bounds) if lower_bounds else 0
+        if len(selected) + min_needed > budget_k:
+            return None
+
+        candidate = ordered[idx]
+        new_year_mask = covered_year_mask | candidate.year_mask
+        new_doc_mask = covered_doc_mask | candidate.doc_mask
+        if new_year_mask != covered_year_mask or new_doc_mask != covered_doc_mask:
+            selected.append(candidate.permno)
+            found = dfs(idx + 1, selected, new_year_mask, new_doc_mask)
+            if found is not None:
+                return found
+            selected.pop()
+
+        return dfs(idx + 1, selected, covered_year_mask, covered_doc_mask)
+
+    return dfs(0, [], 0, 0)
+
+
+def _mask_to_years(mask: int, years: list[int]) -> list[int]:
+    return [year for idx, year in enumerate(years) if mask & (1 << idx)]
+
+
+def _select_mandatory_anchor_permnos(
+    year_mask_by_permno: dict[int, int],
+    doc_mask_by_permno: dict[int, int],
+    target_year_mask: int,
+    target_doc_count: int,
+    budget_k: int,
+    years: list[int],
+) -> AnchorSelectionResult:
+    candidates = _prune_candidates(year_mask_by_permno, doc_mask_by_permno)
+    if target_year_mask == 0 and target_doc_count <= 0:
+        return AnchorSelectionResult([], "greedy", 0, len(candidates))
+
+    greedy_selected, greedy_year_mask, greedy_doc_mask = _combined_greedy_candidates(
+        candidates,
+        target_year_mask,
+        target_doc_count,
+    )
+    greedy_doc_count = greedy_doc_mask.bit_count()
+    if (
+        greedy_year_mask == target_year_mask
+        and greedy_doc_count >= target_doc_count
+        and len(greedy_selected) <= budget_k
+    ):
+        return AnchorSelectionResult(
+            selected_permnos=sorted(greedy_selected),
+            strategy="greedy",
+            greedy_count=len(greedy_selected),
+            pruned_candidate_count=len(candidates),
+        )
+
+    fallback_selected = _find_exact_feasible_subset(
+        candidates,
+        target_year_mask=target_year_mask,
+        target_doc_count=target_doc_count,
+        budget_k=budget_k,
+    )
+    if fallback_selected is not None:
+        return AnchorSelectionResult(
+            selected_permnos=sorted(fallback_selected),
+            strategy="exact_fallback",
+            greedy_count=len(greedy_selected),
+            pruned_candidate_count=len(candidates),
+        )
+
+    uncovered_years = _mask_to_years(target_year_mask & ~greedy_year_mask, years)
+    uncovered_docs = max(target_doc_count - greedy_doc_count, 0)
+    raise ValueError(
+        "Unable to satisfy mandatory anchor constraints within sample budget. "
+        f"k={budget_k} greedy_anchor_count={len(greedy_selected)} "
+        f"pruned_candidate_count={len(candidates)} uncovered_years={uncovered_years} "
+        f"uncovered_linked_docs={uncovered_docs}"
+    )
 
 
 def _choose_sampled_permnos(
     cfg: SampleConfig,
     permno_universe: list[int],
-    year_anchor_permnos: list[int],
-    filing_anchor_permnos: list[int],
+    mandatory_anchor_permnos: list[int],
 ) -> list[int]:
     k = max(1, math.ceil(len(permno_universe) * cfg.sample_frac))
-    anchors = set(year_anchor_permnos) | set(filing_anchor_permnos)
+    anchors = set(mandatory_anchor_permnos)
     if len(anchors) > k:
         raise ValueError(
             "Mandatory anchor set exceeds sample size. "
@@ -510,13 +713,13 @@ def _build_file_sampling_filter(
 
 def _write_filing_mapping_outputs(cfg: SampleConfig, long_df: pl.DataFrame) -> None:
     cfg.out_mappings_dir.mkdir(parents=True, exist_ok=True)
-    long_parquet = cfg.out_mappings_dir / "filing_cik_to_permno_long.parquet"
-    long_csv = cfg.out_mappings_dir / "filing_cik_to_permno_long.csv"
+    long_parquet = cfg.out_mappings_dir / "filing_doc_to_permno_long.parquet"
+    long_csv = cfg.out_mappings_dir / "filing_doc_to_permno_long.csv"
     long_df.write_parquet(long_parquet, compression=cfg.compression)
     long_df.write_csv(long_csv)
 
-    collapsed = (
-        long_df.group_by("cik_10")
+    doc_collapsed = (
+        long_df.group_by("doc_id", "cik_10", "filing_date")
         .agg(
             pl.len().alias("n_long_rows"),
             pl.col("gvkey").drop_nulls().n_unique().alias("n_gvkeys"),
@@ -532,7 +735,44 @@ def _write_filing_mapping_outputs(cfg: SampleConfig, long_df: pl.DataFrame) -> N
             pl.col("best_permno").fill_null(0).cast(pl.Int32).alias("permno"),
         )
         .select(
+            "doc_id",
             "cik_10",
+            "filing_date",
+            "permno",
+            "best_permno",
+            "has_pos_permno",
+            "n_permnos_pos",
+            "n_gvkeys",
+            "n_long_rows",
+        )
+        .sort(["filing_date", "doc_id"])
+    )
+    doc_collapsed.write_parquet(
+        cfg.out_mappings_dir / "filing_doc_to_permno_collapsed.parquet",
+        compression=cfg.compression,
+    )
+    doc_collapsed.write_csv(cfg.out_mappings_dir / "filing_doc_to_permno_collapsed.csv")
+
+    cik_collapsed = (
+        long_df.group_by("cik_10")
+        .agg(
+            pl.col("doc_id").n_unique().alias("n_docs"),
+            pl.len().alias("n_long_rows"),
+            pl.col("gvkey").drop_nulls().n_unique().alias("n_gvkeys"),
+            pl.col("kypermno").filter(pl.col("kypermno") > 0).n_unique().alias("n_permnos_pos"),
+            pl.col("kypermno")
+            .filter(pl.col("kypermno") > 0)
+            .sort()
+            .first()
+            .alias("best_permno"),
+        )
+        .with_columns(
+            pl.col("best_permno").is_not_null().alias("has_pos_permno"),
+            pl.col("best_permno").fill_null(0).cast(pl.Int32).alias("permno"),
+        )
+        .select(
+            "cik_10",
+            "n_docs",
             "permno",
             "best_permno",
             "has_pos_permno",
@@ -542,10 +782,11 @@ def _write_filing_mapping_outputs(cfg: SampleConfig, long_df: pl.DataFrame) -> N
         )
         .sort("cik_10")
     )
-    collapsed_parquet = cfg.out_mappings_dir / "filing_cik_to_permno_collapsed.parquet"
-    collapsed_csv = cfg.out_mappings_dir / "filing_cik_to_permno_collapsed.csv"
-    collapsed.write_parquet(collapsed_parquet, compression=cfg.compression)
-    collapsed.write_csv(collapsed_csv)
+    cik_collapsed.write_parquet(
+        cfg.out_mappings_dir / "filing_cik_to_permno_collapsed.parquet",
+        compression=cfg.compression,
+    )
+    cik_collapsed.write_csv(cfg.out_mappings_dir / "filing_cik_to_permno_collapsed.csv")
 
 
 def _sample_ccm_files(
@@ -636,42 +877,76 @@ def _sample_ccm_files(
     return stats_rows
 
 
+def _format_pct_token(sample_frac: float) -> str:
+    pct = Decimal(str(sample_frac)) * Decimal("100")
+    token = format(pct, "f").rstrip("0").rstrip(".")
+    if not token:
+        token = "0"
+    return token.replace(".", "p")
+
+
+def _sample_tag(cfg: SampleConfig) -> str:
+    return f"sample_{_format_pct_token(cfg.sample_frac)}pct_seed{cfg.seed}"
+
+
+def _tagged_output_name(base_name: str, sample_tag: str) -> str:
+    path = Path(base_name)
+    suffix = path.suffix
+    stem = path.stem if suffix else path.name
+    if stem.endswith(sample_tag):
+        return path.name
+    return f"{stem}.{sample_tag}{suffix}"
+
+
 def _write_overlap_report(
     cfg: SampleConfig,
     sampled_permnos: list[int],
     sampled_gvkeys: list[str],
-    filing_long: pl.DataFrame,
-    linked_target_count: int,
+    doc_long_df: pl.DataFrame,
+    filing_doc_all_count: int,
+    filing_cik_all_count: int,
+    linked_doc_target_count: int,
     year_coverage: dict[int, int],
 ) -> dict[str, Any]:
-    n_filing_all = int(filing_long.select(pl.col("cik_10").n_unique()).item())
-    linked_ciks = filing_long.filter(pl.col("kypermno") > 0).select("cik_10").unique()
-    linked_cik_count = linked_ciks.height
+    linked_doc_count = (
+        int(doc_long_df.select(pl.col("doc_id").n_unique().alias("n")).item()) if doc_long_df.height else 0
+    )
+    linked_cik_count = (
+        int(doc_long_df.select(pl.col("cik_10").n_unique().alias("n")).item()) if doc_long_df.height else 0
+    )
 
-    covered_linked = (
-        filing_long.lazy()
-        .filter((pl.col("kypermno") > 0) & pl.col("kypermno").is_in(sampled_permnos))
-        .select("cik_10")
-        .unique(subset=["cik_10"])
-        .collect()
-        .height
+    covered_linked_docs = (
+        int(
+            doc_long_df.lazy()
+            .filter(pl.col("kypermno").is_in(sampled_permnos))
+            .select(pl.col("doc_id").n_unique().alias("n"))
+            .collect()
+            .item()
+        )
+        if doc_long_df.height
+        else 0
     )
-    covered_all = (
-        filing_long.lazy()
-        .filter(pl.col("kypermno").is_in(sampled_permnos))
-        .select("cik_10")
-        .unique(subset=["cik_10"])
-        .collect()
-        .height
+    covered_linked_ciks = (
+        int(
+            doc_long_df.lazy()
+            .filter(pl.col("kypermno").is_in(sampled_permnos))
+            .select(pl.col("cik_10").n_unique().alias("n"))
+            .collect()
+            .item()
+        )
+        if doc_long_df.height
+        else 0
     )
-    linked_ratio = (covered_linked / linked_cik_count) if linked_cik_count > 0 else 0.0
-    all_ratio = (covered_all / n_filing_all) if n_filing_all > 0 else 0.0
+    linked_doc_ratio = (covered_linked_docs / linked_doc_count) if linked_doc_count > 0 else 0.0
+    all_doc_ratio = (covered_linked_docs / filing_doc_all_count) if filing_doc_all_count > 0 else 0.0
+    linked_cik_ratio = (covered_linked_ciks / linked_cik_count) if linked_cik_count > 0 else 0.0
+    all_cik_ratio = (covered_linked_ciks / filing_cik_all_count) if filing_cik_all_count > 0 else 0.0
 
     missing_years = [y for y in cfg.years if year_coverage.get(y, 0) <= 0]
-    if linked_ratio < cfg.overlap_target:
+    if linked_doc_ratio < cfg.overlap_target:
         raise ValueError(
-            "Linked filing overlap target not met. "
-            f"observed={linked_ratio:.6f} target={cfg.overlap_target:.6f}"
+            "Linked filing doc overlap target not met. "
+            f"observed={linked_doc_ratio:.6f} target={cfg.overlap_target:.6f}"
         )
     if missing_years:
         raise ValueError(
@@ -683,13 +958,19 @@ def _write_overlap_report(
         "sampled_gvkey_count": len(sampled_gvkeys),
         "sample_fraction_target": cfg.sample_frac,
         "filing_overlap_target_linked_ratio": cfg.overlap_target,
-        "filing_cik_all_count": n_filing_all,
+        "filing_doc_all_count": filing_doc_all_count,
+        "filing_doc_linked_count": linked_doc_count,
+        "filing_doc_linked_target_count": linked_doc_target_count,
+        "filing_doc_linked_covered_count": covered_linked_docs,
+        "filing_doc_linked_covered_ratio": linked_doc_ratio,
+        "filing_doc_all_covered_count": covered_linked_docs,
+        "filing_doc_all_covered_ratio": all_doc_ratio,
+        "filing_cik_all_count": filing_cik_all_count,
         "filing_cik_linked_count": linked_cik_count,
-        "filing_cik_linked_target_count": linked_target_count,
-        "filing_cik_linked_covered_count": covered_linked,
-        "filing_cik_linked_covered_ratio": linked_ratio,
-        "filing_cik_all_covered_count": covered_all,
-        "filing_cik_all_covered_ratio": all_ratio,
+        "filing_cik_linked_covered_count": covered_linked_ciks,
+        "filing_cik_linked_covered_ratio": linked_cik_ratio,
+        "filing_cik_all_covered_count": covered_linked_ciks,
+        "filing_cik_all_covered_ratio": all_cik_ratio,
         "year_coverage_start": cfg.start_year,
         "year_coverage_end": cfg.end_year,
         "yearly_ccm_permno_counts": year_coverage,
@@ -700,13 +981,19 @@ def _write_overlap_report(
     csv_rows = [
         {"metric": "sampled_permno_count", "value": len(sampled_permnos)},
         {"metric": "sampled_gvkey_count", "value": len(sampled_gvkeys)},
-        {"metric": "filing_cik_all_count", "value": n_filing_all},
+        {"metric": "filing_doc_all_count", "value": filing_doc_all_count},
+        {"metric": "filing_doc_linked_count", "value": linked_doc_count},
+        {"metric": "filing_doc_linked_target_count", "value": linked_doc_target_count},
+        {"metric": "filing_doc_linked_covered_count", "value": covered_linked_docs},
+        {"metric": "filing_doc_linked_covered_ratio", "value": linked_doc_ratio},
+        {"metric": "filing_doc_all_covered_count", "value": covered_linked_docs},
+        {"metric": "filing_doc_all_covered_ratio", "value": all_doc_ratio},
+        {"metric": "filing_cik_all_count", "value": filing_cik_all_count},
         {"metric": "filing_cik_linked_count", "value": linked_cik_count},
-        {"metric": "filing_cik_linked_target_count", "value": linked_target_count},
-        {"metric": "filing_cik_linked_covered_count", "value": covered_linked},
-        {"metric": "filing_cik_linked_covered_ratio", "value": linked_ratio},
-        {"metric": "filing_cik_all_covered_count", "value": covered_all},
-        {"metric": "filing_cik_all_covered_ratio", "value": all_ratio},
+        {"metric": "filing_cik_linked_covered_count", "value": covered_linked_ciks},
+        {"metric": "filing_cik_linked_covered_ratio", "value": linked_cik_ratio},
+        {"metric": "filing_cik_all_covered_count", "value": covered_linked_ciks},
+        {"metric": "filing_cik_all_covered_ratio", "value": all_cik_ratio},
     ]
     for year in cfg.years:
         csv_rows.append({"metric": f"year_{year}_permno_count", "value": year_coverage.get(year, 0)})
@@ -721,17 +1008,15 @@ def _sample_derived_outputs(
 ) -> dict[str, str]:
     cfg.out_derived_dir.mkdir(parents=True, exist_ok=True)
 
-    daily_out = cfg.out_derived_dir / "final_flagged_data_compdesc_added.sample_5pct_seed42.parquet"
+    sample_tag = _sample_tag(cfg)
+    daily_out = cfg.out_derived_dir / _tagged_output_name(cfg.ccm_daily_name, sample_tag)
     (
         pl.scan_parquet(cfg.ccm_daily_path)
         .filter(pl.col("KYPERMNO").cast(pl.Int32, strict=False).is_in(sampled_permnos))
         .sink_parquet(daily_out, compression=cfg.compression)
     )
 
-    canon_out = (
-        cfg.out_derived_dir
-        / "canonical_link_table_after_startdate_change.sample_5pct_seed42.parquet"
-    )
+    canon_out = cfg.out_derived_dir / _tagged_output_name(cfg.canonical_link_name, sample_tag)
     (
         pl.scan_parquet(cfg.canonical_link_path)
         .with_columns(
@@ -774,18 +1059,40 @@ def run(cfg: SampleConfig) -> None:
         raise ValueError("No positive permno values found in canonical link table.")
     permno_universe_set = set(int(x) for x in permno_universe)
 
-    filing_ciks = _load_filing_ciks(cfg)
-    filing_long, permno_to_ciks, linked_cik_count = _build_filing_link_maps(filing_ciks, links_lf)
-    linked_target_count = int(math.ceil(linked_cik_count * cfg.overlap_target))
+    sec_filings_lf = _load_sec_filings(cfg)
+    sec_counts = (
+        sec_filings_lf.select(
+            pl.len().alias("filing_doc_all_count"),
+            pl.col("cik_10").n_unique().alias("filing_cik_all_count"),
+        )
+        .collect()
+        .row(0, named=True)
+    )
+    filing_doc_all_count = int(sec_counts["filing_doc_all_count"])
+    filing_cik_all_count = int(sec_counts["filing_cik_all_count"])
 
-    year_map = _build_year_anchor_map(cfg, permno_universe_set)
-    year_anchor_permnos = _greedy_year_anchors(set(cfg.years), year_map)
-    filing_anchor_permnos, _ = _greedy_filing_anchors(permno_to_ciks, linked_target_count)
+    filing_long, permno_to_doc_ids, linked_doc_count, permno_to_ciks = _build_filing_doc_link_maps(
+        sec_filings_lf,
+        links_lf,
+    )
+    linked_target_count = int(math.ceil(linked_doc_count * cfg.overlap_target))
+
+    year_mask_by_permno = _build_year_mask_map(cfg, permno_universe_set)
+    doc_mask_by_permno, _ = _build_doc_mask_map(permno_to_doc_ids)
+    target_year_mask = (1 << len(cfg.years)) - 1
+    k = max(1, math.ceil(len(permno_universe) * cfg.sample_frac))
+    anchor_result = _select_mandatory_anchor_permnos(
+        year_mask_by_permno=year_mask_by_permno,
+        doc_mask_by_permno=doc_mask_by_permno,
+        target_year_mask=target_year_mask,
+        target_doc_count=linked_target_count,
+        budget_k=k,
+        years=cfg.years,
+    )
     sampled_permnos = _choose_sampled_permnos(
         cfg,
         permno_universe=permno_universe,
-        year_anchor_permnos=year_anchor_permnos,
-        filing_anchor_permnos=filing_anchor_permnos,
+        mandatory_anchor_permnos=anchor_result.selected_permnos,
     )
 
     sampled_gvkeys = (
@@ -805,8 +1112,10 @@ def run(cfg: SampleConfig) -> None:
         cfg=cfg,
         sampled_permnos=sampled_permnos,
         sampled_gvkeys=sampled_gvkeys,
-        filing_long=filing_long,
-        linked_target_count=linked_target_count,
+        doc_long_df=filing_long,
+        filing_doc_all_count=filing_doc_all_count,
+        filing_cik_all_count=filing_cik_all_count,
+        linked_doc_target_count=linked_target_count,
         year_coverage=year_coverage,
     )
 
@@ -815,6 +1124,7 @@ def run(cfg: SampleConfig) -> None:
             "full_data_root": str(cfg.full_data_root),
             "out_root": str(cfg.out_root),
             "sample_frac": cfg.sample_frac,
+            "sample_tag": _sample_tag(cfg),
             "overlap_target": cfg.overlap_target,
             "seed": cfg.seed,
             "start_year": cfg.start_year,
@@ -827,14 +1137,22 @@ def run(cfg: SampleConfig) -> None:
             "permno_universe_count": len(permno_universe),
             "sampled_permno_count": len(sampled_permnos),
             "sampled_gvkey_count": len(sampled_gvkeys),
-            "year_anchor_permno_count": len(year_anchor_permnos),
-            "filing_anchor_permno_count": len(filing_anchor_permnos),
-            "linked_filing_cik_count": linked_cik_count,
-            "linked_filing_target_count": linked_target_count,
+            "mandatory_anchor_permno_count": len(anchor_result.selected_permnos),
+            "anchor_greedy_count": anchor_result.greedy_count,
+            "anchor_candidate_count": anchor_result.pruned_candidate_count,
+            "linked_filing_doc_count": linked_doc_count,
+            "linked_filing_doc_target_count": linked_target_count,
+            "linked_filing_cik_count": int(
+                filing_long.select(pl.col("cik_10").n_unique().alias("n")).item() if filing_long.height else 0
+            ),
         },
         "anchors": {
-            "year_anchor_permnos": year_anchor_permnos,
-            "filing_anchor_permnos": filing_anchor_permnos,
+            "mandatory_anchor_permnos": anchor_result.selected_permnos,
+            "anchor_selection_strategy": anchor_result.strategy,
+            "anchor_permno_to_ciks": {
+                str(permno): sorted(permno_to_ciks.get(permno, set()))
+                for permno in anchor_result.selected_permnos
+            },
         },
         "derived_outputs": derived_paths,
         "overlap_report": overlap_payload,
@@ -850,8 +1168,9 @@ def run(cfg: SampleConfig) -> None:
                 "out_root": str(cfg.out_root),
                 "sampled_permnos": len(sampled_permnos),
                 "sampled_gvkeys": len(sampled_gvkeys),
-                "linked_overlap_ratio": overlap_payload["filing_cik_linked_covered_ratio"],
+                "linked_overlap_ratio": overlap_payload["filing_doc_linked_covered_ratio"],
                 "missing_years": overlap_payload["missing_years"],
+                "anchor_strategy": anchor_result.strategy,
             },
             indent=2,
         )

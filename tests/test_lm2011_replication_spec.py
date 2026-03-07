@@ -1,0 +1,419 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import polars as pl
+import pytest
+import yaml
+
+from thesis_pkg.core.ccm.sec_ccm_contracts import make_sec_ccm_join_spec_preset
+from thesis_pkg.core.sec.filing_text import FilingItemSchema, ParsedFilingSchema, RawTextSchema
+
+
+SPEC_PATH = Path("specs_drafts/lm2011_ff2001_replication_spec.yaml")
+EXPECTED_RULE_BASIS = [
+    "paper_explicit",
+    "implementation_convention",
+    "known_divergence",
+    "library_gap",
+]
+EXPECTED_RULE_STATUS = ["active", "blocked", "legacy_diagnostic_only"]
+SEC_RAW_YEARLY_DIR = Path("full_data_run/year_merged")
+
+
+def _load_spec() -> dict:
+    return yaml.safe_load(SPEC_PATH.read_text(encoding="utf-8"))
+
+
+def _get_node(spec: dict, *path: str) -> dict:
+    node = spec
+    for key in path:
+        node = node[key]
+    return node
+
+
+def _paper_target(spec: dict, target_id: str) -> dict:
+    for target in spec["paper_targets"]:
+        if target["id"] == target_id:
+            return target
+    raise AssertionError(f"Paper target not found: {target_id}")
+
+
+def _sample_schema_names(sample_file: str | None) -> list[str]:
+    assert sample_file, "Expected a sample-backed contract"
+    path = Path(sample_file)
+    if not path.exists():
+        pytest.skip(f"Sample file not present: {path}")
+    return pl.scan_parquet(path).collect_schema().names()
+
+
+def _unique_values_from_parquet(paths: list[Path], column: str) -> list[str]:
+    if not paths:
+        pytest.skip(f"No parquet files available for column scan: {column}")
+    missing_paths = [path for path in paths if not path.exists()]
+    if missing_paths:
+        pytest.skip(f"Sample file not present: {missing_paths[0]}")
+
+    values = (
+        pl.scan_parquet([str(path) for path in paths])
+        .select(pl.col(column).drop_nulls().unique().sort())
+        .collect()
+        .get_column(column)
+        .to_list()
+    )
+    return [value for value in values if isinstance(value, str)]
+
+
+def _benchmark_rows_by_id(rows: list[dict]) -> dict[str, dict]:
+    return {row["id"]: row for row in rows}
+
+
+def test_lm2011_spec_loads_with_phase0_phase1_contract_sections() -> None:
+    spec = _load_spec()
+
+    assert spec["spec_version"] == "0.3"
+    assert spec["scope"] == "full_paper_replication"
+    assert "column_contract_conventions" in spec["public_interfaces"]
+
+    governance = spec["contract_governance"]
+    assert governance["rule_basis_allowed"] == EXPECTED_RULE_BASIS
+    assert governance["rule_status_allowed"] == EXPECTED_RULE_STATUS
+    assert (
+        governance["benchmark_pass_formula"]
+        == "abs_diff <= max(tolerance_abs, paper_count * tolerance_pct)"
+    )
+
+    blockers = spec["status"]["blocking_prerequisites"]
+    assert any(blocker["id"] == "ccm_filing_form_normalization" for blocker in blockers)
+
+    normalized_fields = spec["public_interfaces"]["normalized_fields"]
+    for field_name in (
+        "gvkey_int",
+        "normalized_form",
+        "filing_trade_date",
+        "pre_filing_trade_date",
+        "accounting_period_end",
+        "quarter_report_date",
+    ):
+        assert field_name in normalized_fields
+
+    derived_outputs = spec["public_interfaces"]["derived_outputs"]
+    for output_name in (
+        "lm2011_text_features_full_10k",
+        "lm2011_text_features_mda",
+        "lm2011_event_panel",
+        "lm2011_sue_panel",
+        "lm2011_label_panel",
+        "lm2011_trading_strategy_panel",
+    ):
+        assert output_name in derived_outputs
+
+    datasets = spec["datasets"]
+    assert "external_required" in datasets
+    assert "sec_ccm_premerge" in datasets
+    assert (
+        datasets["crsp_ccm_daily"]["derived_artifacts"]["final_daily_panel_parquet"]["status"]
+        == "legacy_diagnostic_only"
+    )
+
+    validation = spec["validation_and_acceptance"]
+    assert "benchmark_targets" in validation
+
+
+@pytest.mark.parametrize(
+    ("spec_path", "expected_schema_name", "expected_columns"),
+    [
+        (
+            ("datasets", "sec_text", "raw_yearly_parquet"),
+            "thesis_pkg.core.sec.filing_text.RawTextSchema",
+            list(RawTextSchema.schema),
+        ),
+        (
+            ("datasets", "sec_text", "parsed_yearly_parquet"),
+            "thesis_pkg.core.sec.filing_text.ParsedFilingSchema",
+            list(ParsedFilingSchema.schema),
+        ),
+        (
+            ("datasets", "sec_text", "extracted_10k_item_parquet"),
+            "thesis_pkg.core.sec.filing_text.FilingItemSchema",
+            list(FilingItemSchema.schema),
+        ),
+    ],
+)
+def test_lm2011_spec_sec_schema_contracts_match_library_classes(
+    spec_path: tuple[str, ...],
+    expected_schema_name: str,
+    expected_columns: list[str],
+) -> None:
+    spec = _load_spec()
+    node = _get_node(spec, *spec_path)
+
+    assert node["library_schema_name"] == expected_schema_name
+    assert node["library_schema_columns"] == expected_columns
+
+
+@pytest.mark.parametrize(
+    ("spec_path", "contract_key"),
+    [
+        (("datasets", "sec_text", "raw_yearly_parquet"), "library_schema_columns"),
+        (("datasets", "ccm_filingdates"), "library_input_columns"),
+        (
+            ("datasets", "crsp_ccm_daily", "derived_artifacts", "canonical_link_table_parquet"),
+            "library_output_columns",
+        ),
+        (
+            ("datasets", "crsp_ccm_daily", "derived_artifacts", "final_daily_panel_parquet"),
+            "library_output_columns",
+        ),
+        (("datasets", "sec_ccm_premerge", "match_status_parquet"), "library_output_columns"),
+        (("datasets", "sec_ccm_premerge", "matched_clean_parquet"), "library_output_columns"),
+        (("datasets", "sec_ccm_premerge", "analysis_doc_ids_parquet"), "library_output_columns"),
+    ],
+)
+def test_lm2011_spec_exact_library_column_contracts_match_sample_artifacts(
+    spec_path: tuple[str, ...],
+    contract_key: str,
+) -> None:
+    spec = _load_spec()
+    node = _get_node(spec, *spec_path)
+
+    assert node[contract_key] == _sample_schema_names(node["sample_file"])
+
+
+@pytest.mark.parametrize(
+    ("spec_path", "contract_key"),
+    [
+        (("datasets", "sec_text", "raw_yearly_parquet"), "library_schema_columns"),
+        (("datasets", "sec_text", "parsed_yearly_parquet"), "library_schema_columns"),
+        (("datasets", "sec_text", "extracted_10k_item_parquet"), "library_schema_columns"),
+        (("datasets", "ccm_filingdates"), "library_input_columns"),
+        (
+            ("datasets", "crsp_ccm_daily", "derived_artifacts", "canonical_link_table_parquet"),
+            "library_output_columns",
+        ),
+        (
+            ("datasets", "crsp_ccm_daily", "derived_artifacts", "final_daily_panel_parquet"),
+            "library_output_columns",
+        ),
+        (("datasets", "sec_ccm_premerge", "match_status_parquet"), "library_output_columns"),
+        (("datasets", "sec_ccm_premerge", "matched_clean_parquet"), "library_output_columns"),
+        (("datasets", "sec_ccm_premerge", "analysis_doc_ids_parquet"), "library_output_columns"),
+    ],
+)
+def test_lm2011_required_columns_are_subsets_of_exact_library_contracts(
+    spec_path: tuple[str, ...],
+    contract_key: str,
+) -> None:
+    spec = _load_spec()
+    node = _get_node(spec, *spec_path)
+
+    assert set(node["lm2011_required_columns"]).issubset(set(node[contract_key]))
+
+
+@pytest.mark.parametrize(
+    ("spec_path", "required_columns"),
+    [
+        (
+            ("datasets", "crsp_ccm_daily", "tables", "sfz_dp_dly"),
+            {"KYPERMNO", "CALDT", "PRC", "RET", "RETX", "TCAP", "VOL"},
+        ),
+        (
+            ("datasets", "crsp_ccm_daily", "tables", "sfz_ds_dly"),
+            {"KYPERMNO", "CALDT", "BIDLO", "ASKHI"},
+        ),
+        (
+            ("datasets", "crsp_ccm_daily", "tables", "sfz_shr"),
+            {"KYPERMNO", "SHRSDT", "SHRSENDDT", "SHROUT"},
+        ),
+        (
+            ("datasets", "compustat_fundamentals", "annual_balance_sheet"),
+            {
+                "KYGVKEY",
+                "KEYSET",
+                "FYYYY",
+                "fyra",
+                "SEQ",
+                "CEQ",
+                "AT",
+                "LT",
+                "TXDITC",
+                "PSTKL",
+                "PSTKRV",
+                "PSTK",
+            },
+        ),
+        (
+            ("datasets", "compustat_fundamentals", "annual_income_statement"),
+            {"KYGVKEY", "KEYSET", "FYYYY", "fyra", "IB", "XINT", "TXDI", "DVP"},
+        ),
+        (
+            ("datasets", "compustat_fundamentals", "annual_period_descriptor"),
+            {"KYGVKEY", "KEYSET", "FYEAR", "FYR", "APDEDATE", "FDATE", "PDATE"},
+        ),
+        (
+            ("datasets", "compustat_fundamentals", "quarterly_period_descriptor"),
+            {"KYGVKEY", "KEYSET", "FYEARQ", "FQTR", "APDEDATEQ", "FDATEQ", "PDATEQ", "RDQ"},
+        ),
+        (
+            ("datasets", "compustat_fundamentals", "fiscal_market_annual"),
+            {"KYGVKEY", "DATADATE", "MKVALT", "PRCC"},
+        ),
+    ],
+)
+def test_lm2011_spec_sample_backed_required_columns_exist(
+    spec_path: tuple[str, ...],
+    required_columns: set[str],
+) -> None:
+    spec = _load_spec()
+    node = _get_node(spec, *spec_path)
+
+    missing = required_columns - set(_sample_schema_names(node["sample_file"]))
+    assert not missing, f"{node['sample_file']} missing required columns: {sorted(missing)}"
+
+
+def test_lm2011_spec_join_preset_matches_library_definition() -> None:
+    spec = _load_spec()
+    join_spec = spec["sec_ccm_join_spec"]
+    preset = make_sec_ccm_join_spec_preset("lm2011_filing_date")
+
+    assert join_spec["preset"] == "lm2011_filing_date"
+    assert join_spec["meaning"]["phase_b_alignment_mode"] == preset.phase_b_alignment_mode.value
+    assert join_spec["meaning"]["phase_b_daily_join_mode"] == preset.phase_b_daily_join_mode.value
+    assert join_spec["daily_feature_columns"] == list(preset.daily_feature_columns)
+    assert join_spec["required_daily_non_null_features"] == list(
+        preset.required_daily_non_null_features
+    )
+
+
+def test_lm2011_primary_vs_secondary_outputs_are_partitioned_correctly() -> None:
+    spec = _load_spec()
+    lm2011 = _paper_target(spec, "LM2011")
+
+    assert "MD&A Item 7 word-feature panels" not in lm2011["primary_outputs"]
+    assert "MD&A Item 7 word-feature panels" in lm2011["secondary_outputs"]
+    assert "MD&A filing-period return regressions (Table V only)" in lm2011["secondary_outputs"]
+
+
+def test_lm2011_spec_form_normalization_contract_covers_expected_aliases() -> None:
+    spec = _load_spec()
+    mapping = spec["derived_variables"]["form_normalization"]["canonical_mapping"]
+
+    assert mapping["10K"] == "10-K"
+    assert mapping["10Q"] == "10-Q"
+    assert mapping["10K/A"] == "10-K/A"
+    assert mapping["10Q/A"] == "10-Q/A"
+    assert mapping["10-K405"] == "10-K"
+    assert mapping["10-K-A"] == "10-K/A"
+    assert mapping["10-K405-A"] == "10-K/A"
+    assert mapping["10-Q-A"] == "10-Q/A"
+
+
+def test_lm2011_form_mapping_covers_observed_annual_raw_forms() -> None:
+    spec = _load_spec()
+    form_rule = spec["derived_variables"]["form_normalization"]["lm2011_main_sample_rule"]
+
+    sec_paths = sorted(SEC_RAW_YEARLY_DIR.glob("*.parquet"))
+    sec_forms = _unique_values_from_parquet(sec_paths, "document_type_filename")
+    observed_annual_sec_forms = sorted(
+        value for value in sec_forms if value.startswith("10-K") or value.startswith("10K")
+    )
+
+    sec_allowed = set(form_rule["sec_text_included_raw_forms"]) | set(
+        form_rule["sec_text_excluded_raw_forms"]
+    )
+    missing_sec = sorted(set(observed_annual_sec_forms) - sec_allowed)
+    assert not missing_sec, f"Observed annual SEC forms missing from LM2011 rule: {missing_sec}"
+
+    ccm_filingdates_path = Path(_get_node(spec, "datasets", "ccm_filingdates")["sample_file"])
+    ccm_forms = _unique_values_from_parquet([ccm_filingdates_path], "SRCTYPE")
+    observed_annual_ccm_forms = sorted(value for value in ccm_forms if value.startswith("10K"))
+
+    ccm_allowed = set(form_rule["ccm_filingdates_included_raw_forms"]) | set(
+        form_rule["ccm_filingdates_excluded_raw_forms"]
+    )
+    missing_ccm = sorted(set(observed_annual_ccm_forms) - ccm_allowed)
+    assert not missing_ccm, f"Observed annual CCM forms missing from LM2011 rule: {missing_ccm}"
+
+
+def test_lm2011_main_sample_rule_is_raw_form_based() -> None:
+    spec = _load_spec()
+    form_rule = spec["derived_variables"]["form_normalization"]["lm2011_main_sample_rule"]
+
+    assert form_rule["sec_text_included_raw_forms"] == ["10-K", "10-K405"]
+    assert form_rule["ccm_filingdates_included_raw_forms"] == ["10K"]
+    assert "10-KT" in form_rule["sec_text_excluded_raw_forms"]
+    assert "10-K-A" in form_rule["sec_text_excluded_raw_forms"]
+    assert "10K/A" in form_rule["ccm_filingdates_excluded_raw_forms"]
+    assert (
+        "The paper-faithful main sample is defined from raw SEC filing form values, not from normalized_form alone."
+        in form_rule["predicate_notes"]
+    )
+
+
+def test_lm2011_phase0_phase1_spec_does_not_invent_raw_copy_fields() -> None:
+    spec = _load_spec()
+
+    for spec_path in (
+        ("datasets", "sec_text", "parsed_yearly_parquet"),
+        ("datasets", "sec_text", "extracted_10k_item_parquet"),
+        ("datasets", "ccm_filingdates"),
+    ):
+        normalized_columns = _get_node(spec, *spec_path)["normalized_columns_to_add"]
+        assert "document_type_filename_raw" not in normalized_columns
+        assert "SRCTYPE_raw" not in normalized_columns
+
+
+def test_lm2011_table_i_benchmarks_present_with_tolerances() -> None:
+    spec = _load_spec()
+    benchmarks = spec["validation_and_acceptance"]["benchmark_targets"]["lm2011_table_i"]
+
+    full_10k_expected = {
+        "edgar_complete_nonduplicate_sample": 121217,
+        "first_filing_per_year": 120290,
+        "minimum_180_day_spacing": 120074,
+        "crsp_permno_match": 75252,
+        "ordinary_common_equity": 70061,
+        "market_cap_available": 64227,
+        "price_day_minus_one_ge_3": 55946,
+        "event_window_returns_and_volume": 55630,
+        "major_exchange_listing": 55612,
+        "sixty_day_pre_post_coverage": 55038,
+        "book_to_market_available_and_book_value_positive": 50268,
+        "token_count_ge_2000": 50115,
+    }
+    mda_expected = {
+        "identifiable_mda": 49179,
+        "mda_token_count_ge_250": 37287,
+    }
+
+    full_10k_rows = _benchmark_rows_by_id(benchmarks["full_10k_sample"])
+    for benchmark_id, paper_count in full_10k_expected.items():
+        row = full_10k_rows[benchmark_id]
+        assert row["paper_count"] == paper_count
+        assert row["tolerance_abs"] == 100
+        assert row["tolerance_pct"] == 0.005
+        assert row["basis"] == "paper_explicit"
+        assert row["status"] == "active"
+
+    mda_rows = _benchmark_rows_by_id(benchmarks["mda_subsample"])
+    for benchmark_id, paper_count in mda_expected.items():
+        row = mda_rows[benchmark_id]
+        assert row["paper_count"] == paper_count
+        assert row["tolerance_abs"] == 250
+        assert row["tolerance_pct"] == 0.01
+        assert row["basis"] == "paper_explicit"
+        assert row["status"] == "active"
+
+
+def test_lm2011_acceptance_scenarios_cover_phase0_phase1_contracts() -> None:
+    spec = _load_spec()
+    scenarios = {
+        scenario["id"]: scenario["description"]
+        for scenario in spec["validation_and_acceptance"]["acceptance_scenarios"]
+    }
+
+    assert "lm2011_raw_form_rule_contract" in scenarios
+    assert "lm2011_table_i_benchmark_contract" in scenarios
+    assert "first-filing-per-year" in scenarios["lm2011_sample_filters"]
+    assert "raw-form inclusion and exclusion" in scenarios["lm2011_sample_filters"]
+    assert "180-day filing spacing" in scenarios["lm2011_sample_filters"]
