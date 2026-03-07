@@ -1,16 +1,19 @@
 site_name: NLP Thesis Documentation
+site_description: Documentation for thesis_pkg SEC extraction, SEC-CCM linking, and analysis tooling.
 site_url: ""
 repo_url: ""
 
 theme:
   name: material
   features:
+    - content.code.copy
     - navigation.tabs
     - navigation.indexes
     - navigation.top
     - navigation.sections
     - navigation.instant
     - navigation.tracking
+    - toc.follow
 
 plugins:
   - mkdocstrings:
@@ -38,8 +41,60 @@ markdown_extensions:
 
 nav:
   - Home: index.md
-  - Architecture: architecture/index.md
+  - Architecture:
+    - Overview: architecture/index.md
+    - Pipeline Maps:
+      - Master Execution Index: architecture/00_master_index.md
+      - Thesis Pipeline Architecture: architecture/FINAL_THESIS_PIPELINE.md
+      - Full Pipeline Architecture: architecture/FULL_PIPELINE_ARCHITECTURE.md
+    - Package Entry Points:
+      - Package Root: architecture/16___init__.md
+      - API Facade: architecture/14_api.md
+      - Pipeline Facade: architecture/17_pipeline.md
+      - Filing Text Facade: architecture/18_filing_text.md
+      - Settings: architecture/01_settings.md
+    - Pipelines and IO:
+      - Pipelines Package: architecture/02___init__.md
+      - SEC Pipeline: architecture/25_sec_pipeline.md
+      - CCM Pipeline: architecture/22_ccm_pipeline.md
+      - SEC-CCM Pipeline: architecture/19_sec_ccm_pipeline.md
+      - IO Package: architecture/03___init__.md
+      - Parquet IO: architecture/26_parquet.md
+    - CCM Merge Stack:
+      - Core Package: architecture/11___init__.md
+      - CCM Package: architecture/10___init__.md
+      - Canonical Links: architecture/24_canonical_links.md
+      - Transforms: architecture/23_transforms.md
+      - SEC-CCM Contracts: architecture/21_sec_ccm_contracts.md
+      - SEC-CCM Pre-Merge: architecture/20_sec_ccm_premerge.md
+      - Cleaning Package: architecture/12___init__.md
+      - CCM Cleaning: architecture/13_ccm_cleaning.md
+    - SEC Extraction Stack:
+      - SEC Package: architecture/09___init__.md
+      - Filing Text Core: architecture/27_filing_text.md
+      - Patterns: architecture/32_patterns.md
+      - Heuristics: architecture/29_heuristics.md
+      - Embedded Headings: architecture/08_embedded_headings.md
+      - Extraction Utilities: architecture/33_extraction_utils.md
+      - Extraction Engine: architecture/28_extraction.md
+      - Regime Logic: architecture/31_regime.md
+      - Parquet Streaming: architecture/06_parquet_stream.md
+      - HTML Audit: architecture/07_html_audit.md
+      - Boundary Diagnostics: architecture/05_suspicious_boundary_diagnostics.md
+      - Utilities: architecture/30_utilities.md
+    - Analysis and Context:
+      - Features Package: architecture/04___init__.md
+      - Analysis Package: architecture/15___init__.md
+      - Design Choices: architecture/98_design_choices.md
+      - Literature Mapping: architecture/99_literature_mapping.md
   - Decisions: decisions/index.md
+  - Notes:
+    - Overview: other/index.md
+    - DataStatus Reference: other/data_status.md
+    - SEC-CCM Pre-Merge Contract: other/sec_ccm_premerge.md
+    - CCM Code Review: other/ccm_code_review.md
+    - Docstring Audit Report: docstring_audit_report.md
+    - Behavior Evidence Plan: other/PLAN_P2_Mcdoc.md
   # BEGIN AUTO-REFERENCE-NAV
   - Reference:
     - Overview: reference/index.md
@@ -76,6 +131,8 @@ nav:
     - io:
       - Overview: reference/io/__init__.md
       - parquet: reference/io/parquet.md
+    - notebooks_and_scripts:
+      - sec_ccm_unified_runner: reference/notebooks_and_scripts/sec_ccm_unified_runner.md
     - pipelines:
       - Overview: reference/pipelines/__init__.md
       - ccm_pipeline: reference/pipelines/ccm_pipeline.md

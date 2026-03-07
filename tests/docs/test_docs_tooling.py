@@ -11,6 +11,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from tools import docs_check, docs_pipeline
+import scaffold_docs
 
 
 def _write_json(path: Path, payload: object) -> None:
@@ -127,6 +128,58 @@ def test_nav_structure_check_passes_with_formatting_differences(tmp_path: Path) 
     )
 
     assert errors == []
+
+
+def test_generate_reference_docs_skips_mkdocstrings_for_non_importable_script_module(
+    tmp_path: Path,
+) -> None:
+    docs_dir = tmp_path / "docs"
+    metadata_dir = tmp_path / "docs_metadata"
+    docs_dir.mkdir(parents=True, exist_ok=True)
+    metadata_dir.mkdir(parents=True, exist_ok=True)
+
+    def _module_entry(path: str) -> dict[str, object]:
+        return {
+            "path": path,
+            "docstring": None,
+            "has_docstring": False,
+            "has_all": False,
+            "classes": [],
+            "functions": [],
+            "constants": [],
+            "re_exports": [],
+        }
+
+    inventory = {
+        "thesis_pkg.__init__": _module_entry("thesis_pkg/__init__.py"),
+        "thesis_pkg.pipeline": _module_entry("thesis_pkg/pipeline.py"),
+        "thesis_pkg.notebooks_and_scripts.sec_ccm_unified_runner": _module_entry(
+            "thesis_pkg/notebooks_and_scripts/sec_ccm_unified_runner.py"
+        ),
+    }
+    outward_api = {"all_outward_modules": [], "modules": {}}
+    import_evidence = {"modules": {}}
+
+    _write_json(metadata_dir / "inventory.json", inventory)
+    _write_json(metadata_dir / "outward_api.json", outward_api)
+    _write_json(metadata_dir / "import_evidence.json", import_evidence)
+
+    scaffold_docs.generate_reference_docs(
+        inventory_file=metadata_dir / "inventory.json",
+        outward_api_file=metadata_dir / "outward_api.json",
+        import_evidence_file=metadata_dir / "import_evidence.json",
+        docs_dir=docs_dir,
+        package_root="thesis_pkg",
+    )
+
+    importable_page = (docs_dir / "reference" / "pipeline.md").read_text(encoding="utf-8")
+    script_page = (
+        docs_dir / "reference" / "notebooks_and_scripts" / "sec_ccm_unified_runner.md"
+    ).read_text(encoding="utf-8")
+
+    assert "::: thesis_pkg.pipeline" in importable_page
+    assert "mkdocstrings rendering is skipped" in script_page.lower()
+    assert "::: thesis_pkg.notebooks_and_scripts.sec_ccm_unified_runner" not in script_page
 
 
 def test_nav_structure_check_fails_on_mismatch(tmp_path: Path) -> None:

@@ -40,3 +40,20 @@ Automatic per-run observability artifacts are produced by default:
 - DAG visuals: `sec_ccm_run_dag.mmd` and `sec_ccm_run_dag.dot`
 - Run manifest: `sec_ccm_run_manifest.json`
 - Run report: `sec_ccm_run_report.md`
+
+## Documentation
+
+Install the docs toolchain with:
+
+```bash
+pip install -e .[dev,docs]
+```
+
+Preferred commands:
+
+- `python tools/docs_pipeline.py extract`
+- `python tools/docs_pipeline.py scaffold`
+- `python tools/docs_pipeline.py check`
+- `python tools/docs_pipeline.py build`
+
+On Windows, prefer the wrapper above over direct `python -m mkdocs build` so UTF-8 output handling is applied consistently.

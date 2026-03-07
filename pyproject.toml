@@ -16,6 +16,14 @@ dev = [
   "pytest",
   "PyYAML",
 ]
+docs = [
+  "mkdocs>=1.6,<2.0",
+  "mkdocs-material>=9.7,<10.0",
+  "mkdocs-mermaid2-plugin>=1.2,<2.0",
+  "mkdocstrings[python]>=1.0,<2.0",
+  "pymdown-extensions>=10.0",
+  "PyYAML",
+]
 cython = [
   "Cython>=3.0",
 ]

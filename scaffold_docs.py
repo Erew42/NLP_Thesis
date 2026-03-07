@@ -65,11 +65,22 @@ def _emit_nav_node_lines(node: _NavNode, *, indent: int) -> list[str]:
     return lines
 
 
+def _is_mkdocstrings_renderable(module_name: str, inventory: dict[str, dict]) -> bool:
+    """Return whether mkdocstrings can import the module through package parents."""
+    package_parts = module_name.split(".")[:-1]
+    for idx in range(1, len(package_parts) + 1):
+        package_module = ".".join([*package_parts[:idx], "__init__"])
+        if package_module not in inventory:
+            return False
+    return True
+
+
 def _render_module_page(
     module_name: str,
     module_data: dict,
     outward_data: dict | None,
     import_data: dict | None,
+    render_api: bool,
 ) -> str:
     classes = module_data.get("classes", [])
     functions = module_data.get("functions", [])
@@ -158,7 +169,20 @@ def _render_module_page(
     else:
         lines.extend(["- No `__all__`-based re-exports detected.", ""])
 
-    lines.extend(["## API Rendering", "", f"::: {_mkdocstrings_target(module_name)}", ""])
+    lines.extend(["## API Rendering", ""])
+    if render_api:
+        lines.extend([f"::: {_mkdocstrings_target(module_name)}", ""])
+    else:
+        source_path = str(module_data.get("path") or "unknown")
+        lines.extend(
+            [
+                "Mkdocstrings rendering is skipped for this module because one or more parent directories are not importable packages.",
+                "",
+                f"- Source path: `{source_path}`",
+                "- Reason: at least one intermediate package directory is missing an `__init__.py` file.",
+                "",
+            ]
+        )
     return "\n".join(lines)
 
 
@@ -337,6 +361,7 @@ def generate_reference_docs(
             module_data=inventory[module_name],
             outward_data=outward_modules.get(module_name),
             import_data=import_modules.get(module_name),
+            render_api=_is_mkdocstrings_renderable(module_name, inventory),
         )
         md_file_path.write_text(content, encoding="utf-8")
 
