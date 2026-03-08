@@ -108,7 +108,7 @@ def main() -> None:
             / "final_flagged_data_compdesc_added.sample_5pct_seed42.parquet",
             "CANONICAL_LINK_NAME": "canonical_link_table_after_startdate_change.sample_5pct_seed42.parquet",
             "CCM_DAILY_NAME": "final_flagged_data_compdesc_added.sample_5pct_seed42.parquet",
-            "RUN_CCM_MODE": "REUSE",
+            "RUN_CCM_MODE": "REBUILD",
             "RUN_SEC_PARSE": None,
             "RUN_SEC_YEARLY_MERGE": None,
         },
@@ -228,18 +228,18 @@ def main() -> None:
         RUN_SEC_YEARLY_MERGE = RUN_SEC_PARSE or not existing_year_outputs
     else:
         RUN_SEC_YEARLY_MERGE = bool(profile["RUN_SEC_YEARLY_MERGE"])
-    RUN_SEC_CCM_PREMERGE = True
-    RUN_GATED_ITEM_EXTRACTION = True
-    RUN_UNMATCHED_DIAGNOSTIC_TRACK = True
-    RUN_NO_ITEM_DIAGNOSTICS = True
-    RUN_BOUNDARY_DIAGNOSTICS = True
-    RUN_VALIDATION_CHECKS = True
+    RUN_SEC_CCM_PREMERGE = False
+    RUN_GATED_ITEM_EXTRACTION = False
+    RUN_UNMATCHED_DIAGNOSTIC_TRACK = False
+    RUN_NO_ITEM_DIAGNOSTICS = False
+    RUN_BOUNDARY_DIAGNOSTICS = False
+    RUN_VALIDATION_CHECKS = False
 
     SEC_PARSE_MODE = "parsed"
     YEARS = available_years
     ITEM_EXTRACTION_REGIME = "legacy"
 
-    RUN_ROOT = ROOT / "results" / "sec_ccm_unified_runner" / DATA_PROFILE.lower()
+    RUN_ROOT = SAMPLE_ROOT / "results" / "sec_ccm_unified_runner" / DATA_PROFILE.lower()
     SEC_CCM_OUTPUT_DIR = RUN_ROOT / "sec_ccm_premerge"
     SEC_ITEMS_ANALYSIS_DIR = RUN_ROOT / "items_analysis"
     SEC_ITEMS_DIAGNOSTIC_DIR = RUN_ROOT / "items_diagnostic"
