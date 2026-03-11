@@ -40,8 +40,9 @@ from thesis_pkg.filing_text import (
     summarize_year_parquets,
 )
 from thesis_pkg.pipeline import (
-    SecCcmJoinSpecV1,
+    SecCcmJoinSpecV2,
     build_or_reuse_ccm_daily_stage,
+    make_sec_ccm_join_spec_preset,
     run_sec_ccm_premerge_pipeline,
 )
 
@@ -297,6 +298,7 @@ def main() -> None:
         "ASKHI",
         "VOL",
         "TCAP",
+        "SHROUT",
         "SHRCD",
         "EXCHCD",
     )
@@ -394,13 +396,29 @@ def main() -> None:
     canonical_link_path = ccm_stage_paths["canonical_link_path"]
 
     ccm_daily_lf = pl.scan_parquet(ccm_daily_path)
+    ccm_daily_schema = ccm_daily_lf.collect_schema()
+    daily_contract_cols = ("SHROUT", "SRCTYPE_all", "FILEDATE_all", "FILEDATETIME_all", "n_filings")
+    missing_daily_contract_cols = [col for col in daily_contract_cols if col not in ccm_daily_schema]
     print(
         {
             "ccm_daily_path": str(ccm_daily_path),
             "canonical_link_path": str(canonical_link_path),
             "rows": ccm_daily_lf.select(pl.len()).collect().item(),
+            "has_shrout": "SHROUT" in ccm_daily_schema,
+            "has_filing_arrays": all(
+                col in ccm_daily_schema for col in ("SRCTYPE_all", "FILEDATE_all", "FILEDATETIME_all", "n_filings")
+            ),
+            "missing_daily_contract_cols": missing_daily_contract_cols,
         }
     )
+    if RUN_CCM_MODE == "REUSE" and missing_daily_contract_cols:
+        print(
+            {
+                "warning": "reused daily artifact is missing expected LM2011-facing columns",
+                "missing_cols": missing_daily_contract_cols,
+                "recommended_action": "switch RUN_CCM_MODE to REBUILD to refresh the daily panel",
+            }
+        )
 
     # ## 2) Build link universe + trading calendar
     schema = ccm_daily_lf.collect_schema()
@@ -582,8 +600,7 @@ def main() -> None:
     sec_ccm_paths: dict[str, Path] | None = None
 
     if RUN_SEC_CCM_PREMERGE:
-        join_spec = SecCcmJoinSpecV1(
-            alignment_policy="NEXT_TRADING_DAY_STRICT",
+        join_spec_base = SecCcmJoinSpecV2(
             daily_join_enabled=True,
             daily_join_source="MERGED_DAILY_PANEL",
             daily_permno_col=resolved_permno_col,
@@ -591,6 +608,7 @@ def main() -> None:
             daily_feature_columns=tuple(DAILY_FEATURE_COLUMNS),
             required_daily_non_null_features=tuple(REQUIRED_DAILY_NON_NULL_FEATURES),
         )
+        join_spec = make_sec_ccm_join_spec_preset("lm2011_filing_date", base=join_spec_base)
 
         sec_ccm_paths = run_sec_ccm_premerge_pipeline(
             sec_filings_lf=sec_premerge_input_lf,

@@ -60,6 +60,7 @@ def build_or_reuse_ccm_daily_stage(
             "sfz_del",
             "sfz_nam",
             "sfz_hdr",
+            "sfz_shr",
         }
         tables = load_tables([ccm_base_dir], wanted=wanted)
         missing = sorted(wanted - set(tables))
@@ -83,6 +84,7 @@ def build_or_reuse_ccm_daily_stage(
             tables["sfz_nam"],
             tables["sfz_hdr"],
             start_date,
+            sfz_shr=tables["sfz_shr"],
         )
         price_returns_lf = add_final_returns(price_lf)
         price_filings_lf = attach_filings(price_returns_lf, tables["filingdates"], list(forms_10k_10q))

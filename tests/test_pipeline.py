@@ -137,6 +137,83 @@ def test_build_price_panel_merges_delistings_and_flags():
     assert panel.select("EXCHCD").to_series().to_list() == [1, 1]
 
 
+def test_build_price_panel_attaches_share_history_when_present():
+    ds = pl.DataFrame(
+        {
+            "KYPERMNO": [1, 1],
+            "CALDT": [dt.date(2024, 1, 2), dt.date(2024, 1, 3)],
+            "BIDLO": [10.0, 11.0],
+            "ASKHI": [10.5, 11.5],
+        }
+    )
+    dp = pl.DataFrame(
+        {
+            "KYPERMNO": [1, 1],
+            "CALDT": [dt.date(2024, 1, 2), dt.date(2024, 1, 3)],
+            "RET": [0.01, 0.02],
+            "RETX": [0.009, 0.018],
+            "PRC": [-10.2, -11.3],
+            "TCAP": [100_000_000.0, None],
+            "VOL": [1000.0, 1100.0],
+        }
+    )
+    delist = pl.DataFrame(
+        schema={
+            "KYPERMNO": pl.Int32,
+            "DLSTDT": pl.Date,
+            "DLSTCD": pl.Int32,
+            "DLPRC": pl.Float64,
+            "DLAMT": pl.Float64,
+            "DLRET": pl.Float64,
+            "DLRETX": pl.Float64,
+        }
+    )
+    nam = pl.DataFrame(
+        {
+            "KYPERMNO": [1],
+            "NAMEDT": [dt.date(2023, 1, 1)],
+            "NAMEENDDT": [dt.date(2024, 12, 31)],
+            "SHRCD": [10],
+            "EXCHCD": [1],
+            "PRIMEXCH": ["N"],
+            "TRDSTAT": ["A"],
+            "SECSTAT": ["A"],
+        }
+    )
+    hdr = pl.DataFrame(
+        {
+            "KYPERMNO": [1],
+            "BEGDT": [dt.date(2020, 1, 1)],
+            "ENDDT": [dt.date(2025, 1, 1)],
+            "HSHRCD": [11],
+            "HEXCD": [3],
+            "HPRIMEXCH": ["Q"],
+            "HTRDSTAT": ["A"],
+            "HSECSTAT": ["A"],
+        }
+    )
+    shr = pl.DataFrame(
+        {
+            "KYPERMNO": [1],
+            "SHRSDT": [dt.date(2024, 1, 1)],
+            "SHRSENDDT": [dt.date(2024, 1, 2)],
+            "SHROUT": [12.5],
+        }
+    )
+
+    panel = build_price_panel(
+        ds.lazy(),
+        dp.lazy(),
+        delist.lazy(),
+        nam.lazy(),
+        hdr.lazy(),
+        start_date=dt.date(2024, 1, 2),
+        sfz_shr=shr.lazy(),
+    ).collect()
+
+    assert panel.select("SHROUT").to_series().to_list() == [12.5, None]
+
+
 def test_map_exchcd_to_name_scalar():
     assert map_exchcd_to_name(1) == "NYSE"
     assert map_exchcd_to_name(3) == "NASDAQ"

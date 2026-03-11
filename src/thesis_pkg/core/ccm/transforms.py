@@ -369,6 +369,7 @@ def build_price_panel(
     sfz_nam: pl.LazyFrame,
     sfz_hdr: pl.LazyFrame,
     start_date: dt.date | dt.datetime | str,
+    sfz_shr: pl.LazyFrame | None = None,
 ) -> pl.LazyFrame:
     """Merge CRSP price feeds plus delist data."""
     _require_columns(
@@ -396,6 +397,12 @@ def build_price_panel(
         ("KYPERMNO", "BEGDT", "ENDDT", "HSHRCD", "HEXCD", "HPRIMEXCH", "HTRDSTAT", "HSECSTAT"),
         "sfz_hdr",
     )
+    if sfz_shr is not None:
+        _require_columns(
+            sfz_shr,
+            ("KYPERMNO", "SHRSDT", "SHRSENDDT", "SHROUT"),
+            "sfz_shr",
+        )
 
     start_dt = _coerce_date(start_date)
     ds = sfz_ds.filter(pl.col("CALDT") >= pl.lit(start_dt))
@@ -442,13 +449,47 @@ def build_price_panel(
         .sort("KYPERMNO", "BEGDT")
     )
 
-    price = (
-        price.with_columns(
-            pl.col("KYPERMNO").cast(pl.Int32, strict=False).alias("KYPERMNO"),
-            pl.col("CALDT").cast(pl.Date, strict=False).alias("CALDT"),
+    price = price.with_columns(
+        pl.col("KYPERMNO").cast(pl.Int32, strict=False).alias("KYPERMNO"),
+        pl.col("CALDT").cast(pl.Date, strict=False).alias("CALDT"),
+    ).sort("KYPERMNO", "CALDT")
+
+    if sfz_shr is not None:
+        shr = (
+            sfz_shr.select(
+                pl.col("KYPERMNO").cast(pl.Int32, strict=False).alias("KYPERMNO"),
+                pl.col("SHRSDT").cast(pl.Date, strict=False).alias("SHRSDT"),
+                pl.col("SHRSENDDT").cast(pl.Date, strict=False).alias("SHRSENDDT"),
+                pl.col("SHROUT").cast(pl.Float64, strict=False).alias("_SHROUT"),
+            )
+            .drop_nulls(subset=["KYPERMNO", "SHRSDT"])
+            .unique(subset=["KYPERMNO", "SHRSDT"], keep="first")
+            .sort("KYPERMNO", "SHRSDT")
         )
-        .sort("KYPERMNO", "CALDT")
-        .join_asof(
+        shr_valid = pl.col("SHRSDT").is_not_null() & (
+            pl.col("SHRSENDDT").is_null() | (pl.col("CALDT") <= pl.col("SHRSENDDT"))
+        )
+        price = (
+            price.join_asof(
+                shr,
+                left_on="CALDT",
+                right_on="SHRSDT",
+                by="KYPERMNO",
+                strategy="backward",
+                check_sortedness=False,
+            )
+            .with_columns(
+                pl.when(shr_valid)
+                .then(pl.col("_SHROUT"))
+                .otherwise(pl.lit(None, dtype=pl.Float64))
+                .alias("SHROUT")
+            )
+            .drop("SHRSDT", "SHRSENDDT", "_SHROUT", strict=False)
+            .sort("KYPERMNO", "CALDT")
+        )
+
+    price = (
+        price.join_asof(
             nam,
             left_on="CALDT",
             right_on="NAMEDT",

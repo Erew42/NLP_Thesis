@@ -29,6 +29,9 @@ full_data_run/
 specs_drafts/
 .tmp/
 tmp/
+reports/
+core_paper/
+replication_plan/
 # Agent ephemeral state and memory
 .agent/logs/
 .agent/cache/

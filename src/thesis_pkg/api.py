@@ -26,6 +26,14 @@ from thesis_pkg.core.ccm.sec_ccm_premerge import (
     resolve_links_phase_a,
     join_daily_phase_b,
 )
+from thesis_pkg.core.ccm.lm2011 import (
+    attach_eligible_quarterly_accounting,
+    attach_latest_annual_accounting,
+    attach_pre_filing_market_data,
+    build_annual_accounting_panel,
+    build_quarterly_accounting_panel,
+    derive_filing_trade_anchors,
+)
 from thesis_pkg.core.ccm.transforms import (
     EXCHCD_NAME_MAP,
     SHRCD_FIRST_DIGIT_MAP,
@@ -87,6 +95,12 @@ __all__ = [
     "align_doc_dates_phase_b",
     "join_daily_phase_b",
     "apply_phase_b_reason_codes",
+    "derive_filing_trade_anchors",
+    "build_annual_accounting_panel",
+    "attach_latest_annual_accounting",
+    "build_quarterly_accounting_panel",
+    "attach_eligible_quarterly_accounting",
+    "attach_pre_filing_market_data",
     "build_match_status_doc",
     "build_unmatched_diagnostics_doc",
     "apply_concept_filter_flags_doc",

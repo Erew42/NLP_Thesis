@@ -33,6 +33,7 @@ def _write_required_ccm_tables(
     *,
     include_linkfiscal: bool = True,
     include_securityheader: bool = True,
+    include_sfz_shr: bool = True,
 ) -> None:
     base_dir.mkdir(parents=True, exist_ok=True)
     tables: dict[str, pl.DataFrame] = {
@@ -140,6 +141,15 @@ def _write_required_ccm_tables(
             }
         ),
     }
+    if include_sfz_shr:
+        tables["sfz_shr"] = pl.DataFrame(
+            {
+                "KYPERMNO": [1],
+                "SHRSDT": [dt.date(2020, 1, 1)],
+                "SHRSENDDT": [None],
+                "SHROUT": [10_000.0],
+            }
+        )
     if include_linkfiscal:
         tables["linkfiscalperiodall"] = _empty_linkfiscalperiodall()
     if include_securityheader:
@@ -179,12 +189,13 @@ def test_build_or_reuse_ccm_daily_stage_rebuild_writes_daily_and_canonical(tmp_p
     assert out["canonical_link_path"].exists()
     assert pl.scan_parquet(out["canonical_link_path"]).select(pl.len()).collect().item() > 0
     daily_df = pl.read_parquet(out["ccm_daily_path"])
-    assert {"HSCUSIP", "HISIN", "CUSIP", "ISIN"}.issubset(set(daily_df.columns))
+    assert {"HSCUSIP", "HISIN", "CUSIP", "ISIN", "SHROUT"}.issubset(set(daily_df.columns))
     row = daily_df.row(0, named=True)
     assert row["HSCUSIP"] == "22222222"
     assert row["HISIN"] == "US2222222222"
     assert row["CUSIP"] == "22222222"
     assert row["ISIN"] == "US2222222222"
+    assert row["SHROUT"] == 10_000.0
 
 
 def test_build_or_reuse_ccm_daily_stage_rebuild_raises_when_linkfiscalperiodall_missing(tmp_path: Path) -> None:
@@ -210,6 +221,22 @@ def test_build_or_reuse_ccm_daily_stage_rebuild_raises_when_securityheader_missi
     _write_required_ccm_tables(base_dir, include_linkfiscal=True, include_securityheader=False)
 
     with pytest.raises(ValueError, match="securityheader"):
+        build_or_reuse_ccm_daily_stage(
+            run_mode="REBUILD",
+            ccm_base_dir=base_dir,
+            ccm_derived_dir=derived_dir,
+            ccm_reuse_daily_path=reuse_daily_path,
+            forms_10k_10q=["10-K"],
+        )
+
+
+def test_build_or_reuse_ccm_daily_stage_rebuild_raises_when_sfz_shr_missing(tmp_path: Path) -> None:
+    base_dir = tmp_path / "base_missing_sfz_shr"
+    derived_dir = tmp_path / "derived_missing_sfz_shr"
+    reuse_daily_path = tmp_path / "reuse" / "unused.parquet"
+    _write_required_ccm_tables(base_dir, include_linkfiscal=True, include_sfz_shr=False)
+
+    with pytest.raises(ValueError, match="sfz_shr"):
         build_or_reuse_ccm_daily_stage(
             run_mode="REBUILD",
             ccm_base_dir=base_dir,

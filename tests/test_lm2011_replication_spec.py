@@ -10,7 +10,7 @@ from thesis_pkg.core.ccm.sec_ccm_contracts import make_sec_ccm_join_spec_preset
 from thesis_pkg.core.sec.filing_text import FilingItemSchema, ParsedFilingSchema, RawTextSchema
 
 
-SPEC_PATH = Path("specs_drafts/lm2011_ff2001_replication_spec.yaml")
+SPEC_PATH = Path("specs_drafts/lm2011_replication_spec.yaml")
 EXPECTED_RULE_BASIS = [
     "paper_explicit",
     "implementation_convention",
@@ -113,7 +113,7 @@ def test_lm2011_spec_loads_with_phase0_phase1_contract_sections() -> None:
     assert "sec_ccm_premerge" in datasets
     assert (
         datasets["crsp_ccm_daily"]["derived_artifacts"]["final_daily_panel_parquet"]["status"]
-        == "legacy_diagnostic_only"
+        == "active"
     )
 
     validation = spec["validation_and_acceptance"]
@@ -283,6 +283,51 @@ def test_lm2011_spec_join_preset_matches_library_definition() -> None:
     assert join_spec["required_daily_non_null_features"] == list(
         preset.required_daily_non_null_features
     )
+
+
+def test_lm2011_spec_daily_artifact_and_doc_grain_authority_notes_reflect_corrected_state() -> None:
+    spec = _load_spec()
+    final_daily = _get_node(
+        spec,
+        "datasets",
+        "crsp_ccm_daily",
+        "derived_artifacts",
+        "final_daily_panel_parquet",
+    )
+    ccm_premerge = _get_node(spec, "datasets", "sec_ccm_premerge")
+
+    assert "blocking_caveat" not in final_daily
+    assert (
+        "The corrected sampled daily artifact is authoritative for its filing-array columns."
+        in final_daily["artifact_authority_note"]
+    )
+    assert (
+        "Use the archived sec_ccm_premerge doc-grain artifacts as the preferred LM2011 linkage interface for later filing-level work."
+        in final_daily["architecture_preference_note"]
+    )
+    assert "Preferred doc-grain SEC-CCM linkage artifacts for later LM2011 phases." == ccm_premerge["role"]
+
+
+def test_lm2011_spec_filingdates_is_a_daily_stage_contract_input() -> None:
+    spec = _load_spec()
+    filingdates = _get_node(spec, "datasets", "ccm_filingdates")
+
+    assert filingdates["stage"] == "daily_market_data_stage"
+    assert (
+        "daily-stage contract input" in filingdates["role"]
+    )
+
+
+def test_lm2011_spec_keeps_monthly_trading_return_source_unresolved() -> None:
+    spec = _load_spec()
+    unresolved = _get_node(spec, "implementation_notes", "unresolved_choices")
+
+    monthly_choice = next(
+        entry for entry in unresolved if entry["id"] == "lm2011_monthly_stock_return_source"
+    )
+    assert monthly_choice["status"] == "active"
+    assert monthly_choice["candidate_inputs"] == ["sfz_mth", "sfz_agg_mth"]
+    assert "The monthly stock-return source for lm2011_trading_strategy_panel remains an explicit implementation choice." in monthly_choice["statement"]
 
 
 def test_lm2011_primary_vs_secondary_outputs_are_partitioned_correctly() -> None:
