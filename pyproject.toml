@@ -7,7 +7,9 @@ requires-python = ">=3.10"
 dependencies = [
   "polars>=1.0.0",
   "pandas",
+  "openpyxl",
   "pyarrow",
+  "xlsxwriter",
   # add others you actually use
 ]
 

@@ -56,6 +56,12 @@ from thesis_pkg.core.ccm.transforms import (
 from thesis_pkg.core.sec.filing_text import ParsedFilingSchema, RawTextSchema, parse_filename_minimal
 from thesis_pkg.io.parquet import load_tables
 from thesis_pkg.pipelines.ccm_pipeline import merge_histories
+from thesis_pkg.pipelines.refinitiv_bridge_pipeline import (
+    build_refinitiv_step1_bridge_universe,
+    build_refinitiv_null_ric_rescue_candidates,
+    run_refinitiv_null_ric_diagnostics_pipeline,
+    run_refinitiv_step1_bridge_pipeline,
+)
 from thesis_pkg.pipelines.sec_ccm_pipeline import run_sec_ccm_premerge_pipeline
 from thesis_pkg.pipelines.sec_pipeline import process_zip_year, process_zip_year_raw_text
 
@@ -104,7 +110,11 @@ __all__ = [
     "build_match_status_doc",
     "build_unmatched_diagnostics_doc",
     "apply_concept_filter_flags_doc",
+    "build_refinitiv_step1_bridge_universe",
+    "build_refinitiv_null_ric_rescue_candidates",
     "run_sec_ccm_premerge_pipeline",
+    "run_refinitiv_null_ric_diagnostics_pipeline",
+    "run_refinitiv_step1_bridge_pipeline",
     "parse_filename_minimal",
     "process_zip_year_raw_text",
     "process_zip_year",

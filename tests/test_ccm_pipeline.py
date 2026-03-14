@@ -121,6 +121,7 @@ def _write_required_ccm_tables(
                 "KYPERMNO": [1],
                 "NAMEDT": [dt.date(2020, 1, 1)],
                 "NAMEENDDT": [dt.date(2025, 12, 31)],
+                "TICKER": ["TEST"],
                 "SHRCD": [10],
                 "EXCHCD": [1],
                 "PRIMEXCH": ["N"],
@@ -189,13 +190,14 @@ def test_build_or_reuse_ccm_daily_stage_rebuild_writes_daily_and_canonical(tmp_p
     assert out["canonical_link_path"].exists()
     assert pl.scan_parquet(out["canonical_link_path"]).select(pl.len()).collect().item() > 0
     daily_df = pl.read_parquet(out["ccm_daily_path"])
-    assert {"HSCUSIP", "HISIN", "CUSIP", "ISIN", "SHROUT"}.issubset(set(daily_df.columns))
+    assert {"HSCUSIP", "HISIN", "CUSIP", "ISIN", "SHROUT", "TICKER"}.issubset(set(daily_df.columns))
     row = daily_df.row(0, named=True)
     assert row["HSCUSIP"] == "22222222"
     assert row["HISIN"] == "US2222222222"
     assert row["CUSIP"] == "22222222"
     assert row["ISIN"] == "US2222222222"
     assert row["SHROUT"] == 10_000.0
+    assert row["TICKER"] == "TEST"
 
 
 def test_build_or_reuse_ccm_daily_stage_rebuild_raises_when_linkfiscalperiodall_missing(tmp_path: Path) -> None:

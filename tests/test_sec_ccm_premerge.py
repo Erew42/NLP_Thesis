@@ -69,6 +69,8 @@ def test_join_spec_normalization_from_v1_and_presets():
     assert v2.daily_join_source == "MERGED_DAILY_PANEL"
     assert v2.required_daily_non_null_features == ("RET",)
     assert v2.daily_join_max_forward_lag_days == 14
+    assert "TICKER" in SecCcmJoinSpecV1().daily_feature_columns
+    assert "TICKER" in v2.daily_feature_columns
 
     lm2011 = make_sec_ccm_join_spec_preset("lm2011_filing_date")
     assert lm2011.phase_b_alignment_mode == PhaseBAlignmentMode.FILING_DATE_EXACT_OR_NEXT_TRADING
@@ -645,6 +647,7 @@ def test_end_to_end_pipeline_outputs_doc_grain_artifacts(tmp_path: Path):
             "PRC": [10.0],
             "BIDLO": [9.5],
             "ASKHI": [10.5],
+            "TICKER": ["ALFA"],
             "SHRCD": [10],
             "EXCHCD": [1],
             "VOL": [1000.0],
@@ -685,12 +688,20 @@ def test_end_to_end_pipeline_outputs_doc_grain_artifacts(tmp_path: Path):
 
     final_df = pl.read_parquet(paths["final_flagged_data"])
     status_df = pl.read_parquet(paths["sec_ccm_match_status"])
+    matched_df = pl.read_parquet(paths["sec_ccm_matched_clean"])
+    unmatched_df = pl.read_parquet(paths["sec_ccm_unmatched_filings"])
     unmatched_diag_df = pl.read_parquet(paths["sec_ccm_unmatched_diagnostics"])
 
     assert final_df.height == sec.height
     assert final_df["doc_id"].n_unique() == sec.height
     assert status_df.height == sec.height
     assert status_df["doc_id"].n_unique() == sec.height
+    assert "TICKER" in final_df.columns
+    assert "TICKER" in matched_df.columns
+    assert "TICKER" in unmatched_df.columns
+    assert "TICKER" not in status_df.columns
+    assert matched_df.filter(pl.col("doc_id") == "d1").select("TICKER").item() == "ALFA"
+    assert unmatched_df.filter(pl.col("doc_id") == "d2").select("TICKER").item() is None
     assert final_df.schema["kypermno"] == pl.Int32
     assert final_df.schema["data_status"] == STATUS_DTYPE
     assert final_df.select(pl.col("data_status").is_null().any()).item() is False

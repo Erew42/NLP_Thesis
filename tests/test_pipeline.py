@@ -93,6 +93,7 @@ def test_build_price_panel_merges_delistings_and_flags():
             "KYPERMNO": [1],
             "NAMEDT": [dt.date(2023, 1, 1)],
             "NAMEENDDT": [dt.date(2024, 12, 31)],
+            "TICKER": ["TEST"],
             "SHRCD": [10],
             "EXCHCD": [1],
             "PRIMEXCH": ["N"],
@@ -135,6 +136,7 @@ def test_build_price_panel_merges_delistings_and_flags():
     assert panel.filter(pl.col("CALDT") == dt.date(2024, 1, 3)).select("DLRET").item() == -0.5
     assert panel.select("SHRCD").to_series().to_list() == [10, 10]
     assert panel.select("EXCHCD").to_series().to_list() == [1, 1]
+    assert panel.select("TICKER").to_series().to_list() == ["TEST", "TEST"]
 
 
 def test_build_price_panel_attaches_share_history_when_present():
@@ -173,6 +175,7 @@ def test_build_price_panel_attaches_share_history_when_present():
             "KYPERMNO": [1],
             "NAMEDT": [dt.date(2023, 1, 1)],
             "NAMEENDDT": [dt.date(2024, 12, 31)],
+            "TICKER": ["TEST"],
             "SHRCD": [10],
             "EXCHCD": [1],
             "PRIMEXCH": ["N"],
@@ -363,6 +366,7 @@ def test_build_price_panel_uses_hdr_fallback_when_nam_out_of_range():
             "KYPERMNO": [1],
             "NAMEDT": [dt.date(2020, 1, 1)],
             "NAMEENDDT": [dt.date(2023, 12, 31)],
+            "TICKER": ["OLD"],
             "SHRCD": [10],
             "EXCHCD": [1],
             "PRIMEXCH": ["N"],
@@ -397,6 +401,7 @@ def test_build_price_panel_uses_hdr_fallback_when_nam_out_of_range():
     assert panel.select("PRIMEXCH").item() == "Q"
     assert panel.select("TRDSTAT").item() == "A"
     assert panel.select("SECSTAT").item() == "A"
+    assert panel.select("TICKER").item() is None
 
 
 def test_build_price_panel_sets_null_metadata_when_nam_and_hdr_out_of_range():
@@ -435,6 +440,7 @@ def test_build_price_panel_sets_null_metadata_when_nam_and_hdr_out_of_range():
             "KYPERMNO": [1],
             "NAMEDT": [dt.date(2020, 1, 1)],
             "NAMEENDDT": [dt.date(2023, 12, 31)],
+            "TICKER": ["OLD"],
             "SHRCD": [10],
             "EXCHCD": [1],
             "PRIMEXCH": ["N"],
@@ -469,6 +475,145 @@ def test_build_price_panel_sets_null_metadata_when_nam_and_hdr_out_of_range():
     assert panel.select("PRIMEXCH").item() is None
     assert panel.select("TRDSTAT").item() is None
     assert panel.select("SECSTAT").item() is None
+    assert panel.select("TICKER").item() is None
+
+
+def test_build_price_panel_uses_historical_ticker_from_nam() -> None:
+    ds = pl.DataFrame(
+        {
+            "KYPERMNO": [1, 1],
+            "CALDT": [dt.date(2024, 1, 2), dt.date(2024, 1, 3)],
+            "BIDLO": [10.0, 11.0],
+            "ASKHI": [10.5, 11.5],
+        }
+    )
+    dp = pl.DataFrame(
+        {
+            "KYPERMNO": [1, 1],
+            "CALDT": [dt.date(2024, 1, 2), dt.date(2024, 1, 3)],
+            "RET": [0.01, 0.02],
+            "RETX": [0.009, 0.018],
+            "PRC": [-10.2, -11.3],
+            "TCAP": [100_000_000.0, 101_000_000.0],
+            "VOL": [1000.0, 1100.0],
+        }
+    )
+    delist = pl.DataFrame(
+        schema={
+            "KYPERMNO": pl.Int32,
+            "DLSTDT": pl.Date,
+            "DLSTCD": pl.Int32,
+            "DLPRC": pl.Float64,
+            "DLAMT": pl.Float64,
+            "DLRET": pl.Float64,
+            "DLRETX": pl.Float64,
+        }
+    )
+    nam = pl.DataFrame(
+        {
+            "KYPERMNO": [1, 1],
+            "NAMEDT": [dt.date(2020, 1, 1), dt.date(2024, 1, 3)],
+            "NAMEENDDT": [dt.date(2024, 1, 2), dt.date(2024, 12, 31)],
+            "TICKER": ["OLD", "NEW"],
+            "SHRCD": [10, 10],
+            "EXCHCD": [1, 1],
+            "PRIMEXCH": ["N", "N"],
+            "TRDSTAT": ["A", "A"],
+            "SECSTAT": ["A", "A"],
+        }
+    )
+    hdr = pl.DataFrame(
+        {
+            "KYPERMNO": [1],
+            "BEGDT": [dt.date(2020, 1, 1)],
+            "ENDDT": [dt.date(2024, 12, 31)],
+            "HSHRCD": [11],
+            "HEXCD": [3],
+            "HPRIMEXCH": ["Q"],
+            "HTRDSTAT": ["A"],
+            "HSECSTAT": ["A"],
+        }
+    )
+
+    panel = build_price_panel(
+        ds.lazy(),
+        dp.lazy(),
+        delist.lazy(),
+        nam.lazy(),
+        hdr.lazy(),
+        start_date=dt.date(2024, 1, 2),
+    ).collect()
+
+    assert panel.sort("CALDT").select("TICKER").to_series().to_list() == ["OLD", "NEW"]
+
+
+def test_build_price_panel_normalizes_blank_ticker_to_null() -> None:
+    ds = pl.DataFrame(
+        {
+            "KYPERMNO": [1],
+            "CALDT": [dt.date(2024, 1, 2)],
+            "BIDLO": [10.0],
+            "ASKHI": [10.5],
+        }
+    )
+    dp = pl.DataFrame(
+        {
+            "KYPERMNO": [1],
+            "CALDT": [dt.date(2024, 1, 2)],
+            "RET": [0.01],
+            "RETX": [0.009],
+            "PRC": [-10.2],
+            "TCAP": [100_000_000.0],
+            "VOL": [1000.0],
+        }
+    )
+    delist = pl.DataFrame(
+        schema={
+            "KYPERMNO": pl.Int32,
+            "DLSTDT": pl.Date,
+            "DLSTCD": pl.Int32,
+            "DLPRC": pl.Float64,
+            "DLAMT": pl.Float64,
+            "DLRET": pl.Float64,
+            "DLRETX": pl.Float64,
+        }
+    )
+    nam = pl.DataFrame(
+        {
+            "KYPERMNO": [1],
+            "NAMEDT": [dt.date(2020, 1, 1)],
+            "NAMEENDDT": [dt.date(2024, 12, 31)],
+            "TICKER": ["   "],
+            "SHRCD": [10],
+            "EXCHCD": [1],
+            "PRIMEXCH": ["N"],
+            "TRDSTAT": ["A"],
+            "SECSTAT": ["A"],
+        }
+    )
+    hdr = pl.DataFrame(
+        {
+            "KYPERMNO": [1],
+            "BEGDT": [dt.date(2020, 1, 1)],
+            "ENDDT": [dt.date(2024, 12, 31)],
+            "HSHRCD": [11],
+            "HEXCD": [3],
+            "HPRIMEXCH": ["Q"],
+            "HTRDSTAT": ["A"],
+            "HSECSTAT": ["A"],
+        }
+    )
+
+    panel = build_price_panel(
+        ds.lazy(),
+        dp.lazy(),
+        delist.lazy(),
+        nam.lazy(),
+        hdr.lazy(),
+        start_date=dt.date(2024, 1, 2),
+    ).collect()
+
+    assert panel.select("TICKER").item() is None
 
 
 def test_build_price_panel_requires_nam_and_hdr_columns():

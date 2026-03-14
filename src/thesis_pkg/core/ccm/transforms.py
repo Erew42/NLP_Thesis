@@ -281,6 +281,16 @@ def add_shrcd_name(
     return lf.with_columns(shrcd_name_expr(code_col, unknown=unknown).alias(out_col))
 
 
+def common_stock_pass_expr(code_col: str = "SHRCD") -> pl.Expr:
+    """Return the canonical common-stock predicate (CRSP SHRCD in {10, 11})."""
+    return pl.col(code_col).cast(pl.Int32, strict=False).is_in([10, 11]).fill_null(False)
+
+
+def major_exchange_pass_expr(code_col: str = "EXCHCD") -> pl.Expr:
+    """Return the canonical major-exchange predicate (CRSP EXCHCD in {1, 2, 3})."""
+    return pl.col(code_col).cast(pl.Int32, strict=False).is_in([1, 2, 3]).fill_null(False)
+
+
 def filter_us_common_major_exchange(
     lf: pl.LazyFrame,
     *,
@@ -324,8 +334,8 @@ def apply_concept_filter_flags_doc(final_doc_lf: pl.LazyFrame) -> pl.LazyFrame:
     market_cap_col = _resolve_first_existing(schema, ("TCAP",), "concept filter input (TCAP market cap)")
 
     price_ok = (pl.col(price_col).abs().cast(pl.Float64, strict=False) >= pl.lit(1.0)).fill_null(False)
-    common_stock_ok = pl.col(shrcd_col).cast(pl.Int32, strict=False).is_in([10, 11]).fill_null(False)
-    major_exchange_ok = pl.col(exchcd_col).cast(pl.Int32, strict=False).is_in([1, 2, 3]).fill_null(False)
+    common_stock_ok = common_stock_pass_expr(shrcd_col)
+    major_exchange_ok = major_exchange_pass_expr(exchcd_col)
     liquidity_ok = (pl.col(vol_col).cast(pl.Float64, strict=False).fill_null(0.0) > pl.lit(0.0)).fill_null(False)
     non_microcap_ok = (
         pl.col(market_cap_col).cast(pl.Float64, strict=False).fill_null(0.0) >= pl.lit(50_000_000.0)
@@ -389,7 +399,7 @@ def build_price_panel(
     )
     _require_columns(
         sfz_nam,
-        ("KYPERMNO", "NAMEDT", "NAMEENDDT", "SHRCD", "EXCHCD", "PRIMEXCH", "TRDSTAT", "SECSTAT"),
+        ("KYPERMNO", "NAMEDT", "NAMEENDDT", "TICKER", "SHRCD", "EXCHCD", "PRIMEXCH", "TRDSTAT", "SECSTAT"),
         "sfz_nam",
     )
     _require_columns(
@@ -418,11 +428,17 @@ def build_price_panel(
         ).alias("data_status")
     )
 
+    nam_ticker = pl.col("TICKER").cast(pl.Utf8, strict=False).str.strip_chars()
+
     nam = (
         sfz_nam.select(
             pl.col("KYPERMNO").cast(pl.Int32, strict=False).alias("KYPERMNO"),
             pl.col("NAMEDT").cast(pl.Date, strict=False).alias("NAMEDT"),
             pl.col("NAMEENDDT").cast(pl.Date, strict=False).alias("NAMEENDDT"),
+            pl.when(nam_ticker.str.len_chars().fill_null(0) > 0)
+            .then(nam_ticker)
+            .otherwise(pl.lit(None, dtype=pl.Utf8))
+            .alias("_NAM_TICKER"),
             pl.col("SHRCD").cast(pl.Int32, strict=False).alias("_NAM_SHRCD"),
             pl.col("EXCHCD").cast(pl.Int32, strict=False).alias("_NAM_EXCHCD"),
             pl.col("PRIMEXCH").cast(pl.Utf8, strict=False).alias("_NAM_PRIMEXCH"),
@@ -510,6 +526,7 @@ def build_price_panel(
     nam_valid = pl.col("NAMEDT").is_not_null() & (pl.col("CALDT") <= pl.col("NAMEENDDT"))
     hdr_valid = pl.col("BEGDT").is_not_null() & (pl.col("CALDT") <= pl.col("ENDDT"))
     price = price.with_columns(
+        pl.when(nam_valid).then(pl.col("_NAM_TICKER")).otherwise(pl.lit(None, dtype=pl.Utf8)).alias("TICKER"),
         pl.coalesce(
             [
                 pl.when(nam_valid).then(pl.col("_NAM_SHRCD")).otherwise(pl.lit(None, dtype=pl.Int32)),
@@ -545,6 +562,7 @@ def build_price_panel(
         "NAMEENDDT",
         "BEGDT",
         "ENDDT",
+        "_NAM_TICKER",
         "_NAM_SHRCD",
         "_NAM_EXCHCD",
         "_NAM_PRIMEXCH",

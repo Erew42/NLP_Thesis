@@ -43,6 +43,8 @@ from thesis_pkg.pipeline import (
     SecCcmJoinSpecV2,
     build_or_reuse_ccm_daily_stage,
     make_sec_ccm_join_spec_preset,
+    run_refinitiv_null_ric_diagnostics_pipeline,
+    run_refinitiv_step1_bridge_pipeline,
     run_sec_ccm_premerge_pipeline,
 )
 
@@ -229,7 +231,9 @@ def main() -> None:
         RUN_SEC_YEARLY_MERGE = RUN_SEC_PARSE or not existing_year_outputs
     else:
         RUN_SEC_YEARLY_MERGE = bool(profile["RUN_SEC_YEARLY_MERGE"])
-    RUN_SEC_CCM_PREMERGE = False
+    RUN_SEC_CCM_PREMERGE = True
+    RUN_REFINITIV_STEP1 = True
+    RUN_REFINITIV_NULL_RIC_DIAGNOSTICS = True
     RUN_GATED_ITEM_EXTRACTION = False
     RUN_UNMATCHED_DIAGNOSTIC_TRACK = False
     RUN_NO_ITEM_DIAGNOSTICS = False
@@ -247,6 +251,8 @@ def main() -> None:
     SEC_NO_ITEM_DIR = RUN_ROOT / "no_item_diagnostics"
     BOUNDARY_OUT_DIR = RUN_ROOT / "boundary_diagnostics"
     BOUNDARY_INPUT_DIR = BOUNDARY_OUT_DIR / "matched_filings_input"
+    REFINITIV_STEP1_OUT_DIR = RUN_ROOT / "refinitiv_step1"
+    REFINITIV_NULL_RIC_DIAGNOSTICS_DIR = REFINITIV_STEP1_OUT_DIR / "null_ric_diagnostics_common_stock"
 
     if IN_COLAB:
         LOCAL_TMP = Path("/content/_tmp_zip")
@@ -269,6 +275,8 @@ def main() -> None:
         SEC_NO_ITEM_DIR,
         BOUNDARY_OUT_DIR,
         BOUNDARY_INPUT_DIR,
+        REFINITIV_STEP1_OUT_DIR,
+        REFINITIV_NULL_RIC_DIAGNOSTICS_DIR,
         LOCAL_TMP,
         LOCAL_WORK,
         LOCAL_ITEM_WORK,
@@ -299,6 +307,7 @@ def main() -> None:
         "VOL",
         "TCAP",
         "SHROUT",
+        "TICKER",
         "SHRCD",
         "EXCHCD",
     )
@@ -456,6 +465,41 @@ def main() -> None:
             "trading_days": trading_calendar_lf.select(pl.len()).collect().item(),
         }
     )
+
+    # ## 2b) Refinitiv bridge step 1
+    refinitiv_step1_paths: dict[str, Path] | None = None
+    refinitiv_null_ric_paths: dict[str, Path] | None = None
+    if RUN_REFINITIV_STEP1:
+        company_description_path = CCM_BASE_DIR / "companydescription.parquet"
+        company_description_lf = (
+            pl.scan_parquet(company_description_path)
+            if company_description_path.exists()
+            else None
+        )
+        refinitiv_step1_paths = run_refinitiv_step1_bridge_pipeline(
+            daily_lf=ccm_daily_lf,
+            output_dir=REFINITIV_STEP1_OUT_DIR,
+            company_description_lf=company_description_lf,
+            source_daily_path=ccm_daily_path,
+        )
+        for key in sorted(refinitiv_step1_paths):
+            print(f"{key}: {refinitiv_step1_paths[key]}")
+    if RUN_REFINITIV_NULL_RIC_DIAGNOSTICS:
+        filled_lookup_path = REFINITIV_STEP1_OUT_DIR / "refinitiv_ric_lookup_handoff_common_stock_filled_in.xlsx"
+        if filled_lookup_path.exists():
+            refinitiv_null_ric_paths = run_refinitiv_null_ric_diagnostics_pipeline(
+                filled_lookup_workbook_path=filled_lookup_path,
+                output_dir=REFINITIV_NULL_RIC_DIAGNOSTICS_DIR,
+            )
+            for key in sorted(refinitiv_null_ric_paths):
+                print(f"{key}: {refinitiv_null_ric_paths[key]}")
+        else:
+            print(
+                {
+                    "warning": "skipping Refinitiv NULL-RIC diagnostics; filled lookup workbook not found",
+                    "expected_path": str(filled_lookup_path),
+                }
+            )
 
     # ## 3) SEC parse and yearly merge
     if RUN_SEC_PARSE:
@@ -869,6 +913,12 @@ def main() -> None:
 
     if ccm_daily_path is not None:
         _add("ccm", "ccm_daily_path", ccm_daily_path)
+    if refinitiv_step1_paths is not None:
+        for key in sorted(refinitiv_step1_paths):
+            _add("refinitiv_step1", key, Path(refinitiv_step1_paths[key]))
+    if refinitiv_null_ric_paths is not None:
+        for key in sorted(refinitiv_null_ric_paths):
+            _add("refinitiv_null_ric", key, Path(refinitiv_null_ric_paths[key]))
     if sec_ccm_paths is not None:
         for key in sorted(sec_ccm_paths):
             _add("sec_ccm", key, Path(sec_ccm_paths[key]))
