@@ -44,6 +44,12 @@ from thesis_pkg.pipeline import (
     build_or_reuse_ccm_daily_stage,
     make_sec_ccm_join_spec_preset,
     run_refinitiv_null_ric_diagnostics_pipeline,
+    run_refinitiv_step1_ownership_validation_handoff_pipeline,
+    run_refinitiv_step1_ownership_validation_results_pipeline,
+    run_refinitiv_step1_ownership_universe_handoff_pipeline,
+    run_refinitiv_step1_ownership_universe_results_pipeline,
+    run_refinitiv_step1_resolution_diagnostic_pipeline,
+    run_refinitiv_step1_resolution_pipeline,
     run_refinitiv_step1_bridge_pipeline,
     run_sec_ccm_premerge_pipeline,
 )
@@ -233,6 +239,12 @@ def main() -> None:
         RUN_SEC_YEARLY_MERGE = bool(profile["RUN_SEC_YEARLY_MERGE"])
     RUN_SEC_CCM_PREMERGE = True
     RUN_REFINITIV_STEP1 = True
+    RUN_REFINITIV_STEP1_RESOLUTION = True
+    RUN_REFINITIV_STEP1_RESOLUTION_DIAGNOSTICS = True
+    RUN_REFINITIV_OWNERSHIP_VALIDATION_HANDOFF = True
+    RUN_REFINITIV_OWNERSHIP_VALIDATION_RESULTS = True
+    RUN_REFINITIV_OWNERSHIP_UNIVERSE_HANDOFF = True
+    RUN_REFINITIV_OWNERSHIP_UNIVERSE_RESULTS = True
     RUN_REFINITIV_NULL_RIC_DIAGNOSTICS = True
     RUN_GATED_ITEM_EXTRACTION = False
     RUN_UNMATCHED_DIAGNOSTIC_TRACK = False
@@ -252,6 +264,9 @@ def main() -> None:
     BOUNDARY_OUT_DIR = RUN_ROOT / "boundary_diagnostics"
     BOUNDARY_INPUT_DIR = BOUNDARY_OUT_DIR / "matched_filings_input"
     REFINITIV_STEP1_OUT_DIR = RUN_ROOT / "refinitiv_step1"
+    REFINITIV_RESOLUTION_DIAGNOSTICS_DIR = REFINITIV_STEP1_OUT_DIR / "resolution_diagnostics_common_stock"
+    REFINITIV_OWNERSHIP_VALIDATION_DIR = REFINITIV_STEP1_OUT_DIR / "ownership_validation_common_stock"
+    REFINITIV_OWNERSHIP_UNIVERSE_DIR = REFINITIV_STEP1_OUT_DIR / "ownership_universe_common_stock"
     REFINITIV_NULL_RIC_DIAGNOSTICS_DIR = REFINITIV_STEP1_OUT_DIR / "null_ric_diagnostics_common_stock"
 
     if IN_COLAB:
@@ -276,6 +291,9 @@ def main() -> None:
         BOUNDARY_OUT_DIR,
         BOUNDARY_INPUT_DIR,
         REFINITIV_STEP1_OUT_DIR,
+        REFINITIV_RESOLUTION_DIAGNOSTICS_DIR,
+        REFINITIV_OWNERSHIP_VALIDATION_DIR,
+        REFINITIV_OWNERSHIP_UNIVERSE_DIR,
         REFINITIV_NULL_RIC_DIAGNOSTICS_DIR,
         LOCAL_TMP,
         LOCAL_WORK,
@@ -468,6 +486,12 @@ def main() -> None:
 
     # ## 2b) Refinitiv bridge step 1
     refinitiv_step1_paths: dict[str, Path] | None = None
+    refinitiv_resolution_paths: dict[str, Path] | None = None
+    refinitiv_resolution_diagnostic_paths: dict[str, Path] | None = None
+    refinitiv_ownership_validation_handoff_paths: dict[str, Path] | None = None
+    refinitiv_ownership_validation_results_paths: dict[str, Path] | None = None
+    refinitiv_ownership_universe_handoff_paths: dict[str, Path] | None = None
+    refinitiv_ownership_universe_results_paths: dict[str, Path] | None = None
     refinitiv_null_ric_paths: dict[str, Path] | None = None
     if RUN_REFINITIV_STEP1:
         company_description_path = CCM_BASE_DIR / "companydescription.parquet"
@@ -484,6 +508,122 @@ def main() -> None:
         )
         for key in sorted(refinitiv_step1_paths):
             print(f"{key}: {refinitiv_step1_paths[key]}")
+    if RUN_REFINITIV_STEP1_RESOLUTION:
+        filled_extended_lookup_path = (
+            REFINITIV_STEP1_OUT_DIR / "refinitiv_ric_lookup_handoff_common_stock_extended_filled_in.xlsx"
+        )
+        if filled_extended_lookup_path.exists():
+            refinitiv_resolution_paths = run_refinitiv_step1_resolution_pipeline(
+                filled_lookup_workbook_path=filled_extended_lookup_path,
+                output_dir=REFINITIV_STEP1_OUT_DIR,
+            )
+            for key in sorted(refinitiv_resolution_paths):
+                print(f"{key}: {refinitiv_resolution_paths[key]}")
+        else:
+            print(
+                {
+                    "warning": "skipping Refinitiv step-1 resolution; filled extended lookup workbook not found",
+                    "expected_path": str(filled_extended_lookup_path),
+                }
+            )
+    if RUN_REFINITIV_STEP1_RESOLUTION_DIAGNOSTICS:
+        resolution_artifact_path = (
+            refinitiv_resolution_paths["refinitiv_ric_resolution_common_stock_parquet"]
+            if refinitiv_resolution_paths is not None
+            else REFINITIV_STEP1_OUT_DIR / "refinitiv_ric_resolution_common_stock.parquet"
+        )
+        if resolution_artifact_path.exists():
+            refinitiv_resolution_diagnostic_paths = run_refinitiv_step1_resolution_diagnostic_pipeline(
+                resolution_artifact_path=resolution_artifact_path,
+                output_dir=REFINITIV_RESOLUTION_DIAGNOSTICS_DIR,
+            )
+            for key in sorted(refinitiv_resolution_diagnostic_paths):
+                print(f"{key}: {refinitiv_resolution_diagnostic_paths[key]}")
+        else:
+            print(
+                {
+                    "warning": "skipping Refinitiv step-1 resolution diagnostics; resolved parquet not found",
+                    "expected_path": str(resolution_artifact_path),
+                }
+            )
+    if RUN_REFINITIV_OWNERSHIP_VALIDATION_HANDOFF:
+        resolution_diagnostic_handoff_csv_path = (
+            refinitiv_resolution_diagnostic_paths["refinitiv_ric_resolution_diagnostic_handoff_csv"]
+            if refinitiv_resolution_diagnostic_paths is not None
+            else REFINITIV_RESOLUTION_DIAGNOSTICS_DIR / "refinitiv_ric_resolution_diagnostic_handoff.csv"
+        )
+        if resolution_diagnostic_handoff_csv_path.exists():
+            refinitiv_ownership_validation_handoff_paths = run_refinitiv_step1_ownership_validation_handoff_pipeline(
+                resolution_diagnostic_handoff_csv_path=resolution_diagnostic_handoff_csv_path,
+                output_dir=REFINITIV_OWNERSHIP_VALIDATION_DIR,
+            )
+            for key in sorted(refinitiv_ownership_validation_handoff_paths):
+                print(f"{key}: {refinitiv_ownership_validation_handoff_paths[key]}")
+        else:
+            print(
+                {
+                    "warning": "skipping Refinitiv ownership validation handoff; diagnostic handoff CSV not found",
+                    "expected_path": str(resolution_diagnostic_handoff_csv_path),
+                }
+            )
+    if RUN_REFINITIV_OWNERSHIP_VALIDATION_RESULTS:
+        ownership_validation_filled_workbook_path = (
+            REFINITIV_OWNERSHIP_VALIDATION_DIR
+            / "refinitiv_ownership_validation_handoff_common_stock_filled_in.xlsx"
+        )
+        if ownership_validation_filled_workbook_path.exists():
+            refinitiv_ownership_validation_results_paths = run_refinitiv_step1_ownership_validation_results_pipeline(
+                filled_workbook_path=ownership_validation_filled_workbook_path,
+                output_dir=REFINITIV_OWNERSHIP_VALIDATION_DIR,
+            )
+            for key in sorted(refinitiv_ownership_validation_results_paths):
+                print(f"{key}: {refinitiv_ownership_validation_results_paths[key]}")
+        else:
+            print(
+                {
+                    "warning": "skipping Refinitiv ownership validation results; filled ownership workbook not found",
+                    "expected_path": str(ownership_validation_filled_workbook_path),
+                }
+            )
+    if RUN_REFINITIV_OWNERSHIP_UNIVERSE_HANDOFF:
+        resolution_artifact_path = (
+            refinitiv_resolution_paths["refinitiv_ric_resolution_common_stock_parquet"]
+            if refinitiv_resolution_paths is not None
+            else REFINITIV_STEP1_OUT_DIR / "refinitiv_ric_resolution_common_stock.parquet"
+        )
+        if resolution_artifact_path.exists():
+            refinitiv_ownership_universe_handoff_paths = run_refinitiv_step1_ownership_universe_handoff_pipeline(
+                resolution_artifact_path=resolution_artifact_path,
+                output_dir=REFINITIV_OWNERSHIP_UNIVERSE_DIR,
+            )
+            for key in sorted(refinitiv_ownership_universe_handoff_paths):
+                print(f"{key}: {refinitiv_ownership_universe_handoff_paths[key]}")
+        else:
+            print(
+                {
+                    "warning": "skipping Refinitiv ownership universe handoff; resolved parquet not found",
+                    "expected_path": str(resolution_artifact_path),
+                }
+            )
+    if RUN_REFINITIV_OWNERSHIP_UNIVERSE_RESULTS:
+        ownership_universe_filled_workbook_path = (
+            REFINITIV_OWNERSHIP_UNIVERSE_DIR
+            / "refinitiv_ownership_universe_handoff_common_stock_filled_in.xlsx"
+        )
+        if ownership_universe_filled_workbook_path.exists():
+            refinitiv_ownership_universe_results_paths = run_refinitiv_step1_ownership_universe_results_pipeline(
+                filled_workbook_path=ownership_universe_filled_workbook_path,
+                output_dir=REFINITIV_OWNERSHIP_UNIVERSE_DIR,
+            )
+            for key in sorted(refinitiv_ownership_universe_results_paths):
+                print(f"{key}: {refinitiv_ownership_universe_results_paths[key]}")
+        else:
+            print(
+                {
+                    "warning": "skipping Refinitiv ownership universe results; filled ownership universe workbook not found",
+                    "expected_path": str(ownership_universe_filled_workbook_path),
+                }
+            )
     if RUN_REFINITIV_NULL_RIC_DIAGNOSTICS:
         filled_lookup_path = REFINITIV_STEP1_OUT_DIR / "refinitiv_ric_lookup_handoff_common_stock_filled_in.xlsx"
         if filled_lookup_path.exists():
@@ -916,6 +1056,24 @@ def main() -> None:
     if refinitiv_step1_paths is not None:
         for key in sorted(refinitiv_step1_paths):
             _add("refinitiv_step1", key, Path(refinitiv_step1_paths[key]))
+    if refinitiv_resolution_paths is not None:
+        for key in sorted(refinitiv_resolution_paths):
+            _add("refinitiv_resolution", key, Path(refinitiv_resolution_paths[key]))
+    if refinitiv_resolution_diagnostic_paths is not None:
+        for key in sorted(refinitiv_resolution_diagnostic_paths):
+            _add("refinitiv_resolution_diagnostic", key, Path(refinitiv_resolution_diagnostic_paths[key]))
+    if refinitiv_ownership_validation_handoff_paths is not None:
+        for key in sorted(refinitiv_ownership_validation_handoff_paths):
+            _add("refinitiv_ownership_validation_handoff", key, Path(refinitiv_ownership_validation_handoff_paths[key]))
+    if refinitiv_ownership_validation_results_paths is not None:
+        for key in sorted(refinitiv_ownership_validation_results_paths):
+            _add("refinitiv_ownership_validation_results", key, Path(refinitiv_ownership_validation_results_paths[key]))
+    if refinitiv_ownership_universe_handoff_paths is not None:
+        for key in sorted(refinitiv_ownership_universe_handoff_paths):
+            _add("refinitiv_ownership_universe_handoff", key, Path(refinitiv_ownership_universe_handoff_paths[key]))
+    if refinitiv_ownership_universe_results_paths is not None:
+        for key in sorted(refinitiv_ownership_universe_results_paths):
+            _add("refinitiv_ownership_universe_results", key, Path(refinitiv_ownership_universe_results_paths[key]))
     if refinitiv_null_ric_paths is not None:
         for key in sorted(refinitiv_null_ric_paths):
             _add("refinitiv_null_ric", key, Path(refinitiv_null_ric_paths[key]))

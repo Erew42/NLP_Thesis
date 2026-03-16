@@ -58,8 +58,22 @@ from thesis_pkg.core.ccm.transforms import (
 from thesis_pkg.io.parquet import load_tables, sink_exact_firm_sample_from_parquet
 from thesis_pkg.pipelines.ccm_pipeline import build_or_reuse_ccm_daily_stage, merge_histories
 from thesis_pkg.pipelines.refinitiv_bridge_pipeline import (
+    build_refinitiv_ownership_validation_case_summary,
+    build_refinitiv_ownership_validation_pairwise_comparisons,
+    build_refinitiv_ownership_validation_retrieval_summary,
+    build_refinitiv_ownership_universe_row_summary,
+    build_refinitiv_step1_ownership_validation_handoff,
+    build_refinitiv_step1_ownership_universe_handoff,
     build_refinitiv_step1_bridge_universe,
+    build_refinitiv_step1_resolution_diagnostic_artifacts,
+    build_refinitiv_step1_resolution_frame,
     build_refinitiv_null_ric_rescue_candidates,
+    run_refinitiv_step1_ownership_validation_handoff_pipeline,
+    run_refinitiv_step1_ownership_validation_results_pipeline,
+    run_refinitiv_step1_ownership_universe_handoff_pipeline,
+    run_refinitiv_step1_ownership_universe_results_pipeline,
+    run_refinitiv_step1_resolution_diagnostic_pipeline,
+    run_refinitiv_step1_resolution_pipeline,
     run_refinitiv_null_ric_diagnostics_pipeline,
     run_refinitiv_step1_bridge_pipeline,
 )

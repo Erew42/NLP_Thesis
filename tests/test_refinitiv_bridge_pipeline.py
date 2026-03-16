@@ -15,19 +15,47 @@ from thesis_pkg.pipelines.refinitiv_bridge_pipeline import (
     BRIDGE_OUTPUT_COLUMNS,
     BRIDGE_VENDOR_COLUMNS,
     NULL_RIC_DIAGNOSTIC_COLUMNS,
+    OWNERSHIP_VALIDATION_CASE_SUMMARY_COLUMNS,
+    OWNERSHIP_VALIDATION_HANDOFF_COLUMNS,
+    OWNERSHIP_VALIDATION_PAIRWISE_COMPARISON_COLUMNS,
+    OWNERSHIP_VALIDATION_RESULTS_COLUMNS,
+    OWNERSHIP_VALIDATION_RETRIEVAL_ROLE_ORDER,
+    OWNERSHIP_VALIDATION_RETRIEVAL_SUMMARY_COLUMNS,
+    OWNERSHIP_VALIDATION_VISIBLE_INPUT_FIELDS,
+    OWNERSHIP_UNIVERSE_HANDOFF_COLUMNS,
+    OWNERSHIP_UNIVERSE_RESULTS_COLUMNS,
+    OWNERSHIP_UNIVERSE_ROW_SUMMARY_COLUMNS,
     OWNERSHIP_SMOKE_SAMPLE_COLUMNS,
     RIC_LOOKUP_COLUMNS,
     RIC_LOOKUP_EXTENDED_COLUMNS,
+    RESOLUTION_DIAGNOSTIC_CONTEXT_COLUMNS,
+    RESOLUTION_DIAGNOSTIC_HANDOFF_COLUMNS,
+    RESOLUTION_DIAGNOSTIC_TARGET_COLUMNS,
+    RIC_LOOKUP_RESOLUTION_OUTPUT_COLUMNS,
     RIC_LOOKUP_FILTER_PROFILES,
     _build_filtered_ric_lookup_profile_artifact,
     _build_lookup_profile_bridge_ids,
     _build_null_ric_review_frame,
     _build_ric_lookup_handoff_frames,
+    build_refinitiv_ownership_validation_case_summary,
+    build_refinitiv_ownership_validation_pairwise_comparisons,
+    build_refinitiv_ownership_validation_retrieval_summary,
+    build_refinitiv_ownership_universe_row_summary,
+    build_refinitiv_step1_ownership_validation_handoff,
+    build_refinitiv_step1_ownership_universe_handoff,
+    build_refinitiv_step1_resolution_diagnostic_artifacts,
+    build_refinitiv_step1_resolution_frame,
     build_refinitiv_ownership_smoke_sample,
     build_refinitiv_lookup_extended_diagnostic_artifact,
     build_refinitiv_step1_bridge_universe,
     build_refinitiv_null_ric_rescue_candidates,
     run_refinitiv_null_ric_diagnostics_pipeline,
+    run_refinitiv_step1_ownership_validation_handoff_pipeline,
+    run_refinitiv_step1_ownership_validation_results_pipeline,
+    run_refinitiv_step1_ownership_universe_handoff_pipeline,
+    run_refinitiv_step1_ownership_universe_results_pipeline,
+    run_refinitiv_step1_resolution_diagnostic_pipeline,
+    run_refinitiv_step1_resolution_pipeline,
     run_refinitiv_step1_bridge_pipeline,
 )
 
@@ -333,6 +361,226 @@ def _write_filled_lookup_workbook(path: Path) -> Path:
     return path
 
 
+def _bridge_row_id(
+    kypermno: str,
+    *,
+    liid: str | None = "01",
+    cusip: str | None = None,
+    isin: str | None = None,
+    ticker: str | None = None,
+) -> str:
+    return ":".join(
+        (
+            kypermno,
+            liid or "-",
+            cusip or "-",
+            isin or "-",
+            ticker or "-",
+        )
+    )
+
+
+def _extended_resolution_row(
+    *,
+    kypermno: str,
+    first_seen_caldt: date,
+    last_seen_caldt: date,
+    liid: str | None = "01",
+    cusip: str | None = None,
+    isin: str | None = None,
+    ticker: str | None = None,
+    **overrides: object,
+) -> dict[str, object]:
+    row: dict[str, object] = {name: None for name in RIC_LOOKUP_EXTENDED_COLUMNS}
+    row.update(
+        {
+            "bridge_row_id": _bridge_row_id(
+                kypermno,
+                liid=liid,
+                cusip=cusip,
+                isin=isin,
+                ticker=ticker,
+            ),
+            "KYPERMNO": kypermno,
+            "CUSIP": cusip,
+            "ISIN": isin,
+            "TICKER": ticker,
+            "first_seen_caldt": first_seen_caldt,
+            "last_seen_caldt": last_seen_caldt,
+            "ISIN_lookup_input": isin,
+            "CUSIP_lookup_input": cusip,
+            "TICKER_lookup_input": ticker,
+        }
+    )
+    row.update(overrides)
+    return row
+
+
+def _resolution_input_df(rows: list[dict[str, object]]) -> pl.DataFrame:
+    return pl.DataFrame(rows).select(
+        [
+            pl.col(name).alias(name)
+            if name not in {"first_seen_caldt", "last_seen_caldt"}
+            else pl.col(name).cast(pl.Date, strict=False).alias(name)
+            for name in RIC_LOOKUP_EXTENDED_COLUMNS
+        ]
+    )
+
+
+def _write_filled_extended_lookup_workbook(path: Path, rows: list[dict[str, object]]) -> Path:
+    workbook = Workbook()
+    ws = workbook.active
+    ws.title = "lookup_diagnostics"
+    ws.append(list(RIC_LOOKUP_EXTENDED_COLUMNS))
+    for row in rows:
+        ws.append([row.get(name) for name in RIC_LOOKUP_EXTENDED_COLUMNS])
+    summary_ws = workbook.create_sheet("summary")
+    summary_ws.append(["summary_category", "summary_key", "value"])
+    workbook.create_sheet("README")
+    workbook.save(path)
+    workbook.close()
+    return path
+
+
+def _resolution_diagnostic_handoff_row(
+    *,
+    diagnostic_case_id: str,
+    target_class: str,
+    retrieval_sequence_index: int,
+    retrieval_role: str,
+    diagnostic_role: str,
+    bridge_row_id: str,
+    kypermno: str,
+    lookup_input: str,
+    lookup_input_source: str,
+    request_start_date: str = "2024-01-01",
+    request_end_date: str = "2024-12-31",
+    effective_collection_ric: str | None = None,
+    effective_collection_ric_source: str | None = None,
+    accepted_ric: str | None = None,
+    accepted_ric_source: str | None = None,
+) -> dict[str, object]:
+    row = {name: None for name in RESOLUTION_DIAGNOSTIC_HANDOFF_COLUMNS}
+    row.update(
+        {
+            "diagnostic_case_id": diagnostic_case_id,
+            "case_target_bridge_row_id": f"{diagnostic_case_id}:target",
+            "target_class": target_class,
+            "retrieval_sequence_index": retrieval_sequence_index,
+            "retrieval_role": retrieval_role,
+            "diagnostic_role": diagnostic_role,
+            "bridge_row_id": bridge_row_id,
+            "KYPERMNO": kypermno,
+            "CUSIP": None,
+            "ISIN": None,
+            "TICKER": bridge_row_id.rsplit(":", 1)[-1],
+            "lookup_input": lookup_input,
+            "lookup_input_source": lookup_input_source,
+            "request_start_date": request_start_date,
+            "request_end_date": request_end_date,
+            "effective_collection_ric": effective_collection_ric,
+            "effective_collection_ric_source": effective_collection_ric_source,
+            "accepted_ric": accepted_ric,
+            "accepted_ric_source": accepted_ric_source,
+            "ISIN_returned_ric": None,
+            "CUSIP_returned_ric": None,
+            "ticker_candidate_ric": None,
+            "case_previous_effective_collection_ric": None,
+            "case_next_effective_collection_ric": None,
+        }
+    )
+    return row
+
+
+def _write_filled_ownership_validation_workbook(
+    path: Path,
+    handoff_df: pl.DataFrame,
+    returned_rows_by_key: dict[tuple[str, str], list[tuple[str, str, float, str]]],
+) -> Path:
+    workbook = Workbook()
+    default_ws = workbook.active
+    workbook.remove(default_ws)
+
+    for sheet_name in handoff_df.select("sheet_name").unique().get_column("sheet_name").to_list():
+        workbook.create_sheet(str(sheet_name))
+
+    lookup_input_offset = OWNERSHIP_VALIDATION_VISIBLE_INPUT_FIELDS.index("lookup_input") + 1
+    request_start_offset = OWNERSHIP_VALIDATION_VISIBLE_INPUT_FIELDS.index("request_start_date") + 1
+    request_end_offset = OWNERSHIP_VALIDATION_VISIBLE_INPUT_FIELDS.index("request_end_date") + 1
+
+    for row in handoff_df.iter_rows(named=True):
+        ws = workbook[str(row["sheet_name"])]
+        start_row = int(row["case_band_row_start"])
+        base_col = 2 + ((int(row["block_slot_index"]) - 1) * 5)
+        for field_offset, field_name in enumerate(OWNERSHIP_VALIDATION_VISIBLE_INPUT_FIELDS, start=1):
+            ws.cell(row=start_row + field_offset, column=1).value = field_name
+            ws.cell(row=start_row + field_offset, column=base_col).value = row.get(field_name)
+        rows = returned_rows_by_key.get((str(row["diagnostic_case_id"]), str(row["retrieval_role"])), [])
+        for result_idx, (returned_ric, returned_date, returned_value, returned_category) in enumerate(rows, start=1):
+            ws.cell(row=start_row + result_idx, column=base_col + 1).value = returned_ric
+            ws.cell(row=start_row + result_idx, column=base_col + 2).value = returned_date
+            ws.cell(row=start_row + result_idx, column=base_col + 3).value = returned_value
+            ws.cell(row=start_row + result_idx, column=base_col + 4).value = returned_category
+
+        # Anchor the key input cells so the parser sees a populated block even if there are no returned rows.
+        ws.cell(row=start_row + lookup_input_offset, column=base_col).value = row["lookup_input"]
+        ws.cell(row=start_row + request_start_offset, column=base_col).value = row["request_start_date"]
+        ws.cell(row=start_row + request_end_offset, column=base_col).value = row["request_end_date"]
+
+    workbook.save(path)
+    workbook.close()
+    return path
+
+
+def _write_filled_ownership_universe_workbook(
+    path: Path,
+    handoff_df: pl.DataFrame,
+    returned_rows_by_lookup_row_id: dict[str, list[tuple[str, object, object, str]]],
+) -> Path:
+    workbook = Workbook()
+    default_ws = workbook.active
+    default_ws.title = "ownership_retrieval"
+    block_headers = (
+        "input_data",
+        "returned_ric",
+        "returned_date",
+        "returned_value",
+        "returned_category",
+    )
+
+    eligible_df = handoff_df.filter(pl.col("retrieval_eligible").fill_null(False))
+    input_fields = (
+        "bridge_row_id",
+        "candidate_ric",
+        "request_start_date",
+        "request_end_date",
+        "candidate_slot",
+        "lookup_input_source",
+        "effective_collection_ric",
+        "effective_collection_ric_source",
+        "accepted_ric",
+        "accepted_ric_source",
+    )
+
+    for block_index, row in enumerate(eligible_df.iter_rows(named=True)):
+        base_col = 1 + (block_index * 5)
+        for offset, header in enumerate(block_headers):
+            default_ws.cell(row=1, column=base_col + offset).value = header
+        for field_offset, field_name in enumerate(input_fields, start=1):
+            default_ws.cell(row=1 + field_offset, column=base_col).value = row.get(field_name)
+        rows = returned_rows_by_lookup_row_id.get(str(row["ownership_lookup_row_id"]), [])
+        for result_idx, (returned_ric, returned_date, returned_value, returned_category) in enumerate(rows, start=1):
+            excel_row = 2 + result_idx
+            default_ws.cell(row=excel_row, column=base_col + 1).value = returned_ric
+            default_ws.cell(row=excel_row, column=base_col + 2).value = returned_date
+            default_ws.cell(row=excel_row, column=base_col + 3).value = returned_value
+            default_ws.cell(row=excel_row, column=base_col + 4).value = returned_category
+
+    workbook.save(path)
+    workbook.close()
+    return path
+
+
 def test_build_refinitiv_step1_bridge_universe_uses_distinct_identifier_grain() -> None:
     bridge = build_refinitiv_step1_bridge_universe(
         _daily_panel().lazy(),
@@ -596,6 +844,1289 @@ def test_filtered_ric_lookup_profiles_apply_common_stock_and_gvkey_predicates() 
     assert common_summary["rows_before_filter"] == 4
     assert common_summary["rows_after_filter"] == 3
     assert strict_summary["rows_after_filter"] == 2
+
+
+def test_build_refinitiv_step1_resolution_frame_applies_conventional_and_extension_policy() -> None:
+    rows = [
+        _extended_resolution_row(
+            kypermno="3001",
+            first_seen_caldt=date(2024, 1, 1),
+            last_seen_caldt=date(2024, 1, 5),
+            cusip="111111111",
+            isin="US1111111111",
+            ticker="ALFA",
+            ISIN_returned_ric="AAA.N",
+            ISIN_returned_isin="US1111111111",
+            ISIN_returned_cusip="111111111",
+        ),
+        _extended_resolution_row(
+            kypermno="3002",
+            first_seen_caldt=date(2024, 1, 1),
+            last_seen_caldt=date(2024, 1, 5),
+            cusip="222222222",
+            isin="US2222222222",
+            ticker="BETA",
+            CUSIP_returned_ric="BBB.N",
+            CUSIP_returned_isin="US2222222222",
+            CUSIP_returned_cusip="222222222",
+        ),
+        _extended_resolution_row(
+            kypermno="3003",
+            first_seen_caldt=date(2024, 1, 1),
+            last_seen_caldt=date(2024, 1, 5),
+            cusip="333333333",
+            isin="US3333333333",
+            ticker="GAMM",
+            ISIN_returned_ric="CCC.N",
+            ISIN_returned_isin="US3333333333",
+            ISIN_returned_cusip="333333333",
+            CUSIP_returned_ric="CCC.O",
+            CUSIP_returned_isin="US3333333333",
+            CUSIP_returned_cusip="333333333",
+        ),
+        _extended_resolution_row(
+            kypermno="3004",
+            first_seen_caldt=date(2024, 1, 1),
+            last_seen_caldt=date(2024, 1, 5),
+            cusip="444444444",
+            isin="US4444444444",
+            ticker="DELT",
+            ISIN_returned_ric="DDD.N",
+            ISIN_returned_isin="US4444444444",
+            ISIN_returned_cusip="444444444",
+            CUSIP_returned_ric="EEE.N",
+            CUSIP_returned_isin="US5555555555",
+            CUSIP_returned_cusip="555555555",
+        ),
+        _extended_resolution_row(
+            kypermno="3005",
+            first_seen_caldt=date(2024, 1, 1),
+            last_seen_caldt=date(2024, 1, 5),
+            cusip="666666666",
+            isin="US6666666666",
+            ticker="EPSI",
+            ISIN_returned_ric="FFF.N",
+            ISIN_returned_isin="US6666666666",
+            CUSIP_returned_ric="FFF.N",
+            CUSIP_returned_cusip="666666666",
+        ),
+        _extended_resolution_row(
+            kypermno="3010",
+            first_seen_caldt=date(2024, 1, 1),
+            last_seen_caldt=date(2024, 1, 5),
+            cusip="101010101",
+            isin="US1010101010",
+            ticker="PRIA",
+            ISIN_returned_ric="GGG.N",
+            ISIN_returned_isin="US1010101010",
+            ISIN_returned_cusip="101010101",
+        ),
+        _extended_resolution_row(
+            kypermno="3010",
+            first_seen_caldt=date(2024, 1, 6),
+            last_seen_caldt=date(2024, 1, 10),
+            cusip="101010101",
+            isin="US1010101010",
+            ticker="PRIB",
+        ),
+        _extended_resolution_row(
+            kypermno="3011",
+            first_seen_caldt=date(2024, 1, 1),
+            last_seen_caldt=date(2024, 1, 5),
+            cusip="202020202",
+            isin="US2020202020",
+            ticker="NXTA",
+        ),
+        _extended_resolution_row(
+            kypermno="3011",
+            first_seen_caldt=date(2024, 1, 6),
+            last_seen_caldt=date(2024, 1, 10),
+            cusip="202020202",
+            isin="US2020202020",
+            ticker="NXTB",
+            CUSIP_returned_ric="HHH.N",
+            CUSIP_returned_isin="US2020202020",
+            CUSIP_returned_cusip="202020202",
+        ),
+        _extended_resolution_row(
+            kypermno="3012",
+            first_seen_caldt=date(2024, 1, 1),
+            last_seen_caldt=date(2024, 1, 5),
+            cusip="303030303",
+            isin="US3030303030",
+            ticker="ADJP",
+            CUSIP_returned_ric="III.C",
+            CUSIP_returned_isin="US3030303030",
+            CUSIP_returned_cusip="303030303",
+        ),
+        _extended_resolution_row(
+            kypermno="3012",
+            first_seen_caldt=date(2024, 1, 6),
+            last_seen_caldt=date(2024, 1, 10),
+            cusip=None,
+            isin=None,
+            ticker="ADJM",
+        ),
+        _extended_resolution_row(
+            kypermno="3012",
+            first_seen_caldt=date(2024, 1, 11),
+            last_seen_caldt=date(2024, 1, 15),
+            cusip="303030303",
+            isin="US3030303030",
+            ticker="ADJN",
+            ISIN_returned_ric="III.I",
+            ISIN_returned_isin="US3030303030",
+            ISIN_returned_cusip="303030303",
+        ),
+        _extended_resolution_row(
+            kypermno="3013",
+            first_seen_caldt=date(2024, 1, 1),
+            last_seen_caldt=date(2024, 1, 5),
+            cusip="404040404",
+            isin="US4040404040",
+            ticker="CFLP",
+            ISIN_returned_ric="JJJ.N",
+            ISIN_returned_isin="US4040404040",
+            ISIN_returned_cusip="404040404",
+        ),
+        _extended_resolution_row(
+            kypermno="3013",
+            first_seen_caldt=date(2024, 1, 6),
+            last_seen_caldt=date(2024, 1, 10),
+            cusip=None,
+            isin=None,
+            ticker="CFLM",
+        ),
+        _extended_resolution_row(
+            kypermno="3013",
+            first_seen_caldt=date(2024, 1, 11),
+            last_seen_caldt=date(2024, 1, 15),
+            cusip="505050505",
+            isin="US5050505050",
+            ticker="CFLN",
+            ISIN_returned_ric="KKK.N",
+            ISIN_returned_isin="US5050505050",
+            ISIN_returned_cusip="505050505",
+        ),
+        _extended_resolution_row(
+            kypermno="3014",
+            first_seen_caldt=date(2024, 1, 1),
+            last_seen_caldt=date(2024, 1, 5),
+            cusip="606060606",
+            isin="US6060606060",
+            ticker="BLKP",
+            ISIN_returned_ric="LLL.N",
+            ISIN_returned_isin="US6060606060",
+            ISIN_returned_cusip="606060606",
+        ),
+        _extended_resolution_row(
+            kypermno="3014",
+            first_seen_caldt=date(2024, 1, 6),
+            last_seen_caldt=date(2024, 1, 10),
+            cusip="606060606",
+            isin="US6060606060",
+            ticker="BLKM",
+            ISIN_returned_ric="LLL.N",
+            ISIN_returned_isin="US6060606060",
+            ISIN_returned_cusip="606060606",
+            CUSIP_returned_ric="MMM.N",
+            CUSIP_returned_isin="US9090909090",
+            CUSIP_returned_cusip="909090909",
+        ),
+        _extended_resolution_row(
+            kypermno="3014",
+            first_seen_caldt=date(2024, 1, 11),
+            last_seen_caldt=date(2024, 1, 15),
+            cusip="606060606",
+            isin="US6060606060",
+            ticker="BLKN",
+            ISIN_returned_ric="LLL.N",
+            ISIN_returned_isin="US6060606060",
+            ISIN_returned_cusip="606060606",
+        ),
+        _extended_resolution_row(
+            kypermno="3015",
+            first_seen_caldt=date(2024, 1, 1),
+            last_seen_caldt=date(2024, 1, 5),
+            cusip=None,
+            isin=None,
+            ticker="TKRO",
+            TICKER_returned_ric="TICK.ONLY",
+            TICKER_returned_isin="USTICKONLY01",
+            TICKER_returned_cusip="TICKONLY1",
+        ),
+        _extended_resolution_row(
+            kypermno="3016",
+            first_seen_caldt=date(2024, 1, 1),
+            last_seen_caldt=date(2024, 1, 5),
+            cusip="707070707",
+            isin="US7070707070",
+            ticker="TKOK",
+            ISIN_returned_ric="NNN.N",
+            ISIN_returned_isin="US7070707070",
+            ISIN_returned_cusip="707070707",
+            TICKER_returned_ric="NNN",
+            TICKER_returned_isin="US7070707070",
+            TICKER_returned_cusip="707070707",
+        ),
+        _extended_resolution_row(
+            kypermno="3017",
+            first_seen_caldt=date(2024, 1, 1),
+            last_seen_caldt=date(2024, 1, 5),
+            cusip="808080808",
+            isin="US8080808080",
+            ticker="TKCF",
+            ISIN_returned_ric="OOO.N",
+            ISIN_returned_isin="US8080808080",
+            ISIN_returned_cusip="808080808",
+            TICKER_returned_ric="PPP.N",
+            TICKER_returned_isin="US9999999999",
+            TICKER_returned_cusip="999999999",
+        ),
+    ]
+
+    resolution_df = build_refinitiv_step1_resolution_frame(_resolution_input_df(rows))
+
+    assert resolution_df.columns == list(RIC_LOOKUP_RESOLUTION_OUTPUT_COLUMNS)
+
+    by_id = {row["bridge_row_id"]: row for row in resolution_df.to_dicts()}
+
+    assert by_id[_bridge_row_id("3001", cusip="111111111", isin="US1111111111", ticker="ALFA")][
+        "accepted_resolution_status"
+    ] == "resolved_from_isin"
+    assert by_id[_bridge_row_id("3001", cusip="111111111", isin="US1111111111", ticker="ALFA")][
+        "accepted_ric"
+    ] == "AAA.N"
+
+    assert by_id[_bridge_row_id("3002", cusip="222222222", isin="US2222222222", ticker="BETA")][
+        "accepted_resolution_status"
+    ] == "resolved_from_cusip"
+
+    agree_row = by_id[_bridge_row_id("3003", cusip="333333333", isin="US3333333333", ticker="GAMM")]
+    assert agree_row["accepted_resolution_status"] == "resolved_conventional_agree"
+    assert agree_row["accepted_ric"] == "CCC.N"
+    assert agree_row["accepted_ric_source"] == "ISIN"
+
+    conflict_row = by_id[_bridge_row_id("3004", cusip="444444444", isin="US4444444444", ticker="DELT")]
+    assert conflict_row["accepted_resolution_status"] == "unresolved_conventional_conflict"
+    assert conflict_row["conventional_identity_conflict"] is True
+    assert conflict_row["accepted_ric"] is None
+
+    no_overlap_row = by_id[_bridge_row_id("3005", cusip="666666666", isin="US6666666666", ticker="EPSI")]
+    assert no_overlap_row["accepted_resolution_status"] == "unresolved_conventional_conflict"
+    assert no_overlap_row["accepted_ric"] is None
+
+    extend_prior_row = by_id[_bridge_row_id("3010", cusip="101010101", isin="US1010101010", ticker="PRIB")]
+    assert extend_prior_row["extension_status"] == "extended_from_prior_conventional_span"
+    assert extend_prior_row["extended_ric"] == "GGG.N"
+    assert extend_prior_row["effective_collection_ric_source"] == "EXTENDED_FROM_PRIOR_ISIN"
+
+    extend_next_row = by_id[_bridge_row_id("3011", cusip="202020202", isin="US2020202020", ticker="NXTA")]
+    assert extend_next_row["extension_status"] == "extended_from_next_conventional_span"
+    assert extend_next_row["extended_ric"] == "HHH.N"
+    assert extend_next_row["effective_collection_ric_source"] == "EXTENDED_FROM_NEXT_CUSIP"
+
+    extend_adjacent_row = by_id[_bridge_row_id("3012", cusip=None, isin=None, ticker="ADJM")]
+    assert extend_adjacent_row["extension_status"] == "extended_from_adjacent_conventional_span"
+    assert extend_adjacent_row["extension_direction"] == "ADJACENT"
+    assert extend_adjacent_row["extended_ric"] == "III.I"
+    assert extend_adjacent_row["extended_from_bridge_row_id"] == _bridge_row_id(
+        "3012",
+        cusip="303030303",
+        isin="US3030303030",
+        ticker="ADJN",
+    )
+    assert extend_adjacent_row["effective_collection_ric_source"] == "EXTENDED_FROM_ADJACENT_ISIN"
+
+    blocked_adjacent_row = by_id[_bridge_row_id("3013", cusip=None, isin=None, ticker="CFLM")]
+    assert blocked_adjacent_row["extension_status"] == "not_extended_due_to_conflict"
+    assert blocked_adjacent_row["effective_collection_ric"] is None
+
+    blocked_conflict_row = by_id[_bridge_row_id("3014", cusip="606060606", isin="US6060606060", ticker="BLKM")]
+    assert blocked_conflict_row["conventional_identity_conflict"] is True
+    assert blocked_conflict_row["extension_status"] == "not_extended_due_to_conflict"
+    assert blocked_conflict_row["effective_collection_ric"] is None
+
+    ticker_only_row = by_id[_bridge_row_id("3015", cusip=None, isin=None, ticker="TKRO")]
+    assert ticker_only_row["ticker_candidate_available"] is True
+    assert ticker_only_row["accepted_ric"] is None
+    assert ticker_only_row["extended_ric"] is None
+    assert ticker_only_row["effective_collection_ric"] is None
+    assert ticker_only_row["extension_status"] == "not_extended_no_adjacent_conventional_source"
+
+    ticker_agree_row = by_id[_bridge_row_id("3016", cusip="707070707", isin="US7070707070", ticker="TKOK")]
+    assert ticker_agree_row["ticker_candidate_conflicts_with_conventional"] is False
+
+    ticker_conflict_row = by_id[_bridge_row_id("3017", cusip="808080808", isin="US8080808080", ticker="TKCF")]
+    assert ticker_conflict_row["ticker_candidate_conflicts_with_conventional"] is True
+
+
+def test_run_refinitiv_step1_resolution_pipeline_writes_resolved_artifacts(tmp_path: Path) -> None:
+    rows = [
+        _extended_resolution_row(
+            kypermno="4001",
+            first_seen_caldt=date(2024, 2, 1),
+            last_seen_caldt=date(2024, 2, 5),
+            cusip="111111119",
+            isin="US1111111199",
+            ticker="RSLV",
+            ISIN_returned_ric="RESV.N",
+            ISIN_returned_isin="US1111111199",
+            ISIN_returned_cusip="111111119",
+        ),
+        _extended_resolution_row(
+            kypermno="4001",
+            first_seen_caldt=date(2024, 2, 6),
+            last_seen_caldt=date(2024, 2, 10),
+            cusip="111111119",
+            isin="US1111111199",
+            ticker="MISS",
+        ),
+        _extended_resolution_row(
+            kypermno="4002",
+            first_seen_caldt=date(2024, 2, 1),
+            last_seen_caldt=date(2024, 2, 5),
+            cusip=None,
+            isin=None,
+            ticker="TKRO",
+            TICKER_returned_ric="TICK.ONLY",
+            TICKER_returned_isin="USTICKER4002",
+            TICKER_returned_cusip="TICK4002",
+        ),
+    ]
+    workbook_path = _write_filled_extended_lookup_workbook(
+        tmp_path / "refinitiv_ric_lookup_handoff_common_stock_extended_filled_in.xlsx",
+        rows,
+    )
+
+    out = run_refinitiv_step1_resolution_pipeline(workbook_path, tmp_path)
+
+    assert set(out) == {
+        "refinitiv_ric_resolution_common_stock_parquet",
+        "refinitiv_ric_resolution_common_stock_csv",
+        "refinitiv_ric_resolution_common_stock_summary",
+        "refinitiv_ric_resolution_common_stock_manifest",
+    }
+    for path in out.values():
+        assert path.exists()
+
+    resolved_df = pl.read_parquet(out["refinitiv_ric_resolution_common_stock_parquet"])
+    assert resolved_df.columns == list(RIC_LOOKUP_RESOLUTION_OUTPUT_COLUMNS)
+    assert resolved_df.height == 3
+
+    by_id = {row["bridge_row_id"]: row for row in resolved_df.to_dicts()}
+    assert by_id[_bridge_row_id("4001", cusip="111111119", isin="US1111111199", ticker="RSLV")][
+        "effective_collection_ric"
+    ] == "RESV.N"
+    assert by_id[_bridge_row_id("4001", cusip="111111119", isin="US1111111199", ticker="MISS")][
+        "effective_collection_ric_source"
+    ] == "EXTENDED_FROM_PRIOR_ISIN"
+    assert by_id[_bridge_row_id("4002", cusip=None, isin=None, ticker="TKRO")][
+        "effective_collection_ric"
+    ] is None
+
+    summary = json.loads(out["refinitiv_ric_resolution_common_stock_summary"].read_text(encoding="utf-8"))
+    assert summary["pipeline_name"] == "refinitiv_step1_resolution"
+    assert summary["source_sheet_name"] == "lookup_diagnostics"
+    assert summary["rows_with_accepted_ric"] == 1
+    assert summary["rows_with_extended_ric"] == 1
+    assert summary["rows_with_effective_collection_ric"] == 2
+    assert summary["rows_unresolved_after_accept_and_extend"] == 1
+    assert summary["rows_with_ticker_only_candidates_but_no_effective_collection_ric"] == 1
+    assert summary["rows_blocked_from_extension_due_conventional_conflicts"] == 0
+    assert summary["extension_status_counts"] == {
+        "extended_from_prior_conventional_span": 1,
+        "not_extended": 1,
+        "not_extended_no_adjacent_conventional_source": 1,
+    }
+
+    manifest = json.loads(out["refinitiv_ric_resolution_common_stock_manifest"].read_text(encoding="utf-8"))
+    assert manifest["artifacts"]["refinitiv_ric_resolution_common_stock_parquet"] == str(
+        out["refinitiv_ric_resolution_common_stock_parquet"]
+    )
+    assert manifest["artifacts"]["refinitiv_ric_resolution_common_stock_summary"] == str(
+        out["refinitiv_ric_resolution_common_stock_summary"]
+    )
+
+
+def test_build_refinitiv_step1_resolution_diagnostic_artifacts_selects_targets_and_context() -> None:
+    rows = [
+        _extended_resolution_row(
+            kypermno="5000",
+            first_seen_caldt=date(2024, 1, 1),
+            last_seen_caldt=date(2024, 1, 5),
+            cusip="111111111",
+            isin="US1111111111",
+            ticker="ALFA",
+            ISIN_returned_ric="AAA.N",
+            ISIN_returned_isin="US1111111111",
+            ISIN_returned_cusip="111111111",
+        ),
+        _extended_resolution_row(
+            kypermno="5000",
+            first_seen_caldt=date(2024, 1, 6),
+            last_seen_caldt=date(2024, 1, 10),
+            cusip="111111111",
+            isin="US1111111111",
+            ticker="ALFB",
+            ISIN_returned_ric="AAA.N",
+            ISIN_returned_isin="US1111111111",
+            ISIN_returned_cusip="111111111",
+            CUSIP_returned_ric="BBB.N",
+            CUSIP_returned_isin="US9999999999",
+            CUSIP_returned_cusip="999999999",
+            TICKER_returned_ric="AAA.N",
+            TICKER_returned_isin="US1111111111",
+            TICKER_returned_cusip="111111111",
+        ),
+        _extended_resolution_row(
+            kypermno="5000",
+            first_seen_caldt=date(2024, 1, 11),
+            last_seen_caldt=date(2024, 1, 15),
+            cusip="111111111",
+            isin="US1111111111",
+            ticker="ALFC",
+            ISIN_returned_ric="AAA.N",
+            ISIN_returned_isin="US1111111111",
+            ISIN_returned_cusip="111111111",
+        ),
+        _extended_resolution_row(
+            kypermno="6000",
+            first_seen_caldt=date(2024, 2, 1),
+            last_seen_caldt=date(2024, 2, 5),
+            cusip=None,
+            isin=None,
+            ticker="TKRO",
+            TICKER_returned_ric="TKR.N",
+            TICKER_returned_isin="USTKR000001",
+            TICKER_returned_cusip="TKR000001",
+        ),
+        _extended_resolution_row(
+            kypermno="6000",
+            first_seen_caldt=date(2024, 2, 6),
+            last_seen_caldt=date(2024, 2, 10),
+            cusip="222222222",
+            isin="US2222222222",
+            ticker="TKRN",
+            ISIN_returned_ric="TKR.N",
+            ISIN_returned_isin="US2222222222",
+            ISIN_returned_cusip="222222222",
+        ),
+    ]
+    resolution_df = build_refinitiv_step1_resolution_frame(_resolution_input_df(rows))
+
+    targets_df, context_df, handoff_df, summary = build_refinitiv_step1_resolution_diagnostic_artifacts(
+        resolution_df
+    )
+
+    assert targets_df.columns == list(RESOLUTION_DIAGNOSTIC_TARGET_COLUMNS)
+    assert context_df.columns == list(RESOLUTION_DIAGNOSTIC_CONTEXT_COLUMNS)
+    assert handoff_df.columns == list(RESOLUTION_DIAGNOSTIC_HANDOFF_COLUMNS)
+
+    assert targets_df.height == 2
+    assert context_df.height == 5
+    assert handoff_df.height == 7
+    assert summary["target_class_counts"] == {
+        "conventional_conflict": 1,
+        "unresolved_ticker_only_candidate": 1,
+    }
+    assert summary["diagnostic_role_counts"] == {"NEXT": 2, "PREVIOUS": 1, "TARGET": 2}
+
+    target_by_id = {row["case_target_bridge_row_id"]: row for row in targets_df.to_dicts()}
+
+    conflict_target = target_by_id[_bridge_row_id("5000", cusip="111111111", isin="US1111111111", ticker="ALFB")]
+    assert conflict_target["target_class"] == "conventional_conflict"
+    assert conflict_target["case_previous_bridge_row_id"] == _bridge_row_id(
+        "5000",
+        cusip="111111111",
+        isin="US1111111111",
+        ticker="ALFA",
+    )
+    assert conflict_target["case_next_bridge_row_id"] == _bridge_row_id(
+        "5000",
+        cusip="111111111",
+        isin="US1111111111",
+        ticker="ALFC",
+    )
+    assert conflict_target["case_previous_effective_collection_ric"] == "AAA.N"
+    assert conflict_target["case_next_effective_collection_ric"] == "AAA.N"
+    assert conflict_target["isin_candidate_matches_case_previous_effective_ric"] is True
+    assert conflict_target["cusip_candidate_matches_case_previous_effective_ric"] is False
+    assert conflict_target["ticker_candidate_matches_case_next_effective_ric"] is True
+    assert conflict_target["raw_isin_matches_case_previous_accepted_identity"] is True
+    assert conflict_target["raw_cusip_matches_case_previous_accepted_identity"] is True
+
+    ticker_target = target_by_id[_bridge_row_id("6000", cusip=None, isin=None, ticker="TKRO")]
+    assert ticker_target["target_class"] == "unresolved_ticker_only_candidate"
+    assert ticker_target["case_previous_row_available"] is False
+    assert ticker_target["case_next_row_available"] is True
+    assert ticker_target["case_next_effective_collection_ric"] == "TKR.N"
+    assert ticker_target["ticker_candidate_matches_case_next_effective_ric"] is True
+    assert ticker_target["raw_isin_matches_case_next_accepted_identity"] is None
+
+    assert context_df.filter(pl.col("diagnostic_case_id") == conflict_target["diagnostic_case_id"]).select(
+        "diagnostic_role"
+    ).to_series().to_list() == ["PREVIOUS", "TARGET", "NEXT"]
+
+    handoff_roles = handoff_df.filter(pl.col("diagnostic_case_id") == conflict_target["diagnostic_case_id"]).select(
+        "retrieval_role"
+    ).to_series().to_list()
+    assert handoff_roles == [
+        "PREVIOUS_EFFECTIVE",
+        "TARGET_ISIN_CANDIDATE",
+        "TARGET_CUSIP_CANDIDATE",
+        "TARGET_TICKER_CANDIDATE",
+        "NEXT_EFFECTIVE",
+    ]
+
+
+def test_run_refinitiv_step1_resolution_diagnostic_pipeline_writes_context_and_formula_workbook(
+    tmp_path: Path,
+) -> None:
+    rows = [
+        _extended_resolution_row(
+            kypermno="7000",
+            first_seen_caldt=date(2024, 3, 1),
+            last_seen_caldt=date(2024, 3, 5),
+            cusip="333333333",
+            isin="US3333333333",
+            ticker="PREV",
+            ISIN_returned_ric="CCC.N",
+            ISIN_returned_isin="US3333333333",
+            ISIN_returned_cusip="333333333",
+        ),
+        _extended_resolution_row(
+            kypermno="7000",
+            first_seen_caldt=date(2024, 3, 6),
+            last_seen_caldt=date(2024, 3, 10),
+            cusip="333333333",
+            isin="US3333333333",
+            ticker="CNFL",
+            ISIN_returned_ric="CCC.N",
+            ISIN_returned_isin="US3333333333",
+            ISIN_returned_cusip="333333333",
+            CUSIP_returned_ric="DDD.N",
+            CUSIP_returned_isin="US4444444444",
+            CUSIP_returned_cusip="444444444",
+            TICKER_returned_ric="CCC.N",
+            TICKER_returned_isin="US3333333333",
+            TICKER_returned_cusip="333333333",
+        ),
+        _extended_resolution_row(
+            kypermno="7000",
+            first_seen_caldt=date(2024, 3, 11),
+            last_seen_caldt=date(2024, 3, 15),
+            cusip="333333333",
+            isin="US3333333333",
+            ticker="NEXT",
+            ISIN_returned_ric="CCC.N",
+            ISIN_returned_isin="US3333333333",
+            ISIN_returned_cusip="333333333",
+        ),
+    ]
+    resolution_df = build_refinitiv_step1_resolution_frame(_resolution_input_df(rows))
+    resolution_path = tmp_path / "refinitiv_ric_resolution_common_stock.parquet"
+    resolution_df.write_parquet(resolution_path)
+
+    out = run_refinitiv_step1_resolution_diagnostic_pipeline(
+        resolution_artifact_path=resolution_path,
+        output_dir=tmp_path / "resolution_diagnostics_common_stock",
+    )
+
+    assert set(out) == {
+        "refinitiv_ric_resolution_diagnostic_targets_parquet",
+        "refinitiv_ric_resolution_diagnostic_targets_csv",
+        "refinitiv_ric_resolution_diagnostic_context_parquet",
+        "refinitiv_ric_resolution_diagnostic_context_csv",
+        "refinitiv_ric_resolution_diagnostic_handoff_csv",
+        "refinitiv_ric_resolution_diagnostic_handoff_xlsx",
+        "refinitiv_ric_resolution_diagnostic_summary",
+        "refinitiv_ric_resolution_diagnostic_manifest",
+    }
+    for path in out.values():
+        assert path.exists()
+
+    targets_df = pl.read_parquet(out["refinitiv_ric_resolution_diagnostic_targets_parquet"])
+    context_df = pl.read_parquet(out["refinitiv_ric_resolution_diagnostic_context_parquet"])
+    handoff_df = pl.read_csv(out["refinitiv_ric_resolution_diagnostic_handoff_csv"])
+    assert targets_df.columns == list(RESOLUTION_DIAGNOSTIC_TARGET_COLUMNS)
+    assert context_df.columns == list(RESOLUTION_DIAGNOSTIC_CONTEXT_COLUMNS)
+    assert handoff_df.columns == list(RESOLUTION_DIAGNOSTIC_HANDOFF_COLUMNS)
+    assert targets_df.height == 1
+    assert context_df.height == 3
+    assert handoff_df.height == 5
+
+    summary = json.loads(out["refinitiv_ric_resolution_diagnostic_summary"].read_text(encoding="utf-8"))
+    assert summary["pipeline_name"] == "refinitiv_step1_resolution_diagnostic_handoff"
+    assert summary["target_class_counts"] == {"conventional_conflict": 1}
+    assert summary["handoff_retrieval_role_counts"] == {
+        "NEXT_EFFECTIVE": 1,
+        "PREVIOUS_EFFECTIVE": 1,
+        "TARGET_CUSIP_CANDIDATE": 1,
+        "TARGET_ISIN_CANDIDATE": 1,
+        "TARGET_TICKER_CANDIDATE": 1,
+    }
+
+    manifest = json.loads(out["refinitiv_ric_resolution_diagnostic_manifest"].read_text(encoding="utf-8"))
+    assert manifest["artifacts"]["refinitiv_ric_resolution_diagnostic_handoff_xlsx"] == str(
+        out["refinitiv_ric_resolution_diagnostic_handoff_xlsx"]
+    )
+
+    with zipfile.ZipFile(out["refinitiv_ric_resolution_diagnostic_handoff_xlsx"]) as workbook_zip:
+        workbook_xml = workbook_zip.read("xl/workbook.xml").decode("utf-8")
+        shared_strings = workbook_zip.read("xl/sharedStrings.xml").decode("utf-8")
+
+    assert "diagnostic_context" in workbook_xml
+    assert "targets_only" in workbook_xml
+    assert "retrieval_handoff" in workbook_xml
+    assert "README" in workbook_xml
+    assert "diagnostic_case_id" in shared_strings
+    assert "retrieval_role" in shared_strings
+
+    workbook = load_workbook(out["refinitiv_ric_resolution_diagnostic_handoff_xlsx"], data_only=False)
+    try:
+        retrieval_ws = workbook["retrieval_handoff"]
+        assert retrieval_ws["B2"].value == (
+            '=IF(A9="","",_xll.RDP.Data(A9,'
+            '"TR.CategoryOwnershipPct.Date;TR.CategoryOwnershipPct;TR.InstrStatTypeValue",'
+            '"StatType=7 SDate="&A10&" EDate="&A11&" CH=Fd RH=IN"))'
+        )
+        assert retrieval_ws["A2"].value.startswith("conventional_conflict:")
+        assert retrieval_ws["A4"].value == "PREVIOUS_EFFECTIVE"
+        assert retrieval_ws["A5"].value == "PREVIOUS"
+        assert retrieval_ws["F5"].value == "TARGET"
+    finally:
+        workbook.close()
+
+
+def test_build_refinitiv_step1_ownership_validation_handoff_assigns_stable_layout() -> None:
+    resolution_handoff_df = pl.DataFrame(
+        [
+            _resolution_diagnostic_handoff_row(
+                diagnostic_case_id="case_conflict",
+                target_class="conventional_conflict",
+                retrieval_sequence_index=1,
+                retrieval_role="PREVIOUS_EFFECTIVE",
+                diagnostic_role="PREVIOUS",
+                bridge_row_id=_bridge_row_id("8000", ticker="PREV"),
+                kypermno="8000",
+                lookup_input="AAA.O",
+                lookup_input_source="effective_collection_ric",
+                effective_collection_ric="AAA.O",
+                effective_collection_ric_source="ISIN",
+            ),
+            _resolution_diagnostic_handoff_row(
+                diagnostic_case_id="case_conflict",
+                target_class="conventional_conflict",
+                retrieval_sequence_index=2,
+                retrieval_role="TARGET_TICKER_CANDIDATE",
+                diagnostic_role="TARGET",
+                bridge_row_id=_bridge_row_id("8000", ticker="CNFL"),
+                kypermno="8000",
+                lookup_input="ALT.O",
+                lookup_input_source="ticker_candidate_ric",
+            ),
+            _resolution_diagnostic_handoff_row(
+                diagnostic_case_id="case_conflict",
+                target_class="conventional_conflict",
+                retrieval_sequence_index=3,
+                retrieval_role="NEXT_EFFECTIVE",
+                diagnostic_role="NEXT",
+                bridge_row_id=_bridge_row_id("8000", ticker="NEXT"),
+                kypermno="8000",
+                lookup_input="AAA.O",
+                lookup_input_source="effective_collection_ric",
+                effective_collection_ric="AAA.O",
+                effective_collection_ric_source="ISIN",
+            ),
+            _resolution_diagnostic_handoff_row(
+                diagnostic_case_id="case_ticker",
+                target_class="unresolved_ticker_only_candidate",
+                retrieval_sequence_index=1,
+                retrieval_role="TARGET_TICKER_CANDIDATE",
+                diagnostic_role="TARGET",
+                bridge_row_id=_bridge_row_id("8001", ticker="TKRO"),
+                kypermno="8001",
+                lookup_input="TKR.O",
+                lookup_input_source="ticker_candidate_ric",
+            ),
+        ]
+    ).select(RESOLUTION_DIAGNOSTIC_HANDOFF_COLUMNS)
+
+    handoff_df, summary = build_refinitiv_step1_ownership_validation_handoff(resolution_handoff_df)
+
+    assert handoff_df.columns == list(OWNERSHIP_VALIDATION_HANDOFF_COLUMNS)
+    assert summary["diagnostic_case_count"] == 2
+    assert summary["retrieval_role_counts"] == {
+        "NEXT_EFFECTIVE": 1,
+        "PREVIOUS_EFFECTIVE": 1,
+        "TARGET_TICKER_CANDIDATE": 2,
+    }
+
+    conflict_rows = handoff_df.filter(pl.col("diagnostic_case_id") == "case_conflict").sort("block_slot_index")
+    assert conflict_rows["sheet_name"].to_list() == ["ownership_validation_001"] * 3
+    assert conflict_rows["case_band_row_start"].to_list() == [1, 1, 1]
+    assert conflict_rows["block_slot_index"].to_list() == [1, 4, 5]
+    assert conflict_rows["block_slot_role"].to_list() == [
+        "PREVIOUS_EFFECTIVE",
+        "TARGET_TICKER_CANDIDATE",
+        "NEXT_EFFECTIVE",
+    ]
+
+    ticker_rows = handoff_df.filter(pl.col("diagnostic_case_id") == "case_ticker")
+    assert ticker_rows["sheet_case_index"].to_list() == [2]
+    assert ticker_rows["case_band_row_start"].to_list() == [4001]
+
+
+def test_run_refinitiv_step1_ownership_validation_handoff_pipeline_writes_formula_workbook(
+    tmp_path: Path,
+) -> None:
+    resolution_handoff_df = pl.DataFrame(
+        [
+            _resolution_diagnostic_handoff_row(
+                diagnostic_case_id="case_conflict",
+                target_class="conventional_conflict",
+                retrieval_sequence_index=1,
+                retrieval_role="PREVIOUS_EFFECTIVE",
+                diagnostic_role="PREVIOUS",
+                bridge_row_id=_bridge_row_id("8100", ticker="PREV"),
+                kypermno="8100",
+                lookup_input="AAA.O",
+                lookup_input_source="effective_collection_ric",
+                request_start_date="2024-01-01",
+                request_end_date="2024-01-31",
+                effective_collection_ric="AAA.O",
+                effective_collection_ric_source="ISIN",
+            ),
+            _resolution_diagnostic_handoff_row(
+                diagnostic_case_id="case_conflict",
+                target_class="conventional_conflict",
+                retrieval_sequence_index=2,
+                retrieval_role="TARGET_TICKER_CANDIDATE",
+                diagnostic_role="TARGET",
+                bridge_row_id=_bridge_row_id("8100", ticker="CNFL"),
+                kypermno="8100",
+                lookup_input="ALT.O",
+                lookup_input_source="ticker_candidate_ric",
+                request_start_date="2024-01-01",
+                request_end_date="2024-01-31",
+            ),
+        ]
+    ).select(RESOLUTION_DIAGNOSTIC_HANDOFF_COLUMNS)
+    input_csv = tmp_path / "refinitiv_ric_resolution_diagnostic_handoff.csv"
+    resolution_handoff_df.write_csv(input_csv)
+
+    out = run_refinitiv_step1_ownership_validation_handoff_pipeline(
+        resolution_diagnostic_handoff_csv_path=input_csv,
+        output_dir=tmp_path / "ownership_validation_common_stock",
+    )
+
+    assert set(out) == {
+        "refinitiv_ownership_validation_handoff_common_stock_parquet",
+        "refinitiv_ownership_validation_handoff_common_stock_csv",
+        "refinitiv_ownership_validation_handoff_common_stock_xlsx",
+        "refinitiv_ownership_validation_handoff_common_stock_summary",
+        "refinitiv_ownership_validation_handoff_common_stock_manifest",
+    }
+    for path in out.values():
+        assert path.exists()
+
+    handoff_df = pl.read_parquet(out["refinitiv_ownership_validation_handoff_common_stock_parquet"])
+    assert handoff_df.columns == list(OWNERSHIP_VALIDATION_HANDOFF_COLUMNS)
+
+    summary = json.loads(out["refinitiv_ownership_validation_handoff_common_stock_summary"].read_text(encoding="utf-8"))
+    assert summary["pipeline_name"] == "refinitiv_step1_ownership_validation_handoff"
+    assert summary["retrieval_role_counts"] == {
+        "PREVIOUS_EFFECTIVE": 1,
+        "TARGET_TICKER_CANDIDATE": 1,
+    }
+
+    workbook = load_workbook(out["refinitiv_ownership_validation_handoff_common_stock_xlsx"], data_only=False)
+    try:
+        assert "ownership_validation_001" in workbook.sheetnames
+        ws = workbook["ownership_validation_001"]
+        assert ws["C2"].value == (
+            '=@RDP.Data(B8,'
+            '"TR.CategoryOwnershipPct.Date;TR.CategoryOwnershipPct;TR.InstrStatTypeValue",'
+            '"StatType=7 SDate="&B10&" EDate="&B11&" CH=Fd RH=IN")'
+        )
+        assert ws["A2"].value == "diagnostic_case_id"
+        assert ws["B2"].value == "case_conflict"
+        assert ws["B4"].value == "PREVIOUS_EFFECTIVE"
+        assert ws["Q4"].value == "TARGET_TICKER_CANDIDATE"
+    finally:
+        workbook.close()
+
+
+def test_run_refinitiv_step1_ownership_validation_results_pipeline_derives_pairwise_and_case_buckets(
+    tmp_path: Path,
+) -> None:
+    resolution_handoff_df = pl.DataFrame(
+        [
+            _resolution_diagnostic_handoff_row(
+                diagnostic_case_id="case_variant",
+                target_class="unresolved_ticker_only_candidate",
+                retrieval_sequence_index=1,
+                retrieval_role="PREVIOUS_EFFECTIVE",
+                diagnostic_role="PREVIOUS",
+                bridge_row_id=_bridge_row_id("8200", ticker="PREV"),
+                kypermno="8200",
+                lookup_input="BASE.O",
+                lookup_input_source="effective_collection_ric",
+                effective_collection_ric="BASE.O",
+                effective_collection_ric_source="ISIN",
+            ),
+            _resolution_diagnostic_handoff_row(
+                diagnostic_case_id="case_variant",
+                target_class="unresolved_ticker_only_candidate",
+                retrieval_sequence_index=2,
+                retrieval_role="TARGET_TICKER_CANDIDATE",
+                diagnostic_role="TARGET",
+                bridge_row_id=_bridge_row_id("8200", ticker="VARI"),
+                kypermno="8200",
+                lookup_input="ALT.O",
+                lookup_input_source="ticker_candidate_ric",
+            ),
+            _resolution_diagnostic_handoff_row(
+                diagnostic_case_id="case_conflict",
+                target_class="conventional_conflict",
+                retrieval_sequence_index=1,
+                retrieval_role="TARGET_TICKER_CANDIDATE",
+                diagnostic_role="TARGET",
+                bridge_row_id=_bridge_row_id("8201", ticker="CNFL"),
+                kypermno="8201",
+                lookup_input="CAND.O",
+                lookup_input_source="ticker_candidate_ric",
+            ),
+            _resolution_diagnostic_handoff_row(
+                diagnostic_case_id="case_conflict",
+                target_class="conventional_conflict",
+                retrieval_sequence_index=2,
+                retrieval_role="NEXT_EFFECTIVE",
+                diagnostic_role="NEXT",
+                bridge_row_id=_bridge_row_id("8201", ticker="NEXT"),
+                kypermno="8201",
+                lookup_input="NEXT.O",
+                lookup_input_source="effective_collection_ric",
+                effective_collection_ric="NEXT.O",
+                effective_collection_ric_source="CUSIP",
+            ),
+            _resolution_diagnostic_handoff_row(
+                diagnostic_case_id="case_nodata",
+                target_class="unresolved_ticker_only_candidate",
+                retrieval_sequence_index=1,
+                retrieval_role="TARGET_TICKER_CANDIDATE",
+                diagnostic_role="TARGET",
+                bridge_row_id=_bridge_row_id("8202", ticker="MISS"),
+                kypermno="8202",
+                lookup_input="MISS.O",
+                lookup_input_source="ticker_candidate_ric",
+            ),
+        ]
+    ).select(RESOLUTION_DIAGNOSTIC_HANDOFF_COLUMNS)
+    input_csv = tmp_path / "refinitiv_ric_resolution_diagnostic_handoff.csv"
+    resolution_handoff_df.write_csv(input_csv)
+    handoff_paths = run_refinitiv_step1_ownership_validation_handoff_pipeline(
+        resolution_diagnostic_handoff_csv_path=input_csv,
+        output_dir=tmp_path / "ownership_validation_common_stock",
+    )
+    handoff_df = pl.read_csv(handoff_paths["refinitiv_ownership_validation_handoff_common_stock_csv"])
+
+    dates = [date(2024, 1, 31), date(2024, 2, 29), date(2024, 3, 31), date(2024, 4, 30)]
+    categories = ["CAT_A", "CAT_B", "CAT_C"]
+
+    def _rows(ric: str, base_value: float) -> list[tuple[str, date, float, str]]:
+        return [
+            (ric, current_date, base_value + idx, category)
+            for idx, (current_date, category) in enumerate(
+                [(current_date, category) for current_date in dates for category in categories]
+            )
+        ]
+
+    returned_rows_by_key = {
+        ("case_variant", "PREVIOUS_EFFECTIVE"): _rows("BASE.O", 10.0),
+        ("case_variant", "TARGET_TICKER_CANDIDATE"): _rows("ALT.O", 10.0),
+        ("case_conflict", "TARGET_TICKER_CANDIDATE"): _rows("CAND.O", 5.0),
+        ("case_conflict", "NEXT_EFFECTIVE"): _rows("NEXT.O", 25.0),
+    }
+    filled_workbook_path = (
+        tmp_path
+        / "ownership_validation_common_stock"
+        / "refinitiv_ownership_validation_handoff_common_stock_filled_in.xlsx"
+    )
+    _write_filled_ownership_validation_workbook(filled_workbook_path, handoff_df, returned_rows_by_key)
+
+    out = run_refinitiv_step1_ownership_validation_results_pipeline(
+        filled_workbook_path=filled_workbook_path,
+        output_dir=tmp_path / "ownership_validation_common_stock",
+    )
+
+    assert set(out) == {
+        "refinitiv_ownership_validation_results_parquet",
+        "refinitiv_ownership_validation_results_csv",
+        "refinitiv_ownership_validation_retrieval_summary_parquet",
+        "refinitiv_ownership_validation_retrieval_summary_csv",
+        "refinitiv_ownership_validation_pairwise_comparisons_parquet",
+        "refinitiv_ownership_validation_pairwise_comparisons_csv",
+        "refinitiv_ownership_validation_case_summary_parquet",
+        "refinitiv_ownership_validation_case_summary_csv",
+        "refinitiv_ownership_validation_case_summary_json",
+        "refinitiv_ownership_validation_results_manifest",
+    }
+    for path in out.values():
+        assert path.exists()
+
+    results_df = pl.read_parquet(out["refinitiv_ownership_validation_results_parquet"])
+    retrieval_summary_df = pl.read_parquet(out["refinitiv_ownership_validation_retrieval_summary_parquet"])
+    pairwise_df = pl.read_parquet(out["refinitiv_ownership_validation_pairwise_comparisons_parquet"])
+    case_summary_df = pl.read_parquet(out["refinitiv_ownership_validation_case_summary_parquet"])
+
+    assert results_df.columns == list(OWNERSHIP_VALIDATION_RESULTS_COLUMNS)
+    assert retrieval_summary_df.columns == list(OWNERSHIP_VALIDATION_RETRIEVAL_SUMMARY_COLUMNS)
+    assert pairwise_df.columns == list(OWNERSHIP_VALIDATION_PAIRWISE_COMPARISON_COLUMNS)
+    assert case_summary_df.columns == list(OWNERSHIP_VALIDATION_CASE_SUMMARY_COLUMNS)
+    assert results_df.height == 48
+    assert retrieval_summary_df.height == 5
+    assert pairwise_df.height == 2
+    assert case_summary_df.height == 3
+
+    pair_by_case_direction = {
+        (row["diagnostic_case_id"], row["adjacent_direction"]): row for row in pairwise_df.to_dicts()
+    }
+    variant_pair = pair_by_case_direction[("case_variant", "PREVIOUS")]
+    assert variant_pair["matched_value_pair_count"] == 12
+    assert variant_pair["same_returned_ric"] is False
+    assert variant_pair["pair_supports_same_identity_ric_variant"] is True
+    assert variant_pair["pair_conflicts"] is False
+
+    conflict_pair = pair_by_case_direction[("case_conflict", "NEXT")]
+    assert conflict_pair["matched_value_pair_count"] == 12
+    assert conflict_pair["pair_conflicts"] is True
+    assert conflict_pair["pair_supports_corrobation"] is False
+
+    case_by_id = {row["diagnostic_case_id"]: row for row in case_summary_df.to_dicts()}
+    assert case_by_id["case_variant"]["ownership_validation_bucket"] == "ownership_supports_same_identity_ric_variant"
+    assert case_by_id["case_variant"]["candidate_matches_previous_effective_ownership"] is True
+    assert case_by_id["case_conflict"]["ownership_validation_bucket"] == "ownership_conflicts_with_adjacent_identity"
+    assert case_by_id["case_nodata"]["ownership_validation_bucket"] == "ownership_no_useful_data"
+
+    summary = json.loads(out["refinitiv_ownership_validation_case_summary_json"].read_text(encoding="utf-8"))
+    assert summary["pipeline_name"] == "refinitiv_step1_ownership_validation_results"
+    assert summary["ownership_validation_bucket_counts"] == {
+        "ownership_conflicts_with_adjacent_identity": 1,
+        "ownership_no_useful_data": 1,
+        "ownership_supports_same_identity_ric_variant": 1,
+    }
+
+
+def test_build_refinitiv_step1_ownership_universe_handoff_assigns_roles_and_nonretrievable_rows() -> None:
+    resolution_df = build_refinitiv_step1_resolution_frame(
+        _resolution_input_df(
+            [
+                _extended_resolution_row(
+                    kypermno="9000",
+                    cusip="111111111",
+                    isin="US1111111111",
+                    ticker="EFF",
+                    first_seen_caldt=date(2024, 1, 1),
+                    last_seen_caldt=date(2024, 1, 31),
+                    ISIN_returned_ric="EFF.N",
+                    ISIN_returned_isin="US1111111111",
+                    ISIN_returned_cusip="111111111",
+                ),
+                _extended_resolution_row(
+                    kypermno="9001",
+                    cusip="222222222",
+                    isin="US2222222222",
+                    ticker="CNF",
+                    first_seen_caldt=date(2024, 2, 1),
+                    last_seen_caldt=date(2024, 2, 29),
+                    ISIN_returned_ric="CNFA.O",
+                    ISIN_returned_isin="US2222222222",
+                    ISIN_returned_cusip="222222222",
+                    CUSIP_returned_ric="CNFB.N",
+                    CUSIP_returned_isin="US3333333333",
+                    CUSIP_returned_cusip="333333333",
+                ),
+                _extended_resolution_row(
+                    kypermno="9002",
+                    cusip=None,
+                    isin=None,
+                    ticker="TKR",
+                    first_seen_caldt=date(2024, 3, 1),
+                    last_seen_caldt=date(2024, 3, 31),
+                    TICKER_returned_ric="TKR.O",
+                    TICKER_returned_isin="US4444444444",
+                    TICKER_returned_cusip="444444444",
+                ),
+                _extended_resolution_row(
+                    kypermno="9003",
+                    cusip=None,
+                    isin=None,
+                    ticker="MISS",
+                    first_seen_caldt=date(2024, 4, 1),
+                    last_seen_caldt=date(2024, 4, 30),
+                ),
+            ]
+        )
+    )
+
+    handoff_df, summary = build_refinitiv_step1_ownership_universe_handoff(resolution_df)
+
+    assert handoff_df.columns == list(OWNERSHIP_UNIVERSE_HANDOFF_COLUMNS)
+    assert handoff_df.height == 5
+    assert summary["resolved_universe_row_count"] == 4
+    assert summary["retrieval_eligible_row_count"] == 4
+    assert summary["retrieval_eligible_bridge_row_count"] == 3
+    assert summary["non_retrieval_row_count"] == 1
+    assert summary["retrieval_role_counts"] == {
+        "UNIVERSE_EFFECTIVE": 1,
+        "UNIVERSE_TARGET_CUSIP_CANDIDATE": 1,
+        "UNIVERSE_TARGET_ISIN_CANDIDATE": 1,
+        "UNIVERSE_TARGET_TICKER_CANDIDATE": 1,
+    }
+    assert summary["retrieval_exclusion_reason_counts"] == {"no_usable_lookup_input": 1}
+    assert summary["retrieval_sheet_name"] == "ownership_retrieval"
+    assert summary["request_block_headers"] == [
+        "input_data",
+        "returned_ric",
+        "returned_date",
+        "returned_value",
+        "returned_category",
+    ]
+
+    eligible_rows = handoff_df.filter(pl.col("retrieval_eligible"))
+    assert eligible_rows["diagnostic_case_id"].to_list() == [
+        "9000:01:111111111:US1111111111:EFF",
+        "9001:01:222222222:US2222222222:CNF",
+        "9001:01:222222222:US2222222222:CNF",
+        "9002:01:-:-:TKR",
+    ]
+    assert eligible_rows["candidate_slot"].to_list() == [
+        "UNIVERSE_EFFECTIVE",
+        "UNIVERSE_TARGET_ISIN_CANDIDATE",
+        "UNIVERSE_TARGET_CUSIP_CANDIDATE",
+        "UNIVERSE_TARGET_TICKER_CANDIDATE",
+    ]
+
+    noneligible_row = handoff_df.filter(~pl.col("retrieval_eligible")).row(0, named=True)
+    assert noneligible_row["ownership_lookup_role"] == "UNIVERSE_NOT_RETRIEVABLE"
+    assert noneligible_row["retrieval_exclusion_reason"] == "no_usable_lookup_input"
+
+
+def test_run_refinitiv_step1_ownership_universe_handoff_pipeline_writes_formula_workbook(
+    tmp_path: Path,
+) -> None:
+    resolution_df = build_refinitiv_step1_resolution_frame(
+        _resolution_input_df(
+            [
+                _extended_resolution_row(
+                    kypermno="9010",
+                    cusip="111111111",
+                    isin="US1111111111",
+                    ticker="EFF",
+                    first_seen_caldt=date(2024, 1, 1),
+                    last_seen_caldt=date(2024, 1, 31),
+                    ISIN_returned_ric="EFF.N",
+                    ISIN_returned_isin="US1111111111",
+                    ISIN_returned_cusip="111111111",
+                ),
+                _extended_resolution_row(
+                    kypermno="9011",
+                    cusip=None,
+                    isin=None,
+                    ticker="TKR",
+                    first_seen_caldt=date(2024, 2, 1),
+                    last_seen_caldt=date(2024, 2, 29),
+                    TICKER_returned_ric="TKR.O",
+                    TICKER_returned_isin="US4444444444",
+                    TICKER_returned_cusip="444444444",
+                ),
+            ]
+        )
+    )
+    resolution_path = tmp_path / "refinitiv_ric_resolution_common_stock.parquet"
+    resolution_df.write_parquet(resolution_path)
+
+    out = run_refinitiv_step1_ownership_universe_handoff_pipeline(
+        resolution_artifact_path=resolution_path,
+        output_dir=tmp_path / "ownership_universe_common_stock",
+    )
+
+    assert set(out) == {
+        "refinitiv_ownership_universe_handoff_common_stock_parquet",
+        "refinitiv_ownership_universe_handoff_common_stock_csv",
+        "refinitiv_ownership_universe_handoff_common_stock_xlsx",
+        "refinitiv_ownership_universe_handoff_common_stock_summary",
+        "refinitiv_ownership_universe_handoff_common_stock_manifest",
+    }
+    for path in out.values():
+        assert path.exists()
+
+    handoff_df = pl.read_parquet(out["refinitiv_ownership_universe_handoff_common_stock_parquet"])
+    assert handoff_df.columns == list(OWNERSHIP_UNIVERSE_HANDOFF_COLUMNS)
+    assert handoff_df.filter(pl.col("retrieval_eligible")).height == 2
+
+    summary = json.loads(out["refinitiv_ownership_universe_handoff_common_stock_summary"].read_text(encoding="utf-8"))
+    assert summary["pipeline_name"] == "refinitiv_step1_ownership_universe_handoff"
+    assert summary["retrieval_role_counts"] == {
+        "UNIVERSE_EFFECTIVE": 1,
+        "UNIVERSE_TARGET_TICKER_CANDIDATE": 1,
+    }
+
+    workbook = load_workbook(out["refinitiv_ownership_universe_handoff_common_stock_xlsx"], data_only=False)
+    try:
+        assert workbook.sheetnames == ["ownership_retrieval", "README"]
+        retrieval_ws = workbook["ownership_retrieval"]
+        assert retrieval_ws["A1"].value == "input_data"
+        assert retrieval_ws["B1"].value == "returned_ric"
+        assert retrieval_ws["F1"].value == "input_data"
+        assert retrieval_ws["G1"].value == "returned_ric"
+        assert retrieval_ws["A2"].value == "9010:01:111111111:US1111111111:EFF"
+        assert retrieval_ws["A3"].value == "EFF.N"
+        assert retrieval_ws["A6"].value == "UNIVERSE_EFFECTIVE"
+        assert retrieval_ws["B2"].value == (
+            '=@RDP.Data(A3,'
+            '"TR.CategoryOwnershipPct.Date;TR.CategoryOwnershipPct;TR.InstrStatTypeValue",'
+            '"StatType=7 SDate="&A4&" EDate="&A5&" CH=Fd RH=IN")'
+        )
+        assert retrieval_ws["F2"].value == "9011:01:-:-:TKR"
+        assert retrieval_ws["F3"].value == "TKR.O"
+        assert retrieval_ws["G2"].value == (
+            '=@RDP.Data(F3,'
+            '"TR.CategoryOwnershipPct.Date;TR.CategoryOwnershipPct;TR.InstrStatTypeValue",'
+            '"StatType=7 SDate="&F4&" EDate="&F5&" CH=Fd RH=IN")'
+        )
+    finally:
+        workbook.close()
+
+
+def test_run_refinitiv_step1_ownership_universe_results_pipeline_builds_row_summary(
+    tmp_path: Path,
+) -> None:
+    resolution_df = build_refinitiv_step1_resolution_frame(
+        _resolution_input_df(
+            [
+                _extended_resolution_row(
+                    kypermno="9020",
+                    cusip="111111111",
+                    isin="US1111111111",
+                    ticker="EFF",
+                    first_seen_caldt=date(2024, 1, 1),
+                    last_seen_caldt=date(2024, 1, 31),
+                    ISIN_returned_ric="EFF.N",
+                    ISIN_returned_isin="US1111111111",
+                    ISIN_returned_cusip="111111111",
+                ),
+                _extended_resolution_row(
+                    kypermno="9021",
+                    cusip="222222222",
+                    isin="US2222222222",
+                    ticker="CNF",
+                    first_seen_caldt=date(2024, 2, 1),
+                    last_seen_caldt=date(2024, 2, 29),
+                    ISIN_returned_ric="CNFA.O",
+                    ISIN_returned_isin="US2222222222",
+                    ISIN_returned_cusip="222222222",
+                    CUSIP_returned_ric="CNFB.N",
+                    CUSIP_returned_isin="US3333333333",
+                    CUSIP_returned_cusip="333333333",
+                ),
+                _extended_resolution_row(
+                    kypermno="9022",
+                    cusip=None,
+                    isin=None,
+                    ticker="TKR",
+                    first_seen_caldt=date(2024, 3, 1),
+                    last_seen_caldt=date(2024, 3, 31),
+                    TICKER_returned_ric="TKR.O",
+                    TICKER_returned_isin="US4444444444",
+                    TICKER_returned_cusip="444444444",
+                ),
+                _extended_resolution_row(
+                    kypermno="9023",
+                    cusip=None,
+                    isin=None,
+                    ticker="MISS",
+                    first_seen_caldt=date(2024, 4, 1),
+                    last_seen_caldt=date(2024, 4, 30),
+                ),
+            ]
+        )
+    )
+    resolution_path = tmp_path / "refinitiv_ric_resolution_common_stock.parquet"
+    resolution_df.write_parquet(resolution_path)
+    handoff_paths = run_refinitiv_step1_ownership_universe_handoff_pipeline(
+        resolution_artifact_path=resolution_path,
+        output_dir=tmp_path / "ownership_universe_common_stock",
+    )
+    handoff_df = pl.read_csv(handoff_paths["refinitiv_ownership_universe_handoff_common_stock_csv"])
+
+    returned_rows_by_lookup_row_id = {
+        "9020:01:111111111:US1111111111:EFF|UNIVERSE_EFFECTIVE": [
+            ("EFF.N", date(2024, 1, 31), 10, "CAT_A"),
+            ("EFF.N", date(2024, 2, 29), 11.5, "CAT_B"),
+        ],
+        "9021:01:222222222:US2222222222:CNF|UNIVERSE_TARGET_ISIN_CANDIDATE": [
+            ("CNFA.O", date(2024, 2, 29), 21, "CAT_A"),
+        ],
+        "9021:01:222222222:US2222222222:CNF|UNIVERSE_TARGET_CUSIP_CANDIDATE": [
+            ("CNFB.N", date(2024, 2, 29), 22.0, "CAT_A"),
+        ],
+        "9022:01:-:-:TKR|UNIVERSE_TARGET_TICKER_CANDIDATE": [
+            ("TKR.O", date(2024, 3, 31), 30, "CAT_C"),
+        ],
+    }
+    filled_workbook_path = (
+        tmp_path
+        / "ownership_universe_common_stock"
+        / "refinitiv_ownership_universe_handoff_common_stock_filled_in.xlsx"
+    )
+    _write_filled_ownership_universe_workbook(
+        filled_workbook_path,
+        handoff_df,
+        returned_rows_by_lookup_row_id,
+    )
+
+    out = run_refinitiv_step1_ownership_universe_results_pipeline(
+        filled_workbook_path=filled_workbook_path,
+        output_dir=tmp_path / "ownership_universe_common_stock",
+    )
+
+    assert set(out) == {
+        "refinitiv_ownership_universe_results_parquet",
+        "refinitiv_ownership_universe_results_csv",
+        "refinitiv_ownership_universe_row_summary_parquet",
+        "refinitiv_ownership_universe_row_summary_csv",
+        "refinitiv_ownership_universe_row_summary_json",
+        "refinitiv_ownership_universe_results_manifest",
+    }
+    for path in out.values():
+        assert path.exists()
+
+    results_df = pl.read_parquet(out["refinitiv_ownership_universe_results_parquet"])
+    row_summary_df = pl.read_parquet(out["refinitiv_ownership_universe_row_summary_parquet"])
+
+    assert results_df.columns == list(OWNERSHIP_UNIVERSE_RESULTS_COLUMNS)
+    assert row_summary_df.columns == list(OWNERSHIP_UNIVERSE_ROW_SUMMARY_COLUMNS)
+    assert results_df.height == 5
+    assert row_summary_df.height == 5
+
+    summary_by_lookup_id = {row["ownership_lookup_row_id"]: row for row in row_summary_df.to_dicts()}
+    assert summary_by_lookup_id["9020:01:111111111:US1111111111:EFF|UNIVERSE_EFFECTIVE"]["ownership_rows_returned"] == 2
+    assert summary_by_lookup_id["9020:01:111111111:US1111111111:EFF|UNIVERSE_EFFECTIVE"]["ownership_returned_ric_nunique"] == 1
+    assert summary_by_lookup_id["9023:01:-:-:MISS|UNIVERSE_NOT_RETRIEVABLE"]["retrieval_row_present"] is False
+    assert summary_by_lookup_id["9023:01:-:-:MISS|UNIVERSE_NOT_RETRIEVABLE"]["ownership_rows_returned"] == 0
+
+    summary = json.loads(out["refinitiv_ownership_universe_row_summary_json"].read_text(encoding="utf-8"))
+    assert summary["pipeline_name"] == "refinitiv_step1_ownership_universe_results"
+    assert summary["retrieval_rows_with_any_returned_data"] == 4
+    assert summary["retrieval_role_counts"] == {
+        "UNIVERSE_EFFECTIVE": 1,
+        "UNIVERSE_TARGET_CUSIP_CANDIDATE": 1,
+        "UNIVERSE_TARGET_ISIN_CANDIDATE": 1,
+        "UNIVERSE_TARGET_TICKER_CANDIDATE": 1,
+    }
 
 
 def test_build_refinitiv_null_ric_rescue_candidates_classifies_failed_rows() -> None:
