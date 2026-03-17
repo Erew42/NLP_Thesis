@@ -4336,6 +4336,111 @@ def run_refinitiv_step1_ownership_universe_results_pipeline(
     }
 
 
+def build_refinitiv_step1_ownership_authority_tables(
+    resolution_df: pl.DataFrame,
+    ownership_results_df: pl.DataFrame,
+    ownership_row_summary_df: pl.DataFrame,
+    *,
+    reviewed_ticker_allowlist_df: pl.DataFrame | None = None,
+) -> tuple[dict[str, pl.DataFrame], dict[str, Any]]:
+    from thesis_pkg.pipelines.refinitiv.authority import (
+        build_refinitiv_step1_ownership_authority_tables as _impl,
+    )
+
+    return _impl(
+        resolution_df,
+        ownership_results_df,
+        ownership_row_summary_df,
+        reviewed_ticker_allowlist_df=reviewed_ticker_allowlist_df,
+    )
+
+
+def run_refinitiv_step1_ownership_authority_pipeline(
+    *,
+    resolution_artifact_path: Path | str,
+    ownership_results_artifact_path: Path | str,
+    ownership_row_summary_artifact_path: Path | str,
+    output_dir: Path | str,
+    reviewed_ticker_allowlist_path: Path | str | None = None,
+) -> dict[str, Path]:
+    from thesis_pkg.pipelines.refinitiv.authority import (
+        run_refinitiv_step1_ownership_authority_pipeline as _impl,
+    )
+
+    return _impl(
+        resolution_artifact_path=resolution_artifact_path,
+        ownership_results_artifact_path=ownership_results_artifact_path,
+        ownership_row_summary_artifact_path=ownership_row_summary_artifact_path,
+        output_dir=output_dir,
+        reviewed_ticker_allowlist_path=reviewed_ticker_allowlist_path,
+    )
+
+
+def build_refinitiv_lm2011_doc_ownership_requests(
+    doc_filing_df: pl.DataFrame,
+    authority_decisions_df: pl.DataFrame,
+    authority_exceptions_df: pl.DataFrame,
+) -> pl.DataFrame:
+    from thesis_pkg.pipelines.refinitiv.doc_ownership import (
+        build_refinitiv_lm2011_doc_ownership_requests as _impl,
+    )
+
+    return _impl(
+        doc_filing_df,
+        authority_decisions_df,
+        authority_exceptions_df,
+    )
+
+
+def run_refinitiv_lm2011_doc_ownership_exact_handoff_pipeline(
+    *,
+    doc_filing_artifact_path: Path | str,
+    authority_decisions_artifact_path: Path | str,
+    authority_exceptions_artifact_path: Path | str,
+    output_dir: Path | str,
+) -> dict[str, Path]:
+    from thesis_pkg.pipelines.refinitiv.doc_ownership import (
+        run_refinitiv_lm2011_doc_ownership_exact_handoff_pipeline as _impl,
+    )
+
+    return _impl(
+        doc_filing_artifact_path=doc_filing_artifact_path,
+        authority_decisions_artifact_path=authority_decisions_artifact_path,
+        authority_exceptions_artifact_path=authority_exceptions_artifact_path,
+        output_dir=output_dir,
+    )
+
+
+def run_refinitiv_lm2011_doc_ownership_fallback_handoff_pipeline(
+    *,
+    exact_filled_workbook_path: Path | str,
+    output_dir: Path | str,
+) -> dict[str, Path]:
+    from thesis_pkg.pipelines.refinitiv.doc_ownership import (
+        run_refinitiv_lm2011_doc_ownership_fallback_handoff_pipeline as _impl,
+    )
+
+    return _impl(
+        exact_filled_workbook_path=exact_filled_workbook_path,
+        output_dir=output_dir,
+    )
+
+
+def run_refinitiv_lm2011_doc_ownership_finalize_pipeline(
+    *,
+    output_dir: Path | str,
+    fallback_filled_workbook_path: Path | str | None = None,
+) -> dict[str, Path]:
+    from thesis_pkg.pipelines.refinitiv.doc_ownership import (
+        run_refinitiv_lm2011_doc_ownership_finalize_pipeline as _impl,
+    )
+
+    return _impl(
+        output_dir=output_dir,
+        fallback_filled_workbook_path=fallback_filled_workbook_path,
+    )
+
+
 def _is_failed_lookup_record(record: dict[str, Any]) -> tuple[bool, str, bool]:
     vendor_primary_ric = _normalize_lookup_text(record.get("vendor_primary_ric"))
     returned_fields = (

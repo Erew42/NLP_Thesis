@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime as dt
 import json
 from pathlib import Path
 from typing import Any
@@ -864,6 +865,171 @@ def write_refinitiv_ownership_universe_workbook(
                 "Within each request block, input_data rows 2-11 are fixed: bridge_row_id, candidate_ric, request_start_date, request_end_date, candidate_slot, lookup_input_source, effective_collection_ric, effective_collection_ric_source, accepted_ric, accepted_ric_source.",
                 "The direct @RDP.Data formula is prefilled in the returned_ric cell on row 2 of each block. Open the workbook in Excel with Workspace enabled, let the formulas evaluate, and save the filled workbook before re-import.",
                 "The parser reads ownership_retrieval in 5-column steps, skips the spill header row, and reconstructs long-format observations by matching bridge_row_id, candidate_slot, and candidate_ric back to the handoff snapshot.",
+            ),
+        )
+    finally:
+        workbook.close()
+    return out_path
+
+
+def _write_refinitiv_lm2011_doc_ownership_sheet(
+    workbook: xlsxwriter.Workbook,
+    *,
+    df: pl.DataFrame,
+    header_fmt: xlsxwriter.format.Format,
+    date_fmt: xlsxwriter.format.Format,
+    input_field_order: tuple[str, ...],
+    block_headers: tuple[str, ...],
+    request_stage: str,
+    sheet_name_prefix: str,
+    max_blocks_per_sheet: int,
+) -> list[str]:
+    eligible_df = df.filter(pl.col("retrieval_eligible").fill_null(False))
+    written_sheet_names: list[str] = []
+
+    if eligible_df.height <= 0:
+        worksheet = workbook.add_worksheet(sheet_name_prefix)
+        written_sheet_names.append(sheet_name_prefix)
+        worksheet.freeze_panes(1, 0)
+        for offset, header in enumerate(block_headers):
+            worksheet.write(0, offset, header, header_fmt)
+        worksheet.write_string(1, 0, "No retrieval rows")
+        worksheet.set_column(0, 0, 30)
+        worksheet.set_column(1, 4, 18)
+        return written_sheet_names
+
+    block_width = len(block_headers)
+    authoritative_ric_offset = input_field_order.index("authoritative_ric") + 1
+    target_quarter_end_offset = input_field_order.index("target_quarter_end") + 1
+    fallback_window_start_offset = input_field_order.index("fallback_window_start") + 1
+    fallback_window_end_offset = input_field_order.index("fallback_window_end") + 1
+    date_fields = {
+        "filing_date",
+        "target_quarter_end",
+        "fallback_window_start",
+        "fallback_window_end",
+    }
+
+    for sheet_index in range((eligible_df.height - 1) // max_blocks_per_sheet + 1):
+        start_idx = sheet_index * max_blocks_per_sheet
+        end_idx = min(start_idx + max_blocks_per_sheet, eligible_df.height)
+        chunk_df = eligible_df.slice(start_idx, end_idx - start_idx)
+        sheet_name = sheet_name_prefix if sheet_index == 0 and end_idx == eligible_df.height else (
+            f"{sheet_name_prefix}_{sheet_index + 1:03d}"
+        )
+        worksheet = workbook.add_worksheet(sheet_name)
+        written_sheet_names.append(sheet_name)
+        worksheet.freeze_panes(1, 0)
+
+        for block_index, row in enumerate(chunk_df.iter_rows(named=True)):
+            base_col = block_index * block_width
+            worksheet.set_column(base_col, base_col, 30)
+            worksheet.set_column(base_col + 1, base_col + 4, 18)
+
+            for offset, header in enumerate(block_headers):
+                worksheet.write(0, base_col + offset, header, header_fmt)
+
+            for field_offset, field_name in enumerate(input_field_order, start=1):
+                value = row.get(field_name)
+                if value is None:
+                    continue
+                if field_name in date_fields and isinstance(value, (dt.date, dt.datetime)):
+                    worksheet.write_datetime(field_offset, base_col, value, date_fmt)
+                else:
+                    worksheet.write_string(field_offset, base_col, str(value))
+
+            authoritative_ric_ref = _sheet_cell_ref(authoritative_ric_offset, base_col)
+            target_quarter_end_ref = _sheet_cell_ref(target_quarter_end_offset, base_col)
+            fallback_window_start_ref = _sheet_cell_ref(fallback_window_start_offset, base_col)
+            fallback_window_end_ref = _sheet_cell_ref(fallback_window_end_offset, base_col)
+            worksheet.write_formula(1, base_col + 1, f"={authoritative_ric_ref}", None, "")
+
+            if request_stage == "EXACT":
+                worksheet.write_formula(1, base_col + 2, f"={target_quarter_end_ref}", None, "")
+                worksheet.write_formula(
+                    1,
+                    base_col + 3,
+                    (
+                        f'=@RDP.Data({authoritative_ric_ref},'
+                        '"TR.CategoryOwnershipPct;TR.InstrStatTypeValue",'
+                        f'"StatType=7 SDate="&TEXT({target_quarter_end_ref},"yyyy-mm-dd")&" CH=Fd RH=IN")'
+                    ),
+                    None,
+                    "",
+                )
+            elif request_stage == "FALLBACK":
+                worksheet.write_formula(
+                    1,
+                    base_col + 2,
+                    (
+                        f'=@RDP.Data({authoritative_ric_ref},'
+                        '"TR.CategoryOwnershipPct.Date;TR.CategoryOwnershipPct;TR.InstrStatTypeValue",'
+                        f'"StatType=7 SDate="&TEXT({fallback_window_start_ref},"yyyy-mm-dd")&'
+                        f'" EDate="&TEXT({fallback_window_end_ref},"yyyy-mm-dd")&" CH=Fd RH=IN")'
+                    ),
+                    None,
+                    "",
+                )
+            else:
+                raise ValueError(f"unsupported doc ownership request stage: {request_stage}")
+
+    return written_sheet_names
+
+
+def write_refinitiv_lm2011_doc_ownership_workbook(
+    df: pl.DataFrame,
+    out_path: Path,
+    *,
+    readme_payload: dict[str, Any],
+    input_field_order: tuple[str, ...],
+    block_headers: tuple[str, ...],
+    request_stage: str,
+    sheet_name_prefix: str = "ownership_retrieval",
+    max_blocks_per_sheet: int = 3200,
+) -> Path:
+    """Write the LM2011 doc-grain ownership retrieval workbook."""
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    workbook = xlsxwriter.Workbook(
+        str(out_path),
+        {
+            "strings_to_formulas": False,
+            "strings_to_numbers": False,
+            "strings_to_urls": False,
+        },
+    )
+    try:
+        workbook.set_calc_mode("auto")
+        header_fmt = workbook.add_format({"bold": True, "bg_color": "#D9E2F3", "border": 1})
+        wrap_fmt = workbook.add_format({"text_wrap": True, "valign": "top"})
+        date_fmt = workbook.add_format({"num_format": "yyyy-mm-dd"})
+        written_sheet_names = _write_refinitiv_lm2011_doc_ownership_sheet(
+            workbook,
+            df=df,
+            header_fmt=header_fmt,
+            date_fmt=date_fmt,
+            input_field_order=input_field_order,
+            block_headers=block_headers,
+            request_stage=request_stage,
+            sheet_name_prefix=sheet_name_prefix,
+            max_blocks_per_sheet=max_blocks_per_sheet,
+        )
+        stage_label = "exact target-quarter" if request_stage == "EXACT" else "fallback window"
+        _write_readme_sheet(
+            workbook,
+            readme_payload={
+                **readme_payload,
+                "written_sheet_names": written_sheet_names,
+                "request_stage": request_stage,
+            },
+            header_fmt=header_fmt,
+            wrap_fmt=wrap_fmt,
+            instructions=(
+                f"{stage_label} retrieval blocks are written across ownership_retrieval sheets in repeated 5-column blocks: input_data, returned_ric, returned_date, returned_value, returned_category.",
+                "Within each block, input_data rows 2-9 are fixed: doc_id, authoritative_ric, target_quarter_end, fallback_window_start, fallback_window_end, filing_date, KYPERMNO, authority_decision_status.",
+                "Open the workbook in Excel with Workspace enabled, let the formulas evaluate, and save the filled workbook before re-import.",
+                "The parser reads each ownership_retrieval sheet in 5-column steps and reconstructs long-format request results by matching the doc_id block metadata back to the request snapshot parquet.",
             ),
         )
     finally:

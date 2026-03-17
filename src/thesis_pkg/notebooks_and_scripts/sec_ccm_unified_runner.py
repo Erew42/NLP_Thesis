@@ -46,6 +46,10 @@ from thesis_pkg.pipeline import (
     SecCcmJoinSpecV2,
     build_or_reuse_ccm_daily_stage,
     make_sec_ccm_join_spec_preset,
+    run_refinitiv_lm2011_doc_ownership_exact_handoff_pipeline,
+    run_refinitiv_lm2011_doc_ownership_fallback_handoff_pipeline,
+    run_refinitiv_lm2011_doc_ownership_finalize_pipeline,
+    run_refinitiv_step1_ownership_authority_pipeline,
     run_refinitiv_step1_ownership_universe_handoff_pipeline,
     run_refinitiv_step1_ownership_universe_results_pipeline,
     run_refinitiv_step1_resolution_pipeline,
@@ -102,6 +106,43 @@ def _ownership_rows_with_data(path: Path) -> int | None:
         .collect()
         .item()
     )
+
+
+def _nonnull_count(path: Path, column: str) -> int | None:
+    if not path.exists() or path.suffix.lower() != ".parquet":
+        return None
+    return int(
+        pl.scan_parquet(path)
+        .filter(pl.col(column).is_not_null())
+        .select(pl.len())
+        .collect()
+        .item()
+    )
+
+
+def _bool_true_count(path: Path, column: str) -> int | None:
+    if not path.exists() or path.suffix.lower() != ".parquet":
+        return None
+    return int(
+        pl.scan_parquet(path)
+        .filter(pl.col(column).cast(pl.Boolean, strict=False).fill_null(False))
+        .select(pl.len())
+        .collect()
+        .item()
+    )
+
+
+def _value_counts(path: Path, column: str) -> dict[str, int] | None:
+    if not path.exists() or path.suffix.lower() != ".parquet":
+        return None
+    return {
+        str(row[column]): int(row["len"])
+        for row in pl.scan_parquet(path)
+        .group_by(column)
+        .len()
+        .collect()
+        .to_dicts()
+    }
 
 
 def main() -> None:
@@ -259,6 +300,10 @@ def main() -> None:
     RUN_REFINITIV_STEP1_RESOLUTION = True
     RUN_REFINITIV_OWNERSHIP_UNIVERSE_HANDOFF = True
     RUN_REFINITIV_OWNERSHIP_UNIVERSE_RESULTS = True
+    RUN_REFINITIV_OWNERSHIP_AUTHORITY = True
+    RUN_REFINITIV_DOC_OWNERSHIP_LM2011_EXACT_HANDOFF = True
+    RUN_REFINITIV_DOC_OWNERSHIP_LM2011_FALLBACK_HANDOFF = True
+    RUN_REFINITIV_DOC_OWNERSHIP_LM2011_FINALIZE = True
     RUN_GATED_ITEM_EXTRACTION = False
     RUN_UNMATCHED_DIAGNOSTIC_TRACK = False
     RUN_NO_ITEM_DIAGNOSTICS = False
@@ -278,6 +323,8 @@ def main() -> None:
     BOUNDARY_INPUT_DIR = BOUNDARY_OUT_DIR / "matched_filings_input"
     REFINITIV_STEP1_OUT_DIR = RUN_ROOT / "refinitiv_step1"
     REFINITIV_OWNERSHIP_UNIVERSE_DIR = REFINITIV_STEP1_OUT_DIR / "ownership_universe_common_stock"
+    REFINITIV_OWNERSHIP_AUTHORITY_DIR = REFINITIV_STEP1_OUT_DIR / "ownership_authority_common_stock"
+    REFINITIV_DOC_OWNERSHIP_LM2011_DIR = RUN_ROOT / "refinitiv_doc_ownership_lm2011"
 
     if IN_COLAB:
         LOCAL_TMP = Path("/content/_tmp_zip")
@@ -302,6 +349,8 @@ def main() -> None:
         BOUNDARY_INPUT_DIR,
         REFINITIV_STEP1_OUT_DIR,
         REFINITIV_OWNERSHIP_UNIVERSE_DIR,
+        REFINITIV_OWNERSHIP_AUTHORITY_DIR,
+        REFINITIV_DOC_OWNERSHIP_LM2011_DIR,
         LOCAL_TMP,
         LOCAL_WORK,
         LOCAL_ITEM_WORK,
@@ -496,6 +545,10 @@ def main() -> None:
     refinitiv_resolution_paths: dict[str, Path] | None = None
     refinitiv_ownership_universe_handoff_paths: dict[str, Path] | None = None
     refinitiv_ownership_universe_results_paths: dict[str, Path] | None = None
+    refinitiv_ownership_authority_paths: dict[str, Path] | None = None
+    refinitiv_doc_ownership_exact_paths: dict[str, Path] | None = None
+    refinitiv_doc_ownership_fallback_paths: dict[str, Path] | None = None
+    refinitiv_doc_ownership_finalize_paths: dict[str, Path] | None = None
     refinitiv_artifact_stages: list[_ArtifactStage] = []
 
     def _record_refinitiv_stage(stage: str, paths: dict[str, Path] | None) -> None:
@@ -588,6 +641,167 @@ def main() -> None:
                 {
                     "warning": "skipping Refinitiv ownership universe results; filled ownership universe workbook not found",
                     "expected_path": str(ownership_universe_filled_workbook_path),
+                }
+            )
+    if RUN_REFINITIV_OWNERSHIP_AUTHORITY:
+        resolution_artifact_path = (
+            refinitiv_resolution_paths["refinitiv_ric_resolution_common_stock_parquet"]
+            if refinitiv_resolution_paths is not None
+            else REFINITIV_STEP1_OUT_DIR / "refinitiv_ric_resolution_common_stock.parquet"
+        )
+        ownership_results_artifact_path = (
+            refinitiv_ownership_universe_results_paths["refinitiv_ownership_universe_results_parquet"]
+            if refinitiv_ownership_universe_results_paths is not None
+            else REFINITIV_OWNERSHIP_UNIVERSE_DIR / "refinitiv_ownership_universe_results.parquet"
+        )
+        ownership_row_summary_artifact_path = (
+            refinitiv_ownership_universe_results_paths["refinitiv_ownership_universe_row_summary_parquet"]
+            if refinitiv_ownership_universe_results_paths is not None
+            else REFINITIV_OWNERSHIP_UNIVERSE_DIR / "refinitiv_ownership_universe_row_summary.parquet"
+        )
+        reviewed_ticker_allowlist_path = (
+            REFINITIV_OWNERSHIP_AUTHORITY_DIR / "refinitiv_permno_ownership_ticker_allowlist.parquet"
+        )
+        if (
+            resolution_artifact_path.exists()
+            and ownership_results_artifact_path.exists()
+            and ownership_row_summary_artifact_path.exists()
+        ):
+            refinitiv_ownership_authority_paths = run_refinitiv_step1_ownership_authority_pipeline(
+                resolution_artifact_path=resolution_artifact_path,
+                ownership_results_artifact_path=ownership_results_artifact_path,
+                ownership_row_summary_artifact_path=ownership_row_summary_artifact_path,
+                output_dir=REFINITIV_OWNERSHIP_AUTHORITY_DIR,
+                reviewed_ticker_allowlist_path=reviewed_ticker_allowlist_path,
+            )
+            _record_refinitiv_stage(
+                "refinitiv_ownership_authority",
+                refinitiv_ownership_authority_paths,
+            )
+            for key in sorted(refinitiv_ownership_authority_paths):
+                print(f"{key}: {refinitiv_ownership_authority_paths[key]}")
+        else:
+            print(
+                {
+                    "warning": "skipping Refinitiv ownership authority; required ownership artifacts not found",
+                    "expected_resolution_path": str(resolution_artifact_path),
+                    "expected_results_path": str(ownership_results_artifact_path),
+                    "expected_row_summary_path": str(ownership_row_summary_artifact_path),
+                }
+            )
+    if RUN_REFINITIV_DOC_OWNERSHIP_LM2011_EXACT_HANDOFF:
+        doc_filing_artifact_path = (
+            Path(sec_ccm_paths["sec_ccm_matched_clean_filtered"])
+            if sec_ccm_paths is not None
+            else SEC_CCM_OUTPUT_DIR / "sec_ccm_matched_clean_filtered.parquet"
+        )
+        authority_decisions_artifact_path = (
+            refinitiv_ownership_authority_paths["refinitiv_permno_ownership_authority_decisions_parquet"]
+            if refinitiv_ownership_authority_paths is not None
+            else REFINITIV_OWNERSHIP_AUTHORITY_DIR / "refinitiv_permno_ownership_authority_decisions.parquet"
+        )
+        authority_exceptions_artifact_path = (
+            refinitiv_ownership_authority_paths["refinitiv_permno_ownership_authority_exceptions_parquet"]
+            if refinitiv_ownership_authority_paths is not None
+            else REFINITIV_OWNERSHIP_AUTHORITY_DIR / "refinitiv_permno_ownership_authority_exceptions.parquet"
+        )
+        if (
+            doc_filing_artifact_path.exists()
+            and authority_decisions_artifact_path.exists()
+            and authority_exceptions_artifact_path.exists()
+        ):
+            refinitiv_doc_ownership_exact_paths = run_refinitiv_lm2011_doc_ownership_exact_handoff_pipeline(
+                doc_filing_artifact_path=doc_filing_artifact_path,
+                authority_decisions_artifact_path=authority_decisions_artifact_path,
+                authority_exceptions_artifact_path=authority_exceptions_artifact_path,
+                output_dir=REFINITIV_DOC_OWNERSHIP_LM2011_DIR,
+            )
+            _record_refinitiv_stage(
+                "refinitiv_doc_ownership_exact",
+                refinitiv_doc_ownership_exact_paths,
+            )
+            for key in sorted(refinitiv_doc_ownership_exact_paths):
+                print(f"{key}: {refinitiv_doc_ownership_exact_paths[key]}")
+        else:
+            print(
+                {
+                    "warning": "skipping Refinitiv LM2011 doc ownership exact handoff; required artifacts not found",
+                    "expected_doc_filing_path": str(doc_filing_artifact_path),
+                    "expected_authority_decisions_path": str(authority_decisions_artifact_path),
+                    "expected_authority_exceptions_path": str(authority_exceptions_artifact_path),
+                }
+            )
+    if RUN_REFINITIV_DOC_OWNERSHIP_LM2011_FALLBACK_HANDOFF:
+        exact_filled_workbook_path = (
+            REFINITIV_DOC_OWNERSHIP_LM2011_DIR / "refinitiv_lm2011_doc_ownership_exact_handoff_filled_in.xlsx"
+        )
+        exact_requests_path = (
+            refinitiv_doc_ownership_exact_paths["refinitiv_lm2011_doc_ownership_exact_requests_parquet"]
+            if refinitiv_doc_ownership_exact_paths is not None
+            else REFINITIV_DOC_OWNERSHIP_LM2011_DIR / "refinitiv_lm2011_doc_ownership_exact_requests.parquet"
+        )
+        if exact_requests_path.exists() and exact_filled_workbook_path.exists():
+            refinitiv_doc_ownership_fallback_paths = run_refinitiv_lm2011_doc_ownership_fallback_handoff_pipeline(
+                exact_filled_workbook_path=exact_filled_workbook_path,
+                output_dir=REFINITIV_DOC_OWNERSHIP_LM2011_DIR,
+            )
+            _record_refinitiv_stage(
+                "refinitiv_doc_ownership_fallback",
+                refinitiv_doc_ownership_fallback_paths,
+            )
+            for key in sorted(refinitiv_doc_ownership_fallback_paths):
+                print(f"{key}: {refinitiv_doc_ownership_fallback_paths[key]}")
+        else:
+            print(
+                {
+                    "warning": "skipping Refinitiv LM2011 doc ownership fallback handoff; exact requests or filled workbook not found",
+                    "expected_exact_requests_path": str(exact_requests_path),
+                    "expected_exact_filled_workbook_path": str(exact_filled_workbook_path),
+                }
+            )
+    if RUN_REFINITIV_DOC_OWNERSHIP_LM2011_FINALIZE:
+        fallback_requests_path = (
+            refinitiv_doc_ownership_fallback_paths["refinitiv_lm2011_doc_ownership_fallback_requests_parquet"]
+            if refinitiv_doc_ownership_fallback_paths is not None
+            else REFINITIV_DOC_OWNERSHIP_LM2011_DIR / "refinitiv_lm2011_doc_ownership_fallback_requests.parquet"
+        )
+        exact_raw_path = (
+            refinitiv_doc_ownership_fallback_paths["refinitiv_lm2011_doc_ownership_exact_raw_parquet"]
+            if refinitiv_doc_ownership_fallback_paths is not None
+            else REFINITIV_DOC_OWNERSHIP_LM2011_DIR / "refinitiv_lm2011_doc_ownership_exact_raw.parquet"
+        )
+        fallback_filled_workbook_path = (
+            REFINITIV_DOC_OWNERSHIP_LM2011_DIR / "refinitiv_lm2011_doc_ownership_fallback_handoff_filled_in.xlsx"
+        )
+        fallback_request_count = _bool_true_count(fallback_requests_path, "retrieval_eligible")
+        if fallback_requests_path.exists() and exact_raw_path.exists():
+            if fallback_request_count and not fallback_filled_workbook_path.exists():
+                print(
+                    {
+                        "warning": "skipping Refinitiv LM2011 doc ownership finalize; fallback requests exist but filled fallback workbook not found",
+                        "expected_fallback_filled_workbook_path": str(fallback_filled_workbook_path),
+                        "fallback_request_count": fallback_request_count,
+                    }
+                )
+            else:
+                refinitiv_doc_ownership_finalize_paths = run_refinitiv_lm2011_doc_ownership_finalize_pipeline(
+                    output_dir=REFINITIV_DOC_OWNERSHIP_LM2011_DIR,
+                    fallback_filled_workbook_path=(
+                        fallback_filled_workbook_path if fallback_request_count else None
+                    ),
+                )
+                _record_refinitiv_stage(
+                    "refinitiv_doc_ownership_finalize",
+                    refinitiv_doc_ownership_finalize_paths,
+                )
+                for key in sorted(refinitiv_doc_ownership_finalize_paths):
+                    print(f"{key}: {refinitiv_doc_ownership_finalize_paths[key]}")
+        else:
+            print(
+                {
+                    "warning": "skipping Refinitiv LM2011 doc ownership finalize; fallback requests or exact raw parquet not found",
+                    "expected_fallback_requests_path": str(fallback_requests_path),
+                    "expected_exact_raw_path": str(exact_raw_path),
                 }
             )
 
@@ -1045,6 +1259,16 @@ def main() -> None:
                     REFINITIV_OWNERSHIP_UNIVERSE_DIR
                     / "refinitiv_ownership_universe_handoff_common_stock_filled_in.xlsx"
                 ),
+                "reviewed_ticker_allowlist_parquet": str(
+                    REFINITIV_OWNERSHIP_AUTHORITY_DIR / "refinitiv_permno_ownership_ticker_allowlist.parquet"
+                ),
+                "filled_doc_ownership_exact_workbook": str(
+                    REFINITIV_DOC_OWNERSHIP_LM2011_DIR / "refinitiv_lm2011_doc_ownership_exact_handoff_filled_in.xlsx"
+                ),
+                "filled_doc_ownership_fallback_workbook": str(
+                    REFINITIV_DOC_OWNERSHIP_LM2011_DIR
+                    / "refinitiv_lm2011_doc_ownership_fallback_handoff_filled_in.xlsx"
+                ),
             },
             "counts": {
                 "bridge_rows": _row_count(REFINITIV_STEP1_OUT_DIR / "refinitiv_bridge_universe.parquet"),
@@ -1066,6 +1290,55 @@ def main() -> None:
                 "ownership_universe_requests_with_data": _ownership_rows_with_data(
                     REFINITIV_OWNERSHIP_UNIVERSE_DIR
                     / "refinitiv_ownership_universe_row_summary.parquet"
+                ),
+                "ownership_authority_decision_rows": _row_count(
+                    REFINITIV_OWNERSHIP_AUTHORITY_DIR
+                    / "refinitiv_permno_ownership_authority_decisions.parquet"
+                ),
+                "ownership_authority_exception_rows": _row_count(
+                    REFINITIV_OWNERSHIP_AUTHORITY_DIR
+                    / "refinitiv_permno_ownership_authority_exceptions.parquet"
+                ),
+                "ownership_authority_review_rows": _row_count(
+                    REFINITIV_OWNERSHIP_AUTHORITY_DIR
+                    / "refinitiv_permno_ownership_review_required.parquet"
+                ),
+                "ownership_authority_panel_rows": _row_count(
+                    REFINITIV_OWNERSHIP_AUTHORITY_DIR
+                    / "refinitiv_permno_date_ownership_panel.parquet"
+                ),
+                "doc_ownership_exact_request_rows": _row_count(
+                    REFINITIV_DOC_OWNERSHIP_LM2011_DIR
+                    / "refinitiv_lm2011_doc_ownership_exact_requests.parquet"
+                ),
+                "doc_ownership_exact_raw_rows": _row_count(
+                    REFINITIV_DOC_OWNERSHIP_LM2011_DIR / "refinitiv_lm2011_doc_ownership_exact_raw.parquet"
+                ),
+                "doc_ownership_fallback_request_rows": _row_count(
+                    REFINITIV_DOC_OWNERSHIP_LM2011_DIR
+                    / "refinitiv_lm2011_doc_ownership_fallback_requests.parquet"
+                ),
+                "doc_ownership_fallback_request_eligible_rows": _bool_true_count(
+                    REFINITIV_DOC_OWNERSHIP_LM2011_DIR
+                    / "refinitiv_lm2011_doc_ownership_fallback_requests.parquet",
+                    "retrieval_eligible",
+                ),
+                "doc_ownership_fallback_raw_rows": _row_count(
+                    REFINITIV_DOC_OWNERSHIP_LM2011_DIR / "refinitiv_lm2011_doc_ownership_fallback_raw.parquet"
+                ),
+                "doc_ownership_raw_rows": _row_count(
+                    REFINITIV_DOC_OWNERSHIP_LM2011_DIR / "refinitiv_lm2011_doc_ownership_raw.parquet"
+                ),
+                "doc_ownership_final_rows": _row_count(
+                    REFINITIV_DOC_OWNERSHIP_LM2011_DIR / "refinitiv_lm2011_doc_ownership.parquet"
+                ),
+                "doc_ownership_final_nonnull_rows": _nonnull_count(
+                    REFINITIV_DOC_OWNERSHIP_LM2011_DIR / "refinitiv_lm2011_doc_ownership.parquet",
+                    "institutional_ownership_pct",
+                ),
+                "doc_ownership_retrieval_status_counts": _value_counts(
+                    REFINITIV_DOC_OWNERSHIP_LM2011_DIR / "refinitiv_lm2011_doc_ownership.parquet",
+                    "retrieval_status",
                 ),
             },
             "artifacts": {
