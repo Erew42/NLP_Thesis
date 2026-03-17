@@ -1614,18 +1614,12 @@ def run_refinitiv_step1_bridge_pipeline(
         daily_lf,
         company_description_lf=company_description_lf,
     ).collect()
-    handoff_df = _build_handoff_df(bridge_df)
 
     parquet_path = output_dir / "refinitiv_bridge_universe.parquet"
-    csv_path = output_dir / "refinitiv_bridge_universe.csv"
-    xlsx_path = output_dir / "refinitiv_bridge_handoff.xlsx"
-    ric_lookup_xlsx_path = output_dir / "refinitiv_ric_lookup_handoff.xlsx"
+    extended_profile_path = _extended_profile_output_path(output_dir, "common_stock")
     manifest_path = output_dir / "refinitiv_step1_manifest.json"
 
-    ric_lookup_df, ric_manual_review_df = _build_ric_lookup_handoff_frames(bridge_df)
-
     bridge_df.write_parquet(parquet_path, compression="zstd")
-    handoff_df.write_csv(csv_path)
 
     source_rows = int(bridge_df["n_daily_rows"].sum()) if bridge_df.height else 0
     bridge_rows = bridge_df.height
@@ -1643,6 +1637,22 @@ def run_refinitiv_step1_bridge_pipeline(
     )
     generated_at_utc = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
+    common_stock_profile = next(
+        profile for profile in RIC_LOOKUP_FILTER_PROFILES if profile.name == "common_stock"
+    )
+    qualifying_bridge_ids = _build_lookup_profile_bridge_ids(daily_lf, common_stock_profile)
+    filtered_lookup_df, filtered_manual_review_df, profile_summary = _build_filtered_ric_lookup_profile_artifact(
+        bridge_df,
+        qualifying_bridge_ids,
+        common_stock_profile,
+    )
+    extended_df, extended_summary_df, extended_summary_payload = (
+        build_refinitiv_lookup_extended_diagnostic_artifact(
+            filtered_lookup_df,
+            filtered_manual_review_df,
+        )
+    )
+
     manifest_payload: dict[str, Any] = {
         "pipeline_name": "refinitiv_step1_bridge",
         "artifact_version": "v1",
@@ -1653,110 +1663,35 @@ def run_refinitiv_step1_bridge_pipeline(
         "distinct_permno": int(distinct_permno),
         "rows_with_vendor_identifier": int(with_vendor_id),
         "rows_missing_vendor_identifier": int(bridge_rows - with_vendor_id),
-        "ric_lookup_rows": int(ric_lookup_df.height),
-        "ric_manual_review_rows": int(ric_manual_review_df.height),
+        "ric_lookup_rows": int(filtered_lookup_df.height),
+        "ric_manual_review_rows": int(filtered_manual_review_df.height),
         "authoritative_format": "parquet",
         "source_columns": list(BRIDGE_SOURCE_COLUMNS),
         "vendor_columns": list(BRIDGE_VENDOR_COLUMNS),
-        "ric_lookup_columns": list(RIC_LOOKUP_COLUMNS),
-        "ric_lookup_filter_profiles": [],
+        "extended_lookup_columns": list(RIC_LOOKUP_EXTENDED_COLUMNS),
+        "common_stock_lookup_profile": profile_summary,
+        "extended_lookup_diagnostic_summary": extended_summary_payload,
         "artifacts": {
             "refinitiv_bridge_universe_parquet": str(parquet_path),
-            "refinitiv_bridge_universe_csv": str(csv_path),
-            "refinitiv_bridge_handoff_xlsx": str(xlsx_path),
-            "refinitiv_ric_lookup_handoff_xlsx": str(ric_lookup_xlsx_path),
+            "refinitiv_ric_lookup_handoff_common_stock_extended_xlsx": str(extended_profile_path),
             "refinitiv_step1_manifest": str(manifest_path),
         },
     }
 
-    for profile in RIC_LOOKUP_FILTER_PROFILES:
-        qualifying_bridge_ids = _build_lookup_profile_bridge_ids(daily_lf, profile)
-        filtered_lookup_df, filtered_manual_review_df, profile_summary = (
-            _build_filtered_ric_lookup_profile_artifact(
-                bridge_df,
-                qualifying_bridge_ids,
-                profile,
-            )
-        )
-        profile_path = _profile_output_path(output_dir, profile.name)
-        profile_key = _profile_output_key(profile.name)
-        profile_manifest_payload = {
-            "pipeline_name": manifest_payload["pipeline_name"],
-            "artifact_version": manifest_payload["artifact_version"],
-            "generated_at_utc": manifest_payload["generated_at_utc"],
-            "source_daily_path": manifest_payload["source_daily_path"],
-            "lookup_filter_profile": profile_summary,
-            "ric_lookup_columns": manifest_payload["ric_lookup_columns"],
-        }
-        write_refinitiv_ric_lookup_workbook(
-            filtered_lookup_df,
-            profile_path,
-            readme_payload=profile_manifest_payload,
-            text_columns=RIC_LOOKUP_TEXT_COLUMNS,
-            manual_review_df=filtered_manual_review_df,
-        )
-        profile_manifest_summary: dict[str, Any] = {
-            **profile_summary,
-            "artifact_key": profile_key,
-            "artifact_path": str(profile_path),
-        }
-        manifest_payload["artifacts"][profile_key] = str(profile_path)
-
-        if profile.name == "common_stock":
-            extended_profile_path = _extended_profile_output_path(output_dir, profile.name)
-            extended_profile_key = _extended_profile_output_key(profile.name)
-            extended_df, extended_summary_df, extended_summary_payload = (
-                build_refinitiv_lookup_extended_diagnostic_artifact(
-                    filtered_lookup_df,
-                    filtered_manual_review_df,
-                )
-            )
-            extended_manifest_payload = {
-                **profile_manifest_payload,
-                "lookup_filter_profile": profile_manifest_summary,
-                "extended_lookup_diagnostic_summary": extended_summary_payload,
-            }
-            write_refinitiv_ric_lookup_extended_workbook(
-                extended_df,
-                extended_profile_path,
-                readme_payload=extended_manifest_payload,
-                text_columns=RIC_LOOKUP_EXTENDED_TEXT_COLUMNS,
-                summary_df=extended_summary_df,
-                summary_text_columns=RIC_LOOKUP_EXTENDED_SUMMARY_TEXT_COLUMNS,
-            )
-            profile_manifest_summary["extended_diagnostic_artifact_key"] = extended_profile_key
-            profile_manifest_summary["extended_diagnostic_artifact_path"] = str(extended_profile_path)
-            profile_manifest_summary["extended_diagnostic_summary"] = extended_summary_payload
-            manifest_payload["artifacts"][extended_profile_key] = str(extended_profile_path)
-
-        manifest_payload["ric_lookup_filter_profiles"].append(profile_manifest_summary)
-
-    write_refinitiv_bridge_workbook(
-        handoff_df,
-        xlsx_path,
+    write_refinitiv_ric_lookup_extended_workbook(
+        extended_df,
+        extended_profile_path,
         readme_payload=manifest_payload,
-        text_columns=WORKBOOK_TEXT_COLUMNS,
-    )
-    write_refinitiv_ric_lookup_workbook(
-        ric_lookup_df,
-        ric_lookup_xlsx_path,
-        readme_payload=manifest_payload,
-        text_columns=RIC_LOOKUP_TEXT_COLUMNS,
-        manual_review_df=ric_manual_review_df,
+        text_columns=RIC_LOOKUP_EXTENDED_TEXT_COLUMNS,
+        summary_df=extended_summary_df,
+        summary_text_columns=RIC_LOOKUP_EXTENDED_SUMMARY_TEXT_COLUMNS,
     )
     _write_json(manifest_path, manifest_payload)
 
     return {
         "refinitiv_bridge_universe_parquet": parquet_path,
-        "refinitiv_bridge_universe_csv": csv_path,
-        "refinitiv_bridge_handoff_xlsx": xlsx_path,
-        "refinitiv_ric_lookup_handoff_xlsx": ric_lookup_xlsx_path,
+        "refinitiv_ric_lookup_handoff_common_stock_extended_xlsx": extended_profile_path,
         "refinitiv_step1_manifest": manifest_path,
-        **{
-            _profile_output_key(profile.name): _profile_output_path(output_dir, profile.name)
-            for profile in RIC_LOOKUP_FILTER_PROFILES
-        },
-        _extended_profile_output_key("common_stock"): _extended_profile_output_path(output_dir, "common_stock"),
     }
 
 
@@ -2314,36 +2249,11 @@ def run_refinitiv_step1_resolution_pipeline(
     resolution_df = build_refinitiv_step1_resolution_frame(resolution_input_df)
 
     parquet_path = output_dir / "refinitiv_ric_resolution_common_stock.parquet"
-    csv_path = output_dir / "refinitiv_ric_resolution_common_stock.csv"
-    summary_path = output_dir / "refinitiv_ric_resolution_common_stock_summary.json"
-    manifest_path = output_dir / "refinitiv_ric_resolution_common_stock_manifest.json"
 
     resolution_df.write_parquet(parquet_path, compression="zstd")
-    resolution_df.write_csv(csv_path)
-
-    summary_payload = _summarize_resolution_frame(
-        resolution_df,
-        input_workbook_path=filled_lookup_workbook_path,
-    )
-    _write_json(summary_path, summary_payload)
-
-    manifest_payload: dict[str, Any] = {
-        **summary_payload,
-        "resolution_columns": list(RIC_LOOKUP_RESOLUTION_OUTPUT_COLUMNS),
-        "artifacts": {
-            "refinitiv_ric_resolution_common_stock_parquet": str(parquet_path),
-            "refinitiv_ric_resolution_common_stock_csv": str(csv_path),
-            "refinitiv_ric_resolution_common_stock_summary": str(summary_path),
-            "refinitiv_ric_resolution_common_stock_manifest": str(manifest_path),
-        },
-    }
-    _write_json(manifest_path, manifest_payload)
 
     return {
         "refinitiv_ric_resolution_common_stock_parquet": parquet_path,
-        "refinitiv_ric_resolution_common_stock_csv": csv_path,
-        "refinitiv_ric_resolution_common_stock_summary": summary_path,
-        "refinitiv_ric_resolution_common_stock_manifest": manifest_path,
     }
 
 
@@ -4367,49 +4277,28 @@ def run_refinitiv_step1_ownership_universe_handoff_pipeline(
     handoff_df, summary = build_refinitiv_step1_ownership_universe_handoff(resolution_df)
 
     handoff_parquet_path = output_dir / "refinitiv_ownership_universe_handoff_common_stock.parquet"
-    handoff_csv_path = output_dir / "refinitiv_ownership_universe_handoff_common_stock.csv"
     handoff_xlsx_path = output_dir / "refinitiv_ownership_universe_handoff_common_stock.xlsx"
-    summary_path = output_dir / "refinitiv_ownership_universe_handoff_common_stock_summary.json"
-    manifest_path = output_dir / "refinitiv_ownership_universe_handoff_common_stock_manifest.json"
 
     handoff_df.write_parquet(handoff_parquet_path, compression="zstd")
-    handoff_df.write_csv(handoff_csv_path)
-
-    summary_payload: dict[str, Any] = {
+    readme_payload = {
         "pipeline_name": "refinitiv_step1_ownership_universe_handoff",
         "artifact_version": "v1",
         "generated_at_utc": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "source_resolution_artifact": str(resolution_artifact_path),
         **summary,
-    }
-    _write_json(summary_path, summary_payload)
-
-    manifest_payload = {
-        **summary_payload,
         "handoff_columns": list(OWNERSHIP_UNIVERSE_HANDOFF_COLUMNS),
-        "artifacts": {
-            "refinitiv_ownership_universe_handoff_common_stock_parquet": str(handoff_parquet_path),
-            "refinitiv_ownership_universe_handoff_common_stock_csv": str(handoff_csv_path),
-            "refinitiv_ownership_universe_handoff_common_stock_xlsx": str(handoff_xlsx_path),
-            "refinitiv_ownership_universe_handoff_common_stock_summary": str(summary_path),
-            "refinitiv_ownership_universe_handoff_common_stock_manifest": str(manifest_path),
-        },
     }
     write_refinitiv_ownership_universe_workbook(
         handoff_df,
         handoff_xlsx_path,
-        readme_payload=manifest_payload,
+        readme_payload=readme_payload,
         input_field_order=OWNERSHIP_UNIVERSE_VISIBLE_INPUT_FIELDS,
         block_headers=OWNERSHIP_UNIVERSE_BLOCK_HEADERS,
     )
-    _write_json(manifest_path, manifest_payload)
 
     return {
         "refinitiv_ownership_universe_handoff_common_stock_parquet": handoff_parquet_path,
-        "refinitiv_ownership_universe_handoff_common_stock_csv": handoff_csv_path,
         "refinitiv_ownership_universe_handoff_common_stock_xlsx": handoff_xlsx_path,
-        "refinitiv_ownership_universe_handoff_common_stock_summary": summary_path,
-        "refinitiv_ownership_universe_handoff_common_stock_manifest": manifest_path,
     }
 
 
@@ -4417,17 +4306,17 @@ def run_refinitiv_step1_ownership_universe_results_pipeline(
     filled_workbook_path: Path | str,
     output_dir: Path | str,
     *,
-    handoff_csv_path: Path | str | None = None,
+    handoff_parquet_path: Path | str | None = None,
 ) -> dict[str, Path]:
     filled_workbook_path = Path(filled_workbook_path)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    if handoff_csv_path is None:
-        handoff_csv_path = output_dir / "refinitiv_ownership_universe_handoff_common_stock.csv"
-    handoff_csv_path = Path(handoff_csv_path)
+    if handoff_parquet_path is None:
+        handoff_parquet_path = output_dir / "refinitiv_ownership_universe_handoff_common_stock.parquet"
+    handoff_parquet_path = Path(handoff_parquet_path)
 
     handoff_df = _cast_df_to_schema(
-        pl.read_csv(handoff_csv_path).select(OWNERSHIP_UNIVERSE_HANDOFF_COLUMNS),
+        pl.read_parquet(handoff_parquet_path).select(OWNERSHIP_UNIVERSE_HANDOFF_COLUMNS),
         _ownership_universe_handoff_schema(),
     ).select(OWNERSHIP_UNIVERSE_HANDOFF_COLUMNS)
     results_df = _parse_refinitiv_ownership_universe_filled_workbook(filled_workbook_path, handoff_df).select(
@@ -4436,61 +4325,14 @@ def run_refinitiv_step1_ownership_universe_results_pipeline(
     row_summary_df = build_refinitiv_ownership_universe_row_summary(handoff_df, results_df)
 
     results_parquet_path = output_dir / "refinitiv_ownership_universe_results.parquet"
-    results_csv_path = output_dir / "refinitiv_ownership_universe_results.csv"
     row_summary_parquet_path = output_dir / "refinitiv_ownership_universe_row_summary.parquet"
-    row_summary_csv_path = output_dir / "refinitiv_ownership_universe_row_summary.csv"
-    row_summary_json_path = output_dir / "refinitiv_ownership_universe_row_summary.json"
-    manifest_path = output_dir / "refinitiv_ownership_universe_results_manifest.json"
 
     results_df.write_parquet(results_parquet_path, compression="zstd")
-    results_df.write_csv(results_csv_path)
     row_summary_df.write_parquet(row_summary_parquet_path, compression="zstd")
-    row_summary_df.write_csv(row_summary_csv_path)
-
-    retrieval_with_data_df = row_summary_df.filter(pl.col("ownership_rows_returned") > 0)
-    row_summary_json_payload: dict[str, Any] = {
-        "pipeline_name": "refinitiv_step1_ownership_universe_results",
-        "artifact_version": "v1",
-        "generated_at_utc": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "source_handoff_csv": str(handoff_csv_path),
-        "source_filled_workbook": str(filled_workbook_path),
-        "ownership_results_rows": int(results_df.height),
-        "handoff_snapshot_row_count": int(handoff_df.height),
-        "retrieval_eligible_row_count": int(handoff_df.filter(pl.col("retrieval_eligible").fill_null(False)).height),
-        "retrieval_rows_with_any_returned_data": int(retrieval_with_data_df.height),
-        "retrieval_role_counts": _value_counts(
-            handoff_df.filter(pl.col("retrieval_eligible").fill_null(False)).to_dicts(),
-            "ownership_lookup_role",
-        ),
-        "retrieval_exclusion_reason_counts": _value_counts(
-            handoff_df.filter(~pl.col("retrieval_eligible").fill_null(False)).to_dicts(),
-            "retrieval_exclusion_reason",
-        ),
-    }
-    _write_json(row_summary_json_path, row_summary_json_payload)
-
-    manifest_payload = {
-        **row_summary_json_payload,
-        "results_columns": list(OWNERSHIP_UNIVERSE_RESULTS_COLUMNS),
-        "row_summary_columns": list(OWNERSHIP_UNIVERSE_ROW_SUMMARY_COLUMNS),
-        "artifacts": {
-            "refinitiv_ownership_universe_results_parquet": str(results_parquet_path),
-            "refinitiv_ownership_universe_results_csv": str(results_csv_path),
-            "refinitiv_ownership_universe_row_summary_parquet": str(row_summary_parquet_path),
-            "refinitiv_ownership_universe_row_summary_csv": str(row_summary_csv_path),
-            "refinitiv_ownership_universe_row_summary_json": str(row_summary_json_path),
-            "refinitiv_ownership_universe_results_manifest": str(manifest_path),
-        },
-    }
-    _write_json(manifest_path, manifest_payload)
 
     return {
         "refinitiv_ownership_universe_results_parquet": results_parquet_path,
-        "refinitiv_ownership_universe_results_csv": results_csv_path,
         "refinitiv_ownership_universe_row_summary_parquet": row_summary_parquet_path,
-        "refinitiv_ownership_universe_row_summary_csv": row_summary_csv_path,
-        "refinitiv_ownership_universe_row_summary_json": row_summary_json_path,
-        "refinitiv_ownership_universe_results_manifest": manifest_path,
     }
 
 
