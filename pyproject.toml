@@ -10,7 +10,9 @@ dependencies = [
   "openpyxl",
   "pyarrow",
   "xlsxwriter",
-  # add others you actually use
+  "refinitiv-data",
+  "lseg-data",
+  # add others I actually use
 ]
 
 [project.optional-dependencies]

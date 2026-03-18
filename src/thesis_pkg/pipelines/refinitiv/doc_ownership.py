@@ -13,6 +13,7 @@ from thesis_pkg.pipelines.refinitiv_bridge_pipeline import (
     _cast_df_to_schema,
     _normalize_lookup_text,
     _normalize_workbook_scalar,
+    _write_workbook_or_reuse_locked_output,
 )
 
 
@@ -720,7 +721,8 @@ def run_refinitiv_lm2011_doc_ownership_exact_handoff_pipeline(
     requests_parquet_path = output_dir / "refinitiv_lm2011_doc_ownership_exact_requests.parquet"
     handoff_xlsx_path = output_dir / "refinitiv_lm2011_doc_ownership_exact_handoff.xlsx"
     request_df.write_parquet(requests_parquet_path, compression="zstd")
-    write_refinitiv_lm2011_doc_ownership_workbook(
+    _write_workbook_or_reuse_locked_output(
+        write_refinitiv_lm2011_doc_ownership_workbook,
         request_df,
         handoff_xlsx_path,
         readme_payload=_request_readme_payload(request_df, request_stage=DOC_OWNERSHIP_EXACT_STAGE),
@@ -762,7 +764,8 @@ def run_refinitiv_lm2011_doc_ownership_fallback_handoff_pipeline(
     fallback_handoff_path = output_dir / "refinitiv_lm2011_doc_ownership_fallback_handoff.xlsx"
     exact_raw_df.write_parquet(exact_raw_path, compression="zstd")
     fallback_request_df.write_parquet(fallback_requests_path, compression="zstd")
-    write_refinitiv_lm2011_doc_ownership_workbook(
+    _write_workbook_or_reuse_locked_output(
+        write_refinitiv_lm2011_doc_ownership_workbook,
         fallback_request_df,
         fallback_handoff_path,
         readme_payload=_request_readme_payload(fallback_request_df, request_stage=DOC_OWNERSHIP_FALLBACK_STAGE),

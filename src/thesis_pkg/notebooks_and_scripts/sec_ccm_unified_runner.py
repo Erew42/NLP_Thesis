@@ -689,122 +689,6 @@ def main() -> None:
                     "expected_row_summary_path": str(ownership_row_summary_artifact_path),
                 }
             )
-    if RUN_REFINITIV_DOC_OWNERSHIP_LM2011_EXACT_HANDOFF:
-        doc_filing_artifact_path = (
-            Path(sec_ccm_paths["sec_ccm_matched_clean_filtered"])
-            if sec_ccm_paths is not None
-            else SEC_CCM_OUTPUT_DIR / "sec_ccm_matched_clean_filtered.parquet"
-        )
-        authority_decisions_artifact_path = (
-            refinitiv_ownership_authority_paths["refinitiv_permno_ownership_authority_decisions_parquet"]
-            if refinitiv_ownership_authority_paths is not None
-            else REFINITIV_OWNERSHIP_AUTHORITY_DIR / "refinitiv_permno_ownership_authority_decisions.parquet"
-        )
-        authority_exceptions_artifact_path = (
-            refinitiv_ownership_authority_paths["refinitiv_permno_ownership_authority_exceptions_parquet"]
-            if refinitiv_ownership_authority_paths is not None
-            else REFINITIV_OWNERSHIP_AUTHORITY_DIR / "refinitiv_permno_ownership_authority_exceptions.parquet"
-        )
-        if (
-            doc_filing_artifact_path.exists()
-            and authority_decisions_artifact_path.exists()
-            and authority_exceptions_artifact_path.exists()
-        ):
-            refinitiv_doc_ownership_exact_paths = run_refinitiv_lm2011_doc_ownership_exact_handoff_pipeline(
-                doc_filing_artifact_path=doc_filing_artifact_path,
-                authority_decisions_artifact_path=authority_decisions_artifact_path,
-                authority_exceptions_artifact_path=authority_exceptions_artifact_path,
-                output_dir=REFINITIV_DOC_OWNERSHIP_LM2011_DIR,
-            )
-            _record_refinitiv_stage(
-                "refinitiv_doc_ownership_exact",
-                refinitiv_doc_ownership_exact_paths,
-            )
-            for key in sorted(refinitiv_doc_ownership_exact_paths):
-                print(f"{key}: {refinitiv_doc_ownership_exact_paths[key]}")
-        else:
-            print(
-                {
-                    "warning": "skipping Refinitiv LM2011 doc ownership exact handoff; required artifacts not found",
-                    "expected_doc_filing_path": str(doc_filing_artifact_path),
-                    "expected_authority_decisions_path": str(authority_decisions_artifact_path),
-                    "expected_authority_exceptions_path": str(authority_exceptions_artifact_path),
-                }
-            )
-    if RUN_REFINITIV_DOC_OWNERSHIP_LM2011_FALLBACK_HANDOFF:
-        exact_filled_workbook_path = (
-            REFINITIV_DOC_OWNERSHIP_LM2011_DIR / "refinitiv_lm2011_doc_ownership_exact_handoff_filled_in.xlsx"
-        )
-        exact_requests_path = (
-            refinitiv_doc_ownership_exact_paths["refinitiv_lm2011_doc_ownership_exact_requests_parquet"]
-            if refinitiv_doc_ownership_exact_paths is not None
-            else REFINITIV_DOC_OWNERSHIP_LM2011_DIR / "refinitiv_lm2011_doc_ownership_exact_requests.parquet"
-        )
-        if exact_requests_path.exists() and exact_filled_workbook_path.exists():
-            refinitiv_doc_ownership_fallback_paths = run_refinitiv_lm2011_doc_ownership_fallback_handoff_pipeline(
-                exact_filled_workbook_path=exact_filled_workbook_path,
-                output_dir=REFINITIV_DOC_OWNERSHIP_LM2011_DIR,
-            )
-            _record_refinitiv_stage(
-                "refinitiv_doc_ownership_fallback",
-                refinitiv_doc_ownership_fallback_paths,
-            )
-            for key in sorted(refinitiv_doc_ownership_fallback_paths):
-                print(f"{key}: {refinitiv_doc_ownership_fallback_paths[key]}")
-        else:
-            print(
-                {
-                    "warning": "skipping Refinitiv LM2011 doc ownership fallback handoff; exact requests or filled workbook not found",
-                    "expected_exact_requests_path": str(exact_requests_path),
-                    "expected_exact_filled_workbook_path": str(exact_filled_workbook_path),
-                }
-            )
-    if RUN_REFINITIV_DOC_OWNERSHIP_LM2011_FINALIZE:
-        fallback_requests_path = (
-            refinitiv_doc_ownership_fallback_paths["refinitiv_lm2011_doc_ownership_fallback_requests_parquet"]
-            if refinitiv_doc_ownership_fallback_paths is not None
-            else REFINITIV_DOC_OWNERSHIP_LM2011_DIR / "refinitiv_lm2011_doc_ownership_fallback_requests.parquet"
-        )
-        exact_raw_path = (
-            refinitiv_doc_ownership_fallback_paths["refinitiv_lm2011_doc_ownership_exact_raw_parquet"]
-            if refinitiv_doc_ownership_fallback_paths is not None
-            else REFINITIV_DOC_OWNERSHIP_LM2011_DIR / "refinitiv_lm2011_doc_ownership_exact_raw.parquet"
-        )
-        fallback_filled_workbook_path = (
-            REFINITIV_DOC_OWNERSHIP_LM2011_DIR / "refinitiv_lm2011_doc_ownership_fallback_handoff_filled_in.xlsx"
-        )
-        fallback_request_count = _bool_true_count(fallback_requests_path, "retrieval_eligible")
-        if fallback_requests_path.exists() and exact_raw_path.exists():
-            if fallback_request_count and not fallback_filled_workbook_path.exists():
-                print(
-                    {
-                        "warning": "skipping Refinitiv LM2011 doc ownership finalize; fallback requests exist but filled fallback workbook not found",
-                        "expected_fallback_filled_workbook_path": str(fallback_filled_workbook_path),
-                        "fallback_request_count": fallback_request_count,
-                    }
-                )
-            else:
-                refinitiv_doc_ownership_finalize_paths = run_refinitiv_lm2011_doc_ownership_finalize_pipeline(
-                    output_dir=REFINITIV_DOC_OWNERSHIP_LM2011_DIR,
-                    fallback_filled_workbook_path=(
-                        fallback_filled_workbook_path if fallback_request_count else None
-                    ),
-                )
-                _record_refinitiv_stage(
-                    "refinitiv_doc_ownership_finalize",
-                    refinitiv_doc_ownership_finalize_paths,
-                )
-                for key in sorted(refinitiv_doc_ownership_finalize_paths):
-                    print(f"{key}: {refinitiv_doc_ownership_finalize_paths[key]}")
-        else:
-            print(
-                {
-                    "warning": "skipping Refinitiv LM2011 doc ownership finalize; fallback requests or exact raw parquet not found",
-                    "expected_fallback_requests_path": str(fallback_requests_path),
-                    "expected_exact_raw_path": str(exact_raw_path),
-                }
-            )
-
     # ## 3) SEC parse and yearly merge
     if RUN_SEC_PARSE:
         common = dict(
@@ -994,6 +878,122 @@ def main() -> None:
         print("run_report:", sec_ccm_paths.get("sec_ccm_run_report"))
         print("run_dag_mermaid:", sec_ccm_paths.get("sec_ccm_run_dag_mermaid"))
         print("run_dag_dot:", sec_ccm_paths.get("sec_ccm_run_dag_dot"))
+
+    if RUN_REFINITIV_DOC_OWNERSHIP_LM2011_EXACT_HANDOFF:
+        doc_filing_artifact_path = (
+            Path(sec_ccm_paths["sec_ccm_matched_clean_filtered"])
+            if sec_ccm_paths is not None
+            else SEC_CCM_OUTPUT_DIR / "sec_ccm_matched_clean_filtered.parquet"
+        )
+        authority_decisions_artifact_path = (
+            refinitiv_ownership_authority_paths["refinitiv_permno_ownership_authority_decisions_parquet"]
+            if refinitiv_ownership_authority_paths is not None
+            else REFINITIV_OWNERSHIP_AUTHORITY_DIR / "refinitiv_permno_ownership_authority_decisions.parquet"
+        )
+        authority_exceptions_artifact_path = (
+            refinitiv_ownership_authority_paths["refinitiv_permno_ownership_authority_exceptions_parquet"]
+            if refinitiv_ownership_authority_paths is not None
+            else REFINITIV_OWNERSHIP_AUTHORITY_DIR / "refinitiv_permno_ownership_authority_exceptions.parquet"
+        )
+        if (
+            doc_filing_artifact_path.exists()
+            and authority_decisions_artifact_path.exists()
+            and authority_exceptions_artifact_path.exists()
+        ):
+            refinitiv_doc_ownership_exact_paths = run_refinitiv_lm2011_doc_ownership_exact_handoff_pipeline(
+                doc_filing_artifact_path=doc_filing_artifact_path,
+                authority_decisions_artifact_path=authority_decisions_artifact_path,
+                authority_exceptions_artifact_path=authority_exceptions_artifact_path,
+                output_dir=REFINITIV_DOC_OWNERSHIP_LM2011_DIR,
+            )
+            _record_refinitiv_stage(
+                "refinitiv_doc_ownership_exact",
+                refinitiv_doc_ownership_exact_paths,
+            )
+            for key in sorted(refinitiv_doc_ownership_exact_paths):
+                print(f"{key}: {refinitiv_doc_ownership_exact_paths[key]}")
+        else:
+            print(
+                {
+                    "warning": "skipping Refinitiv LM2011 doc ownership exact handoff; required artifacts not found",
+                    "expected_doc_filing_path": str(doc_filing_artifact_path),
+                    "expected_authority_decisions_path": str(authority_decisions_artifact_path),
+                    "expected_authority_exceptions_path": str(authority_exceptions_artifact_path),
+                }
+            )
+    if RUN_REFINITIV_DOC_OWNERSHIP_LM2011_FALLBACK_HANDOFF:
+        exact_filled_workbook_path = (
+            REFINITIV_DOC_OWNERSHIP_LM2011_DIR / "refinitiv_lm2011_doc_ownership_exact_handoff_filled_in.xlsx"
+        )
+        exact_requests_path = (
+            refinitiv_doc_ownership_exact_paths["refinitiv_lm2011_doc_ownership_exact_requests_parquet"]
+            if refinitiv_doc_ownership_exact_paths is not None
+            else REFINITIV_DOC_OWNERSHIP_LM2011_DIR / "refinitiv_lm2011_doc_ownership_exact_requests.parquet"
+        )
+        if exact_requests_path.exists() and exact_filled_workbook_path.exists():
+            refinitiv_doc_ownership_fallback_paths = run_refinitiv_lm2011_doc_ownership_fallback_handoff_pipeline(
+                exact_filled_workbook_path=exact_filled_workbook_path,
+                output_dir=REFINITIV_DOC_OWNERSHIP_LM2011_DIR,
+            )
+            _record_refinitiv_stage(
+                "refinitiv_doc_ownership_fallback",
+                refinitiv_doc_ownership_fallback_paths,
+            )
+            for key in sorted(refinitiv_doc_ownership_fallback_paths):
+                print(f"{key}: {refinitiv_doc_ownership_fallback_paths[key]}")
+        else:
+            print(
+                {
+                    "warning": "skipping Refinitiv LM2011 doc ownership fallback handoff; exact requests or filled workbook not found",
+                    "expected_exact_requests_path": str(exact_requests_path),
+                    "expected_exact_filled_workbook_path": str(exact_filled_workbook_path),
+                }
+            )
+    if RUN_REFINITIV_DOC_OWNERSHIP_LM2011_FINALIZE:
+        fallback_requests_path = (
+            refinitiv_doc_ownership_fallback_paths["refinitiv_lm2011_doc_ownership_fallback_requests_parquet"]
+            if refinitiv_doc_ownership_fallback_paths is not None
+            else REFINITIV_DOC_OWNERSHIP_LM2011_DIR / "refinitiv_lm2011_doc_ownership_fallback_requests.parquet"
+        )
+        exact_raw_path = (
+            refinitiv_doc_ownership_fallback_paths["refinitiv_lm2011_doc_ownership_exact_raw_parquet"]
+            if refinitiv_doc_ownership_fallback_paths is not None
+            else REFINITIV_DOC_OWNERSHIP_LM2011_DIR / "refinitiv_lm2011_doc_ownership_exact_raw.parquet"
+        )
+        fallback_filled_workbook_path = (
+            REFINITIV_DOC_OWNERSHIP_LM2011_DIR / "refinitiv_lm2011_doc_ownership_fallback_handoff_filled_in.xlsx"
+        )
+        fallback_request_count = _bool_true_count(fallback_requests_path, "retrieval_eligible")
+        if fallback_requests_path.exists() and exact_raw_path.exists():
+            if fallback_request_count and not fallback_filled_workbook_path.exists():
+                print(
+                    {
+                        "warning": "skipping Refinitiv LM2011 doc ownership finalize; fallback requests exist but filled fallback workbook not found",
+                        "expected_fallback_filled_workbook_path": str(fallback_filled_workbook_path),
+                        "fallback_request_count": fallback_request_count,
+                    }
+                )
+            else:
+                refinitiv_doc_ownership_finalize_paths = run_refinitiv_lm2011_doc_ownership_finalize_pipeline(
+                    output_dir=REFINITIV_DOC_OWNERSHIP_LM2011_DIR,
+                    fallback_filled_workbook_path=(
+                        fallback_filled_workbook_path if fallback_request_count else None
+                    ),
+                )
+                _record_refinitiv_stage(
+                    "refinitiv_doc_ownership_finalize",
+                    refinitiv_doc_ownership_finalize_paths,
+                )
+                for key in sorted(refinitiv_doc_ownership_finalize_paths):
+                    print(f"{key}: {refinitiv_doc_ownership_finalize_paths[key]}")
+        else:
+            print(
+                {
+                    "warning": "skipping Refinitiv LM2011 doc ownership finalize; fallback requests or exact raw parquet not found",
+                    "expected_fallback_requests_path": str(fallback_requests_path),
+                    "expected_exact_raw_path": str(exact_raw_path),
+                }
+            )
 
     # ## 6) Gated item extraction
     analysis_item_paths: list[Path] = []

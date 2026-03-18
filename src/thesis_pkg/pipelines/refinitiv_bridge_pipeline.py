@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 import polars as pl
+from xlsxwriter.exceptions import FileCreateError
 
 from thesis_pkg.core.ccm.transforms import common_stock_pass_expr
 from thesis_pkg.io.excel import (
@@ -1599,6 +1600,29 @@ def _write_json(out_path: Path, payload: dict[str, Any]) -> Path:
     return out_path
 
 
+def _write_workbook_or_reuse_locked_output(
+    writer: Callable[..., Path],
+    df: pl.DataFrame,
+    output_path: Path,
+    /,
+    **writer_kwargs: Any,
+) -> Path:
+    output_path = Path(output_path)
+    try:
+        return writer(df, output_path, **writer_kwargs)
+    except FileCreateError as exc:
+        if output_path.exists():
+            print(
+                {
+                    "warning": "reusing existing locked workbook output",
+                    "path": str(output_path),
+                    "reason": str(exc),
+                }
+            )
+            return output_path
+        raise
+
+
 def run_refinitiv_step1_bridge_pipeline(
     daily_lf: pl.LazyFrame,
     output_dir: Path,
@@ -1678,7 +1702,8 @@ def run_refinitiv_step1_bridge_pipeline(
         },
     }
 
-    write_refinitiv_ric_lookup_extended_workbook(
+    _write_workbook_or_reuse_locked_output(
+        write_refinitiv_ric_lookup_extended_workbook,
         extended_df,
         extended_profile_path,
         readme_payload=manifest_payload,
@@ -4288,7 +4313,8 @@ def run_refinitiv_step1_ownership_universe_handoff_pipeline(
         **summary,
         "handoff_columns": list(OWNERSHIP_UNIVERSE_HANDOFF_COLUMNS),
     }
-    write_refinitiv_ownership_universe_workbook(
+    _write_workbook_or_reuse_locked_output(
+        write_refinitiv_ownership_universe_workbook,
         handoff_df,
         handoff_xlsx_path,
         readme_payload=readme_payload,
