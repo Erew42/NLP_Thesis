@@ -1641,6 +1641,7 @@ def run_refinitiv_step1_bridge_pipeline(
 
     parquet_path = output_dir / "refinitiv_bridge_universe.parquet"
     extended_profile_path = _extended_profile_output_path(output_dir, "common_stock")
+    extended_snapshot_path = output_dir / "refinitiv_ric_lookup_handoff_common_stock_extended_snapshot.parquet"
     manifest_path = output_dir / "refinitiv_step1_manifest.json"
 
     bridge_df.write_parquet(parquet_path, compression="zstd")
@@ -1711,13 +1712,14 @@ def run_refinitiv_step1_bridge_pipeline(
         summary_df=extended_summary_df,
         summary_text_columns=RIC_LOOKUP_EXTENDED_SUMMARY_TEXT_COLUMNS,
     )
+    extended_df.write_parquet(extended_snapshot_path, compression="zstd")
     _write_json(manifest_path, manifest_payload)
 
     return {
         "refinitiv_bridge_universe_parquet": parquet_path,
         "refinitiv_ric_lookup_handoff_common_stock_extended_xlsx": extended_profile_path,
         "refinitiv_step1_manifest": manifest_path,
-    }
+}
 
 
 def _normalize_workbook_scalar(value: Any) -> str | None:
@@ -2262,6 +2264,18 @@ def _summarize_resolution_frame(
     }
 
 
+def _read_refinitiv_ric_lookup_extended_artifact(
+    artifact_path: Path | str,
+) -> pl.DataFrame:
+    artifact_path = Path(artifact_path)
+    if artifact_path.suffix.lower() == ".parquet":
+        return _cast_df_to_schema(
+            pl.read_parquet(artifact_path).select(RIC_LOOKUP_EXTENDED_COLUMNS),
+            _extended_lookup_schema(),
+        ).select(RIC_LOOKUP_EXTENDED_COLUMNS)
+    return _read_refinitiv_ric_lookup_extended_sheet(artifact_path)
+
+
 def run_refinitiv_step1_resolution_pipeline(
     filled_lookup_workbook_path: Path | str,
     output_dir: Path | str,
@@ -2270,7 +2284,7 @@ def run_refinitiv_step1_resolution_pipeline(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    resolution_input_df = _read_refinitiv_ric_lookup_extended_sheet(filled_lookup_workbook_path)
+    resolution_input_df = _read_refinitiv_ric_lookup_extended_artifact(filled_lookup_workbook_path)
     resolution_df = build_refinitiv_step1_resolution_frame(resolution_input_df)
 
     parquet_path = output_dir / "refinitiv_ric_resolution_common_stock.parquet"

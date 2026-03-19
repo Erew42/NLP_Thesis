@@ -153,7 +153,17 @@ def _normalize_date_value(value: Any) -> dt.date | None:
     try:
         return dt.date.fromisoformat(normalized)
     except ValueError:
-        return None
+        try:
+            return dt.datetime.fromisoformat(normalized).date()
+        except ValueError:
+            pass
+    if " " in normalized:
+        date_part = normalized.split(" ", 1)[0].strip()
+        try:
+            return dt.date.fromisoformat(date_part)
+        except ValueError:
+            return None
+    return None
 
 
 def _normalize_float_value(value: Any) -> float | None:
@@ -791,6 +801,7 @@ def run_refinitiv_lm2011_doc_ownership_finalize_pipeline(
     exact_requests_path = output_dir / "refinitiv_lm2011_doc_ownership_exact_requests.parquet"
     exact_raw_path = output_dir / "refinitiv_lm2011_doc_ownership_exact_raw.parquet"
     fallback_requests_path = output_dir / "refinitiv_lm2011_doc_ownership_fallback_requests.parquet"
+    fallback_raw_path = output_dir / "refinitiv_lm2011_doc_ownership_fallback_raw.parquet"
     if not exact_requests_path.exists():
         raise FileNotFoundError(f"exact requests parquet not found: {exact_requests_path}")
     if not exact_raw_path.exists():
@@ -817,9 +828,16 @@ def run_refinitiv_lm2011_doc_ownership_finalize_pipeline(
         if fallback_request_df.height
         else 0
     )
-    if fallback_eligible_count > 0:
+    if fallback_raw_path.exists():
+        fallback_raw_df = _cast_df_to_schema(
+            pl.read_parquet(fallback_raw_path).select(DOC_OWNERSHIP_RAW_COLUMNS),
+            _doc_ownership_raw_schema(),
+        ).select(DOC_OWNERSHIP_RAW_COLUMNS)
+    elif fallback_eligible_count > 0:
         if fallback_filled_workbook_path is None:
-            raise FileNotFoundError("fallback filled workbook path is required when fallback requests exist")
+            raise FileNotFoundError(
+                "fallback filled workbook path is required when fallback requests exist and fallback raw parquet is absent"
+            )
         fallback_raw_df = _parse_doc_ownership_filled_workbook(
             fallback_filled_workbook_path,
             fallback_request_df,
@@ -827,7 +845,6 @@ def run_refinitiv_lm2011_doc_ownership_finalize_pipeline(
         ).select(DOC_OWNERSHIP_RAW_COLUMNS)
 
     tables, _ = _build_doc_ownership_output_tables(request_df, exact_raw_df, fallback_raw_df)
-    fallback_raw_path = output_dir / "refinitiv_lm2011_doc_ownership_fallback_raw.parquet"
     raw_path = output_dir / "refinitiv_lm2011_doc_ownership_raw.parquet"
     final_path = output_dir / "refinitiv_lm2011_doc_ownership.parquet"
     fallback_raw_df.write_parquet(fallback_raw_path, compression="zstd")

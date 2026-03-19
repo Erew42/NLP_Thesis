@@ -45,17 +45,24 @@ from thesis_pkg.filing_text import (
 from thesis_pkg.pipeline import (
     SecCcmJoinSpecV2,
     build_or_reuse_ccm_daily_stage,
+    is_lseg_available,
     make_sec_ccm_join_spec_preset,
+    run_refinitiv_lm2011_doc_ownership_exact_api_pipeline,
     run_refinitiv_lm2011_doc_ownership_exact_handoff_pipeline,
+    run_refinitiv_lm2011_doc_ownership_fallback_api_pipeline,
     run_refinitiv_lm2011_doc_ownership_fallback_handoff_pipeline,
     run_refinitiv_lm2011_doc_ownership_finalize_pipeline,
+    run_refinitiv_step1_lookup_api_pipeline,
     run_refinitiv_step1_ownership_authority_pipeline,
+    run_refinitiv_step1_ownership_universe_api_pipeline,
     run_refinitiv_step1_ownership_universe_handoff_pipeline,
     run_refinitiv_step1_ownership_universe_results_pipeline,
     run_refinitiv_step1_resolution_pipeline,
     run_refinitiv_step1_bridge_pipeline,
     run_sec_ccm_premerge_pipeline,
 )
+
+LSEG_API_READY = is_lseg_available()
 
 
 @dataclass(frozen=True)
@@ -581,7 +588,28 @@ def main() -> None:
         filled_extended_lookup_path = (
             REFINITIV_STEP1_OUT_DIR / "refinitiv_ric_lookup_handoff_common_stock_extended_filled_in.xlsx"
         )
-        if filled_extended_lookup_path.exists():
+        api_lookup_snapshot_path = (
+            REFINITIV_STEP1_OUT_DIR / "refinitiv_ric_lookup_handoff_common_stock_extended_snapshot.parquet"
+        )
+        api_lookup_parquet_path = (
+            REFINITIV_STEP1_OUT_DIR / "refinitiv_ric_lookup_handoff_common_stock_extended.parquet"
+        )
+        if LSEG_API_READY and api_lookup_snapshot_path.exists():
+            refinitiv_lookup_api_paths = run_refinitiv_step1_lookup_api_pipeline(
+                snapshot_parquet_path=api_lookup_snapshot_path,
+                output_dir=REFINITIV_STEP1_OUT_DIR,
+            )
+            _record_refinitiv_stage("refinitiv_lookup_api", refinitiv_lookup_api_paths)
+            for key in sorted(refinitiv_lookup_api_paths):
+                print(f"{key}: {refinitiv_lookup_api_paths[key]}")
+            refinitiv_resolution_paths = run_refinitiv_step1_resolution_pipeline(
+                filled_lookup_workbook_path=api_lookup_parquet_path,
+                output_dir=REFINITIV_STEP1_OUT_DIR,
+            )
+            _record_refinitiv_stage("refinitiv_resolution", refinitiv_resolution_paths)
+            for key in sorted(refinitiv_resolution_paths):
+                print(f"{key}: {refinitiv_resolution_paths[key]}")
+        elif filled_extended_lookup_path.exists():
             refinitiv_resolution_paths = run_refinitiv_step1_resolution_pipeline(
                 filled_lookup_workbook_path=filled_extended_lookup_path,
                 output_dir=REFINITIV_STEP1_OUT_DIR,
@@ -625,7 +653,23 @@ def main() -> None:
             REFINITIV_OWNERSHIP_UNIVERSE_DIR
             / "refinitiv_ownership_universe_handoff_common_stock_filled_in.xlsx"
         )
-        if ownership_universe_filled_workbook_path.exists():
+        ownership_universe_handoff_parquet_path = (
+            refinitiv_ownership_universe_handoff_paths["refinitiv_ownership_universe_handoff_common_stock_parquet"]
+            if refinitiv_ownership_universe_handoff_paths is not None
+            else REFINITIV_OWNERSHIP_UNIVERSE_DIR / "refinitiv_ownership_universe_handoff_common_stock.parquet"
+        )
+        if LSEG_API_READY and ownership_universe_handoff_parquet_path.exists():
+            refinitiv_ownership_universe_results_paths = run_refinitiv_step1_ownership_universe_api_pipeline(
+                handoff_parquet_path=ownership_universe_handoff_parquet_path,
+                output_dir=REFINITIV_OWNERSHIP_UNIVERSE_DIR,
+            )
+            _record_refinitiv_stage(
+                "refinitiv_ownership_universe_results",
+                refinitiv_ownership_universe_results_paths,
+            )
+            for key in sorted(refinitiv_ownership_universe_results_paths):
+                print(f"{key}: {refinitiv_ownership_universe_results_paths[key]}")
+        elif ownership_universe_filled_workbook_path.exists():
             refinitiv_ownership_universe_results_paths = run_refinitiv_step1_ownership_universe_results_pipeline(
                 filled_workbook_path=ownership_universe_filled_workbook_path,
                 output_dir=REFINITIV_OWNERSHIP_UNIVERSE_DIR,
@@ -900,12 +944,20 @@ def main() -> None:
             and authority_decisions_artifact_path.exists()
             and authority_exceptions_artifact_path.exists()
         ):
-            refinitiv_doc_ownership_exact_paths = run_refinitiv_lm2011_doc_ownership_exact_handoff_pipeline(
-                doc_filing_artifact_path=doc_filing_artifact_path,
-                authority_decisions_artifact_path=authority_decisions_artifact_path,
-                authority_exceptions_artifact_path=authority_exceptions_artifact_path,
-                output_dir=REFINITIV_DOC_OWNERSHIP_LM2011_DIR,
-            )
+            if LSEG_API_READY:
+                refinitiv_doc_ownership_exact_paths = run_refinitiv_lm2011_doc_ownership_exact_api_pipeline(
+                    doc_filing_artifact_path=doc_filing_artifact_path,
+                    authority_decisions_artifact_path=authority_decisions_artifact_path,
+                    authority_exceptions_artifact_path=authority_exceptions_artifact_path,
+                    output_dir=REFINITIV_DOC_OWNERSHIP_LM2011_DIR,
+                )
+            else:
+                refinitiv_doc_ownership_exact_paths = run_refinitiv_lm2011_doc_ownership_exact_handoff_pipeline(
+                    doc_filing_artifact_path=doc_filing_artifact_path,
+                    authority_decisions_artifact_path=authority_decisions_artifact_path,
+                    authority_exceptions_artifact_path=authority_exceptions_artifact_path,
+                    output_dir=REFINITIV_DOC_OWNERSHIP_LM2011_DIR,
+                )
             _record_refinitiv_stage(
                 "refinitiv_doc_ownership_exact",
                 refinitiv_doc_ownership_exact_paths,
@@ -930,7 +982,23 @@ def main() -> None:
             if refinitiv_doc_ownership_exact_paths is not None
             else REFINITIV_DOC_OWNERSHIP_LM2011_DIR / "refinitiv_lm2011_doc_ownership_exact_requests.parquet"
         )
-        if exact_requests_path.exists() and exact_filled_workbook_path.exists():
+        exact_raw_path = (
+            refinitiv_doc_ownership_exact_paths["refinitiv_lm2011_doc_ownership_exact_raw_parquet"]
+            if refinitiv_doc_ownership_exact_paths is not None
+            and "refinitiv_lm2011_doc_ownership_exact_raw_parquet" in refinitiv_doc_ownership_exact_paths
+            else REFINITIV_DOC_OWNERSHIP_LM2011_DIR / "refinitiv_lm2011_doc_ownership_exact_raw.parquet"
+        )
+        if LSEG_API_READY and exact_requests_path.exists() and exact_raw_path.exists():
+            refinitiv_doc_ownership_fallback_paths = run_refinitiv_lm2011_doc_ownership_fallback_api_pipeline(
+                output_dir=REFINITIV_DOC_OWNERSHIP_LM2011_DIR,
+            )
+            _record_refinitiv_stage(
+                "refinitiv_doc_ownership_fallback",
+                refinitiv_doc_ownership_fallback_paths,
+            )
+            for key in sorted(refinitiv_doc_ownership_fallback_paths):
+                print(f"{key}: {refinitiv_doc_ownership_fallback_paths[key]}")
+        elif exact_requests_path.exists() and exact_filled_workbook_path.exists():
             refinitiv_doc_ownership_fallback_paths = run_refinitiv_lm2011_doc_ownership_fallback_handoff_pipeline(
                 exact_filled_workbook_path=exact_filled_workbook_path,
                 output_dir=REFINITIV_DOC_OWNERSHIP_LM2011_DIR,
@@ -960,12 +1028,18 @@ def main() -> None:
             if refinitiv_doc_ownership_fallback_paths is not None
             else REFINITIV_DOC_OWNERSHIP_LM2011_DIR / "refinitiv_lm2011_doc_ownership_exact_raw.parquet"
         )
+        fallback_raw_path = (
+            refinitiv_doc_ownership_fallback_paths["refinitiv_lm2011_doc_ownership_fallback_raw_parquet"]
+            if refinitiv_doc_ownership_fallback_paths is not None
+            and "refinitiv_lm2011_doc_ownership_fallback_raw_parquet" in refinitiv_doc_ownership_fallback_paths
+            else REFINITIV_DOC_OWNERSHIP_LM2011_DIR / "refinitiv_lm2011_doc_ownership_fallback_raw.parquet"
+        )
         fallback_filled_workbook_path = (
             REFINITIV_DOC_OWNERSHIP_LM2011_DIR / "refinitiv_lm2011_doc_ownership_fallback_handoff_filled_in.xlsx"
         )
         fallback_request_count = _bool_true_count(fallback_requests_path, "retrieval_eligible")
         if fallback_requests_path.exists() and exact_raw_path.exists():
-            if fallback_request_count and not fallback_filled_workbook_path.exists():
+            if fallback_request_count and not fallback_raw_path.exists() and not fallback_filled_workbook_path.exists():
                 print(
                     {
                         "warning": "skipping Refinitiv LM2011 doc ownership finalize; fallback requests exist but filled fallback workbook not found",
@@ -977,7 +1051,9 @@ def main() -> None:
                 refinitiv_doc_ownership_finalize_paths = run_refinitiv_lm2011_doc_ownership_finalize_pipeline(
                     output_dir=REFINITIV_DOC_OWNERSHIP_LM2011_DIR,
                     fallback_filled_workbook_path=(
-                        fallback_filled_workbook_path if fallback_request_count else None
+                        fallback_filled_workbook_path
+                        if fallback_request_count and not fallback_raw_path.exists()
+                        else None
                     ),
                 )
                 _record_refinitiv_stage(

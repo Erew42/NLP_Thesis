@@ -14,6 +14,15 @@ from thesis_pkg.pipelines.refinitiv.doc_ownership import (
     run_refinitiv_lm2011_doc_ownership_fallback_handoff_pipeline,
     run_refinitiv_lm2011_doc_ownership_finalize_pipeline,
 )
+from thesis_pkg.pipelines.refinitiv.lseg_lookup_api import (
+    run_refinitiv_step1_lookup_api_pipeline,
+)
+from thesis_pkg.pipelines.refinitiv.lseg_ownership_api import (
+    run_refinitiv_lm2011_doc_ownership_exact_api_pipeline,
+    run_refinitiv_lm2011_doc_ownership_fallback_api_pipeline,
+    run_refinitiv_step1_ownership_universe_api_pipeline,
+)
+from thesis_pkg.pipelines.refinitiv.lseg_provider import is_lseg_available
 from thesis_pkg.pipelines.refinitiv.ownership import (
     build_refinitiv_ownership_universe_row_summary,
     build_refinitiv_step1_ownership_universe_handoff,
@@ -34,10 +43,15 @@ __all__ = [
     "run_refinitiv_step1_ownership_authority_pipeline",
     "build_refinitiv_lm2011_doc_ownership_requests",
     "run_refinitiv_lm2011_doc_ownership_exact_handoff_pipeline",
+    "run_refinitiv_lm2011_doc_ownership_exact_api_pipeline",
     "run_refinitiv_lm2011_doc_ownership_fallback_handoff_pipeline",
+    "run_refinitiv_lm2011_doc_ownership_fallback_api_pipeline",
     "run_refinitiv_lm2011_doc_ownership_finalize_pipeline",
     "build_refinitiv_step1_ownership_universe_handoff",
     "build_refinitiv_ownership_universe_row_summary",
     "run_refinitiv_step1_ownership_universe_handoff_pipeline",
+    "run_refinitiv_step1_ownership_universe_api_pipeline",
     "run_refinitiv_step1_ownership_universe_results_pipeline",
+    "run_refinitiv_step1_lookup_api_pipeline",
+    "is_lseg_available",
 ]
