@@ -24,6 +24,7 @@ DOC_OWNERSHIP_REQUEST_COLUMNS: tuple[str, ...] = (
     "authoritative_ric",
     "authority_decision_status",
     "target_quarter_end",
+    "target_effective_date",
     "fallback_window_start",
     "fallback_window_end",
     "retrieval_eligible",
@@ -37,6 +38,7 @@ DOC_OWNERSHIP_RAW_COLUMNS: tuple[str, ...] = (
     "authoritative_ric",
     "authority_decision_status",
     "target_quarter_end",
+    "target_effective_date",
     "request_stage",
     "response_date",
     "response_date_is_imputed",
@@ -53,6 +55,7 @@ DOC_OWNERSHIP_FINAL_COLUMNS: tuple[str, ...] = (
     "authoritative_ric",
     "authority_decision_status",
     "target_quarter_end",
+    "target_effective_date",
     "selected_response_date",
     "returned_category",
     "institutional_ownership_pct",
@@ -64,6 +67,7 @@ DOC_OWNERSHIP_INPUT_FIELDS: tuple[str, ...] = (
     "doc_id",
     "authoritative_ric",
     "target_quarter_end",
+    "target_effective_date",
     "fallback_window_start",
     "fallback_window_end",
     "filing_date",
@@ -93,6 +97,7 @@ def _doc_ownership_request_schema() -> dict[str, pl.DataType]:
         "authoritative_ric": pl.Utf8,
         "authority_decision_status": pl.Utf8,
         "target_quarter_end": pl.Date,
+        "target_effective_date": pl.Date,
         "fallback_window_start": pl.Date,
         "fallback_window_end": pl.Date,
         "retrieval_eligible": pl.Boolean,
@@ -108,6 +113,7 @@ def _doc_ownership_raw_schema() -> dict[str, pl.DataType]:
         "authoritative_ric": pl.Utf8,
         "authority_decision_status": pl.Utf8,
         "target_quarter_end": pl.Date,
+        "target_effective_date": pl.Date,
         "request_stage": pl.Utf8,
         "response_date": pl.Date,
         "response_date_is_imputed": pl.Boolean,
@@ -126,6 +132,7 @@ def _doc_ownership_final_schema() -> dict[str, pl.DataType]:
         "authoritative_ric": pl.Utf8,
         "authority_decision_status": pl.Utf8,
         "target_quarter_end": pl.Date,
+        "target_effective_date": pl.Date,
         "selected_response_date": pl.Date,
         "returned_category": pl.Utf8,
         "institutional_ownership_pct": pl.Float64,
@@ -217,6 +224,10 @@ def _most_recent_quarter_end_before(filing_date: dt.date) -> dt.date:
     quarter_start_month = ((filing_date.month - 1) // 3) * 3 + 1
     quarter_start = dt.date(filing_date.year, quarter_start_month, 1)
     return quarter_start - dt.timedelta(days=1)
+
+
+def _target_effective_date_for_quarter_end(target_quarter_end: dt.date) -> dt.date:
+    return target_quarter_end + dt.timedelta(days=1)
 
 
 def _read_doc_filing_artifact(parquet_path: Path | str) -> pl.DataFrame:
@@ -339,11 +350,14 @@ def build_refinitiv_lm2011_doc_ownership_requests(
         filing_date = _normalize_date_value(record.get("filing_date"))
         kypermno = _normalize_kypermno(record.get("KYPERMNO") if "KYPERMNO" in record else record.get("kypermno"))
         target_quarter_end = None if filing_date is None else _most_recent_quarter_end_before(filing_date)
-        fallback_window_start = target_quarter_end
+        target_effective_date = (
+            None if target_quarter_end is None else _target_effective_date_for_quarter_end(target_quarter_end)
+        )
+        fallback_window_start = target_effective_date
         fallback_window_end = (
             None
-            if filing_date is None or target_quarter_end is None
-            else min(filing_date, target_quarter_end + dt.timedelta(days=DOC_OWNERSHIP_MAX_FALLBACK_DAYS))
+            if filing_date is None or target_effective_date is None
+            else min(filing_date, target_effective_date + dt.timedelta(days=DOC_OWNERSHIP_MAX_FALLBACK_DAYS))
         )
 
         authoritative_ric: str | None = None
@@ -399,6 +413,7 @@ def build_refinitiv_lm2011_doc_ownership_requests(
                 "authoritative_ric": authoritative_ric,
                 "authority_decision_status": authority_decision_status,
                 "target_quarter_end": target_quarter_end,
+                "target_effective_date": target_effective_date,
                 "fallback_window_start": fallback_window_start,
                 "fallback_window_end": fallback_window_end,
                 "retrieval_eligible": retrieval_eligible,
@@ -486,20 +501,23 @@ def _parse_doc_ownership_filled_workbook(
 
                 if request_stage == DOC_OWNERSHIP_EXACT_STAGE:
                     for excel_row in range(3, worksheet.max_row + 1):
+                        response_date = _normalize_date_value(
+                            worksheet.cell(row=excel_row, column=base_col + 2).value
+                        )
                         returned_value = _normalize_float_value(
                             worksheet.cell(row=excel_row, column=base_col + 3).value
                         )
                         returned_category = _normalize_category(
                             worksheet.cell(row=excel_row, column=base_col + 4).value
                         )
-                        if returned_value is None and returned_category is None:
+                        if response_date is None and returned_value is None and returned_category is None:
                             break
                         results.append(
                             {
                                 **{name: request_row.get(name) for name in DOC_OWNERSHIP_REQUEST_COLUMNS},
                                 "request_stage": DOC_OWNERSHIP_EXACT_STAGE,
-                                "response_date": request_row.get("target_quarter_end"),
-                                "response_date_is_imputed": True,
+                                "response_date": response_date,
+                                "response_date_is_imputed": False,
                                 "returned_category": returned_category,
                                 "returned_category_normalized": returned_category,
                                 "returned_value": returned_value,
@@ -682,6 +700,7 @@ def _build_doc_ownership_output_tables(
                 "authoritative_ric": _normalize_lookup_text(row.get("authoritative_ric")),
                 "authority_decision_status": _normalize_lookup_text(row.get("authority_decision_status")),
                 "target_quarter_end": _normalize_date_value(row.get("target_quarter_end")),
+                "target_effective_date": _normalize_date_value(row.get("target_effective_date")),
                 "selected_response_date": selected_response_date,
                 "returned_category": returned_category,
                 "institutional_ownership_pct": institutional_ownership_pct,
@@ -863,6 +882,7 @@ __all__ = [
     "DOC_OWNERSHIP_INPUT_FIELDS",
     "DOC_OWNERSHIP_RAW_COLUMNS",
     "DOC_OWNERSHIP_REQUEST_COLUMNS",
+    "_target_effective_date_for_quarter_end",
     "build_refinitiv_lm2011_doc_ownership_requests",
     "run_refinitiv_lm2011_doc_ownership_exact_handoff_pipeline",
     "run_refinitiv_lm2011_doc_ownership_fallback_handoff_pipeline",

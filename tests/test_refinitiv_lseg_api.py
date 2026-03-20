@@ -456,6 +456,7 @@ def test_doc_ownership_exact_and_fallback_api_pipelines_finalize_without_workboo
             pl.DataFrame(
                 {
                     "Instrument": ["AAA.N", "BBB.N"],
+                    "Date": [date(2024, 4, 1), date(2024, 4, 1)],
                     "Category Percent Of Traded Shares": [55.0, 21.0],
                     "Investor Statistics Category Value": [
                         "Holdings by Institutions",
@@ -499,13 +500,24 @@ def test_doc_ownership_exact_and_fallback_api_pipelines_finalize_without_workboo
 
     assert rows["doc_exact"]["retrieval_status"] == "EXACT_TARGET_HIT"
     assert rows["doc_exact"]["institutional_ownership_pct"] == 55.0
+    assert rows["doc_exact"]["target_effective_date"] == date(2024, 4, 1)
+    assert rows["doc_exact"]["selected_response_date"] == date(2024, 4, 1)
     assert rows["doc_fallback"]["retrieval_status"] == "FALLBACK_WINDOW_HIT"
     assert rows["doc_fallback"]["fallback_used"] is True
     assert rows["doc_fallback"]["institutional_ownership_pct"] == 65.0
+    assert rows["doc_fallback"]["target_effective_date"] == date(2024, 4, 1)
+    assert rows["doc_fallback"]["selected_response_date"] == date(2024, 4, 15)
 
     fallback_requests_df = pl.read_parquet(fallback_out["refinitiv_lm2011_doc_ownership_fallback_requests_parquet"])
     assert fallback_requests_df.select("doc_id").to_series(0).to_list() == ["doc_fallback"]
     assert fallback_requests_df.columns == list(DOC_OWNERSHIP_REQUEST_COLUMNS)
+    assert exact_provider.calls[0]["fields"] == [
+        "TR.CategoryOwnershipPct.Date",
+        "TR.CategoryOwnershipPct",
+        "TR.InstrStatTypeValue",
+    ]
+    assert exact_provider.calls[0]["parameters"] == {"StatType": 7, "SDate": "2024-04-01", "EDate": "2024-04-01"}
+    assert fallback_provider.calls[0]["parameters"] == {"StatType": 7, "SDate": "2024-04-01", "EDate": "2024-05-16"}
 
 
 def test_normalize_date_value_accepts_iso_datetime_text() -> None:

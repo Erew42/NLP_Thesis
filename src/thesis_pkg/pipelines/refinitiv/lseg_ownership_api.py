@@ -63,6 +63,7 @@ OWNERSHIP_UNIVERSE_FIELDS: tuple[str, ...] = (
     "TR.InstrStatTypeValue",
 )
 DOC_EXACT_FIELDS: tuple[str, ...] = (
+    "TR.CategoryOwnershipPct.Date",
     "TR.CategoryOwnershipPct",
     "TR.InstrStatTypeValue",
 )
@@ -580,10 +581,10 @@ def _build_doc_ownership_exact_items(request_df: pl.DataFrame) -> list[RequestIt
     for row in request_df.filter(pl.col("retrieval_eligible").fill_null(False)).to_dicts():
         doc_id = _normalize_lookup_text(row.get("doc_id"))
         authoritative_ric = _normalize_lookup_text(row.get("authoritative_ric"))
-        target_quarter_end = _normalize_date_value(row.get("target_quarter_end"))
-        if doc_id is None or authoritative_ric is None or target_quarter_end is None:
+        target_effective_date = _normalize_date_value(row.get("target_effective_date"))
+        if doc_id is None or authoritative_ric is None or target_effective_date is None:
             continue
-        date_text = target_quarter_end.isoformat()
+        date_text = target_effective_date.isoformat()
         items.append(
             RequestItem(
                 item_id=stable_hash_id(DOC_EXACT_STAGE, doc_id, prefix="item"),
@@ -678,20 +679,20 @@ def _normalize_doc_exact_batch_response(items: list[Any], frame: pl.DataFrame) -
     rows: list[dict[str, Any]] = []
     for item in items:
         request_row = dict(item.payload["request_row"])
-        target_quarter_end = _normalize_date_value(request_row.get("target_quarter_end"))
         matched_rows = rows_by_instrument.get(item.instrument, [])
         for matched_row in matched_rows:
+            response_date = _normalize_date_value(matched_row.get("TR.CategoryOwnershipPct.Date"))
             returned_value = _normalize_float_value(matched_row.get("TR.CategoryOwnershipPct"))
             returned_category = _normalize_category(matched_row.get("TR.InstrStatTypeValue"))
-            if returned_value is None and returned_category is None:
+            if response_date is None and returned_value is None and returned_category is None:
                 continue
             rows.append(
                 {
                     "item_id": item.item_id,
                     **{name: request_row.get(name) for name in DOC_OWNERSHIP_REQUEST_COLUMNS},
                     "request_stage": DOC_OWNERSHIP_EXACT_STAGE,
-                    "response_date": target_quarter_end,
-                    "response_date_is_imputed": True,
+                    "response_date": response_date,
+                    "response_date_is_imputed": False,
                     "returned_category": returned_category,
                     "returned_category_normalized": returned_category,
                     "returned_value": returned_value,

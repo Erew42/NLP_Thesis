@@ -900,12 +900,13 @@ def _write_refinitiv_lm2011_doc_ownership_sheet(
 
     block_width = len(block_headers)
     authoritative_ric_offset = input_field_order.index("authoritative_ric") + 1
-    target_quarter_end_offset = input_field_order.index("target_quarter_end") + 1
+    target_effective_date_offset = input_field_order.index("target_effective_date") + 1
     fallback_window_start_offset = input_field_order.index("fallback_window_start") + 1
     fallback_window_end_offset = input_field_order.index("fallback_window_end") + 1
     date_fields = {
         "filing_date",
         "target_quarter_end",
+        "target_effective_date",
         "fallback_window_start",
         "fallback_window_end",
     }
@@ -939,20 +940,20 @@ def _write_refinitiv_lm2011_doc_ownership_sheet(
                     worksheet.write_string(field_offset, base_col, str(value))
 
             authoritative_ric_ref = _sheet_cell_ref(authoritative_ric_offset, base_col)
-            target_quarter_end_ref = _sheet_cell_ref(target_quarter_end_offset, base_col)
+            target_effective_date_ref = _sheet_cell_ref(target_effective_date_offset, base_col)
             fallback_window_start_ref = _sheet_cell_ref(fallback_window_start_offset, base_col)
             fallback_window_end_ref = _sheet_cell_ref(fallback_window_end_offset, base_col)
             worksheet.write_formula(1, base_col + 1, f"={authoritative_ric_ref}", None, "")
 
             if request_stage == "EXACT":
-                worksheet.write_formula(1, base_col + 2, f"={target_quarter_end_ref}", None, "")
                 worksheet.write_formula(
                     1,
-                    base_col + 3,
+                    base_col + 2,
                     (
                         f'=@RDP.Data({authoritative_ric_ref},'
-                        '"TR.CategoryOwnershipPct;TR.InstrStatTypeValue",'
-                        f'"StatType=7 SDate="&TEXT({target_quarter_end_ref},"yyyy-mm-dd")&" CH=Fd RH=IN")'
+                        '"TR.CategoryOwnershipPct.Date;TR.CategoryOwnershipPct;TR.InstrStatTypeValue",'
+                        f'"StatType=7 SDate="&TEXT({target_effective_date_ref},"yyyy-mm-dd")&'
+                        f'" EDate="&TEXT({target_effective_date_ref},"yyyy-mm-dd")&" CH=Fd RH=IN")'
                     ),
                     None,
                     "",
@@ -1015,7 +1016,7 @@ def write_refinitiv_lm2011_doc_ownership_workbook(
             sheet_name_prefix=sheet_name_prefix,
             max_blocks_per_sheet=max_blocks_per_sheet,
         )
-        stage_label = "exact target-quarter" if request_stage == "EXACT" else "fallback window"
+        stage_label = "exact post-quarter effective-date" if request_stage == "EXACT" else "fallback window"
         _write_readme_sheet(
             workbook,
             readme_payload={
@@ -1027,7 +1028,7 @@ def write_refinitiv_lm2011_doc_ownership_workbook(
             wrap_fmt=wrap_fmt,
             instructions=(
                 f"{stage_label} retrieval blocks are written across ownership_retrieval sheets in repeated 5-column blocks: input_data, returned_ric, returned_date, returned_value, returned_category.",
-                "Within each block, input_data rows 2-9 are fixed: doc_id, authoritative_ric, target_quarter_end, fallback_window_start, fallback_window_end, filing_date, KYPERMNO, authority_decision_status.",
+                "Within each block, input_data rows 2-10 are fixed: doc_id, authoritative_ric, target_quarter_end, target_effective_date, fallback_window_start, fallback_window_end, filing_date, KYPERMNO, authority_decision_status.",
                 "Open the workbook in Excel with Workspace enabled, let the formulas evaluate, and save the filled workbook before re-import.",
                 "The parser reads each ownership_retrieval sheet in 5-column steps and reconstructs long-format request results by matching the doc_id block metadata back to the request snapshot parquet.",
             ),

@@ -18,6 +18,7 @@ from thesis_pkg.pipelines.refinitiv.doc_ownership import (
     DOC_OWNERSHIP_FALLBACK_STAGE,
     _clean_institutional_value,
     _most_recent_quarter_end_before,
+    _target_effective_date_for_quarter_end,
     build_refinitiv_lm2011_doc_ownership_requests,
 )
 
@@ -85,7 +86,7 @@ def _write_filled_doc_ownership_workbook(
     request_df: pl.DataFrame,
     *,
     request_stage: str,
-    exact_rows_by_doc_id: dict[str, list[tuple[float | None, str | None]]] | None = None,
+    exact_rows_by_doc_id: dict[str, list[tuple[date | None, float | None, str | None]]] | None = None,
     fallback_rows_by_doc_id: dict[str, list[tuple[date | None, float | None, str | None]]] | None = None,
 ) -> Path:
     workbook = Workbook()
@@ -103,14 +104,15 @@ def _write_filled_doc_ownership_workbook(
         doc_id = str(row["doc_id"])
         worksheet.cell(row=2, column=base_col + 1).value = row.get("authoritative_ric")
         if request_stage == DOC_OWNERSHIP_EXACT_STAGE:
-            worksheet.cell(row=2, column=base_col + 2).value = row.get("target_quarter_end")
+            worksheet.cell(row=2, column=base_col + 2).value = "Date"
             worksheet.cell(row=2, column=base_col + 3).value = "Category Percent Of Tr"
             worksheet.cell(row=2, column=base_col + 4).value = "Investor Statistics Category Value"
-            for result_index, (returned_value, returned_category) in enumerate(
+            for result_index, (returned_date, returned_value, returned_category) in enumerate(
                 (exact_rows_by_doc_id or {}).get(doc_id, []),
                 start=1,
             ):
                 excel_row = 2 + result_index
+                worksheet.cell(row=excel_row, column=base_col + 2).value = returned_date
                 worksheet.cell(row=excel_row, column=base_col + 3).value = returned_value
                 worksheet.cell(row=excel_row, column=base_col + 4).value = returned_category
         elif request_stage == DOC_OWNERSHIP_FALLBACK_STAGE:
@@ -139,6 +141,13 @@ def test_most_recent_quarter_end_before_handles_boundaries() -> None:
     assert _most_recent_quarter_end_before(date(2024, 4, 1)) == date(2024, 3, 31)
 
 
+def test_target_effective_date_for_quarter_end_handles_boundaries() -> None:
+    assert _target_effective_date_for_quarter_end(date(2023, 12, 31)) == date(2024, 1, 1)
+    assert _target_effective_date_for_quarter_end(date(2024, 3, 31)) == date(2024, 4, 1)
+    assert _target_effective_date_for_quarter_end(date(2024, 6, 30)) == date(2024, 7, 1)
+    assert _target_effective_date_for_quarter_end(date(2024, 9, 30)) == date(2024, 10, 1)
+
+
 def test_build_refinitiv_lm2011_doc_ownership_requests_handles_static_exception_and_ineligible(
     tmp_path: Path,
 ) -> None:
@@ -153,10 +162,14 @@ def test_build_refinitiv_lm2011_doc_ownership_requests_handles_static_exception_
     assert rows["doc_exact"]["retrieval_eligible"] is True
     assert rows["doc_exact"]["authoritative_ric"] == "AAA.N"
     assert rows["doc_exact"]["target_quarter_end"] == date(2024, 3, 31)
+    assert rows["doc_exact"]["target_effective_date"] == date(2024, 4, 1)
+    assert rows["doc_exact"]["fallback_window_start"] == date(2024, 4, 1)
+    assert rows["doc_exact"]["fallback_window_end"] == date(2024, 4, 15)
 
     assert rows["doc_exception"]["retrieval_eligible"] is True
     assert rows["doc_exception"]["authoritative_ric"] == "NEW.N"
     assert rows["doc_exception"]["target_quarter_end"] == date(2024, 6, 30)
+    assert rows["doc_exception"]["target_effective_date"] == date(2024, 7, 1)
 
     assert rows["doc_review"]["retrieval_eligible"] is False
     assert rows["doc_review"]["retrieval_exclusion_reason"] == "authority_review_required"
@@ -179,9 +192,9 @@ def test_doc_ownership_workbooks_write_expected_exact_and_fallback_formulas(tmp_
     try:
         worksheet = workbook["ownership_retrieval"]
         assert [worksheet.cell(row=1, column=idx).value for idx in range(1, 6)] == list(DOC_OWNERSHIP_BLOCK_HEADERS)
-        assert worksheet["D2"].value is not None
-        assert "TR.CategoryOwnershipPct;TR.InstrStatTypeValue" in str(worksheet["D2"].value)
-        assert 'TEXT(A4,"yyyy-mm-dd")' in str(worksheet["D2"].value)
+        assert worksheet["C2"].value is not None
+        assert "TR.CategoryOwnershipPct.Date;TR.CategoryOwnershipPct;TR.InstrStatTypeValue" in str(worksheet["C2"].value)
+        assert 'TEXT(A5,"yyyy-mm-dd")' in str(worksheet["C2"].value)
     finally:
         workbook.close()
 
@@ -192,7 +205,7 @@ def test_doc_ownership_workbooks_write_expected_exact_and_fallback_formulas(tmp_
         exact_request_df,
         request_stage=DOC_OWNERSHIP_EXACT_STAGE,
         exact_rows_by_doc_id={
-            "doc_exact": [(55.0, "Holdings by Institutions")],
+            "doc_exact": [(date(2024, 4, 1), 55.0, "Holdings by Institutions")],
         },
     )
     fallback_paths = run_refinitiv_lm2011_doc_ownership_fallback_handoff_pipeline(
@@ -208,8 +221,8 @@ def test_doc_ownership_workbooks_write_expected_exact_and_fallback_formulas(tmp_
         assert "TR.CategoryOwnershipPct.Date;TR.CategoryOwnershipPct;TR.InstrStatTypeValue" in str(
             fallback_sheet["C2"].value
         )
-        assert 'TEXT(A5,"yyyy-mm-dd")' in str(fallback_sheet["C2"].value)
         assert 'TEXT(A6,"yyyy-mm-dd")' in str(fallback_sheet["C2"].value)
+        assert 'TEXT(A7,"yyyy-mm-dd")' in str(fallback_sheet["C2"].value)
     finally:
         fallback_workbook.close()
 
@@ -237,12 +250,12 @@ def test_doc_ownership_finalize_pipeline_builds_one_row_per_doc_id(tmp_path: Pat
         request_stage=DOC_OWNERSHIP_EXACT_STAGE,
         exact_rows_by_doc_id={
             "doc_exact": [
-                (105.0, "Holdings by Institutions"),
-                (20.0, "Holdings by Domestic Investors"),
+                (date(2024, 4, 1), 105.0, "Holdings by Institutions"),
+                (date(2024, 4, 1), 20.0, "Holdings by Domestic Investors"),
             ],
-            "doc_fallback": [(21.0, "Holdings by Domestic Investors")],
-            "doc_exception": [(120.0, "Holdings by Institutions")],
-            "doc_conflict": [(18.0, "Holdings by Domestic Investors")],
+            "doc_fallback": [(date(2024, 4, 1), 21.0, "Holdings by Domestic Investors")],
+            "doc_exception": [(date(2024, 7, 1), 120.0, "Holdings by Institutions")],
+            "doc_conflict": [(date(2024, 4, 1), 18.0, "Holdings by Domestic Investors")],
         },
     )
     fallback_paths = run_refinitiv_lm2011_doc_ownership_fallback_handoff_pipeline(
@@ -281,9 +294,10 @@ def test_doc_ownership_finalize_pipeline_builds_one_row_per_doc_id(tmp_path: Pat
 
     rows = {row["doc_id"]: row for row in final_df.to_dicts()}
     assert rows["doc_exact"]["retrieval_status"] == "EXACT_TARGET_HIT"
+    assert rows["doc_exact"]["target_effective_date"] == date(2024, 4, 1)
     assert rows["doc_exact"]["institutional_ownership_pct"] == 100.0
     assert rows["doc_exact"]["fallback_used"] is False
-    assert rows["doc_exact"]["selected_response_date"] == date(2024, 3, 31)
+    assert rows["doc_exact"]["selected_response_date"] == date(2024, 4, 1)
 
     assert rows["doc_fallback"]["retrieval_status"] == "FALLBACK_WINDOW_HIT"
     assert rows["doc_fallback"]["institutional_ownership_pct"] == 44.0
@@ -293,7 +307,7 @@ def test_doc_ownership_finalize_pipeline_builds_one_row_per_doc_id(tmp_path: Pat
     assert rows["doc_exception"]["retrieval_status"] == "EXACT_TARGET_HIT"
     assert rows["doc_exception"]["authoritative_ric"] == "NEW.N"
     assert rows["doc_exception"]["institutional_ownership_pct"] == 100.0
-    assert rows["doc_exception"]["selected_response_date"] == date(2024, 6, 30)
+    assert rows["doc_exception"]["selected_response_date"] == date(2024, 7, 1)
 
     assert rows["doc_review"]["retrieval_status"] == "AUTHORITY_REVIEW_REQUIRED"
     assert rows["doc_review"]["institutional_ownership_pct"] is None
