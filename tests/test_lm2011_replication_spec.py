@@ -287,6 +287,27 @@ def test_lm2011_spec_join_preset_matches_library_definition() -> None:
 
 def test_lm2011_spec_daily_artifact_and_doc_grain_authority_notes_reflect_corrected_state() -> None:
     spec = _load_spec()
+    market_core = _get_node(
+        spec,
+        "datasets",
+        "crsp_ccm_daily",
+        "derived_artifacts",
+        "ccm_daily_market_core_parquet",
+    )
+    phase_b_surface = _get_node(
+        spec,
+        "datasets",
+        "crsp_ccm_daily",
+        "derived_artifacts",
+        "ccm_daily_phase_b_surface_parquet",
+    )
+    bridge_surface = _get_node(
+        spec,
+        "datasets",
+        "crsp_ccm_daily",
+        "derived_artifacts",
+        "ccm_daily_bridge_surface_parquet",
+    )
     final_daily = _get_node(
         spec,
         "datasets",
@@ -296,11 +317,21 @@ def test_lm2011_spec_daily_artifact_and_doc_grain_authority_notes_reflect_correc
     )
     ccm_premerge = _get_node(spec, "datasets", "sec_ccm_premerge")
 
+    assert market_core["status"] == "active"
+    assert phase_b_surface["status"] == "active"
+    assert bridge_surface["status"] == "active"
+    assert (
+        "project_ccm_daily_phase_b_surface" in phase_b_surface["produced_by"]
+    )
+    assert (
+        "project_ccm_daily_bridge_surface" in bridge_surface["produced_by"]
+    )
     assert "blocking_caveat" not in final_daily
     assert (
         "The corrected sampled daily artifact is authoritative for its filing-array columns."
         in final_daily["artifact_authority_note"]
     )
+    assert "legacy compatibility artifact" in final_daily["compatibility_note"]
     assert (
         "Use the archived sec_ccm_premerge doc-grain artifacts as the preferred LM2011 linkage interface for later filing-level work."
         in final_daily["architecture_preference_note"]

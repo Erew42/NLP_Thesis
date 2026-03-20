@@ -54,6 +54,82 @@ SHRCD_NAME_MAP: dict[int, str] = {
     for second_digit, second_desc in SHRCD_SECOND_DIGIT_MAP.items()
 }
 
+CCM_DAILY_MARKET_CORE_COLUMNS: tuple[str, ...] = (
+    "KYPERMNO",
+    "CALDT",
+    "PRC",
+    "RET",
+    "RETX",
+    "TCAP",
+    "VOL",
+    "BIDLO",
+    "ASKHI",
+    "BID",
+    "ASK",
+    "NUMTRD",
+    "OPENPRC",
+    "data_status",
+    "SHROUT",
+    "TICKER",
+    "SHRCD",
+    "EXCHCD",
+    "PRIMEXCH",
+    "TRDSTAT",
+    "SECSTAT",
+    "DLSTDT",
+    "DLSTCD",
+    "DLPRC",
+    "DLAMT",
+    "DLRET",
+    "DLRETX",
+    "FINAL_RET",
+    "FINAL_RETX",
+    "FINAL_PRC",
+    "filter_price_pass",
+    "filter_common_stock_pass",
+    "filter_major_exchange_pass",
+    "filter_liquidity_pass",
+    "filter_non_microcap_pass",
+    "passes_all_filters",
+)
+
+CCM_DAILY_PHASE_B_SURFACE_COLUMNS: tuple[str, ...] = (
+    "KYPERMNO",
+    "CALDT",
+    "RET",
+    "RETX",
+    "PRC",
+    "FINAL_PRC",
+    "BIDLO",
+    "ASKHI",
+    "VOL",
+    "TCAP",
+    "SHROUT",
+    "TICKER",
+    "SHRCD",
+    "EXCHCD",
+)
+
+CCM_DAILY_BRIDGE_SURFACE_REQUIRED_COLUMNS: tuple[str, ...] = (
+    "KYPERMNO",
+    "CALDT",
+    "KYGVKEY_final",
+    "LIID",
+    "CIK_final",
+    "CUSIP",
+    "ISIN",
+    "TICKER",
+    "SHRCD",
+)
+
+CCM_DAILY_BRIDGE_SURFACE_OPTIONAL_COLUMNS: tuple[str, ...] = (
+    "LINKTYPE",
+    "LINKPRIM",
+    "link_quality_flag",
+    "HEXCNTRY",
+    "n_filings",
+)
+
 
 class DataStatus(IntFlag):
     """Bitmask for data availability, provenance, and join results."""
@@ -371,6 +447,80 @@ def _require_columns(lf: pl.LazyFrame, required: tuple[str, ...], label: str) ->
     missing = [name for name in required if name not in schema]
     if missing:
         raise ValueError(f"{label} missing required columns: {missing}")
+
+
+def _project_columns_with_defaults(
+    lf: pl.LazyFrame,
+    *,
+    required: tuple[str, ...],
+    optional_defaults: tuple[tuple[str, pl.DataType, object | None], ...],
+    label: str,
+    ordered_columns: tuple[str, ...] | None = None,
+) -> pl.LazyFrame:
+    """Project a stable output schema while filling missing optional columns."""
+    schema = lf.collect_schema()
+    missing = [name for name in required if name not in schema]
+    if missing:
+        raise ValueError(f"{label} missing required columns: {missing}")
+
+    default_map = {name: (dtype, default_value) for name, dtype, default_value in optional_defaults}
+    ordered = ordered_columns or tuple(required) + tuple(default_map)
+
+    exprs: list[pl.Expr] = []
+    for name in ordered:
+        if name in schema:
+            if name in default_map:
+                exprs.append(pl.col(name).cast(default_map[name][0], strict=False).alias(name))
+            else:
+                exprs.append(pl.col(name))
+        else:
+            dtype, default_value = default_map[name]
+            exprs.append(pl.lit(default_value, dtype=dtype).alias(name))
+    return lf.select(exprs)
+
+
+def project_ccm_daily_market_core(daily_lf: pl.LazyFrame) -> pl.LazyFrame:
+    """Project the lean daily market-core artifact contract."""
+    required = tuple(
+        name
+        for name in CCM_DAILY_MARKET_CORE_COLUMNS
+        if name not in {"BID", "ASK", "NUMTRD", "OPENPRC", "SHROUT"}
+    )
+    return _project_columns_with_defaults(
+        daily_lf,
+        required=required,
+        optional_defaults=(
+            ("BID", pl.Float64, None),
+            ("ASK", pl.Float64, None),
+            ("NUMTRD", pl.Int64, None),
+            ("OPENPRC", pl.Float64, None),
+            ("SHROUT", pl.Float64, None),
+        ),
+        label="ccm daily market core",
+        ordered_columns=CCM_DAILY_MARKET_CORE_COLUMNS,
+    )
+
+
+def project_ccm_daily_phase_b_surface(daily_lf: pl.LazyFrame) -> pl.LazyFrame:
+    """Project the canonical SEC-CCM Phase-B daily join surface."""
+    _require_columns(daily_lf, CCM_DAILY_PHASE_B_SURFACE_COLUMNS, "ccm daily phase-b surface")
+    return daily_lf.select(CCM_DAILY_PHASE_B_SURFACE_COLUMNS)
+
+
+def project_ccm_daily_bridge_surface(daily_lf: pl.LazyFrame) -> pl.LazyFrame:
+    """Project the compact daily identifier surface for Refinitiv step 1."""
+    return _project_columns_with_defaults(
+        daily_lf,
+        required=CCM_DAILY_BRIDGE_SURFACE_REQUIRED_COLUMNS,
+        optional_defaults=(
+            ("LINKTYPE", pl.Utf8, None),
+            ("LINKPRIM", pl.Utf8, None),
+            ("link_quality_flag", pl.Utf8, None),
+            ("HEXCNTRY", pl.Utf8, None),
+            ("n_filings", pl.Int64, 0),
+        ),
+        label="ccm daily bridge surface",
+    )
 
 def build_price_panel(
     sfz_ds: pl.LazyFrame,

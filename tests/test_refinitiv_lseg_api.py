@@ -18,12 +18,13 @@ from thesis_pkg.pipeline import (
 )
 from thesis_pkg.pipelines.refinitiv.doc_ownership import DOC_OWNERSHIP_REQUEST_COLUMNS
 from thesis_pkg.pipelines.refinitiv.doc_ownership import _normalize_date_value
+from thesis_pkg.pipelines.refinitiv import lseg_ownership_api
 from thesis_pkg.pipelines.refinitiv.lseg_batching import RequestItem
 from thesis_pkg.pipelines.refinitiv.lseg_ownership_api import _normalize_ownership_universe_batch_response
 from thesis_pkg.pipelines.refinitiv import lseg_provider
 from thesis_pkg.pipelines.refinitiv.lseg_ledger import RequestLedger
 from thesis_pkg.pipelines.refinitiv.lseg_lookup_api import _classify_error
-from thesis_pkg.pipelines.refinitiv.lseg_provider import LsegDataResponse, LsegResponseMetadata
+from thesis_pkg.pipelines.refinitiv.lseg_provider import LsegDataProvider, LsegDataResponse, LsegResponseMetadata
 from thesis_pkg.pipelines.refinitiv.lseg_provider import LsegRequestError
 from thesis_pkg.pipelines.refinitiv_bridge_pipeline import (
     OWNERSHIP_UNIVERSE_HANDOFF_COLUMNS,
@@ -245,7 +246,10 @@ def test_ownership_universe_api_pipeline_writes_results_and_summary(tmp_path: Pa
     assert row_summary_df.item(0, "ownership_single_returned_ric") is True
 
 
-def test_ownership_universe_api_pipeline_treats_unresolved_identifier_as_empty_result(tmp_path: Path) -> None:
+def test_ownership_universe_api_pipeline_treats_unresolved_identifier_as_empty_result_after_retries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     handoff_row = {name: None for name in OWNERSHIP_UNIVERSE_HANDOFF_COLUMNS}
     handoff_row.update(
         {
@@ -279,19 +283,27 @@ def test_ownership_universe_api_pipeline_treats_unresolved_identifier_as_empty_r
     handoff_path = tmp_path / "refinitiv_ownership_universe_handoff_common_stock.parquet"
     pl.DataFrame([handoff_row]).write_parquet(handoff_path)
 
+    monkeypatch.setattr(lseg_ownership_api, "_retry_delay_seconds", lambda attempt_no: 0.0)
     provider = ErrorProvider(
         [
             LsegRequestError(
                 "Unable to resolve all requested identifiers in ['QRHC'].",
                 error_kind="unresolved_identifiers",
                 unresolved_identifiers=("QRHC",),
-            )
+            ),
+            LsegRequestError(
+                "Unable to resolve all requested identifiers in ['QRHC'].",
+                error_kind="unresolved_identifiers",
+                unresolved_identifiers=("QRHC",),
+            ),
         ]
     )
     out = run_refinitiv_step1_ownership_universe_api_pipeline(
         handoff_parquet_path=handoff_path,
         output_dir=tmp_path,
         provider=provider,
+        min_seconds_between_requests=0.0,
+        max_attempts=2,
     )
 
     results_df = pl.read_parquet(out["refinitiv_ownership_universe_results_parquet"])
@@ -300,8 +312,12 @@ def test_ownership_universe_api_pipeline_treats_unresolved_identifier_as_empty_r
     assert row_summary_df.height == 1
     assert row_summary_df.item(0, "ownership_rows_returned") == 0
     assert row_summary_df.item(0, "ownership_single_returned_ric") is False
+    assert len(provider.calls) == 2
 
     request_log = [json.loads(line) for line in Path(out["refinitiv_ownership_universe_api_requests_jsonl"]).read_text().splitlines()]
+    assert request_log[-2]["event"] == "request_failed"
+    assert request_log[-2]["policy"] == "retryable_error"
+    assert request_log[-2]["unresolved_identifiers"] == ["QRHC"]
     assert request_log[-1]["event"] == "request_unresolved_identifiers_treated_as_empty"
     assert request_log[-1]["unresolved_identifiers"] == ["QRHC"]
 
@@ -536,6 +552,21 @@ def test_classify_error_splits_unresolved_identifier_batches() -> None:
     assert policy["stop_stage"] is False
 
 
+def test_classify_error_retries_single_unresolved_identifier_before_max_attempts() -> None:
+    exc = LsegRequestError(
+        "Unable to resolve all requested identifiers in ['QRHC'].",
+        error_kind="unresolved_identifiers",
+        unresolved_identifiers=("QRHC",),
+    )
+    retry_policy = _classify_error(exc, batch_size=1, attempt_no=1, max_attempts=4)
+    final_policy = _classify_error(exc, batch_size=1, attempt_no=4, max_attempts=4)
+    assert retry_policy["state"] == "retryable_error"
+    assert retry_policy["split_batch"] is False
+    assert retry_policy["stop_stage"] is False
+    assert final_policy["state"] == "fatal_error"
+    assert final_policy["split_batch"] is False
+
+
 def test_ledger_requeues_known_fixable_fatal_batches(tmp_path: Path) -> None:
     item = RequestItem(
         item_id="item-1",
@@ -589,3 +620,81 @@ def test_to_polars_frame_falls_back_to_utf8_records_when_from_pandas_raises(monk
         {"Instrument": "AAA.N", "MixedValue": "1"},
         {"Instrument": "BBB.N", "MixedValue": "Desktop Metal Inc"},
     ]
+
+
+def test_lseg_provider_retries_once_for_session_not_opened_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = LsegDataProvider()
+    provider._ld = object()
+    provider._session_open = True
+    response = LsegDataResponse(
+        frame=pl.DataFrame({"Instrument": ["AAA.N"]}),
+        metadata=LsegResponseMetadata(
+            status_code=200,
+            headers={},
+            latency_ms=1,
+            response_bytes=8,
+            fingerprint="ok",
+        ),
+    )
+    call_count = 0
+    reset_count = 0
+
+    def fake_get_data_once(*, universe: list[str], fields: list[str], parameters: dict[str, Any] | None = None) -> LsegDataResponse:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise LsegRequestError("Session is not opened. Can't send any request")
+        return response
+
+    def fake_reset_session() -> None:
+        nonlocal reset_count
+        reset_count += 1
+
+    monkeypatch.setattr(provider, "_get_data_once", fake_get_data_once)
+    monkeypatch.setattr(provider, "_reset_session", fake_reset_session)
+
+    result = provider.get_data(universe=["AAA.N"], fields=["TR.RIC"], parameters={})
+    assert result is response
+    assert call_count == 2
+    assert reset_count == 1
+
+
+def test_lseg_provider_retries_once_for_singleton_unresolved_identifier(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = LsegDataProvider()
+    provider._ld = object()
+    provider._session_open = True
+    response = LsegDataResponse(
+        frame=pl.DataFrame({"Instrument": ["PNRA.OQ^G17"]}),
+        metadata=LsegResponseMetadata(
+            status_code=200,
+            headers={},
+            latency_ms=1,
+            response_bytes=16,
+            fingerprint="ok",
+        ),
+    )
+    call_count = 0
+    reset_count = 0
+
+    def fake_get_data_once(*, universe: list[str], fields: list[str], parameters: dict[str, Any] | None = None) -> LsegDataResponse:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise LsegRequestError(
+                "Unable to resolve all requested identifiers in ['PNRA.OQ^G17'].",
+                error_kind="unresolved_identifiers",
+                unresolved_identifiers=("PNRA.OQ^G17",),
+            )
+        return response
+
+    def fake_reset_session() -> None:
+        nonlocal reset_count
+        reset_count += 1
+
+    monkeypatch.setattr(provider, "_get_data_once", fake_get_data_once)
+    monkeypatch.setattr(provider, "_reset_session", fake_reset_session)
+
+    result = provider.get_data(universe=["PNRA.OQ^G17"], fields=["TR.RIC"], parameters={})
+    assert result is response
+    assert call_count == 2
+    assert reset_count == 1

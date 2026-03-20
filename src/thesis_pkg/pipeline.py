@@ -11,6 +11,7 @@ from thesis_pkg.core.ccm.sec_ccm_contracts import (
     MatchReasonCode,
     PhaseBAlignmentMode,
     PhaseBDailyJoinMode,
+    SEC_CCM_PHASE_B_DAILY_FEATURE_COLUMNS,
     SecCcmJoinSpec,
     SecCcmJoinSpecV1,
     SecCcmJoinSpecV2,
@@ -28,6 +29,7 @@ from thesis_pkg.core.ccm.sec_ccm_premerge import (
 )
 from thesis_pkg.core.ccm.lm2011 import (
     attach_eligible_quarterly_accounting,
+    attach_lm2011_industry_classifications,
     attach_latest_annual_accounting,
     attach_pre_filing_market_data,
     build_annual_accounting_panel,
@@ -35,6 +37,10 @@ from thesis_pkg.core.ccm.lm2011 import (
     derive_filing_trade_anchors,
 )
 from thesis_pkg.core.ccm.transforms import (
+    CCM_DAILY_BRIDGE_SURFACE_OPTIONAL_COLUMNS,
+    CCM_DAILY_BRIDGE_SURFACE_REQUIRED_COLUMNS,
+    CCM_DAILY_MARKET_CORE_COLUMNS,
+    CCM_DAILY_PHASE_B_SURFACE_COLUMNS,
     EXCHCD_NAME_MAP,
     SHRCD_FIRST_DIGIT_MAP,
     SHRCD_NAME_MAP,
@@ -51,6 +57,9 @@ from thesis_pkg.core.ccm.transforms import (
     attach_filings,
     build_price_panel,
     exchcd_name_expr,
+    project_ccm_daily_bridge_surface,
+    project_ccm_daily_market_core,
+    project_ccm_daily_phase_b_surface,
     map_shrcd_to_name,
     shrcd_name_expr,
     map_exchcd_to_name,

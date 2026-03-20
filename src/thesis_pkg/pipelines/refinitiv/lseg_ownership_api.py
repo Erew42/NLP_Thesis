@@ -426,6 +426,8 @@ def _run_api_batches(
                     error_kind=error_details["error_kind"],
                     unresolved_identifiers=error_details["unresolved_identifiers"],
                     universe=universe,
+                    attempt_no=batch.attempt_count,
+                    max_attempts=max_attempts,
                 ):
                     normalized_batch_df = response_normalizer(batch_items_rows, pl.DataFrame())
                     staging_path = staging_dir / f"{batch.batch_id}.parquet"

@@ -12,6 +12,7 @@ from thesis_pkg.core.ccm.sec_ccm_contracts import (
     MatchReasonCode,
     PhaseBAlignmentMode,
     PhaseBDailyJoinMode,
+    SEC_CCM_PHASE_B_DAILY_FEATURE_COLUMNS,
     SecCcmJoinSpecV1,
     SecCcmJoinSpecV2,
     make_sec_ccm_join_spec_preset,
@@ -26,7 +27,12 @@ from thesis_pkg.core.ccm.sec_ccm_premerge import (
     resolve_links_phase_a,
     join_daily_phase_b,
 )
-from thesis_pkg.core.ccm.transforms import DataStatus, STATUS_DTYPE, apply_concept_filter_flags_doc
+from thesis_pkg.core.ccm.transforms import (
+    DataStatus,
+    STATUS_DTYPE,
+    apply_concept_filter_flags_doc,
+    project_ccm_daily_phase_b_surface,
+)
 from thesis_pkg.pipelines.sec_ccm_pipeline import run_sec_ccm_premerge_pipeline
 
 
@@ -70,7 +76,11 @@ def test_join_spec_normalization_from_v1_and_presets():
     assert v2.required_daily_non_null_features == ("RET",)
     assert v2.daily_join_max_forward_lag_days == 14
     assert "TICKER" in SecCcmJoinSpecV1().daily_feature_columns
+    assert "FINAL_PRC" in SecCcmJoinSpecV1().daily_feature_columns
+    assert "SHROUT" in SecCcmJoinSpecV1().daily_feature_columns
     assert "TICKER" in v2.daily_feature_columns
+    assert "FINAL_PRC" in v2.daily_feature_columns
+    assert "SHROUT" in v2.daily_feature_columns
 
     lm2011 = make_sec_ccm_join_spec_preset("lm2011_filing_date")
     assert lm2011.phase_b_alignment_mode == PhaseBAlignmentMode.FILING_DATE_EXACT_OR_NEXT_TRADING
@@ -748,6 +758,90 @@ def test_end_to_end_pipeline_outputs_doc_grain_artifacts(tmp_path: Path):
     assert "Step Performance" in report_text
     assert "phase_b_alignment_mode" in report_text
     assert "phase_b_daily_join_mode" in report_text
+
+
+def test_end_to_end_pipeline_matches_phase_b_surface_projection(tmp_path: Path) -> None:
+    sec = pl.DataFrame(
+        {
+            "doc_id": ["d1", "d2"],
+            "cik_10": ["0000000001", "0000000002"],
+            "filing_date": [dt.date(2024, 1, 2), dt.date(2024, 1, 4)],
+            "document_type_filename": ["10-K", "10-K"],
+        }
+    )
+    link_universe = _canonical_links(
+        [
+            {"cik_10": "0000000001", "gvkey": "1000", "kypermno": 1},
+            {"cik_10": "0000000002", "gvkey": "2000", "kypermno": 2},
+        ]
+    )
+    trading_calendar = pl.DataFrame({"CALDT": [dt.date(2024, 1, 3), dt.date(2024, 1, 4)]})
+    legacy_daily = pl.DataFrame(
+        {
+            "KYPERMNO": [1, 2],
+            "CALDT": [dt.date(2024, 1, 3), dt.date(2024, 1, 4)],
+            "RET": [0.01, 0.02],
+            "RETX": [0.01, 0.02],
+            "PRC": [10.0, 20.0],
+            "FINAL_PRC": [10.0, 20.0],
+            "BIDLO": [9.5, 19.5],
+            "ASKHI": [10.5, 20.5],
+            "VOL": [1000.0, 2000.0],
+            "TCAP": [100_000_000.0, 200_000_000.0],
+            "SHROUT": [10_000.0, 20_000.0],
+            "TICKER": ["ALFA", "BETA"],
+            "SHRCD": [10, 11],
+            "EXCHCD": [1, 2],
+            "KYGVKEY_final": ["1000", "2000"],
+            "LIID": ["A", "B"],
+            "CIK_final": ["0000000001", "0000000002"],
+            "CUSIP": ["11111111", "22222222"],
+            "ISIN": ["US1111111111", "US2222222222"],
+            "LINKTYPE": ["LC", "LC"],
+            "LINKPRIM": ["P", "P"],
+            "link_quality_flag": ["canonical_primary_LC", "canonical_primary_LC"],
+            "HEXCNTRY": ["US", "US"],
+            "n_filings": [1, 1],
+        }
+    )
+    phase_b_daily = project_ccm_daily_phase_b_surface(legacy_daily.lazy())
+    join_spec = SecCcmJoinSpecV2(
+        daily_join_source="MERGED_DAILY_PANEL",
+        daily_feature_columns=SEC_CCM_PHASE_B_DAILY_FEATURE_COLUMNS,
+        required_daily_non_null_features=("RET",),
+    )
+
+    legacy_paths = run_sec_ccm_premerge_pipeline(
+        sec.lazy(),
+        link_universe.lazy(),
+        trading_calendar.lazy(),
+        tmp_path / "legacy",
+        daily_lf=legacy_daily.lazy(),
+        join_spec=join_spec,
+        emit_run_report=False,
+    )
+    phase_surface_paths = run_sec_ccm_premerge_pipeline(
+        sec.lazy(),
+        link_universe.lazy(),
+        trading_calendar.lazy(),
+        tmp_path / "phase_surface",
+        daily_lf=phase_b_daily,
+        join_spec=join_spec,
+        emit_run_report=False,
+    )
+
+    for artifact_name in (
+        "final_flagged_data",
+        "sec_ccm_match_status",
+        "sec_ccm_matched_clean",
+        "sec_ccm_matched_clean_filtered",
+        "sec_ccm_analysis_doc_ids",
+        "sec_ccm_diagnostic_doc_ids",
+    ):
+        legacy_df = pl.read_parquet(legacy_paths[artifact_name]).sort("doc_id")
+        phase_surface_df = pl.read_parquet(phase_surface_paths[artifact_name]).sort("doc_id")
+        assert legacy_df.columns == phase_surface_df.columns
+        assert legacy_df.to_dicts() == phase_surface_df.to_dicts()
 
 
 def test_end_to_end_pipeline_daily_join_disabled_sets_filter_columns_false(tmp_path: Path):

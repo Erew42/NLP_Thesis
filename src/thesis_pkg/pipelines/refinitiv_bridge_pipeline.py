@@ -10,7 +10,11 @@ from typing import Any, Callable
 import polars as pl
 from xlsxwriter.exceptions import FileCreateError
 
-from thesis_pkg.core.ccm.transforms import common_stock_pass_expr
+from thesis_pkg.core.ccm.transforms import (
+    CCM_DAILY_BRIDGE_SURFACE_OPTIONAL_COLUMNS,
+    CCM_DAILY_BRIDGE_SURFACE_REQUIRED_COLUMNS,
+    common_stock_pass_expr,
+)
 from thesis_pkg.io.excel import (
     write_refinitiv_bridge_workbook,
     write_refinitiv_null_ric_diagnostics_workbook,
@@ -23,24 +27,9 @@ from thesis_pkg.io.excel import (
 )
 
 
-REQUIRED_DAILY_COLUMNS: tuple[str, ...] = (
-    "KYPERMNO",
-    "CALDT",
-    "KYGVKEY_final",
-    "LIID",
-    "CIK_final",
-    "CUSIP",
-    "ISIN",
-    "TICKER",
-)
+REQUIRED_DAILY_COLUMNS: tuple[str, ...] = CCM_DAILY_BRIDGE_SURFACE_REQUIRED_COLUMNS
 
-OPTIONAL_DAILY_COLUMNS: tuple[str, ...] = (
-    "LINKTYPE",
-    "LINKPRIM",
-    "link_quality_flag",
-    "HEXCNTRY",
-    "n_filings",
-)
+OPTIONAL_DAILY_COLUMNS: tuple[str, ...] = CCM_DAILY_BRIDGE_SURFACE_OPTIONAL_COLUMNS
 
 BRIDGE_SOURCE_COLUMNS: tuple[str, ...] = (
     "bridge_row_id",
@@ -1122,7 +1111,7 @@ def _build_lookup_profile_bridge_ids(
 ) -> pl.DataFrame:
     _require_columns(
         daily_lf,
-        REQUIRED_DAILY_COLUMNS + ("SHRCD",),
+        REQUIRED_DAILY_COLUMNS,
         f"daily panel for lookup profile {profile.name}",
     )
 
@@ -1683,6 +1672,7 @@ def run_refinitiv_step1_bridge_pipeline(
         "artifact_version": "v1",
         "generated_at_utc": generated_at_utc,
         "source_daily_path": str(source_daily_path) if source_daily_path is not None else None,
+        "source_daily_contract": "ccm_daily_bridge_surface",
         "bridge_rows": bridge_rows,
         "source_daily_rows": source_rows,
         "distinct_permno": int(distinct_permno),
@@ -1691,6 +1681,8 @@ def run_refinitiv_step1_bridge_pipeline(
         "ric_lookup_rows": int(filtered_lookup_df.height),
         "ric_manual_review_rows": int(filtered_manual_review_df.height),
         "authoritative_format": "parquet",
+        "input_daily_required_columns": list(REQUIRED_DAILY_COLUMNS),
+        "input_daily_optional_columns": list(OPTIONAL_DAILY_COLUMNS),
         "source_columns": list(BRIDGE_SOURCE_COLUMNS),
         "vendor_columns": list(BRIDGE_VENDOR_COLUMNS),
         "extended_lookup_columns": list(RIC_LOOKUP_EXTENDED_COLUMNS),

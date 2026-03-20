@@ -179,6 +179,8 @@ def run_refinitiv_step1_lookup_api_pipeline(
                     error_kind=error_details["error_kind"],
                     unresolved_identifiers=error_details["unresolved_identifiers"],
                     universe=universe,
+                    attempt_no=batch.attempt_count,
+                    max_attempts=max_attempts,
                 ):
                     normalized_batch_df = _normalize_lookup_batch_response(batch_items_rows, pl.DataFrame())
                     staging_path = staging_dir / f"{batch.batch_id}.parquet"
@@ -502,6 +504,13 @@ def _classify_error(
     status_code = error_details["status_code"]
     headers = error_details["headers"]
     if error_details["error_kind"] == "unresolved_identifiers":
+        if batch_size == 1 and attempt_no < max_attempts:
+            return {
+                "state": LEDGER_RETRYABLE_ERROR,
+                "split_batch": False,
+                "stop_stage": False,
+                "defer_stage": False,
+            }
         return {
             "state": LEDGER_RETRYABLE_ERROR if batch_size > 1 else LEDGER_FATAL_ERROR,
             "split_batch": batch_size > 1,
@@ -565,8 +574,12 @@ def _should_treat_as_empty_result(
     error_kind: str | None,
     unresolved_identifiers: list[str],
     universe: list[str],
+    attempt_no: int,
+    max_attempts: int,
 ) -> bool:
     if error_kind != "unresolved_identifiers":
+        return False
+    if attempt_no < max_attempts:
         return False
     unresolved_set = {
         normalized

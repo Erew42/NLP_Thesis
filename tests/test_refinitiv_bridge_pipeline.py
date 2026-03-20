@@ -10,6 +10,7 @@ import pytest
 from openpyxl import Workbook, load_workbook
 from openpyxl.utils import get_column_letter
 
+from thesis_pkg.core.ccm.transforms import project_ccm_daily_bridge_surface
 from thesis_pkg.io.excel import write_refinitiv_ric_lookup_extended_workbook
 from thesis_pkg.pipelines.refinitiv_bridge_pipeline import (
     BRIDGE_OUTPUT_COLUMNS,
@@ -86,6 +87,26 @@ def _company_description() -> pl.DataFrame:
             "CONM": ["Alpha Corp", "Beta plc"],
         }
     )
+
+
+def test_build_refinitiv_step1_bridge_universe_matches_bridge_surface_projection() -> None:
+    broad_daily = _daily_panel().with_columns(
+        pl.Series("HSIC", [None, None, None, None, None, None], dtype=pl.Int32),
+        pl.Series("SRCTYPE_all", [["10-K"], ["10-K"], [], [], [], []], dtype=pl.List(pl.Utf8)),
+    )
+    bridge_surface = project_ccm_daily_bridge_surface(broad_daily.lazy())
+
+    expected = build_refinitiv_step1_bridge_universe(
+        _daily_panel().lazy(),
+        company_description_lf=_company_description().lazy(),
+    ).collect()
+    actual = build_refinitiv_step1_bridge_universe(
+        bridge_surface,
+        company_description_lf=_company_description().lazy(),
+    ).collect()
+
+    assert expected.columns == actual.columns
+    assert expected.to_dicts() == actual.to_dicts()
 
 
 def _bridge_with_manual_review() -> pl.DataFrame:

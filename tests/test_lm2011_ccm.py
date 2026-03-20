@@ -6,6 +6,7 @@ import polars as pl
 
 from thesis_pkg.pipeline import (
     attach_eligible_quarterly_accounting,
+    attach_lm2011_industry_classifications,
     attach_latest_annual_accounting,
     attach_pre_filing_market_data,
     build_annual_accounting_panel,
@@ -200,3 +201,67 @@ def test_attach_pre_filing_market_data_prefers_tcap_and_falls_back_to_price_time
     assert attached.filter(pl.col("doc_id") == "fallback").select("bm_event").item() == 1.0
     assert attached.filter(pl.col("doc_id") == "preferred").select("market_equity_me_event").item() == 80.0
     assert attached.filter(pl.col("doc_id") == "preferred").select("bm_event").item() == 0.5
+
+
+def test_attach_lm2011_industry_classifications_uses_historical_sic_then_description_fallback(
+    tmp_path,
+) -> None:
+    ff48_path = tmp_path / "ff48.txt"
+    ff48_path.write_text(
+        "\n".join(
+            [
+                " 1 Agric  Agriculture",
+                "          0100-0199 Agricultural production - crops",
+                "12 MedEq  Medical Equipment",
+                "          3840-3849 Surgical, medical, and dental instruments and supplies",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    filings = pl.DataFrame(
+        {
+            "doc_id": ["hist", "fallback", "missing"],
+            "gvkey": ["1000", "2000", "3000"],
+            "filing_date": [dt.date(2024, 1, 10), dt.date(2024, 1, 10), dt.date(2024, 1, 10)],
+        }
+    )
+    company_history = pl.DataFrame(
+        {
+            "KYGVKEY": ["1000", "2000"],
+            "HCHGDT": [dt.date(2020, 1, 1), dt.date(2020, 1, 1)],
+            "HCHGENDDT": [None, None],
+            "HSIC": [3845, None],
+        }
+    )
+    company_description = pl.DataFrame(
+        {
+            "KYGVKEY": ["1000", "2000", "3000"],
+            "SIC": ["111", "0115", None],
+        }
+    )
+
+    attached = attach_lm2011_industry_classifications(
+        filings.lazy(),
+        company_history.lazy(),
+        company_description.lazy(),
+        ff48_siccodes_path=ff48_path,
+    ).collect().sort("doc_id")
+
+    by_doc = {row["doc_id"]: row for row in attached.to_dicts()}
+    assert by_doc["hist"]["HSIC"] == 3845
+    assert by_doc["hist"]["SIC_desc"] == 111
+    assert by_doc["hist"]["SIC_final"] == 3845
+    assert by_doc["hist"]["ff48_industry_id"] == 12
+    assert by_doc["hist"]["ff48_industry_short"] == "MedEq"
+
+    assert by_doc["fallback"]["HSIC"] is None
+    assert by_doc["fallback"]["SIC_desc"] == 115
+    assert by_doc["fallback"]["SIC_final"] == 115
+    assert by_doc["fallback"]["ff48_industry_id"] == 1
+    assert by_doc["fallback"]["ff48_industry_short"] == "Agric"
+
+    assert by_doc["missing"]["HSIC"] is None
+    assert by_doc["missing"]["SIC_desc"] is None
+    assert by_doc["missing"]["SIC_final"] is None
+    assert by_doc["missing"]["ff48_industry_id"] is None

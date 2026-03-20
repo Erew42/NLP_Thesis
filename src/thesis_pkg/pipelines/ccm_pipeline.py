@@ -19,8 +19,26 @@ from thesis_pkg.core.ccm.transforms import (
     attach_company_description,
     attach_filings,
     build_price_panel,
+    project_ccm_daily_bridge_surface,
+    project_ccm_daily_market_core,
+    project_ccm_daily_phase_b_surface,
 )
 from thesis_pkg.io.parquet import load_tables
+
+
+def _derive_layer_name(base_stem: str, reference_daily_name: str) -> str:
+    """Carry any sample-tag suffix from the legacy daily artifact into new layer names."""
+    reference = Path(reference_daily_name)
+    sample_suffix = ""
+    if ".sample_" in reference.stem:
+        sample_suffix = reference.stem[reference.stem.index(".sample_") :]
+    return f"{base_stem}{sample_suffix}{reference.suffix or '.parquet'}"
+
+
+def _write_surface(path: Path, lf: pl.LazyFrame) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lf.sink_parquet(path, compression="zstd")
+    return path
 
 
 def build_or_reuse_ccm_daily_stage(
@@ -33,6 +51,9 @@ def build_or_reuse_ccm_daily_stage(
     start_date: dt.date | dt.datetime | str = "1990-01-01",
     canonical_name: str = "canonical_link_table.parquet",
     daily_name: str = "final_flagged_data_compdesc_added.parquet",
+    market_core_name: str | None = None,
+    phase_b_surface_name: str | None = None,
+    bridge_surface_name: str | None = None,
     cik_history_window_policy: CikHistoryWindowPolicy | str = CikHistoryWindowPolicy.HISTORY_OPEN_START_EARLIEST_PER_GVKEY,
     verbose: int = 0,
 ) -> dict[str, Path]:
@@ -44,6 +65,12 @@ def build_or_reuse_ccm_daily_stage(
     ccm_derived_dir.mkdir(parents=True, exist_ok=True)
 
     canonical_link_path = ccm_derived_dir / canonical_name
+    market_core_name = market_core_name or _derive_layer_name("ccm_daily_market_core", daily_name)
+    phase_b_surface_name = phase_b_surface_name or _derive_layer_name("ccm_daily_phase_b_surface", daily_name)
+    bridge_surface_name = bridge_surface_name or _derive_layer_name("ccm_daily_bridge_surface", daily_name)
+    ccm_daily_market_core_path = ccm_derived_dir / market_core_name
+    ccm_daily_phase_b_surface_path = ccm_derived_dir / phase_b_surface_name
+    ccm_daily_bridge_surface_path = ccm_derived_dir / bridge_surface_name
     ccm_daily_path: Path
 
     if mode == "REBUILD":
@@ -87,6 +114,11 @@ def build_or_reuse_ccm_daily_stage(
             sfz_shr=tables["sfz_shr"],
         )
         price_returns_lf = add_final_returns(price_lf)
+        _write_surface(ccm_daily_market_core_path, project_ccm_daily_market_core(price_returns_lf))
+        _write_surface(
+            ccm_daily_phase_b_surface_path,
+            project_ccm_daily_phase_b_surface(pl.scan_parquet(ccm_daily_market_core_path)),
+        )
         price_filings_lf = attach_filings(price_returns_lf, tables["filingdates"], list(forms_10k_10q))
         price_linked_lf = attach_ccm_links(price_filings_lf, canonical_for_attach)
         merged_path = merge_histories(
@@ -102,8 +134,24 @@ def build_or_reuse_ccm_daily_stage(
         merged_with_desc_lf = attach_company_description(pl.scan_parquet(merged_path), tables["companydescription"])
         ccm_daily_path = ccm_derived_dir / daily_name
         merged_with_desc_lf.sink_parquet(ccm_daily_path, compression="zstd")
+        _write_surface(
+            ccm_daily_bridge_surface_path,
+            project_ccm_daily_bridge_surface(pl.scan_parquet(ccm_daily_path)),
+        )
     elif mode == "REUSE":
         ccm_daily_path = ccm_reuse_daily_path
+        _write_surface(
+            ccm_daily_market_core_path,
+            project_ccm_daily_market_core(pl.scan_parquet(ccm_daily_path)),
+        )
+        _write_surface(
+            ccm_daily_phase_b_surface_path,
+            project_ccm_daily_phase_b_surface(pl.scan_parquet(ccm_daily_market_core_path)),
+        )
+        _write_surface(
+            ccm_daily_bridge_surface_path,
+            project_ccm_daily_bridge_surface(pl.scan_parquet(ccm_daily_path)),
+        )
     else:
         raise ValueError(f"run_mode must be 'REBUILD' or 'REUSE'; got: {run_mode!r}")
 
@@ -111,10 +159,19 @@ def build_or_reuse_ccm_daily_stage(
         raise FileNotFoundError(f"CCM canonical link parquet not found: {canonical_link_path}")
     if not ccm_daily_path.exists():
         raise FileNotFoundError(f"CCM daily parquet not found: {ccm_daily_path}")
+    if not ccm_daily_market_core_path.exists():
+        raise FileNotFoundError(f"CCM daily market-core parquet not found: {ccm_daily_market_core_path}")
+    if not ccm_daily_phase_b_surface_path.exists():
+        raise FileNotFoundError(f"CCM daily phase-b surface parquet not found: {ccm_daily_phase_b_surface_path}")
+    if not ccm_daily_bridge_surface_path.exists():
+        raise FileNotFoundError(f"CCM daily bridge surface parquet not found: {ccm_daily_bridge_surface_path}")
 
     return {
         "ccm_daily_path": ccm_daily_path,
         "canonical_link_path": canonical_link_path,
+        "ccm_daily_market_core_path": ccm_daily_market_core_path,
+        "ccm_daily_phase_b_surface_path": ccm_daily_phase_b_surface_path,
+        "ccm_daily_bridge_surface_path": ccm_daily_bridge_surface_path,
     }
 
 

@@ -21,6 +21,11 @@ SENSITIVE_HEADER_NAMES = frozenset(
     }
 )
 
+SESSION_NOT_OPENED_MARKERS = (
+    "session is not opened",
+    "can't send any request",
+)
+
 UNRESOLVED_IDENTIFIERS_RE = re.compile(
     r"Unable to resolve all requested identifiers in \[(?P<identifiers>.*?)\]\.",
     re.IGNORECASE,
@@ -126,6 +131,27 @@ class LsegDataProvider:
     ) -> LsegDataResponse:
         if not self._session_open or self._ld is None:
             self.open()
+        refresh_attempt = 0
+        while True:
+            try:
+                return self._get_data_once(universe=universe, fields=fields, parameters=parameters)
+            except LsegRequestError as exc:
+                if not _should_refresh_and_retry_request(
+                    exc=exc,
+                    universe=universe,
+                    refresh_attempt=refresh_attempt,
+                ):
+                    raise
+                self._reset_session()
+                refresh_attempt += 1
+
+    def _get_data_once(
+        self,
+        *,
+        universe: list[str],
+        fields: list[str],
+        parameters: dict[str, Any] | None = None,
+    ) -> LsegDataResponse:
         assert self._ld is not None
 
         started = time.perf_counter()
@@ -168,12 +194,34 @@ class LsegDataProvider:
             ),
         )
 
+    def _reset_session(self) -> None:
+        self.close()
+        self.open()
+
 
 def classify_lseg_error_message(message: str) -> tuple[str | None, tuple[str, ...]]:
     unresolved_identifiers = _parse_unresolved_identifiers(message)
     if unresolved_identifiers:
         return "unresolved_identifiers", unresolved_identifiers
     return None, ()
+
+
+def _is_session_not_opened_message(message: str) -> bool:
+    normalized = message.lower()
+    return all(marker in normalized for marker in SESSION_NOT_OPENED_MARKERS)
+
+
+def _should_refresh_and_retry_request(
+    *,
+    exc: LsegRequestError,
+    universe: list[str],
+    refresh_attempt: int,
+) -> bool:
+    if refresh_attempt > 0:
+        return False
+    if _is_session_not_opened_message(str(exc)):
+        return True
+    return len(universe) == 1 and exc.error_kind == "unresolved_identifiers"
 
 
 def _extract_http_metadata(source: Any) -> tuple[dict[str, Any], int | None, int | None]:

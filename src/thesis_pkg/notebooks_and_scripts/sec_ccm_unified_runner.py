@@ -14,14 +14,86 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+REPO_ROOT_ENV_VAR = "NLP_THESIS_REPO_ROOT"
+DATA_PROFILE_ENV_VAR = "SEC_CCM_DATA_PROFILE"
+
 IN_COLAB = "google.colab" in sys.modules
 
-# The notebook assumed execution from repo root. For script execution, prefer
-# cwd when it already looks like the repo root; otherwise fall back to the
-# script's location.
-_CWD_ROOT = Path.cwd().resolve()
-_SCRIPT_ROOT = Path(__file__).resolve().parents[3]
-ROOT = _CWD_ROOT if (_CWD_ROOT / "src").exists() else _SCRIPT_ROOT
+
+def _resolve_repo_root() -> Path:
+    candidates: list[Path] = []
+    env_root = os.environ.get(REPO_ROOT_ENV_VAR)
+    if env_root:
+        candidates.append(Path(env_root).expanduser())
+
+    cwd = Path.cwd().resolve()
+    candidates.extend([cwd, *cwd.parents])
+
+    script_path = Path(__file__).resolve()
+    candidates.extend(script_path.parents)
+
+    seen: set[Path] = set()
+    for candidate in candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        if (candidate / "src" / "thesis_pkg" / "pipeline.py").exists():
+            return candidate
+
+    return cwd
+
+
+def _resolve_colab_drive_root() -> Path:
+    for candidate in (
+        Path("/content/drive/MyDrive"),
+        Path("/content/drive/My Drive"),
+        Path("/content/drive"),
+    ):
+        if candidate.exists():
+            return candidate
+    return Path("/content/drive")
+
+
+def _first_existing_path(*candidates: Path) -> Path:
+    if not candidates:
+        raise ValueError("At least one candidate path is required")
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+
+def _env_str(name: str, default: str) -> str:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    stripped = value.strip()
+    return stripped or default
+
+
+def _env_path(name: str, default: Path) -> Path:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    stripped = value.strip()
+    if not stripped:
+        return default
+    return Path(stripped).expanduser()
+
+
+def _resolve_ff48_siccodes_path(work_root: Path) -> Path:
+    return _env_path(
+        "SEC_CCM_FF48_SICCODES_PATH",
+        _first_existing_path(
+            ROOT / "full_data_run" / "LM2011_additional_data" / "FF_Siccodes_48_Industries.txt",
+            ROOT / "LM2011_additional_data" / "FF_Siccodes_48_Industries.txt",
+            work_root / "LM2011_additional_data" / "FF_Siccodes_48_Industries.txt",
+            work_root / "Data" / "LM2011_additional_data" / "FF_Siccodes_48_Industries.txt",
+        ),
+    )
+
+
+ROOT = _resolve_repo_root()
 SRC = ROOT / "src"
 if SRC.exists() and str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
@@ -43,7 +115,13 @@ from thesis_pkg.filing_text import (
     summarize_year_parquets,
 )
 from thesis_pkg.pipeline import (
+    CCM_DAILY_BRIDGE_SURFACE_OPTIONAL_COLUMNS,
+    CCM_DAILY_BRIDGE_SURFACE_REQUIRED_COLUMNS,
+    CCM_DAILY_MARKET_CORE_COLUMNS,
+    CCM_DAILY_PHASE_B_SURFACE_COLUMNS,
+    SEC_CCM_PHASE_B_DAILY_FEATURE_COLUMNS,
     SecCcmJoinSpecV2,
+    attach_lm2011_industry_classifications,
     build_or_reuse_ccm_daily_stage,
     is_lseg_available,
     make_sec_ccm_join_spec_preset,
@@ -162,9 +240,23 @@ def main() -> None:
     print({"IN_COLAB": IN_COLAB, "ROOT": str(ROOT), "SRC_EXISTS": SRC.exists()})
 
     # ## Config
-    DATA_PROFILE = "DRIVE_FULL" if IN_COLAB else "LOCAL_SAMPLE"
+    default_data_profile = "DRIVE_FULL" if IN_COLAB else "LOCAL_SAMPLE"
+    DATA_PROFILE = _env_str(DATA_PROFILE_ENV_VAR, default_data_profile)
 
-    SAMPLE_ROOT = ROOT / "full_data_run" / "sample_5pct_seed42"
+    SAMPLE_ROOT = _env_path(
+        "SEC_CCM_SAMPLE_ROOT",
+        ROOT / "full_data_run" / "sample_5pct_seed42",
+    )
+    default_work_root = (
+        _resolve_colab_drive_root() / "Data_LM"
+        if IN_COLAB
+        else Path("C:/Users/erik9/Documents/SEC_Data")
+    )
+    drive_work_root = _env_path("SEC_CCM_WORK_ROOT", default_work_root)
+    legacy_sec_root = drive_work_root
+    alt_sec_root = drive_work_root / "Data" / "Sample_Filings"
+    legacy_ccm_root = drive_work_root / "CRSP_Compustat_data"
+    alt_ccm_root = drive_work_root / "Data" / "CRSP_Compustat_data"
 
     PROFILE_CONFIG = {
         "LOCAL_SAMPLE": {
@@ -182,89 +274,44 @@ def main() -> None:
             / "final_flagged_data_compdesc_added.sample_5pct_seed42.parquet",
             "CANONICAL_LINK_NAME": "canonical_link_table_after_startdate_change.sample_5pct_seed42.parquet",
             "CCM_DAILY_NAME": "final_flagged_data_compdesc_added.sample_5pct_seed42.parquet",
+            "RUN_ROOT": SAMPLE_ROOT / "results" / "sec_ccm_unified_runner" / "local_sample",
             "RUN_CCM_MODE": "REBUILD",
             "RUN_SEC_PARSE": None,
             "RUN_SEC_YEARLY_MERGE": None,
         },
         "DRIVE_FULL": {
-            "WORK_ROOT": (
-                Path("/content/drive/MyDrive/Data_LM")
-                if IN_COLAB
-                else Path("C:/Users/erik9/Documents/SEC_Data")
+            "WORK_ROOT": drive_work_root,
+            "SEC_ZIP_DIR": _first_existing_path(
+                legacy_sec_root / "Zip_Files",
+                alt_sec_root,
             ),
-            "SEC_ZIP_DIR": (
-                (
-                    Path("/content/drive/MyDrive/Data_LM")
-                    if IN_COLAB
-                    else Path("C:/Users/erik9/Documents/SEC_Data")
-                )
-                / "Data"
-                / "Sample_Filings"
+            "SEC_BATCH_ROOT": _first_existing_path(
+                legacy_sec_root / "parquet_data",
+                alt_sec_root / "parquet_batches",
             ),
-            "SEC_BATCH_ROOT": (
-                (
-                    Path("/content/drive/MyDrive/Data_LM")
-                    if IN_COLAB
-                    else Path("C:/Users/erik9/Documents/SEC_Data")
-                )
-                / "Data"
-                / "Sample_Filings"
-                / "parquet_batches"
+            "SEC_YEAR_MERGED_DIR": _first_existing_path(
+                legacy_sec_root / "parquet_data" / "_year_merged",
+                alt_sec_root / "parquet_batches" / "_year_merged",
             ),
-            "SEC_YEAR_MERGED_DIR": (
-                (
-                    Path("/content/drive/MyDrive/Data_LM")
-                    if IN_COLAB
-                    else Path("C:/Users/erik9/Documents/SEC_Data")
-                )
-                / "Data"
-                / "Sample_Filings"
-                / "parquet_batches"
-                / "_year_merged"
+            "SEC_LIGHT_METADATA_PATH": _first_existing_path(
+                legacy_sec_root / "parquet_data" / "filings_metadata_1993_2024_LIGHT.parquet",
+                alt_sec_root / "filings_metadata_LIGHT.parquet",
             ),
-            "SEC_LIGHT_METADATA_PATH": (
-                (
-                    Path("/content/drive/MyDrive/Data_LM")
-                    if IN_COLAB
-                    else Path("C:/Users/erik9/Documents/SEC_Data")
-                )
-                / "Data"
-                / "Sample_Filings"
-                / "filings_metadata_LIGHT.parquet"
+            "CCM_BASE_DIR": _first_existing_path(
+                legacy_ccm_root / "parquet_data",
+                alt_ccm_root / "parquet_data",
             ),
-            "CCM_BASE_DIR": (
-                (
-                    Path("/content/drive/MyDrive/Data_LM")
-                    if IN_COLAB
-                    else Path("C:/Users/erik9/Documents/SEC_Data")
-                )
-                / "Data"
-                / "CRSP_Compustat_data"
-                / "parquet_data"
+            "CCM_DERIVED_DIR": _first_existing_path(
+                legacy_ccm_root / "derived_data",
+                alt_ccm_root / "derived_data",
             ),
-            "CCM_DERIVED_DIR": (
-                (
-                    Path("/content/drive/MyDrive/Data_LM")
-                    if IN_COLAB
-                    else Path("C:/Users/erik9/Documents/SEC_Data")
-                )
-                / "Data"
-                / "CRSP_Compustat_data"
-                / "derived_data"
-            ),
-            "CCM_REUSE_DAILY_PATH": (
-                (
-                    Path("/content/drive/MyDrive/Data_LM")
-                    if IN_COLAB
-                    else Path("C:/Users/erik9/Documents/SEC_Data")
-                )
-                / "Data"
-                / "CRSP_Compustat_data"
-                / "derived_data"
-                / "final_flagged_data_compdesc_added.parquet"
+            "CCM_REUSE_DAILY_PATH": _first_existing_path(
+                legacy_ccm_root / "derived_data" / "final_flagged_data_compdesc_added.parquet",
+                alt_ccm_root / "derived_data" / "final_flagged_data_compdesc_added.parquet",
             ),
             "CANONICAL_LINK_NAME": "canonical_link_table_after_startdate_change.parquet",
             "CCM_DAILY_NAME": "final_flagged_data_compdesc_added.parquet",
+            "RUN_ROOT": drive_work_root / "results" / "sec_ccm_unified_runner",
             "RUN_CCM_MODE": "REBUILD",
             "RUN_SEC_PARSE": True,
             "RUN_SEC_YEARLY_MERGE": True,
@@ -277,16 +324,30 @@ def main() -> None:
         )
 
     profile = PROFILE_CONFIG[DATA_PROFILE]
-    WORK_ROOT = Path(profile["WORK_ROOT"])
-    SEC_ZIP_DIR = Path(profile["SEC_ZIP_DIR"])
-    SEC_BATCH_ROOT = Path(profile["SEC_BATCH_ROOT"])
-    SEC_YEAR_MERGED_DIR = Path(profile["SEC_YEAR_MERGED_DIR"])
-    SEC_LIGHT_METADATA_PATH = Path(profile["SEC_LIGHT_METADATA_PATH"])
-    CCM_BASE_DIR = Path(profile["CCM_BASE_DIR"])
-    CCM_DERIVED_DIR = Path(profile["CCM_DERIVED_DIR"])
-    CCM_REUSE_DAILY_PATH = Path(profile["CCM_REUSE_DAILY_PATH"])
+    WORK_ROOT = _env_path("SEC_CCM_WORK_ROOT", Path(profile["WORK_ROOT"]))
+    SEC_ZIP_DIR = _env_path("SEC_CCM_SEC_ZIP_DIR", Path(profile["SEC_ZIP_DIR"]))
+    SEC_BATCH_ROOT = _env_path("SEC_CCM_SEC_BATCH_ROOT", Path(profile["SEC_BATCH_ROOT"]))
+    SEC_YEAR_MERGED_DIR = _env_path(
+        "SEC_CCM_SEC_YEAR_MERGED_DIR",
+        Path(profile["SEC_YEAR_MERGED_DIR"]),
+    )
+    SEC_LIGHT_METADATA_PATH = _env_path(
+        "SEC_CCM_SEC_LIGHT_METADATA_PATH",
+        Path(profile["SEC_LIGHT_METADATA_PATH"]),
+    )
+    CCM_BASE_DIR = _env_path("SEC_CCM_CCM_BASE_DIR", Path(profile["CCM_BASE_DIR"]))
+    CCM_DERIVED_DIR = _env_path(
+        "SEC_CCM_CCM_DERIVED_DIR",
+        Path(profile["CCM_DERIVED_DIR"]),
+    )
+    CCM_REUSE_DAILY_PATH = _env_path(
+        "SEC_CCM_CCM_REUSE_DAILY_PATH",
+        Path(profile["CCM_REUSE_DAILY_PATH"]),
+    )
     CANONICAL_LINK_NAME = str(profile["CANONICAL_LINK_NAME"])
     CCM_DAILY_NAME = str(profile["CCM_DAILY_NAME"])
+    RUN_ROOT = _env_path("SEC_CCM_RUN_ROOT", Path(profile["RUN_ROOT"]))
+    LM2011_FF48_SICCODES_PATH = _resolve_ff48_siccodes_path(WORK_ROOT)
 
     available_years = _discover_sec_years(SEC_ZIP_DIR, SEC_YEAR_MERGED_DIR)
     if not available_years:
@@ -321,7 +382,6 @@ def main() -> None:
     YEARS = available_years
     ITEM_EXTRACTION_REGIME = "legacy"
 
-    RUN_ROOT = SAMPLE_ROOT / "results" / "sec_ccm_unified_runner" / DATA_PROFILE.lower()
     SEC_CCM_OUTPUT_DIR = RUN_ROOT / "sec_ccm_premerge"
     SEC_ITEMS_ANALYSIS_DIR = RUN_ROOT / "items_analysis"
     SEC_ITEMS_DIAGNOSTIC_DIR = RUN_ROOT / "items_diagnostic"
@@ -378,20 +438,7 @@ def main() -> None:
         "10-QT/A",
         "10-K405",
     ]
-    DAILY_FEATURE_COLUMNS = (
-        "RET",
-        "RETX",
-        "PRC",
-        "FINAL_PRC",
-        "BIDLO",
-        "ASKHI",
-        "VOL",
-        "TCAP",
-        "SHROUT",
-        "TICKER",
-        "SHRCD",
-        "EXCHCD",
-    )
+    DAILY_FEATURE_COLUMNS = SEC_CCM_PHASE_B_DAILY_FEATURE_COLUMNS
     REQUIRED_DAILY_NON_NULL_FEATURES = ("RET",)
 
     print(
@@ -399,7 +446,11 @@ def main() -> None:
             "DATA_PROFILE": DATA_PROFILE,
             "RUN_CCM_MODE": RUN_CCM_MODE,
             "WORK_ROOT": str(WORK_ROOT),
+            "SEC_ZIP_DIR": str(SEC_ZIP_DIR),
+            "SEC_BATCH_ROOT": str(SEC_BATCH_ROOT),
+            "CCM_BASE_DIR": str(CCM_BASE_DIR),
             "RUN_ROOT": str(RUN_ROOT),
+            "LM2011_FF48_SICCODES_PATH": str(LM2011_FF48_SICCODES_PATH),
             "RUN_SEC_PARSE": RUN_SEC_PARSE,
             "RUN_SEC_YEARLY_MERGE": RUN_SEC_YEARLY_MERGE,
             "year_count": len(YEARS),
@@ -483,49 +534,77 @@ def main() -> None:
     )
 
     ccm_daily_path = ccm_stage_paths["ccm_daily_path"]
+    ccm_daily_market_core_path = ccm_stage_paths["ccm_daily_market_core_path"]
+    ccm_daily_phase_b_surface_path = ccm_stage_paths["ccm_daily_phase_b_surface_path"]
+    ccm_daily_bridge_surface_path = ccm_stage_paths["ccm_daily_bridge_surface_path"]
     canonical_link_path = ccm_stage_paths["canonical_link_path"]
 
-    ccm_daily_lf = pl.scan_parquet(ccm_daily_path)
-    ccm_daily_schema = ccm_daily_lf.collect_schema()
-    daily_contract_cols = ("SHROUT", "SRCTYPE_all", "FILEDATE_all", "FILEDATETIME_all", "n_filings")
-    missing_daily_contract_cols = [col for col in daily_contract_cols if col not in ccm_daily_schema]
+    ccm_daily_market_core_lf = pl.scan_parquet(ccm_daily_market_core_path)
+    ccm_daily_phase_b_lf = pl.scan_parquet(ccm_daily_phase_b_surface_path)
+    ccm_daily_bridge_lf = pl.scan_parquet(ccm_daily_bridge_surface_path)
+    ccm_daily_legacy_lf = pl.scan_parquet(ccm_daily_path)
+
+    market_core_schema = ccm_daily_market_core_lf.collect_schema()
+    phase_b_schema = ccm_daily_phase_b_lf.collect_schema()
+    bridge_schema = ccm_daily_bridge_lf.collect_schema()
+    legacy_schema = ccm_daily_legacy_lf.collect_schema()
+
+    missing_market_core_cols = [col for col in CCM_DAILY_MARKET_CORE_COLUMNS if col not in market_core_schema]
+    missing_phase_b_cols = [col for col in CCM_DAILY_PHASE_B_SURFACE_COLUMNS if col not in phase_b_schema]
+    bridge_contract_cols = (
+        *CCM_DAILY_BRIDGE_SURFACE_REQUIRED_COLUMNS,
+        *CCM_DAILY_BRIDGE_SURFACE_OPTIONAL_COLUMNS,
+    )
+    missing_bridge_cols = [col for col in bridge_contract_cols if col not in bridge_schema]
+    legacy_compat_cols = ("SHROUT", "SRCTYPE_all", "FILEDATE_all", "FILEDATETIME_all", "n_filings")
+    missing_legacy_compat_cols = [col for col in legacy_compat_cols if col not in legacy_schema]
     print(
         {
             "ccm_daily_path": str(ccm_daily_path),
+            "ccm_daily_market_core_path": str(ccm_daily_market_core_path),
+            "ccm_daily_phase_b_surface_path": str(ccm_daily_phase_b_surface_path),
+            "ccm_daily_bridge_surface_path": str(ccm_daily_bridge_surface_path),
             "canonical_link_path": str(canonical_link_path),
-            "rows": ccm_daily_lf.select(pl.len()).collect().item(),
-            "has_shrout": "SHROUT" in ccm_daily_schema,
-            "has_filing_arrays": all(
-                col in ccm_daily_schema for col in ("SRCTYPE_all", "FILEDATE_all", "FILEDATETIME_all", "n_filings")
-            ),
-            "missing_daily_contract_cols": missing_daily_contract_cols,
+            "market_core_rows": ccm_daily_market_core_lf.select(pl.len()).collect().item(),
+            "phase_b_rows": ccm_daily_phase_b_lf.select(pl.len()).collect().item(),
+            "bridge_rows": ccm_daily_bridge_lf.select(pl.len()).collect().item(),
+            "legacy_rows": ccm_daily_legacy_lf.select(pl.len()).collect().item(),
+            "missing_market_core_cols": missing_market_core_cols,
+            "missing_phase_b_cols": missing_phase_b_cols,
+            "missing_bridge_cols": missing_bridge_cols,
+            "missing_legacy_compat_cols": missing_legacy_compat_cols,
         }
     )
-    if RUN_CCM_MODE == "REUSE" and missing_daily_contract_cols:
+    if RUN_CCM_MODE == "REUSE" and (
+        missing_market_core_cols or missing_phase_b_cols or missing_bridge_cols or missing_legacy_compat_cols
+    ):
         print(
             {
-                "warning": "reused daily artifact is missing expected LM2011-facing columns",
-                "missing_cols": missing_daily_contract_cols,
+                "warning": "reused daily artifact stack is missing expected surface columns",
+                "missing_market_core_cols": missing_market_core_cols,
+                "missing_phase_b_cols": missing_phase_b_cols,
+                "missing_bridge_cols": missing_bridge_cols,
+                "missing_legacy_compat_cols": missing_legacy_compat_cols,
                 "recommended_action": "switch RUN_CCM_MODE to REBUILD to refresh the daily panel",
             }
         )
 
     # ## 2) Build link universe + trading calendar
-    schema = ccm_daily_lf.collect_schema()
+    schema = phase_b_schema
     resolved_permno_col = _first_existing(
         schema,
         ("KYPERMNO", "LPERMNO", "PERMNO"),
-        "ccm_daily",
+        "ccm_daily_phase_b_surface",
     )
     resolved_date_col = _first_existing(
         schema,
         ("CALDT", "caldt"),
-        "ccm_daily",
+        "ccm_daily_phase_b_surface",
     )
 
     link_universe_lf = pl.scan_parquet(canonical_link_path)
     trading_calendar_lf = (
-        ccm_daily_lf.select(
+        ccm_daily_market_core_lf.select(
             pl.col(resolved_date_col).cast(pl.Date, strict=False).alias("CALDT")
         )
         .drop_nulls(subset=["CALDT"])
@@ -576,10 +655,10 @@ def main() -> None:
             else None
         )
         refinitiv_step1_paths = run_refinitiv_step1_bridge_pipeline(
-            daily_lf=ccm_daily_lf,
+            daily_lf=ccm_daily_bridge_lf,
             output_dir=REFINITIV_STEP1_OUT_DIR,
             company_description_lf=company_description_lf,
-            source_daily_path=ccm_daily_path,
+            source_daily_path=ccm_daily_bridge_surface_path,
         )
         _record_refinitiv_stage("refinitiv_step1", refinitiv_step1_paths)
         for key in sorted(refinitiv_step1_paths):
@@ -874,6 +953,7 @@ def main() -> None:
 
     # ## 5) SEC-CCM pre-merge
     sec_ccm_paths: dict[str, Path] | None = None
+    lm2011_industry_enriched_path: Path | None = None
 
     if RUN_SEC_CCM_PREMERGE:
         join_spec_base = SecCcmJoinSpecV2(
@@ -891,7 +971,7 @@ def main() -> None:
             link_universe_lf=link_universe_lf,
             trading_calendar_lf=trading_calendar_lf,
             output_dir=SEC_CCM_OUTPUT_DIR,
-            daily_lf=ccm_daily_lf,
+            daily_lf=ccm_daily_phase_b_lf,
             join_spec=join_spec,
             emit_run_report=True,
         )
@@ -922,6 +1002,32 @@ def main() -> None:
         print("run_report:", sec_ccm_paths.get("sec_ccm_run_report"))
         print("run_dag_mermaid:", sec_ccm_paths.get("sec_ccm_run_dag_mermaid"))
         print("run_dag_dot:", sec_ccm_paths.get("sec_ccm_run_dag_dot"))
+
+        ff48_siccodes_path = LM2011_FF48_SICCODES_PATH
+        company_history_path = CCM_BASE_DIR / "companyhistory.parquet"
+        company_description_path = CCM_BASE_DIR / "companydescription.parquet"
+        matched_clean_path = Path(sec_ccm_paths["sec_ccm_matched_clean"])
+        if matched_clean_path.exists() and company_history_path.exists() and company_description_path.exists() and ff48_siccodes_path.exists():
+            lm2011_industry_enriched_path = (
+                SEC_CCM_OUTPUT_DIR / "sec_ccm_matched_clean_lm2011_industry.parquet"
+            )
+            attach_lm2011_industry_classifications(
+                pl.scan_parquet(matched_clean_path),
+                pl.scan_parquet(company_history_path),
+                pl.scan_parquet(company_description_path),
+                ff48_siccodes_path=ff48_siccodes_path,
+            ).sink_parquet(lm2011_industry_enriched_path, compression="zstd")
+            print("lm2011_industry_enriched_path:", lm2011_industry_enriched_path)
+        else:
+            print(
+                {
+                    "warning": "skipping LM2011 SIC/FF48 enrichment; required inputs not found",
+                    "matched_clean_path": str(matched_clean_path),
+                    "company_history_path": str(company_history_path),
+                    "company_description_path": str(company_description_path),
+                    "ff48_siccodes_path": str(ff48_siccodes_path),
+                }
+            )
 
     if RUN_REFINITIV_DOC_OWNERSHIP_LM2011_EXACT_HANDOFF:
         doc_filing_artifact_path = (
@@ -1293,12 +1399,20 @@ def main() -> None:
 
     if ccm_daily_path is not None:
         _add("ccm", "ccm_daily_path", ccm_daily_path)
+    if ccm_daily_market_core_path is not None:
+        _add("ccm", "ccm_daily_market_core_path", ccm_daily_market_core_path)
+    if ccm_daily_phase_b_surface_path is not None:
+        _add("ccm", "ccm_daily_phase_b_surface_path", ccm_daily_phase_b_surface_path)
+    if ccm_daily_bridge_surface_path is not None:
+        _add("ccm", "ccm_daily_bridge_surface_path", ccm_daily_bridge_surface_path)
     for stage in refinitiv_artifact_stages:
         for key in sorted(stage.paths):
             _add(stage.name, key, stage.paths[key])
     if sec_ccm_paths is not None:
         for key in sorted(sec_ccm_paths):
             _add("sec_ccm", key, Path(sec_ccm_paths[key]))
+    if lm2011_industry_enriched_path is not None:
+        _add("lm2011", "sec_ccm_matched_clean_lm2011_industry", lm2011_industry_enriched_path)
     for path in analysis_item_paths:
         _add("items_analysis", path.stem, path)
     for path in diagnostic_item_paths:

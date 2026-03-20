@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import re
+from functools import lru_cache
+from pathlib import Path
+
 import polars as pl
 
 
 GVKEY_DTYPE = pl.Int32
 _MIN_VALID_YEAR = 1900
 _MAX_VALID_YEAR = 2100
+_FF48_HEADER_RE = re.compile(r"^\s*(\d{1,2})\s+([A-Za-z0-9]+)\s+(.+?)\s*$")
+_FF48_RANGE_RE = re.compile(r"^\s*(\d{4})-(\d{4})\s+(.+?)\s*$")
 
 
 def _require_columns(lf: pl.LazyFrame, required: tuple[str, ...], label: str) -> None:
@@ -52,6 +58,22 @@ def _parse_yyyymmdd_date_expr(col_name: str) -> pl.Expr:
     )
 
 
+def _sic_int_expr(col_name: str) -> pl.Expr:
+    digits = (
+        pl.col(col_name)
+        .cast(pl.Utf8, strict=False)
+        .str.strip_chars()
+        .str.replace_all(r"\.0$", "")
+        .str.replace_all(r"\D", "")
+    )
+    return (
+        pl.when(digits.str.len_chars() > 0)
+        .then(digits.cast(pl.Int32, strict=False))
+        .otherwise(pl.lit(None, dtype=pl.Int32))
+        .alias(col_name)
+    )
+
+
 def _mask_payload_columns(
     lf: pl.LazyFrame,
     *,
@@ -68,6 +90,65 @@ def _mask_payload_columns(
             for name in payload_cols
         ]
     )
+
+
+@lru_cache(maxsize=4)
+def _load_ff48_sic_mapping(ff48_siccodes_path: str) -> tuple[dict[str, object], ...]:
+    path = Path(ff48_siccodes_path)
+    if not path.exists():
+        raise FileNotFoundError(f"FF48 SIC mapping file not found: {path}")
+
+    rows: list[dict[str, object]] = []
+    current_id: int | None = None
+    current_short: str | None = None
+    current_name: str | None = None
+
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        if not raw_line.strip():
+            continue
+        header_match = _FF48_HEADER_RE.match(raw_line)
+        if header_match:
+            current_id = int(header_match.group(1))
+            current_short = header_match.group(2).strip()
+            current_name = header_match.group(3).strip()
+            continue
+
+        range_match = _FF48_RANGE_RE.match(raw_line)
+        if range_match and current_id is not None and current_short is not None and current_name is not None:
+            rows.append(
+                {
+                    "ff48_industry_id": current_id,
+                    "ff48_industry_short": current_short,
+                    "ff48_industry_name": current_name,
+                    "sic_start": int(range_match.group(1)),
+                    "sic_end": int(range_match.group(2)),
+                }
+            )
+
+    if not rows:
+        raise ValueError(f"FF48 SIC mapping file did not yield any ranges: {path}")
+    return tuple(rows)
+
+
+def _ff48_mapping_expr(
+    *,
+    sic_col: str,
+    mapping_rows: tuple[dict[str, object], ...],
+    out_col: str,
+    value_key: str,
+    dtype: pl.DataType,
+) -> pl.Expr:
+    sic_expr = pl.col(sic_col).cast(pl.Int32, strict=False)
+    expr: pl.Expr | None = None
+    for row in mapping_rows:
+        condition = sic_expr.is_between(int(row["sic_start"]), int(row["sic_end"]))
+        value_expr = pl.lit(row[value_key], dtype=dtype)
+        if expr is None:
+            expr = pl.when(condition).then(value_expr)
+        else:
+            expr = expr.when(condition).then(value_expr)
+    assert expr is not None
+    return expr.otherwise(pl.lit(None, dtype=dtype)).alias(out_col)
 
 
 def derive_filing_trade_anchors(
@@ -378,6 +459,130 @@ def attach_eligible_quarterly_accounting(
         payload_cols=quarterly_payload_cols,
         valid_expr=valid_expr,
     ).drop("_attach_gvkey_int", "_attach_filing_date", "_attach_quarter_lookup_start")
+
+
+def attach_lm2011_industry_classifications(
+    filings_lf: pl.LazyFrame,
+    company_history_lf: pl.LazyFrame,
+    company_description_lf: pl.LazyFrame,
+    *,
+    ff48_siccodes_path: Path | str,
+    filing_gvkey_col: str = "gvkey",
+    filing_date_col: str = "filing_date",
+) -> pl.LazyFrame:
+    """Attach historical SIC, description SIC fallback, and FF48 labels at doc grain."""
+    _require_columns(filings_lf, ("doc_id", filing_gvkey_col, filing_date_col), "filings")
+    _require_columns(
+        company_history_lf,
+        ("KYGVKEY", "HCHGDT", "HCHGENDDT", "HSIC"),
+        "company_history",
+    )
+    _require_columns(
+        company_description_lf,
+        ("KYGVKEY", "SIC"),
+        "company_description",
+    )
+
+    mapping_rows = _load_ff48_sic_mapping(str(Path(ff48_siccodes_path).resolve()))
+    filing_schema = filings_lf.collect_schema()
+    gvkey_dtype = filing_schema.get(filing_gvkey_col, pl.Utf8)
+
+    filings = (
+        filings_lf.drop(
+            "HSIC",
+            "SIC_desc",
+            "SIC_final",
+            "ff48_industry_id",
+            "ff48_industry_short",
+            "ff48_industry_name",
+            strict=False,
+        )
+        .with_columns(
+            pl.col(filing_gvkey_col).cast(gvkey_dtype, strict=False).alias("_industry_gvkey"),
+            pl.col(filing_date_col).cast(pl.Date, strict=False).alias("_industry_filing_date"),
+        )
+        .sort("_industry_gvkey", "_industry_filing_date")
+    )
+
+    company_history = (
+        company_history_lf.select(
+            pl.col("KYGVKEY").cast(gvkey_dtype, strict=False).alias("KYGVKEY"),
+            pl.col("HCHGDT").cast(pl.Date, strict=False).alias("HIST_START_DATE_COMP"),
+            pl.col("HCHGENDDT").cast(pl.Date, strict=False).alias("HCHGENDDT_COMP"),
+            _sic_int_expr("HSIC"),
+        )
+        .sort("KYGVKEY", "HIST_START_DATE_COMP")
+    )
+    history_joined = filings.join_asof(
+        company_history,
+        left_on="_industry_filing_date",
+        right_on="HIST_START_DATE_COMP",
+        by_left="_industry_gvkey",
+        by_right="KYGVKEY",
+        strategy="backward",
+        check_sortedness=False,
+    )
+    history_valid = (
+        pl.col("HIST_START_DATE_COMP").is_not_null()
+        & (
+            pl.col("HCHGENDDT_COMP").is_null()
+            | (pl.col("_industry_filing_date") <= pl.col("HCHGENDDT_COMP"))
+        )
+    )
+
+    sic_desc_map = (
+        company_description_lf.select(
+            pl.col("KYGVKEY").cast(gvkey_dtype, strict=False).alias("_industry_gvkey"),
+            _sic_int_expr("SIC"),
+        )
+        .drop_nulls(subset=["_industry_gvkey"])
+        .group_by("_industry_gvkey")
+        .agg(pl.col("SIC").drop_nulls().mode().first().alias("SIC_desc"))
+    )
+
+    enriched = (
+        history_joined.with_columns(
+            pl.when(history_valid)
+            .then(pl.col("HSIC").cast(pl.Int32, strict=False))
+            .otherwise(pl.lit(None, dtype=pl.Int32))
+            .alias("HSIC")
+        )
+        .drop("HIST_START_DATE_COMP", "HCHGENDDT_COMP", "KYGVKEY", strict=False)
+        .join(sic_desc_map, on="_industry_gvkey", how="left")
+        .with_columns(
+            pl.coalesce(
+                [
+                    pl.col("HSIC").cast(pl.Int32, strict=False),
+                    pl.col("SIC_desc").cast(pl.Int32, strict=False),
+                ]
+            ).alias("SIC_final")
+        )
+        .with_columns(
+            _ff48_mapping_expr(
+                sic_col="SIC_final",
+                mapping_rows=mapping_rows,
+                out_col="ff48_industry_id",
+                value_key="ff48_industry_id",
+                dtype=pl.Int32,
+            ),
+            _ff48_mapping_expr(
+                sic_col="SIC_final",
+                mapping_rows=mapping_rows,
+                out_col="ff48_industry_short",
+                value_key="ff48_industry_short",
+                dtype=pl.Utf8,
+            ),
+            _ff48_mapping_expr(
+                sic_col="SIC_final",
+                mapping_rows=mapping_rows,
+                out_col="ff48_industry_name",
+                value_key="ff48_industry_name",
+                dtype=pl.Utf8,
+            ),
+        )
+    )
+
+    return enriched.drop("_industry_gvkey", "_industry_filing_date", strict=False)
 
 
 def attach_pre_filing_market_data(

@@ -7,7 +7,13 @@ import polars as pl
 import pytest
 
 from thesis_pkg.core.ccm.canonical_links import CikHistoryWindowPolicy
-from thesis_pkg.pipeline import build_or_reuse_ccm_daily_stage
+from thesis_pkg.pipeline import (
+    CCM_DAILY_BRIDGE_SURFACE_OPTIONAL_COLUMNS,
+    CCM_DAILY_BRIDGE_SURFACE_REQUIRED_COLUMNS,
+    CCM_DAILY_MARKET_CORE_COLUMNS,
+    CCM_DAILY_PHASE_B_SURFACE_COLUMNS,
+    build_or_reuse_ccm_daily_stage,
+)
 
 
 def _empty_linkfiscalperiodall() -> pl.DataFrame:
@@ -169,6 +175,51 @@ def _write_required_ccm_tables(
         table.write_parquet(base_dir / f"{name}.parquet", compression="zstd")
 
 
+def _write_reuse_daily(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame(
+        {
+            "KYPERMNO": [1],
+            "CALDT": [dt.date(2024, 1, 2)],
+            "PRC": [10.0],
+            "RET": [0.01],
+            "RETX": [0.01],
+            "TCAP": [100_000_000.0],
+            "VOL": [1_000.0],
+            "BIDLO": [9.0],
+            "ASKHI": [11.0],
+            "data_status": [0],
+            "SHROUT": [10_000.0],
+            "TICKER": ["TEST"],
+            "SHRCD": [10],
+            "EXCHCD": [1],
+            "PRIMEXCH": ["N"],
+            "TRDSTAT": ["A"],
+            "SECSTAT": ["A"],
+            "DLSTDT": [None],
+            "DLSTCD": [None],
+            "DLPRC": [None],
+            "DLAMT": [None],
+            "DLRET": [None],
+            "DLRETX": [None],
+            "FINAL_RET": [0.01],
+            "FINAL_RETX": [0.01],
+            "FINAL_PRC": [10.0],
+            "filter_price_pass": [True],
+            "filter_common_stock_pass": [True],
+            "filter_major_exchange_pass": [True],
+            "filter_liquidity_pass": [True],
+            "filter_non_microcap_pass": [True],
+            "passes_all_filters": [True],
+            "KYGVKEY_final": ["1000"],
+            "LIID": ["A"],
+            "CIK_final": ["0123456789"],
+            "CUSIP": ["22222222"],
+            "ISIN": ["US2222222222"],
+        }
+    ).write_parquet(path)
+
+
 def test_build_or_reuse_ccm_daily_stage_rebuild_writes_daily_and_canonical(tmp_path: Path) -> None:
     base_dir = tmp_path / "base"
     derived_dir = tmp_path / "derived"
@@ -183,21 +234,49 @@ def test_build_or_reuse_ccm_daily_stage_rebuild_writes_daily_and_canonical(tmp_p
         forms_10k_10q=["10-K"],
     )
 
-    assert set(out) == {"ccm_daily_path", "canonical_link_path"}
+    assert set(out) == {
+        "ccm_daily_path",
+        "canonical_link_path",
+        "ccm_daily_market_core_path",
+        "ccm_daily_phase_b_surface_path",
+        "ccm_daily_bridge_surface_path",
+    }
     assert out["ccm_daily_path"] == derived_dir / "final_flagged_data_compdesc_added.parquet"
     assert out["canonical_link_path"] == derived_dir / "canonical_link_table.parquet"
+    assert out["ccm_daily_market_core_path"] == derived_dir / "ccm_daily_market_core.parquet"
+    assert out["ccm_daily_phase_b_surface_path"] == derived_dir / "ccm_daily_phase_b_surface.parquet"
+    assert out["ccm_daily_bridge_surface_path"] == derived_dir / "ccm_daily_bridge_surface.parquet"
     assert out["ccm_daily_path"].exists()
     assert out["canonical_link_path"].exists()
+    assert out["ccm_daily_market_core_path"].exists()
+    assert out["ccm_daily_phase_b_surface_path"].exists()
+    assert out["ccm_daily_bridge_surface_path"].exists()
     assert pl.scan_parquet(out["canonical_link_path"]).select(pl.len()).collect().item() > 0
     daily_df = pl.read_parquet(out["ccm_daily_path"])
+    market_core_df = pl.read_parquet(out["ccm_daily_market_core_path"])
+    phase_b_df = pl.read_parquet(out["ccm_daily_phase_b_surface_path"])
+    bridge_df = pl.read_parquet(out["ccm_daily_bridge_surface_path"])
     assert {"HSCUSIP", "HISIN", "CUSIP", "ISIN", "SHROUT", "TICKER"}.issubset(set(daily_df.columns))
+    assert tuple(market_core_df.columns) == CCM_DAILY_MARKET_CORE_COLUMNS
+    assert tuple(phase_b_df.columns) == CCM_DAILY_PHASE_B_SURFACE_COLUMNS
+    assert tuple(bridge_df.columns) == (
+        *CCM_DAILY_BRIDGE_SURFACE_REQUIRED_COLUMNS,
+        *CCM_DAILY_BRIDGE_SURFACE_OPTIONAL_COLUMNS,
+    )
     row = daily_df.row(0, named=True)
+    market_core_row = market_core_df.row(0, named=True)
+    phase_b_row = phase_b_df.row(0, named=True)
+    bridge_row = bridge_df.row(0, named=True)
     assert row["HSCUSIP"] == "22222222"
     assert row["HISIN"] == "US2222222222"
     assert row["CUSIP"] == "22222222"
     assert row["ISIN"] == "US2222222222"
     assert row["SHROUT"] == 10_000.0
     assert row["TICKER"] == "TEST"
+    assert market_core_row["FINAL_PRC"] == 10.0
+    assert phase_b_row["SHROUT"] == 10_000.0
+    assert bridge_row["CIK_final"] == "0123456789"
+    assert bridge_row["n_filings"] == 1
 
 
 def test_build_or_reuse_ccm_daily_stage_rebuild_raises_when_linkfiscalperiodall_missing(tmp_path: Path) -> None:
@@ -256,7 +335,7 @@ def test_build_or_reuse_ccm_daily_stage_reuse_succeeds_when_artifacts_exist(tmp_
     reuse_daily_path.parent.mkdir(parents=True, exist_ok=True)
 
     pl.DataFrame({"x": [1]}).write_parquet(canonical_path)
-    pl.DataFrame({"y": [1]}).write_parquet(reuse_daily_path)
+    _write_reuse_daily(reuse_daily_path)
 
     out = build_or_reuse_ccm_daily_stage(
         run_mode="REUSE",
@@ -275,7 +354,7 @@ def test_build_or_reuse_ccm_daily_stage_reuse_raises_when_canonical_missing(tmp_
     derived_dir.mkdir(parents=True, exist_ok=True)
     reuse_daily_path = tmp_path / "reuse" / "final_flagged_data_compdesc_added.parquet"
     reuse_daily_path.parent.mkdir(parents=True, exist_ok=True)
-    pl.DataFrame({"y": [1]}).write_parquet(reuse_daily_path)
+    _write_reuse_daily(reuse_daily_path)
 
     with pytest.raises(FileNotFoundError, match="CCM canonical link parquet not found"):
         build_or_reuse_ccm_daily_stage(

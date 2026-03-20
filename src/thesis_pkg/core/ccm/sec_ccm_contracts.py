@@ -6,6 +6,13 @@ from enum import Enum
 from pathlib import Path
 from typing import Literal
 
+from thesis_pkg.core.ccm.transforms import CCM_DAILY_PHASE_B_SURFACE_COLUMNS
+
+
+SEC_CCM_PHASE_B_DAILY_FEATURE_COLUMNS: tuple[str, ...] = tuple(
+    name for name in CCM_DAILY_PHASE_B_SURFACE_COLUMNS if name not in {"KYPERMNO", "CALDT"}
+)
+
 
 class MatchReasonCode(str, Enum):
     """Canonical reason codes for SEC-CCM linking and alignment outcomes.
@@ -86,18 +93,7 @@ class SecCcmJoinSpecV1:
     daily_join_source: Literal["CRSP_DAILY", "MERGED_DAILY_PANEL"] = "CRSP_DAILY"
     daily_permno_col: str = "KYPERMNO"
     daily_date_col: str = "CALDT"
-    daily_feature_columns: tuple[str, ...] = (
-        "RET",
-        "RETX",
-        "PRC",
-        "BIDLO",
-        "ASKHI",
-        "TICKER",
-        "SHRCD",
-        "EXCHCD",
-        "VOL",
-        "TCAP",
-    )
+    daily_feature_columns: tuple[str, ...] = SEC_CCM_PHASE_B_DAILY_FEATURE_COLUMNS
     required_daily_non_null_features: tuple[str, ...] = ()
 
     def to_dict(self) -> dict:
@@ -150,18 +146,7 @@ class SecCcmJoinSpecV2:
     daily_join_source: Literal["CRSP_DAILY", "MERGED_DAILY_PANEL"] = "CRSP_DAILY"
     daily_permno_col: str = "KYPERMNO"
     daily_date_col: str = "CALDT"
-    daily_feature_columns: tuple[str, ...] = (
-        "RET",
-        "RETX",
-        "PRC",
-        "BIDLO",
-        "ASKHI",
-        "TICKER",
-        "SHRCD",
-        "EXCHCD",
-        "VOL",
-        "TCAP",
-    )
+    daily_feature_columns: tuple[str, ...] = SEC_CCM_PHASE_B_DAILY_FEATURE_COLUMNS
     required_daily_non_null_features: tuple[str, ...] = ()
     daily_join_max_forward_lag_days: int | None = 14
 
