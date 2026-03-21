@@ -54,15 +54,31 @@ def test_resolve_ff48_siccodes_path_honors_env_override(
     assert runner._resolve_ff48_siccodes_path(tmp_path) == ff48_path
 
 
+def test_env_list_and_bool_helpers(monkeypatch: MonkeyPatch) -> None:
+    monkeypatch.setenv("TEST_BOOL", "true")
+    monkeypatch.setenv("TEST_OPTIONAL_BOOL", "auto")
+    monkeypatch.setenv("TEST_STR_LIST", '["a", "b"]')
+    monkeypatch.setenv("TEST_INT_LIST", "[1993, 1994]")
+
+    assert runner._env_bool("TEST_BOOL", False) is True
+    assert runner._env_optional_bool("TEST_OPTIONAL_BOOL", False) is None
+    assert runner._env_str_list("TEST_STR_LIST", ["x"]) == ["a", "b"]
+    assert runner._env_int_list("TEST_INT_LIST", [1]) == [1993, 1994]
+
+
 def test_sec_ccm_unified_runner_notebook_bootstrap_is_valid() -> None:
     notebook_path = Path("src/thesis_pkg/notebooks_and_scripts/sec_ccm_unified_runner.ipynb")
     notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
 
-    assert len(notebook["cells"]) == 3
+    assert len(notebook["cells"]) == 4
     bootstrap_cell = "".join(notebook["cells"][1]["source"])
-    run_cell = "".join(notebook["cells"][2]["source"])
+    config_cell = "".join(notebook["cells"][2]["source"])
+    run_cell = "".join(notebook["cells"][3]["source"])
 
     assert 'subprocess.check_call(["git", "clone"' in bootstrap_cell
-    assert 'SEC_CCM_WORK_ROOT' in bootstrap_cell
+    assert "CONFIG_ENV = {" in config_cell
+    assert 'SEC_CCM_WORK_ROOT' in config_cell
+    assert 'SEC_CCM_RUN_SEC_PARSE' in config_cell
+    assert 'SEC_CCM_OUTPUT_DIR' in config_cell
     assert "from thesis_pkg.notebooks_and_scripts.sec_ccm_unified_runner import main" in run_cell
     assert "main()" in run_cell

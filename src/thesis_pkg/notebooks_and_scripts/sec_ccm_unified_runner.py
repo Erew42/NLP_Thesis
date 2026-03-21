@@ -81,6 +81,54 @@ def _env_path(name: str, default: Path) -> Path:
     return Path(stripped).expanduser()
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    lowered = value.strip().lower()
+    if lowered in {"1", "true", "yes", "y", "on"}:
+        return True
+    if lowered in {"0", "false", "no", "n", "off"}:
+        return False
+    raise ValueError(f"Invalid boolean value for {name}: {value!r}")
+
+
+def _env_optional_bool(name: str, default: bool | None) -> bool | None:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    lowered = value.strip().lower()
+    if lowered in {"", "auto", "none", "null"}:
+        return None
+    if lowered in {"1", "true", "yes", "y", "on"}:
+        return True
+    if lowered in {"0", "false", "no", "n", "off"}:
+        return False
+    raise ValueError(f"Invalid optional boolean value for {name}: {value!r}")
+
+
+def _env_str_list(name: str, default: list[str]) -> list[str]:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    stripped = value.strip()
+    if not stripped:
+        return default
+    parsed = json.loads(stripped) if stripped.startswith("[") else stripped.split(",")
+    return [str(item).strip() for item in parsed if str(item).strip()]
+
+
+def _env_int_list(name: str, default: list[int]) -> list[int]:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    stripped = value.strip()
+    if not stripped:
+        return default
+    parsed = json.loads(stripped) if stripped.startswith("[") else stripped.split(",")
+    return [int(item) for item in parsed]
+
+
 def _resolve_ff48_siccodes_path(work_root: Path) -> Path:
     return _env_path(
         "SEC_CCM_FF48_SICCODES_PATH",
@@ -344,8 +392,14 @@ def main() -> None:
         "SEC_CCM_CCM_REUSE_DAILY_PATH",
         Path(profile["CCM_REUSE_DAILY_PATH"]),
     )
-    CANONICAL_LINK_NAME = str(profile["CANONICAL_LINK_NAME"])
-    CCM_DAILY_NAME = str(profile["CCM_DAILY_NAME"])
+    CANONICAL_LINK_NAME = _env_str(
+        "SEC_CCM_CANONICAL_LINK_NAME",
+        str(profile["CANONICAL_LINK_NAME"]),
+    )
+    CCM_DAILY_NAME = _env_str(
+        "SEC_CCM_CCM_DAILY_NAME",
+        str(profile["CCM_DAILY_NAME"]),
+    )
     RUN_ROOT = _env_path("SEC_CCM_RUN_ROOT", Path(profile["RUN_ROOT"]))
     LM2011_FF48_SICCODES_PATH = _resolve_ff48_siccodes_path(WORK_ROOT)
 
@@ -353,56 +407,126 @@ def main() -> None:
     if not available_years:
         available_years = list(range(1995, 2025))
 
-    RUN_CCM_MODE = str(profile["RUN_CCM_MODE"])
+    RUN_CCM_MODE = _env_str("SEC_CCM_RUN_CCM_MODE", str(profile["RUN_CCM_MODE"]))
     existing_year_outputs = _has_yearly_outputs(SEC_YEAR_MERGED_DIR)
-    if profile["RUN_SEC_PARSE"] is None:
+    profile_run_sec_parse = _env_optional_bool(
+        "SEC_CCM_RUN_SEC_PARSE",
+        profile["RUN_SEC_PARSE"],
+    )
+    if profile_run_sec_parse is None:
         RUN_SEC_PARSE = not existing_year_outputs
     else:
-        RUN_SEC_PARSE = bool(profile["RUN_SEC_PARSE"])
-    if profile["RUN_SEC_YEARLY_MERGE"] is None:
+        RUN_SEC_PARSE = profile_run_sec_parse
+    profile_run_sec_yearly_merge = _env_optional_bool(
+        "SEC_CCM_RUN_SEC_YEARLY_MERGE",
+        profile["RUN_SEC_YEARLY_MERGE"],
+    )
+    if profile_run_sec_yearly_merge is None:
         RUN_SEC_YEARLY_MERGE = RUN_SEC_PARSE or not existing_year_outputs
     else:
-        RUN_SEC_YEARLY_MERGE = bool(profile["RUN_SEC_YEARLY_MERGE"])
-    RUN_SEC_CCM_PREMERGE = True
-    RUN_REFINITIV_STEP1 = False
-    RUN_REFINITIV_STEP1_RESOLUTION = False
-    RUN_REFINITIV_OWNERSHIP_UNIVERSE_HANDOFF = False
-    RUN_REFINITIV_OWNERSHIP_UNIVERSE_RESULTS = False
-    RUN_REFINITIV_OWNERSHIP_AUTHORITY = False
-    RUN_REFINITIV_DOC_OWNERSHIP_LM2011_EXACT_HANDOFF = False
-    RUN_REFINITIV_DOC_OWNERSHIP_LM2011_FALLBACK_HANDOFF = False
-    RUN_REFINITIV_DOC_OWNERSHIP_LM2011_FINALIZE = False
-    RUN_GATED_ITEM_EXTRACTION = False
-    RUN_UNMATCHED_DIAGNOSTIC_TRACK = False
-    RUN_NO_ITEM_DIAGNOSTICS = False
-    RUN_BOUNDARY_DIAGNOSTICS = False
-    RUN_VALIDATION_CHECKS = False
+        RUN_SEC_YEARLY_MERGE = profile_run_sec_yearly_merge
+    RUN_SEC_CCM_PREMERGE = _env_bool("SEC_CCM_RUN_SEC_CCM_PREMERGE", True)
+    RUN_REFINITIV_STEP1 = _env_bool("SEC_CCM_RUN_REFINITIV_STEP1", False)
+    RUN_REFINITIV_STEP1_RESOLUTION = _env_bool(
+        "SEC_CCM_RUN_REFINITIV_STEP1_RESOLUTION",
+        False,
+    )
+    RUN_REFINITIV_OWNERSHIP_UNIVERSE_HANDOFF = _env_bool(
+        "SEC_CCM_RUN_REFINITIV_OWNERSHIP_UNIVERSE_HANDOFF",
+        False,
+    )
+    RUN_REFINITIV_OWNERSHIP_UNIVERSE_RESULTS = _env_bool(
+        "SEC_CCM_RUN_REFINITIV_OWNERSHIP_UNIVERSE_RESULTS",
+        False,
+    )
+    RUN_REFINITIV_OWNERSHIP_AUTHORITY = _env_bool(
+        "SEC_CCM_RUN_REFINITIV_OWNERSHIP_AUTHORITY",
+        False,
+    )
+    RUN_REFINITIV_DOC_OWNERSHIP_LM2011_EXACT_HANDOFF = _env_bool(
+        "SEC_CCM_RUN_REFINITIV_DOC_OWNERSHIP_LM2011_EXACT_HANDOFF",
+        False,
+    )
+    RUN_REFINITIV_DOC_OWNERSHIP_LM2011_FALLBACK_HANDOFF = _env_bool(
+        "SEC_CCM_RUN_REFINITIV_DOC_OWNERSHIP_LM2011_FALLBACK_HANDOFF",
+        False,
+    )
+    RUN_REFINITIV_DOC_OWNERSHIP_LM2011_FINALIZE = _env_bool(
+        "SEC_CCM_RUN_REFINITIV_DOC_OWNERSHIP_LM2011_FINALIZE",
+        False,
+    )
+    RUN_GATED_ITEM_EXTRACTION = _env_bool(
+        "SEC_CCM_RUN_GATED_ITEM_EXTRACTION",
+        False,
+    )
+    RUN_UNMATCHED_DIAGNOSTIC_TRACK = _env_bool(
+        "SEC_CCM_RUN_UNMATCHED_DIAGNOSTIC_TRACK",
+        False,
+    )
+    RUN_NO_ITEM_DIAGNOSTICS = _env_bool("SEC_CCM_RUN_NO_ITEM_DIAGNOSTICS", False)
+    RUN_BOUNDARY_DIAGNOSTICS = _env_bool("SEC_CCM_RUN_BOUNDARY_DIAGNOSTICS", False)
+    RUN_VALIDATION_CHECKS = _env_bool("SEC_CCM_RUN_VALIDATION_CHECKS", False)
 
-    SEC_PARSE_MODE = "parsed"
-    YEARS = available_years
-    ITEM_EXTRACTION_REGIME = "legacy"
+    SEC_PARSE_MODE = _env_str("SEC_CCM_SEC_PARSE_MODE", "parsed")
+    YEARS = _env_int_list("SEC_CCM_YEARS", available_years)
+    ITEM_EXTRACTION_REGIME = _env_str(
+        "SEC_CCM_ITEM_EXTRACTION_REGIME",
+        "legacy",
+    )
 
-    SEC_CCM_OUTPUT_DIR = RUN_ROOT / "sec_ccm_premerge"
-    SEC_ITEMS_ANALYSIS_DIR = RUN_ROOT / "items_analysis"
-    SEC_ITEMS_DIAGNOSTIC_DIR = RUN_ROOT / "items_diagnostic"
-    SEC_NO_ITEM_DIR = RUN_ROOT / "no_item_diagnostics"
-    BOUNDARY_OUT_DIR = RUN_ROOT / "boundary_diagnostics"
-    BOUNDARY_INPUT_DIR = BOUNDARY_OUT_DIR / "matched_filings_input"
-    REFINITIV_STEP1_OUT_DIR = RUN_ROOT / "refinitiv_step1"
-    REFINITIV_OWNERSHIP_UNIVERSE_DIR = REFINITIV_STEP1_OUT_DIR / "ownership_universe_common_stock"
-    REFINITIV_OWNERSHIP_AUTHORITY_DIR = REFINITIV_STEP1_OUT_DIR / "ownership_authority_common_stock"
-    REFINITIV_DOC_OWNERSHIP_LM2011_DIR = RUN_ROOT / "refinitiv_doc_ownership_lm2011"
+    SEC_CCM_OUTPUT_DIR = _env_path("SEC_CCM_OUTPUT_DIR", RUN_ROOT / "sec_ccm_premerge")
+    SEC_ITEMS_ANALYSIS_DIR = _env_path(
+        "SEC_CCM_ITEMS_ANALYSIS_DIR",
+        RUN_ROOT / "items_analysis",
+    )
+    SEC_ITEMS_DIAGNOSTIC_DIR = _env_path(
+        "SEC_CCM_ITEMS_DIAGNOSTIC_DIR",
+        RUN_ROOT / "items_diagnostic",
+    )
+    SEC_NO_ITEM_DIR = _env_path(
+        "SEC_CCM_NO_ITEM_DIR",
+        RUN_ROOT / "no_item_diagnostics",
+    )
+    BOUNDARY_OUT_DIR = _env_path(
+        "SEC_CCM_BOUNDARY_OUT_DIR",
+        RUN_ROOT / "boundary_diagnostics",
+    )
+    BOUNDARY_INPUT_DIR = _env_path(
+        "SEC_CCM_BOUNDARY_INPUT_DIR",
+        BOUNDARY_OUT_DIR / "matched_filings_input",
+    )
+    REFINITIV_STEP1_OUT_DIR = _env_path(
+        "SEC_CCM_REFINITIV_STEP1_OUT_DIR",
+        RUN_ROOT / "refinitiv_step1",
+    )
+    REFINITIV_OWNERSHIP_UNIVERSE_DIR = _env_path(
+        "SEC_CCM_REFINITIV_OWNERSHIP_UNIVERSE_DIR",
+        REFINITIV_STEP1_OUT_DIR / "ownership_universe_common_stock",
+    )
+    REFINITIV_OWNERSHIP_AUTHORITY_DIR = _env_path(
+        "SEC_CCM_REFINITIV_OWNERSHIP_AUTHORITY_DIR",
+        REFINITIV_STEP1_OUT_DIR / "ownership_authority_common_stock",
+    )
+    REFINITIV_DOC_OWNERSHIP_LM2011_DIR = _env_path(
+        "SEC_CCM_REFINITIV_DOC_OWNERSHIP_LM2011_DIR",
+        RUN_ROOT / "refinitiv_doc_ownership_lm2011",
+    )
 
     if IN_COLAB:
-        LOCAL_TMP = Path("/content/_tmp_zip")
-        LOCAL_WORK = Path("/content/_batch_work")
-        LOCAL_ITEM_WORK = Path("/content/_item_work")
-        LOCAL_MERGE_WORK = Path("/content/_merge_work")
+        default_local_tmp = Path("/content/_tmp_zip")
+        default_local_work = Path("/content/_batch_work")
+        default_local_item_work = Path("/content/_item_work")
+        default_local_merge_work = Path("/content/_merge_work")
     else:
-        LOCAL_TMP = ROOT / ".tmp" / "zip"
-        LOCAL_WORK = ROOT / ".tmp" / "batch_work"
-        LOCAL_ITEM_WORK = ROOT / ".tmp" / "item_work"
-        LOCAL_MERGE_WORK = ROOT / ".tmp" / "merge_work"
+        default_local_tmp = ROOT / ".tmp" / "zip"
+        default_local_work = ROOT / ".tmp" / "batch_work"
+        default_local_item_work = ROOT / ".tmp" / "item_work"
+        default_local_merge_work = ROOT / ".tmp" / "merge_work"
+
+    LOCAL_TMP = _env_path("SEC_CCM_LOCAL_TMP", default_local_tmp)
+    LOCAL_WORK = _env_path("SEC_CCM_LOCAL_WORK", default_local_work)
+    LOCAL_ITEM_WORK = _env_path("SEC_CCM_LOCAL_ITEM_WORK", default_local_item_work)
+    LOCAL_MERGE_WORK = _env_path("SEC_CCM_LOCAL_MERGE_WORK", default_local_merge_work)
 
     for path in [
         SEC_BATCH_ROOT,
@@ -425,7 +549,7 @@ def main() -> None:
     ]:
         path.mkdir(parents=True, exist_ok=True)
 
-    FORMS_10K_10Q = [
+    default_forms_10k_10q = [
         "10-K",
         "10-K/A",
         "10-KA",
@@ -438,8 +562,16 @@ def main() -> None:
         "10-QT/A",
         "10-K405",
     ]
-    DAILY_FEATURE_COLUMNS = SEC_CCM_PHASE_B_DAILY_FEATURE_COLUMNS
-    REQUIRED_DAILY_NON_NULL_FEATURES = ("RET",)
+    FORMS_10K_10Q = _env_str_list("SEC_CCM_FORMS_10K_10Q", default_forms_10k_10q)
+    DAILY_FEATURE_COLUMNS = tuple(
+        _env_str_list(
+            "SEC_CCM_DAILY_FEATURE_COLUMNS",
+            list(SEC_CCM_PHASE_B_DAILY_FEATURE_COLUMNS),
+        )
+    )
+    REQUIRED_DAILY_NON_NULL_FEATURES = tuple(
+        _env_str_list("SEC_CCM_REQUIRED_DAILY_NON_NULL_FEATURES", ["RET"])
+    )
 
     print(
         {
@@ -453,6 +585,11 @@ def main() -> None:
             "LM2011_FF48_SICCODES_PATH": str(LM2011_FF48_SICCODES_PATH),
             "RUN_SEC_PARSE": RUN_SEC_PARSE,
             "RUN_SEC_YEARLY_MERGE": RUN_SEC_YEARLY_MERGE,
+            "RUN_SEC_CCM_PREMERGE": RUN_SEC_CCM_PREMERGE,
+            "RUN_GATED_ITEM_EXTRACTION": RUN_GATED_ITEM_EXTRACTION,
+            "RUN_VALIDATION_CHECKS": RUN_VALIDATION_CHECKS,
+            "SEC_PARSE_MODE": SEC_PARSE_MODE,
+            "ITEM_EXTRACTION_REGIME": ITEM_EXTRACTION_REGIME,
             "year_count": len(YEARS),
             "year_range": (YEARS[0], YEARS[-1]) if YEARS else None,
         }
