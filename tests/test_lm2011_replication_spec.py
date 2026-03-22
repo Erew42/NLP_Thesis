@@ -398,7 +398,32 @@ def test_lm2011_spec_separates_raw_share_turnover_from_log_regression_transform(
 
     assert share_turnover["definition"] == "Share turnover = sum(volume on trading days -252 through -6) / shares_outstanding_on_filing_date."
     assert log_transform["definition"] == "log_share_turnover = ln(share_turnover)"
+    assert set(log_transform["usage"]) == {
+        "LM2011 Tables IV",
+        "LM2011 Tables V",
+        "LM2011 Table VI",
+        "LM2011 Table VIII",
+        "LM2011 Internet Appendix Table IA.I",
+    }
     assert "share_turnover remains the raw appendix variable in lm2011_event_panel and lm2011_sue_panel." in log_transform["notes"]
+
+
+def test_lm2011_spec_limits_pre_filing_trade_date_public_requirement_to_event_panel() -> None:
+    spec = _load_spec()
+    pre_filing_trade_date = _get_node(spec, "public_interfaces", "normalized_fields", "pre_filing_trade_date")
+
+    assert pre_filing_trade_date["required_on"] == ["lm2011_event_panel"]
+
+
+def test_lm2011_spec_pins_ibes_exact_then_safe_fallback_matching_contract() -> None:
+    spec = _load_spec()
+    ibes = _get_node(spec, "datasets", "external_required", "ibes_unadjusted_earnings")
+
+    assert ibes["matching_contract"] == [
+        "First match exact on (gvkey_int, quarter_report_date, quarter_fiscal_period_end) against (gvkey_int, announcement_date, fiscal_period_end).",
+        "If no exact match exists, allow fallback only to unique (gvkey_int, announcement_date) rows matched on (gvkey_int, quarter_report_date).",
+        "Reject ambiguous fallback announcement_date matches rather than selecting one arbitrarily.",
+    ]
 
 
 def test_lm2011_spec_pins_trading_strategy_direction_and_split_outputs() -> None:

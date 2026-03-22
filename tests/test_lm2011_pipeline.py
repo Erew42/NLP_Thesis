@@ -286,6 +286,31 @@ def test_build_lm2011_sample_backbone_enforces_179_day_drop_and_180_day_keep() -
     assert set(backbone.get_column("doc_id").to_list()) == {"drop_179_a", "keep_180_a", "keep_180_b"}
 
 
+def test_build_lm2011_sample_backbone_uses_accession_nodash_as_same_day_tie_break() -> None:
+    sec_parsed = pl.DataFrame(
+        {
+            "doc_id": ["high_accession", "low_accession"],
+            "cik_10": ["0001", "0001"],
+            "filing_date": [dt.date(1998, 3, 31), dt.date(1998, 3, 31)],
+            "accession_nodash": ["0000000002", "0000000001"],
+            "document_type_filename": ["10-K", "10-K"],
+        }
+    )
+    matched_clean = pl.DataFrame(
+        {
+            "doc_id": ["high_accession", "low_accession"],
+            "KYPERMNO": [1, 1],
+            "gvkey": [1001, 1001],
+            "SRCTYPE": ["10K", "10K"],
+        }
+    )
+
+    backbone = build_lm2011_sample_backbone(sec_parsed.lazy(), matched_clean.lazy()).collect()
+
+    assert backbone.get_column("doc_id").to_list() == ["low_accession"]
+    assert backbone.get_column("accession_nodash").to_list() == ["0000000001"]
+
+
 def test_build_annual_accounting_panel_computes_me_fiscal_and_firm_value_v() -> None:
     annual_bs = pl.DataFrame(
         {
@@ -468,6 +493,36 @@ def test_build_lm2011_event_panel_uses_prc_when_final_prc_is_missing() -> None:
     assert panel.item(0, "share_turnover") == pytest.approx(expected_turnover)
 
 
+def test_build_lm2011_event_panel_requires_filing_day_shares_for_share_turnover() -> None:
+    inputs = _base_event_inputs()
+    inputs["daily"] = (
+        inputs["daily"]
+        .with_row_index("_idx", offset=0)
+        .with_columns((pl.col("_idx").cast(pl.Int64, strict=False) - 260).alias("_relative_day"))
+        .with_columns(
+            pl.when(pl.col("_relative_day") == 0)
+            .then(pl.lit(None, dtype=pl.Float64))
+            .when(pl.col("_relative_day").is_between(1, 3, closed="both"))
+            .then(pl.lit(25.0))
+            .otherwise(pl.col("SHROUT"))
+            .alias("SHROUT")
+        )
+        .drop("_idx", "_relative_day")
+    )
+
+    panel = build_lm2011_event_panel(
+        inputs["sample_backbone"].lazy(),
+        inputs["daily"].lazy(),
+        inputs["annual_panel"].lazy(),
+        inputs["ff"].lazy(),
+        inputs["ownership"].lazy(),
+        inputs["text_features"].lazy(),
+    ).collect()
+
+    assert panel.height == 1
+    assert panel.row(0, named=True)["share_turnover"] is None
+
+
 def test_regression_transforms_log_share_turnover_without_mutating_event_panel_contract() -> None:
     transformed = _apply_lm2011_regression_transforms(
         pl.DataFrame(
@@ -540,6 +595,53 @@ def test_build_lm2011_event_panel_rejects_insufficient_coverage_and_constant_pre
         constant_inputs["text_features"].lazy(),
     ).collect()
     assert constant_panel.height == 0
+
+
+def test_build_lm2011_event_panel_postevent_volatility_excludes_days_four_and_five() -> None:
+    def _mutate_event_returns(daily: pl.DataFrame, *, relative_days: set[int], value: float) -> pl.DataFrame:
+        return (
+            daily.with_row_index("_idx", offset=0)
+            .with_columns((pl.col("_idx").cast(pl.Int64, strict=False) - 260).alias("_relative_day"))
+            .with_columns(
+                pl.when(pl.col("_relative_day").is_in(sorted(relative_days)))
+                .then(pl.lit(value))
+                .otherwise(pl.col("FINAL_RET"))
+                .alias("FINAL_RET"),
+                pl.when(pl.col("_relative_day").is_in(sorted(relative_days)))
+                .then(pl.lit(value))
+                .otherwise(pl.col("RET"))
+                .alias("RET"),
+            )
+            .drop("_idx", "_relative_day")
+        )
+
+    base_inputs = _base_event_inputs()
+    day45_inputs = _base_event_inputs()
+    day6_inputs = _base_event_inputs()
+
+    day45_inputs["daily"] = _mutate_event_returns(day45_inputs["daily"], relative_days={4, 5}, value=0.35)
+    day6_inputs["daily"] = _mutate_event_returns(day6_inputs["daily"], relative_days={6}, value=0.35)
+
+    def _collect_panel(inputs: dict[str, pl.DataFrame]) -> pl.DataFrame:
+        return build_lm2011_event_panel(
+            inputs["sample_backbone"].lazy(),
+            inputs["daily"].lazy(),
+            inputs["annual_panel"].lazy(),
+            inputs["ff"].lazy(),
+            inputs["ownership"].lazy(),
+            inputs["text_features"].lazy(),
+        ).collect()
+
+    base_panel = _collect_panel(base_inputs)
+    day45_panel = _collect_panel(day45_inputs)
+    day6_panel = _collect_panel(day6_inputs)
+
+    base_vol = base_panel.item(0, "postevent_return_volatility")
+    day45_vol = day45_panel.item(0, "postevent_return_volatility")
+    day6_vol = day6_panel.item(0, "postevent_return_volatility")
+
+    assert day45_vol == pytest.approx(base_vol)
+    assert day6_vol > base_vol
 
 
 def test_build_lm2011_event_panel_rejects_non_unique_ownership_input() -> None:

@@ -82,6 +82,18 @@ from thesis_pkg.pipelines.lm2011_pipeline import (
     build_lm2011_trading_strategy_ff4_summary,
     build_lm2011_trading_strategy_monthly_returns,
 )
+from thesis_pkg.pipelines.lm2011_regressions import (
+    build_lm2011_normalized_difference_panel,
+    build_lm2011_return_regression_panel,
+    build_lm2011_sue_regression_panel,
+    build_lm2011_table_ia_i_results,
+    build_lm2011_table_ia_ii_results,
+    build_lm2011_table_iv_results,
+    build_lm2011_table_v_results,
+    build_lm2011_table_vi_results,
+    build_lm2011_table_viii_results,
+    run_lm2011_quarterly_fama_macbeth,
+)
 from thesis_pkg.pipelines.refinitiv import (
     build_refinitiv_lm2011_doc_ownership_requests,
     build_refinitiv_step1_ownership_authority_tables,

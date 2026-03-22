@@ -686,7 +686,7 @@ def build_lm2011_event_panel(
         .otherwise(pl.lit(0))
         .sum()
         .alias("abnormal_volume_pre_obs"),
-        pl.when(pl.col("relative_day").is_between(0, 3, closed="both"))
+        pl.when(pl.col("relative_day") == 0)
         .then(pl.col("SHROUT"))
         .otherwise(None)
         .drop_nulls()
