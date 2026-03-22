@@ -10,12 +10,11 @@ from thesis_pkg.core.ccm.sec_ccm_contracts import make_sec_ccm_join_spec_preset
 from thesis_pkg.core.sec.filing_text import FilingItemSchema, ParsedFilingSchema, RawTextSchema
 
 
-SPEC_PATH = Path("specs_drafts/lm2011_replication_spec.yaml")
+SPEC_PATH = Path("replication_plan/LM2011/lm2011_replication_spec.yaml")
 EXPECTED_RULE_BASIS = [
     "paper_explicit",
     "implementation_convention",
     "known_divergence",
-    "library_gap",
 ]
 EXPECTED_RULE_STATUS = ["active", "blocked", "legacy_diagnostic_only"]
 SEC_RAW_YEARLY_DIR = Path("full_data_run/year_merged")
@@ -71,8 +70,8 @@ def _benchmark_rows_by_id(rows: list[dict]) -> dict[str, dict]:
 def test_lm2011_spec_loads_with_phase0_phase1_contract_sections() -> None:
     spec = _load_spec()
 
-    assert spec["spec_version"] == "0.3"
-    assert spec["scope"] == "full_paper_replication"
+    assert spec["spec_version"] == "0.5"
+    assert spec["scope"] == "limited_replication"
     assert "column_contract_conventions" in spec["public_interfaces"]
 
     governance = spec["contract_governance"]
@@ -83,8 +82,7 @@ def test_lm2011_spec_loads_with_phase0_phase1_contract_sections() -> None:
         == "abs_diff <= max(tolerance_abs, paper_count * tolerance_pct)"
     )
 
-    blockers = spec["status"]["blocking_prerequisites"]
-    assert any(blocker["id"] == "ccm_filing_form_normalization" for blocker in blockers)
+    assert spec["status"]["blocking_prerequisites"] == []
 
     normalized_fields = spec["public_interfaces"]["normalized_fields"]
     for field_name in (
@@ -103,13 +101,14 @@ def test_lm2011_spec_loads_with_phase0_phase1_contract_sections() -> None:
         "lm2011_text_features_mda",
         "lm2011_event_panel",
         "lm2011_sue_panel",
-        "lm2011_label_panel",
-        "lm2011_trading_strategy_panel",
+        "lm2011_trading_strategy_monthly_returns",
+        "lm2011_trading_strategy_ff4_summary",
     ):
         assert output_name in derived_outputs
 
     datasets = spec["datasets"]
     assert "external_required" in datasets
+    assert "harvard_negative_word_list" in datasets["external_required"]
     assert "sec_ccm_premerge" in datasets
     assert (
         datasets["crsp_ccm_daily"]["derived_artifacts"]["final_daily_panel_parquet"]["status"]
@@ -224,6 +223,10 @@ def test_lm2011_required_columns_are_subsets_of_exact_library_contracts(
         (
             ("datasets", "crsp_ccm_daily", "tables", "sfz_shr"),
             {"KYPERMNO", "SHRSDT", "SHRSENDDT", "SHROUT"},
+        ),
+        (
+            ("datasets", "crsp_ccm_daily", "tables", "sfz_mth"),
+            {"KYPERMNO", "MCALDT", "MRET", "MTCAP"},
         ),
         (
             ("datasets", "compustat_fundamentals", "annual_balance_sheet"),
@@ -349,16 +352,120 @@ def test_lm2011_spec_filingdates_is_a_daily_stage_contract_input() -> None:
     )
 
 
-def test_lm2011_spec_keeps_monthly_trading_return_source_unresolved() -> None:
+def test_lm2011_spec_resolves_monthly_trading_return_source_to_sfz_mth() -> None:
     spec = _load_spec()
-    unresolved = _get_node(spec, "implementation_notes", "unresolved_choices")
-
-    monthly_choice = next(
-        entry for entry in unresolved if entry["id"] == "lm2011_monthly_stock_return_source"
-    )
+    assert _get_node(spec, "implementation_notes", "unresolved_choices") == []
+    resolved = _get_node(spec, "implementation_notes", "resolved_choices")
+    monthly_choice = next(entry for entry in resolved if entry["id"] == "lm2011_monthly_stock_return_source")
     assert monthly_choice["status"] == "active"
-    assert monthly_choice["candidate_inputs"] == ["sfz_mth", "sfz_agg_mth"]
-    assert "The monthly stock-return source for lm2011_trading_strategy_panel remains an explicit implementation choice." in monthly_choice["statement"]
+    assert monthly_choice["selected_input"] == "sfz_mth"
+    assert "lm2011_trading_strategy_monthly_returns uses sfz_mth as the monthly stock-return source." == monthly_choice["statement"]
+
+
+def test_lm2011_spec_records_strategy_defaults_as_explicit_assumptions() -> None:
+    spec = _load_spec()
+    strategy_defaults = _get_node(spec, "assumptions_and_defaults", "strategy_defaults")
+    assert any("lm2011_trading_strategy_monthly_returns uses sfz_mth with MRET" in entry for entry in strategy_defaults)
+    assert any("lm2011_trading_strategy_ff4_summary is estimated from lm2011_trading_strategy_monthly_returns" in entry for entry in strategy_defaults)
+    assert any("equal-weight is the default assumption" in entry for entry in strategy_defaults)
+    assert any("Harvard H4N-Inf comparison signals require an explicit external word-list input." == entry for entry in strategy_defaults)
+
+
+def test_lm2011_spec_encodes_exact_tfidf_formula_and_signal_surface() -> None:
+    spec = _load_spec()
+    weighting = _get_node(spec, "derived_variables", "text_weighting_contract")
+    full_cols = _get_node(
+        spec, "public_interfaces", "derived_outputs", "lm2011_text_features_full_10k", "required_columns"
+    )
+    mda_cols = _get_node(
+        spec, "public_interfaces", "derived_outputs", "lm2011_text_features_mda", "required_columns"
+    )
+
+    assert weighting["basis"] == "paper_explicit"
+    assert weighting["formula"] == "w_i,j = ((1 + log(tf_i,j)) / (1 + log(a_j))) * log(N / df_i) when tf_i,j >= 1, else 0."
+    assert "Do not use smoothed idf." in weighting["implementation_guardrails"]
+    assert "Do not add a +1 idf offset." in weighting["implementation_guardrails"]
+    assert "h4n_inf_tfidf" in full_cols
+    assert "lm_modal_weak_tfidf" in full_cols
+    assert "h4n_inf_tfidf" in mda_cols
+    assert "lm_negative_tfidf" in mda_cols
+
+
+def test_lm2011_spec_separates_raw_share_turnover_from_log_regression_transform() -> None:
+    spec = _load_spec()
+    share_turnover = _get_node(spec, "derived_variables", "lm2011_controls_and_outcomes", "share_turnover")
+    log_transform = _get_node(spec, "derived_variables", "regression_layer_transforms", "log_share_turnover")
+
+    assert share_turnover["definition"] == "Share turnover = sum(volume on trading days -252 through -6) / shares_outstanding_on_filing_date."
+    assert log_transform["definition"] == "log_share_turnover = ln(share_turnover)"
+    assert "share_turnover remains the raw appendix variable in lm2011_event_panel and lm2011_sue_panel." in log_transform["notes"]
+
+
+def test_lm2011_spec_pins_trading_strategy_direction_and_split_outputs() -> None:
+    spec = _load_spec()
+    derived_outputs = spec["public_interfaces"]["derived_outputs"]
+    strategy_contract = _get_node(spec, "implementation_contracts", "trading_strategy_contract")
+
+    assert derived_outputs["lm2011_trading_strategy_monthly_returns"]["required_columns"] == [
+        "portfolio_month",
+        "sort_signal_name",
+        "long_short_return",
+    ]
+    assert derived_outputs["lm2011_trading_strategy_ff4_summary"]["required_columns"] == [
+        "sort_signal_name",
+        "alpha_ff3_mom",
+        "beta_market",
+        "beta_smb",
+        "beta_hml",
+        "beta_mom",
+        "r2",
+    ]
+    assert strategy_contract["formation_month"] == "June"
+    assert "Use the prior year's accepted 10-K signal to assign annual June sorts." in strategy_contract["portfolio_assignment_rule"]
+    assert "Long portfolio = lowest-negative quintile (Q1)." in strategy_contract["portfolio_assignment_rule"]
+    assert "Short portfolio = highest-negative quintile (Q5)." in strategy_contract["portfolio_assignment_rule"]
+    assert "long_short_return = return(Q1) - return(Q5)." in strategy_contract["portfolio_assignment_rule"]
+
+
+def test_lm2011_spec_activates_common_equity_market_cap_exchange_and_mda_filters() -> None:
+    spec = _load_spec()
+    market_filters = {
+        row["id"]: row
+        for row in spec["filters"]["paper_faithful_lm2011_filters"]["market_and_listing"]
+    }
+    mda_filters = {
+        row["id"]: row
+        for row in spec["filters"]["paper_faithful_lm2011_filters"]["mda_subsample"]
+    }
+
+    assert market_filters["require_ordinary_common_equity_filter"]["status"] == "active"
+    assert market_filters["require_ordinary_common_equity_filter"]["operational_proxy"]["statement"] == "Operationalize ordinary common equity as SHRCD in {10, 11}."
+    assert market_filters["require_market_cap_available"]["status"] == "active"
+    assert market_filters["require_nyse_amex_nasdaq_listing"]["operational_proxy"]["statement"] == "Operationalize major-exchange listing as EXCHCD in {1, 2, 3}."
+    assert mda_filters["require_identifiable_mda_item_7"]["status"] == "active"
+    assert mda_filters["require_mda_token_count_ge_250"]["status"] == "active"
+
+
+def test_lm2011_spec_adds_retained_table_contracts() -> None:
+    spec = _load_spec()
+    tables = spec["table_and_regression_contracts"]
+
+    assert set(tables) >= {
+        "table_iv_full_10k",
+        "table_v_mda",
+        "table_vi_full_10k_dictionary_surface",
+        "table_viii_sue",
+        "internet_appendix_table_ia_i",
+        "internet_appendix_table_ia_ii",
+    }
+    assert tables["table_iv_full_10k"]["estimator"] == "quarterly_fama_macbeth"
+    assert tables["table_iv_full_10k"]["newey_west_lags"] == 1
+    assert tables["table_iv_full_10k"]["quarter_weighting"]["operationalization"]["statement"] == "Operationalize quarter weighting by quarter observation count."
+    assert tables["table_viii_sue"]["source_panel"] == "lm2011_sue_panel"
+    assert tables["internet_appendix_table_ia_ii"]["source_artifacts"] == [
+        "lm2011_trading_strategy_monthly_returns",
+        "lm2011_trading_strategy_ff4_summary",
+    ]
 
 
 def test_lm2011_primary_vs_secondary_outputs_are_partitioned_correctly() -> None:

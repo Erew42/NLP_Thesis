@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import datetime as dt
 import re
+from collections.abc import Mapping
 from functools import lru_cache
 from pathlib import Path
 
@@ -12,6 +14,57 @@ _MIN_VALID_YEAR = 1900
 _MAX_VALID_YEAR = 2100
 _FF48_HEADER_RE = re.compile(r"^\s*(\d{1,2})\s+([A-Za-z0-9]+)\s+(.+?)\s*$")
 _FF48_RANGE_RE = re.compile(r"^\s*(\d{4})-(\d{4})\s+(.+?)\s*$")
+_LM2011_SAMPLE_START = dt.date(1994, 1, 1)
+_LM2011_SAMPLE_END = dt.date(2008, 12, 31)
+_LM2011_FORM_CANONICAL_MAP: dict[str, str] = {
+    "10-K": "10-K",
+    "10-K405": "10-K",
+    "10-KT": "10-K",
+    "10-K/A": "10-K/A",
+    "10-K-A": "10-K/A",
+    "10-K405/A": "10-K/A",
+    "10-K405-A": "10-K/A",
+    "10-KT/A": "10-K/A",
+    "10-KT-A": "10-K/A",
+    "10-Q": "10-Q",
+    "10-QT": "10-Q",
+    "10-Q/A": "10-Q/A",
+    "10-Q-A": "10-Q/A",
+    "10-QT/A": "10-Q/A",
+    "10-QT-A": "10-Q/A",
+    "10K": "10-K",
+    "10K405": "10-K",
+    "10KT": "10-K",
+    "10K/A": "10-K/A",
+    "10K405/A": "10-K/A",
+    "10KT/A": "10-K/A",
+    "10Q": "10-Q",
+    "10QT": "10-Q",
+    "10Q/A": "10-Q/A",
+    "10QT/A": "10-Q/A",
+    "20F": "20-F",
+    "20-F": "20-F",
+    "20F/A": "20-F/A",
+    "20-F/A": "20-F/A",
+    "40F": "40-F",
+    "40-F": "40-F",
+    "40F/A": "40-F/A",
+    "40-F/A": "40-F/A",
+}
+_LM2011_SEC_INCLUDED_RAW_FORMS = {"10-K", "10-K405"}
+_LM2011_SEC_EXCLUDED_RAW_FORMS = {
+    "10-K-A",
+    "10-K405-A",
+    "10-KT",
+    "10-KT-A",
+    "10KSB",
+    "10KSB-A",
+    "10KSB40",
+    "10KSB40-A",
+}
+_LM2011_CCM_INCLUDED_RAW_FORMS = {"10K"}
+_LM2011_CCM_EXCLUDED_RAW_FORMS = {"10K/A"}
+_FISCAL_MARKET_SHARE_COLUMNS = ("CSHO", "CSHOC", "CSHPRI", "SHROUT", "CSHOQ")
 
 
 def _require_columns(lf: pl.LazyFrame, required: tuple[str, ...], label: str) -> None:
@@ -71,6 +124,257 @@ def _sic_int_expr(col_name: str) -> pl.Expr:
         .then(digits.cast(pl.Int32, strict=False))
         .otherwise(pl.lit(None, dtype=pl.Int32))
         .alias(col_name)
+    )
+
+
+def _clean_form_token(value: str | None) -> str | None:
+    if value is None:
+        return None
+    cleaned = re.sub(r"\s+", "", str(value).strip().upper())
+    return cleaned or None
+
+
+def normalize_lm2011_form_value(value: str | None, *, other_value: str | None = "Other") -> str | None:
+    cleaned = _clean_form_token(value)
+    if cleaned is None:
+        return None
+    return _LM2011_FORM_CANONICAL_MAP.get(cleaned, other_value)
+
+
+def normalize_lm2011_form_expr(col_name: str, *, other_value: str | None = "Other") -> pl.Expr:
+    return pl.col(col_name).map_elements(
+        lambda value: normalize_lm2011_form_value(value, other_value=other_value),
+        return_dtype=pl.Utf8,
+    )
+
+
+def _normalize_sec_raw_form_value(value: str | None) -> str | None:
+    cleaned = _clean_form_token(value)
+    if cleaned is None:
+        return None
+    compact = cleaned.replace("-", "").replace("/", "")
+    raw_form_map = {
+        "10K": "10-K",
+        "10K405": "10-K405",
+        "10KT": "10-KT",
+        "10KA": "10-K-A",
+        "10K405A": "10-K405-A",
+        "10KTA": "10-KT-A",
+        "10Q": "10-Q",
+        "10QT": "10-QT",
+        "10QA": "10-Q-A",
+        "10QTA": "10-QT-A",
+        "10KSB": "10KSB",
+        "10KSBA": "10KSB-A",
+        "10KSB40": "10KSB40",
+        "10KSB40A": "10KSB40-A",
+    }
+    if compact in raw_form_map:
+        return raw_form_map[compact]
+    cleaned = cleaned.replace("/A", "-A")
+    if cleaned.endswith("A") and "/" not in cleaned and "-A" not in cleaned:
+        for base in ("10-K405", "10-KT", "10-K", "10KSB40", "10KSB", "10-QT", "10-Q"):
+            if cleaned == f"{base}A":
+                return f"{base}-A"
+    return cleaned
+
+
+def _normalize_ccm_raw_form_value(value: str | None) -> str | None:
+    cleaned = _clean_form_token(value)
+    if cleaned is None:
+        return None
+    normalized = cleaned.replace("-", "")
+    if normalized == "10KA":
+        return "10K/A"
+    if normalized == "10QA":
+        return "10Q/A"
+    if normalized == "10KTA":
+        return "10KT/A"
+    if normalized == "10QTA":
+        return "10QT/A"
+    if normalized == "20FA":
+        return "20F/A"
+    if normalized == "40FA":
+        return "40F/A"
+    return normalized
+
+
+def build_lm2011_normalized_filing_feeds(
+    sec_parsed_lf: pl.LazyFrame,
+    ccm_filingdates_lf: pl.LazyFrame,
+    *,
+    sec_form_col: str = "document_type_filename",
+    ccm_form_col: str = "SRCTYPE",
+) -> tuple[pl.LazyFrame, pl.LazyFrame]:
+    """Preserve raw forms and add canonical ``normalized_form`` to SEC and CCM feeds."""
+    _require_columns(sec_parsed_lf, ("doc_id", sec_form_col), "sec_parsed")
+    _require_columns(ccm_filingdates_lf, (ccm_form_col,), "ccm_filingdates")
+
+    sec = sec_parsed_lf.drop("normalized_form", strict=False).with_columns(
+        normalize_lm2011_form_expr(sec_form_col).alias("normalized_form"),
+    )
+    ccm = ccm_filingdates_lf.drop("normalized_form", strict=False).with_columns(
+        normalize_lm2011_form_expr(ccm_form_col).alias("normalized_form"),
+    )
+    return sec, ccm
+
+
+def build_lm2011_sample_backbone(
+    sec_parsed_lf: pl.LazyFrame,
+    matched_clean_lf: pl.LazyFrame,
+    *,
+    ccm_filingdates_lf: pl.LazyFrame | None = None,
+    sample_start: dt.date = _LM2011_SAMPLE_START,
+    sample_end: dt.date = _LM2011_SAMPLE_END,
+    sec_form_col: str = "document_type_filename",
+) -> pl.LazyFrame:
+    """Build the paper-faithful LM2011 10-K filing backbone before panel assembly."""
+    _require_columns(
+        sec_parsed_lf,
+        ("doc_id", "cik_10", "filing_date", "accession_nodash", sec_form_col),
+        "sec_parsed",
+    )
+    _require_columns(matched_clean_lf, ("doc_id",), "matched_clean")
+
+    sec_schema = sec_parsed_lf.collect_schema()
+    optional_sec_cols = [
+        name
+        for name in (
+            "accession_number",
+            "acceptance_datetime",
+            "period_end",
+            "full_text",
+        )
+        if name in sec_schema
+    ]
+    sec = (
+        sec_parsed_lf.drop("normalized_form", strict=False)
+        .with_columns(
+            pl.col("doc_id").cast(pl.Utf8, strict=False),
+            pl.col("cik_10").cast(pl.Utf8, strict=False),
+            pl.col("accession_nodash").cast(pl.Utf8, strict=False),
+            pl.col("filing_date").cast(pl.Date, strict=False),
+            pl.col(sec_form_col).cast(pl.Utf8, strict=False),
+            pl.col(sec_form_col)
+            .map_elements(_normalize_sec_raw_form_value, return_dtype=pl.Utf8)
+            .alias("_sec_raw_form"),
+            normalize_lm2011_form_expr(sec_form_col).alias("normalized_form"),
+        )
+        .filter(
+            pl.col("doc_id").is_not_null()
+            & pl.col("cik_10").is_not_null()
+            & pl.col("filing_date").is_not_null()
+            & pl.col("accession_nodash").is_not_null()
+            & pl.col(sec_form_col).is_not_null()
+        )
+        .sort("doc_id", "filing_date", "accession_nodash")
+        .unique(subset=["doc_id"], keep="first")
+        .filter(pl.col("filing_date").is_between(pl.lit(sample_start), pl.lit(sample_end), closed="both"))
+        .filter(pl.col("_sec_raw_form").is_in(sorted(_LM2011_SEC_INCLUDED_RAW_FORMS)))
+        .filter(pl.col("_sec_raw_form").is_in(sorted(_LM2011_SEC_EXCLUDED_RAW_FORMS)).not_())
+        .with_columns(pl.col("filing_date").dt.year().alias("_filing_year"))
+        .sort("cik_10", "_filing_year", "filing_date", "accession_nodash")
+        .unique(subset=["cik_10", "_filing_year"], keep="first")
+        .sort("cik_10", "filing_date", "accession_nodash")
+        .with_columns(pl.col("filing_date").shift(1).over("cik_10").alias("_prev_kept_filing_date"))
+        .filter(
+            pl.col("_prev_kept_filing_date").is_null()
+            | ((pl.col("filing_date") - pl.col("_prev_kept_filing_date")).dt.total_days() >= pl.lit(180))
+        )
+        .select(
+            "doc_id",
+            "cik_10",
+            "filing_date",
+            "accession_nodash",
+            pl.col(sec_form_col),
+            "normalized_form",
+            *[pl.col(name) for name in optional_sec_cols],
+        )
+    )
+
+    matched_schema = matched_clean_lf.collect_schema()
+    matched = matched_clean_lf.with_columns(pl.col("doc_id").cast(pl.Utf8, strict=False))
+    duplicated_sec_cols = [name for name in ("cik_10", "filing_date", sec_form_col) if name in matched_schema]
+    if duplicated_sec_cols:
+        matched = matched.drop(*duplicated_sec_cols, strict=False)
+
+    joined = sec.join(matched, on="doc_id", how="inner", suffix="_matched")
+    joined_schema = joined.collect_schema()
+    if "kypermno" not in joined_schema and "KYPERMNO" in joined_schema:
+        joined = joined.with_columns(pl.col("KYPERMNO").cast(pl.Int32, strict=False).alias("kypermno"))
+        joined_schema = joined.collect_schema()
+    if "KYPERMNO" not in joined_schema and "kypermno" in joined_schema:
+        joined = joined.with_columns(pl.col("kypermno").cast(pl.Int32, strict=False).alias("KYPERMNO"))
+        joined_schema = joined.collect_schema()
+
+    if "SRCTYPE" in joined_schema:
+        joined = joined.with_columns(
+            pl.col("SRCTYPE")
+            .map_elements(_normalize_ccm_raw_form_value, return_dtype=pl.Utf8)
+            .alias("_ccm_raw_form")
+        ).filter(
+            pl.col("_ccm_raw_form").is_in(sorted(_LM2011_CCM_INCLUDED_RAW_FORMS))
+            & pl.col("_ccm_raw_form").is_in(sorted(_LM2011_CCM_EXCLUDED_RAW_FORMS)).not_()
+        )
+    elif ccm_filingdates_lf is not None:
+        _require_columns(ccm_filingdates_lf, ("LPERMNO", "FILEDATE", "SRCTYPE"), "ccm_filingdates")
+        ccm_permno_col = _resolve_first_existing(
+            joined_schema,
+            ("KYPERMNO", "kypermno", "LPERMNO"),
+            "lm2011 sample backbone",
+        )
+        ccm_gate = (
+            ccm_filingdates_lf.select(
+                pl.col("LPERMNO").cast(pl.Int32, strict=False).alias("_ccm_permno"),
+                pl.col("FILEDATE").cast(pl.Date, strict=False).alias("_ccm_filing_date"),
+                pl.col("SRCTYPE")
+                .map_elements(_normalize_ccm_raw_form_value, return_dtype=pl.Utf8)
+                .alias("_ccm_raw_form"),
+            )
+            .drop_nulls(subset=["_ccm_permno", "_ccm_filing_date", "_ccm_raw_form"])
+            .group_by("_ccm_permno", "_ccm_filing_date")
+            .agg(
+                pl.col("_ccm_raw_form")
+                .is_in(sorted(_LM2011_CCM_INCLUDED_RAW_FORMS))
+                .any()
+                .alias("_ccm_has_included_form"),
+                pl.col("_ccm_raw_form")
+                .is_in(sorted(_LM2011_CCM_EXCLUDED_RAW_FORMS))
+                .any()
+                .alias("_ccm_has_excluded_form"),
+            )
+        )
+        joined = (
+            joined.with_columns(
+                pl.col(ccm_permno_col).cast(pl.Int32, strict=False).alias("_ccm_permno"),
+                pl.col("filing_date").cast(pl.Date, strict=False).alias("_ccm_filing_date"),
+            )
+            .join(ccm_gate, on=["_ccm_permno", "_ccm_filing_date"], how="left")
+            .filter(
+                pl.col("_ccm_has_included_form").fill_null(False)
+                & pl.col("_ccm_has_excluded_form").fill_null(False).not_()
+            )
+            .drop(
+                "_ccm_permno",
+                "_ccm_filing_date",
+                "_ccm_has_included_form",
+                "_ccm_has_excluded_form",
+                strict=False,
+            )
+        )
+        joined_schema = joined.collect_schema()
+    else:
+        raise ValueError(
+            "LM2011 sample backbone requires CCM raw forms via matched_clean.SRCTYPE or explicit ccm_filingdates_lf"
+        )
+
+    gvkey_source = _resolve_first_existing(
+        joined_schema,
+        ("gvkey", "KYGVKEY_final", "KYGVKEY", "KYGVKEY_ccm"),
+        "lm2011 sample backbone",
+    )
+    return joined.with_columns(
+        pl.col(gvkey_source).cast(GVKEY_DTYPE, strict=False).alias("gvkey_int"),
     )
 
 
@@ -211,6 +515,7 @@ def build_annual_accounting_panel(
     annual_balance_sheet_lf: pl.LazyFrame,
     annual_income_statement_lf: pl.LazyFrame,
     annual_period_descriptor_lf: pl.LazyFrame,
+    annual_fiscal_market_lf: pl.LazyFrame | None = None,
 ) -> pl.LazyFrame:
     """Build the detailed-key annual FF2001-compatible accounting panel."""
     join_keys = ("KYGVKEY", "KEYSET", "FYYYY", "fyra")
@@ -259,7 +564,7 @@ def build_annual_accounting_panel(
     prba_expr = _optional_float_expr(bs_schema, "PRBA").fill_null(0.0)
     txdi_expr = _float_expr("TXDI").fill_null(0.0)
 
-    return (
+    panel = (
         annual_balance_sheet_lf.join(annual_income_statement_lf, on=list(join_keys), how="inner")
         .join(annual_period_descriptor_lf, on=list(join_keys), how="inner")
         .with_columns(
@@ -278,6 +583,59 @@ def build_annual_accounting_panel(
             (_float_expr("IB") - _float_expr("DVP") + txdi_expr).alias("earnings_available_for_common_y"),
         )
     )
+    if annual_fiscal_market_lf is None:
+        return panel.with_columns(
+            pl.lit(None, dtype=pl.Float64).alias("market_equity_me_fiscal"),
+            pl.lit(None, dtype=pl.Float64).alias("firm_value_v"),
+        )
+
+    _require_columns(
+        annual_fiscal_market_lf,
+        ("KYGVKEY", "DATADATE", "MKVALT", "PRCC"),
+        "annual_fiscal_market",
+    )
+    fiscal_schema = annual_fiscal_market_lf.collect_schema()
+    share_col = next((name for name in _FISCAL_MARKET_SHARE_COLUMNS if name in fiscal_schema), None)
+
+    fiscal_market = annual_fiscal_market_lf.select(
+        pl.col("KYGVKEY").cast(GVKEY_DTYPE, strict=False).alias("gvkey_int"),
+        pl.col("DATADATE").cast(pl.Date, strict=False).alias("accounting_period_end"),
+        pl.col("MKVALT").cast(pl.Float64, strict=False).alias("_MKVALT"),
+        pl.col("PRCC").cast(pl.Float64, strict=False).alias("_PRCC"),
+        (
+            pl.col(share_col).cast(pl.Float64, strict=False).alias("_ME_SHARES")
+            if share_col is not None
+            else pl.lit(None, dtype=pl.Float64).alias("_ME_SHARES")
+        ),
+        (
+            pl.col("KEYSET").cast(pl.Utf8, strict=False).alias("_ME_KEYSET")
+            if "KEYSET" in fiscal_schema
+            else pl.lit(None, dtype=pl.Utf8).alias("_ME_KEYSET")
+        ),
+    )
+
+    out = panel.join(
+        fiscal_market,
+        on=["gvkey_int", "accounting_period_end"],
+        how="left",
+    )
+    me_fiscal_expr = pl.coalesce(
+        [
+            pl.col("_MKVALT").cast(pl.Float64, strict=False),
+            (
+                pl.col("_PRCC").cast(pl.Float64, strict=False).abs()
+                * pl.col("_ME_SHARES").cast(pl.Float64, strict=False)
+            ),
+        ]
+    )
+    return out.with_columns(
+        me_fiscal_expr.alias("market_equity_me_fiscal"),
+        (
+            pl.col("AT").cast(pl.Float64, strict=False)
+            - pl.col("book_equity_be").cast(pl.Float64, strict=False)
+            + me_fiscal_expr
+        ).alias("firm_value_v"),
+    ).drop("_MKVALT", "_PRCC", "_ME_SHARES", "_ME_KEYSET", strict=False)
 
 
 def attach_latest_annual_accounting(
@@ -611,7 +969,7 @@ def attach_pre_filing_market_data(
     )
     projected_cols = [
         col
-        for col in ("TCAP", "PRC", "SHROUT", "VOL", "SHRCD", "EXCHCD")
+        for col in ("TCAP", "PRC", "FINAL_PRC", "SHROUT", "VOL", "SHRCD", "EXCHCD")
         if col in daily_schema
     ]
     if "TCAP" not in daily_schema and ("PRC" not in daily_schema or "SHROUT" not in daily_schema):

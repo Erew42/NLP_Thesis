@@ -33,8 +33,18 @@ from thesis_pkg.core.ccm.lm2011 import (
     attach_latest_annual_accounting,
     attach_pre_filing_market_data,
     build_annual_accounting_panel,
+    build_lm2011_normalized_filing_feeds,
+    build_lm2011_sample_backbone,
     build_quarterly_accounting_panel,
     derive_filing_trade_anchors,
+    normalize_lm2011_form_expr,
+    normalize_lm2011_form_value,
+)
+from thesis_pkg.core.sec.lm2011_text import (
+    build_lm2011_text_features_full_10k,
+    build_lm2011_text_features_mda,
+    normalize_lm2011_dictionary_lists,
+    tokenize_lm2011_text,
 )
 from thesis_pkg.core.ccm.transforms import (
     CCM_DAILY_BRIDGE_SURFACE_OPTIONAL_COLUMNS,
@@ -66,6 +76,12 @@ from thesis_pkg.core.ccm.transforms import (
 )
 from thesis_pkg.io.parquet import load_tables, sink_exact_firm_sample_from_parquet
 from thesis_pkg.pipelines.ccm_pipeline import build_or_reuse_ccm_daily_stage, merge_histories
+from thesis_pkg.pipelines.lm2011_pipeline import (
+    build_lm2011_event_panel,
+    build_lm2011_sue_panel,
+    build_lm2011_trading_strategy_ff4_summary,
+    build_lm2011_trading_strategy_monthly_returns,
+)
 from thesis_pkg.pipelines.refinitiv import (
     build_refinitiv_lm2011_doc_ownership_requests,
     build_refinitiv_step1_ownership_authority_tables,
