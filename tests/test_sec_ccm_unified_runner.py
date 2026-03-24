@@ -33,6 +33,69 @@ def test_doc_analyst_stage_runs_after_sec_ccm_premerge_block() -> None:
     assert source.index(doc_stage_marker) > source.index(premerge_marker)
 
 
+def test_analyst_step1_stage_functions_are_imported_and_referenced() -> None:
+    runner_path = Path("src/thesis_pkg/notebooks_and_scripts/sec_ccm_unified_runner.py")
+    source = runner_path.read_text(encoding="utf-8")
+
+    required_symbols = [
+        "run_refinitiv_step1_instrument_authority_pipeline",
+        "run_refinitiv_step1_analyst_request_groups_pipeline",
+        "run_refinitiv_step1_analyst_actuals_api_pipeline",
+        "run_refinitiv_step1_analyst_estimates_monthly_api_pipeline",
+        "run_refinitiv_step1_analyst_normalize_pipeline",
+    ]
+
+    for symbol in required_symbols:
+        assert symbol in source
+
+
+def test_analyst_step1_stage_order_precedes_doc_analyst_stages() -> None:
+    runner_path = Path("src/thesis_pkg/notebooks_and_scripts/sec_ccm_unified_runner.py")
+    source = runner_path.read_text(encoding="utf-8")
+
+    normalize_marker = "if RUN_REFINITIV_ANALYST_NORMALIZE:"
+    doc_anchor_marker = "if RUN_REFINITIV_DOC_ANALYST_LM2011_ANCHORS:"
+    doc_select_marker = "if RUN_REFINITIV_DOC_ANALYST_LM2011_SELECT:"
+
+    assert normalize_marker in source
+    assert doc_anchor_marker in source
+    assert doc_select_marker in source
+    assert source.index(normalize_marker) < source.index(doc_anchor_marker)
+    assert source.index(doc_anchor_marker) < source.index(doc_select_marker)
+
+
+def test_new_analyst_step1_booleans_exist_and_default_false() -> None:
+    runner_path = Path("src/thesis_pkg/notebooks_and_scripts/sec_ccm_unified_runner.py")
+    source = runner_path.read_text(encoding="utf-8")
+
+    expected_defaults = [
+        'RUN_REFINITIV_INSTRUMENT_AUTHORITY = _env_bool(\n        "SEC_CCM_RUN_REFINITIV_INSTRUMENT_AUTHORITY",\n        False,',
+        'RUN_REFINITIV_ANALYST_REQUEST_GROUPS = _env_bool(\n        "SEC_CCM_RUN_REFINITIV_ANALYST_REQUEST_GROUPS",\n        False,',
+        'RUN_REFINITIV_ANALYST_ACTUALS = _env_bool(\n        "SEC_CCM_RUN_REFINITIV_ANALYST_ACTUALS",\n        False,',
+        'RUN_REFINITIV_ANALYST_ESTIMATES_MONTHLY = _env_bool(\n        "SEC_CCM_RUN_REFINITIV_ANALYST_ESTIMATES_MONTHLY",\n        False,',
+        'RUN_REFINITIV_ANALYST_NORMALIZE = _env_bool(\n        "SEC_CCM_RUN_REFINITIV_ANALYST_NORMALIZE",\n        False,',
+    ]
+
+    for snippet in expected_defaults:
+        assert snippet in source
+
+
+def test_runner_references_expected_analyst_output_artifacts() -> None:
+    runner_path = Path("src/thesis_pkg/notebooks_and_scripts/sec_ccm_unified_runner.py")
+    source = runner_path.read_text(encoding="utf-8")
+
+    expected_artifacts = [
+        "refinitiv_analyst_request_group_membership_common_stock.parquet",
+        "refinitiv_analyst_request_universe_common_stock.parquet",
+        "refinitiv_analyst_actuals_raw.parquet",
+        "refinitiv_analyst_estimates_monthly_raw.parquet",
+        "refinitiv_analyst_normalized_panel.parquet",
+    ]
+
+    for artifact in expected_artifacts:
+        assert artifact in source
+
+
 def test_first_existing_path_prefers_existing_candidate(tmp_path: Path) -> None:
     missing = tmp_path / "missing"
     existing = tmp_path / "existing"

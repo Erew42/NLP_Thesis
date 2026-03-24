@@ -204,6 +204,11 @@ from thesis_pkg.pipeline import (
     run_refinitiv_lm2011_doc_ownership_fallback_api_pipeline,
     run_refinitiv_lm2011_doc_ownership_fallback_handoff_pipeline,
     run_refinitiv_lm2011_doc_ownership_finalize_pipeline,
+    run_refinitiv_step1_analyst_actuals_api_pipeline,
+    run_refinitiv_step1_analyst_estimates_monthly_api_pipeline,
+    run_refinitiv_step1_analyst_normalize_pipeline,
+    run_refinitiv_step1_analyst_request_groups_pipeline,
+    run_refinitiv_step1_instrument_authority_pipeline,
     run_refinitiv_step1_lookup_api_pipeline,
     run_refinitiv_step1_ownership_authority_pipeline,
     run_refinitiv_step1_ownership_universe_api_pipeline,
@@ -489,6 +494,26 @@ def main() -> None:
         "SEC_CCM_RUN_REFINITIV_DOC_ANALYST_LM2011_SELECT",
         True,
     )
+    RUN_REFINITIV_INSTRUMENT_AUTHORITY = _env_bool(
+        "SEC_CCM_RUN_REFINITIV_INSTRUMENT_AUTHORITY",
+        True,
+    )
+    RUN_REFINITIV_ANALYST_REQUEST_GROUPS = _env_bool(
+        "SEC_CCM_RUN_REFINITIV_ANALYST_REQUEST_GROUPS",
+        True,
+    )
+    RUN_REFINITIV_ANALYST_ACTUALS = _env_bool(
+        "SEC_CCM_RUN_REFINITIV_ANALYST_ACTUALS",
+        True,
+    )
+    RUN_REFINITIV_ANALYST_ESTIMATES_MONTHLY = _env_bool(
+        "SEC_CCM_RUN_REFINITIV_ANALYST_ESTIMATES_MONTHLY",
+        True,
+    )
+    RUN_REFINITIV_ANALYST_NORMALIZE = _env_bool(
+        "SEC_CCM_RUN_REFINITIV_ANALYST_NORMALIZE",
+        True,
+    )
     RUN_GATED_ITEM_EXTRACTION = _env_bool(
         "SEC_CCM_RUN_GATED_ITEM_EXTRACTION",
         False,
@@ -632,6 +657,11 @@ def main() -> None:
             "RUN_SEC_CCM_PREMERGE": RUN_SEC_CCM_PREMERGE,
             "RUN_REFINITIV_DOC_ANALYST_LM2011_ANCHORS": RUN_REFINITIV_DOC_ANALYST_LM2011_ANCHORS,
             "RUN_REFINITIV_DOC_ANALYST_LM2011_SELECT": RUN_REFINITIV_DOC_ANALYST_LM2011_SELECT,
+            "RUN_REFINITIV_INSTRUMENT_AUTHORITY": RUN_REFINITIV_INSTRUMENT_AUTHORITY,
+            "RUN_REFINITIV_ANALYST_REQUEST_GROUPS": RUN_REFINITIV_ANALYST_REQUEST_GROUPS,
+            "RUN_REFINITIV_ANALYST_ACTUALS": RUN_REFINITIV_ANALYST_ACTUALS,
+            "RUN_REFINITIV_ANALYST_ESTIMATES_MONTHLY": RUN_REFINITIV_ANALYST_ESTIMATES_MONTHLY,
+            "RUN_REFINITIV_ANALYST_NORMALIZE": RUN_REFINITIV_ANALYST_NORMALIZE,
             "RUN_GATED_ITEM_EXTRACTION": RUN_GATED_ITEM_EXTRACTION,
             "RUN_VALIDATION_CHECKS": RUN_VALIDATION_CHECKS,
             "SEC_PARSE_MODE": SEC_PARSE_MODE,
@@ -815,6 +845,11 @@ def main() -> None:
     refinitiv_ownership_universe_handoff_paths: dict[str, Path] | None = None
     refinitiv_ownership_universe_results_paths: dict[str, Path] | None = None
     refinitiv_ownership_authority_paths: dict[str, Path] | None = None
+    refinitiv_instrument_authority_paths: dict[str, Path] | None = None
+    refinitiv_analyst_request_group_paths: dict[str, Path] | None = None
+    refinitiv_analyst_actuals_paths: dict[str, Path] | None = None
+    refinitiv_analyst_estimates_paths: dict[str, Path] | None = None
+    refinitiv_analyst_normalize_paths: dict[str, Path] | None = None
     refinitiv_doc_ownership_exact_paths: dict[str, Path] | None = None
     refinitiv_doc_ownership_fallback_paths: dict[str, Path] | None = None
     refinitiv_doc_ownership_finalize_paths: dict[str, Path] | None = None
@@ -995,6 +1030,142 @@ def main() -> None:
                     "expected_resolution_path": str(resolution_artifact_path),
                     "expected_results_path": str(ownership_results_artifact_path),
                     "expected_row_summary_path": str(ownership_row_summary_artifact_path),
+                }
+            )
+    if RUN_REFINITIV_INSTRUMENT_AUTHORITY:
+        bridge_artifact_path = (
+            refinitiv_step1_paths["refinitiv_bridge_universe_parquet"]
+            if refinitiv_step1_paths is not None
+            else REFINITIV_STEP1_OUT_DIR / "refinitiv_bridge_universe.parquet"
+        )
+        resolution_artifact_path = (
+            refinitiv_resolution_paths["refinitiv_ric_resolution_common_stock_parquet"]
+            if refinitiv_resolution_paths is not None
+            else REFINITIV_STEP1_OUT_DIR / "refinitiv_ric_resolution_common_stock.parquet"
+        )
+        if bridge_artifact_path.exists() and resolution_artifact_path.exists():
+            refinitiv_instrument_authority_paths = run_refinitiv_step1_instrument_authority_pipeline(
+                bridge_artifact_path=bridge_artifact_path,
+                resolution_artifact_path=resolution_artifact_path,
+                output_dir=REFINITIV_STEP1_OUT_DIR,
+            )
+            _record_refinitiv_stage(
+                "refinitiv_instrument_authority",
+                refinitiv_instrument_authority_paths,
+            )
+            for key in sorted(refinitiv_instrument_authority_paths):
+                print(f"{key}: {refinitiv_instrument_authority_paths[key]}")
+        else:
+            print(
+                {
+                    "warning": "skipping Refinitiv instrument authority; required artifacts not found",
+                    "expected_bridge_path": str(bridge_artifact_path),
+                    "expected_resolution_path": str(resolution_artifact_path),
+                }
+            )
+    if RUN_REFINITIV_ANALYST_REQUEST_GROUPS:
+        instrument_authority_artifact_path = (
+            refinitiv_instrument_authority_paths["refinitiv_instrument_authority_common_stock_parquet"]
+            if refinitiv_instrument_authority_paths is not None
+            else REFINITIV_STEP1_OUT_DIR / "refinitiv_instrument_authority_common_stock.parquet"
+        )
+        if instrument_authority_artifact_path.exists():
+            refinitiv_analyst_request_group_paths = run_refinitiv_step1_analyst_request_groups_pipeline(
+                instrument_authority_artifact_path=instrument_authority_artifact_path,
+                output_dir=REFINITIV_ANALYST_COMMON_STOCK_DIR,
+            )
+            _record_refinitiv_stage(
+                "refinitiv_analyst_request_groups",
+                refinitiv_analyst_request_group_paths,
+            )
+            for key in sorted(refinitiv_analyst_request_group_paths):
+                print(f"{key}: {refinitiv_analyst_request_group_paths[key]}")
+        else:
+            print(
+                {
+                    "warning": "skipping Refinitiv analyst request groups; instrument authority artifact not found",
+                    "expected_instrument_authority_path": str(instrument_authority_artifact_path),
+                }
+            )
+    if RUN_REFINITIV_ANALYST_ACTUALS:
+        analyst_request_universe_path = (
+            refinitiv_analyst_request_group_paths["refinitiv_analyst_request_universe_common_stock_parquet"]
+            if refinitiv_analyst_request_group_paths is not None
+            else REFINITIV_ANALYST_COMMON_STOCK_DIR / "refinitiv_analyst_request_universe_common_stock.parquet"
+        )
+        if LSEG_API_READY and analyst_request_universe_path.exists():
+            refinitiv_analyst_actuals_paths = run_refinitiv_step1_analyst_actuals_api_pipeline(
+                request_universe_parquet_path=analyst_request_universe_path,
+                output_dir=REFINITIV_ANALYST_COMMON_STOCK_DIR,
+            )
+            _record_refinitiv_stage(
+                "refinitiv_analyst_actuals",
+                refinitiv_analyst_actuals_paths,
+            )
+            for key in sorted(refinitiv_analyst_actuals_paths):
+                print(f"{key}: {refinitiv_analyst_actuals_paths[key]}")
+        else:
+            print(
+                {
+                    "warning": "skipping Refinitiv analyst actuals; API unavailable or request universe not found",
+                    "lseg_api_ready": LSEG_API_READY,
+                    "expected_request_universe_path": str(analyst_request_universe_path),
+                }
+            )
+    if RUN_REFINITIV_ANALYST_ESTIMATES_MONTHLY:
+        analyst_request_universe_path = (
+            refinitiv_analyst_request_group_paths["refinitiv_analyst_request_universe_common_stock_parquet"]
+            if refinitiv_analyst_request_group_paths is not None
+            else REFINITIV_ANALYST_COMMON_STOCK_DIR / "refinitiv_analyst_request_universe_common_stock.parquet"
+        )
+        if LSEG_API_READY and analyst_request_universe_path.exists():
+            refinitiv_analyst_estimates_paths = run_refinitiv_step1_analyst_estimates_monthly_api_pipeline(
+                request_universe_parquet_path=analyst_request_universe_path,
+                output_dir=REFINITIV_ANALYST_COMMON_STOCK_DIR,
+            )
+            _record_refinitiv_stage(
+                "refinitiv_analyst_estimates_monthly",
+                refinitiv_analyst_estimates_paths,
+            )
+            for key in sorted(refinitiv_analyst_estimates_paths):
+                print(f"{key}: {refinitiv_analyst_estimates_paths[key]}")
+        else:
+            print(
+                {
+                    "warning": "skipping Refinitiv analyst estimates monthly; API unavailable or request universe not found",
+                    "lseg_api_ready": LSEG_API_READY,
+                    "expected_request_universe_path": str(analyst_request_universe_path),
+                }
+            )
+    if RUN_REFINITIV_ANALYST_NORMALIZE:
+        analyst_actuals_raw_path = (
+            refinitiv_analyst_actuals_paths["refinitiv_analyst_actuals_raw_parquet"]
+            if refinitiv_analyst_actuals_paths is not None
+            else REFINITIV_ANALYST_COMMON_STOCK_DIR / "refinitiv_analyst_actuals_raw.parquet"
+        )
+        analyst_estimates_raw_path = (
+            refinitiv_analyst_estimates_paths["refinitiv_analyst_estimates_monthly_raw_parquet"]
+            if refinitiv_analyst_estimates_paths is not None
+            else REFINITIV_ANALYST_COMMON_STOCK_DIR / "refinitiv_analyst_estimates_monthly_raw.parquet"
+        )
+        if analyst_actuals_raw_path.exists() and analyst_estimates_raw_path.exists():
+            refinitiv_analyst_normalize_paths = run_refinitiv_step1_analyst_normalize_pipeline(
+                actuals_raw_artifact_path=analyst_actuals_raw_path,
+                estimates_raw_artifact_path=analyst_estimates_raw_path,
+                output_dir=REFINITIV_ANALYST_COMMON_STOCK_DIR,
+            )
+            _record_refinitiv_stage(
+                "refinitiv_analyst_normalize",
+                refinitiv_analyst_normalize_paths,
+            )
+            for key in sorted(refinitiv_analyst_normalize_paths):
+                print(f"{key}: {refinitiv_analyst_normalize_paths[key]}")
+        else:
+            print(
+                {
+                    "warning": "skipping Refinitiv analyst normalize; required raw analyst artifacts not found",
+                    "expected_actuals_raw_path": str(analyst_actuals_raw_path),
+                    "expected_estimates_raw_path": str(analyst_estimates_raw_path),
                 }
             )
     # ## 3) SEC parse and yearly merge
