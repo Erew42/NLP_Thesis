@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from datetime import date
 import sqlite3
 from pathlib import Path
 from typing import Any
 
 import polars as pl
+import pytest
 
+from thesis_pkg.pipelines.refinitiv import lseg_lookup_api
 from thesis_pkg.pipelines.refinitiv.lseg_api_execution import run_api_batches
 from thesis_pkg.pipelines.refinitiv.lseg_batching import RequestItem, batch_items
 from thesis_pkg.pipelines.refinitiv.lseg_ledger import RequestLedger
@@ -19,7 +22,12 @@ from thesis_pkg.pipelines.refinitiv.lseg_recovery import (
     build_lookup_unresolved_recovery_artifact,
     build_ownership_unresolved_recovery_artifact,
 )
-from thesis_pkg.pipelines.refinitiv.lseg_stage_audit import audit_api_stage
+from thesis_pkg.pipelines.refinitiv.lseg_stage_audit import AuditIssue, StageAuditResult, audit_api_stage
+from thesis_pkg.pipeline import run_refinitiv_step1_lookup_api_pipeline
+from thesis_pkg.pipelines.refinitiv_bridge_pipeline import (
+    RIC_LOOKUP_COLUMNS,
+    build_refinitiv_lookup_extended_diagnostic_artifact,
+)
 
 
 class TimeoutThenSuccessProvider:
@@ -108,6 +116,72 @@ def test_request_ledger_records_claim_and_stale_requeue_history(tmp_path: Path) 
         assert item_state == "pending"
     finally:
         conn.close()
+
+
+def test_request_ledger_backfills_missing_attempt_events_for_legacy_attempt_rows(tmp_path: Path) -> None:
+    item = RequestItem(
+        item_id="item-1",
+        stage="test_stage",
+        instrument="AAA.N",
+        batch_key="single",
+        fields=("TR.Field",),
+        parameters={},
+        payload={"row": 1},
+    )
+    batch = batch_items([item], max_batch_size=10, unique_instrument_limit=True)[0]
+    ledger_path = tmp_path / "ledger.sqlite3"
+    staging_dir = tmp_path / "staging"
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    stage_path = staging_dir / f"{batch.batch_id}.parquet"
+    pl.DataFrame({"item_id": ["item-1"], "value": [1.0]}).write_parquet(stage_path)
+
+    ledger = RequestLedger(ledger_path, run_session_id="run-test", worker_id="worker-test")
+    ledger.enqueue([item], [batch])
+    claimed = ledger.claim_next_batch(stage="test_stage")
+    assert claimed is not None
+    ledger.record_success(
+        batch_id=claimed.batch_id,
+        row_count_by_item_id={"item-1": 1},
+        stage_output_path=stage_path,
+        response_fingerprint="ok",
+        headers={"X-Test": "1"},
+        status_code=200,
+        latency_ms=1,
+        rows_returned=1,
+        response_bytes=10,
+    )
+
+    conn = sqlite3.connect(ledger_path)
+    try:
+        conn.execute("DELETE FROM batch_attempt_events")
+        conn.commit()
+    finally:
+        conn.close()
+
+    repaired_ledger = RequestLedger(ledger_path)
+    mismatches = repaired_ledger.attempt_mismatches()
+    assert mismatches == []
+
+    conn = sqlite3.connect(ledger_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = [
+            dict(row)
+            for row in conn.execute(
+                "SELECT attempt_no, phase, status_code, rows_returned FROM batch_attempt_events ORDER BY event_id"
+            ).fetchall()
+        ]
+    finally:
+        conn.close()
+
+    assert rows == [
+        {
+            "attempt_no": 1,
+            "phase": "legacy_finish_backfill",
+            "status_code": 200,
+            "rows_returned": 1,
+        }
+    ]
 
 
 def test_run_api_batches_splits_timeout_prone_batch(tmp_path: Path) -> None:
@@ -212,6 +286,120 @@ def test_audit_api_stage_flags_orphan_staging_files(tmp_path: Path) -> None:
 
     assert any(issue.code == "orphan_staging_files" for issue in audit_result.issues)
     assert audit_result.passed is True
+
+
+def test_audit_api_stage_fails_when_declared_output_artifact_is_missing(tmp_path: Path) -> None:
+    item = RequestItem(
+        item_id="item-1",
+        stage="test_stage",
+        instrument="AAA.N",
+        batch_key="single",
+        fields=("TR.Field",),
+        parameters={},
+        payload={"row": 1},
+    )
+    batch = batch_items([item], max_batch_size=10, unique_instrument_limit=True)[0]
+    ledger_path = tmp_path / "ledger.sqlite3"
+    staging_dir = tmp_path / "staging"
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    output_path = tmp_path / "final.parquet"
+    missing_output_path = tmp_path / "missing.parquet"
+    ledger = RequestLedger(ledger_path)
+    ledger.enqueue([item], [batch])
+    claimed = ledger.claim_next_batch(stage="test_stage")
+    assert claimed is not None
+    stage_df = pl.DataFrame({"item_id": ["item-1"], "value": [1.0]})
+    stage_path = staging_dir / f"{claimed.batch_id}.parquet"
+    stage_df.write_parquet(stage_path)
+    ledger.record_success(
+        batch_id=claimed.batch_id,
+        row_count_by_item_id={"item-1": 1},
+        stage_output_path=stage_path,
+        response_fingerprint="ok",
+        headers={},
+        status_code=200,
+        latency_ms=1,
+        rows_returned=1,
+        response_bytes=10,
+    )
+    stage_df.write_parquet(output_path)
+
+    audit_result = audit_api_stage(
+        stage_name="test_stage",
+        ledger_path=ledger_path,
+        staging_dir=staging_dir,
+        output_artifacts={
+            "final_parquet": output_path,
+            "missing_parquet": missing_output_path,
+        },
+        rebuilders={"final_parquet": lambda: stage_df},
+    )
+
+    assert audit_result.passed is False
+    assert any(
+        issue.code == "missing_output_artifact"
+        and issue.details is not None
+        and issue.details.get("label") == "missing_parquet"
+        for issue in audit_result.issues
+    )
+
+
+def test_lookup_stage_keeps_last_good_canonical_output_when_audit_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshot_path = tmp_path / "lookup_snapshot.parquet"
+    output_path = tmp_path / "refinitiv_ric_lookup_handoff_common_stock_extended.parquet"
+    sentinel_df = pl.DataFrame({"sentinel": ["keep"]})
+    sentinel_df.write_parquet(output_path)
+    lookup_df = pl.DataFrame(
+        {
+            "bridge_row_id": [
+                "1:A:111111111:US1111111111:ALFA-1",
+                "1:A:111111111:US1111111111:ALFA-2",
+            ],
+            "KYPERMNO": ["1", "1"],
+            "CUSIP": ["111111111", "111111111"],
+            "ISIN": ["US1111111111", "US1111111111"],
+            "TICKER": ["ALFA", "ALFA"],
+            "first_seen_caldt": [date(2024, 1, 1), date(2024, 1, 2)],
+            "last_seen_caldt": [date(2024, 1, 10), date(2024, 1, 11)],
+            "preferred_lookup_id": ["US1111111111", "US1111111111"],
+            "preferred_lookup_type": ["ISIN", "ISIN"],
+            "vendor_primary_ric": [None, None],
+            "vendor_returned_name": [None, None],
+            "vendor_returned_cusip": [None, None],
+            "vendor_returned_isin": [None, None],
+            "vendor_match_status": [None, None],
+            "vendor_notes": [None, None],
+        }
+    ).select(RIC_LOOKUP_COLUMNS)
+    snapshot_df, _, _ = build_refinitiv_lookup_extended_diagnostic_artifact(lookup_df)
+    snapshot_df.write_parquet(snapshot_path)
+    provider = TimeoutThenSuccessProvider()
+
+    def fake_audit_api_stage(**_: Any) -> StageAuditResult:
+        return StageAuditResult(
+            stage_name="lookup",
+            passed=False,
+            issues=(AuditIssue("high", "forced_failure", "forced audit failure"),),
+            metrics={},
+        )
+
+    monkeypatch.setattr(lseg_lookup_api, "audit_api_stage", fake_audit_api_stage)
+
+    with pytest.raises(RuntimeError, match="lookup stage audit failed"):
+        run_refinitiv_step1_lookup_api_pipeline(
+            snapshot_parquet_path=snapshot_path,
+            output_dir=tmp_path,
+            provider=provider,
+            min_seconds_between_requests=0.0,
+        )
+
+    current_df = pl.read_parquet(output_path)
+    assert current_df.to_dicts() == sentinel_df.to_dicts()
+    candidate_path = output_path.with_suffix(".parquet.candidate")
+    assert candidate_path.exists()
 
 
 def test_recovery_builders_select_only_unresolved_rows(tmp_path: Path) -> None:

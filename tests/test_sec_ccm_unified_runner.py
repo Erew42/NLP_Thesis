@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import polars as pl
 from pytest import MonkeyPatch
 
 from thesis_pkg.notebooks_and_scripts import sec_ccm_unified_runner as runner
@@ -86,6 +87,18 @@ def test_env_list_and_bool_helpers(monkeypatch: MonkeyPatch) -> None:
     assert runner._env_optional_bool("TEST_OPTIONAL_BOOL", False) is None
     assert runner._env_str_list("TEST_STR_LIST", ["x"]) == ["a", "b"]
     assert runner._env_int_list("TEST_INT_LIST", [1]) == [1993, 1994]
+
+
+def test_print_rows_table_uses_tabular_ascii_output(capsys) -> None:
+    rows = [{"stage": "lookup", "artifact": "out", "path": "C:/tmp/out.parquet"}]
+
+    runner._print_rows_table(rows, sort_by=["stage", "artifact"], empty_message="empty")
+
+    captured = capsys.readouterr().out
+    expected = pl.DataFrame(rows).sort(["stage", "artifact"]).write_csv(None, separator="\t")
+
+    assert captured == expected + "\n"
+    assert "┌" not in captured
 
 
 def test_sec_ccm_unified_runner_notebook_bootstrap_is_valid() -> None:

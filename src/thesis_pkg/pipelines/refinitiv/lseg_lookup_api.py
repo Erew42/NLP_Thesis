@@ -7,10 +7,12 @@ import polars as pl
 
 from thesis_pkg.pipelines.refinitiv.lseg_api_common import (
     append_json_log as _append_json_log,
+    candidate_output_path as _candidate_output_path,
     classify_error as _classify_error,
     daily_limit_likely_exhausted as _daily_limit_likely_exhausted,
     error_details_for_exception as _error_details,
     next_daily_resume_utc as _next_daily_resume_utc,
+    promote_candidate_output as _promote_candidate_output,
     retry_delay_seconds as _retry_delay_seconds,
     should_treat_as_empty_result as _should_treat_as_empty_result,
     standardize_field_frame as _standardize_field_frame,
@@ -101,7 +103,8 @@ def run_refinitiv_step1_lookup_api_pipeline(
 
     final_df = _assemble_lookup_output(snapshot_df, stage_run.staging_dir)
     output_path = output_dir / "refinitiv_ric_lookup_handoff_common_stock_extended.parquet"
-    _write_parquet_atomic(final_df, output_path)
+    candidate_path = _candidate_output_path(output_path)
+    _write_parquet_atomic(final_df, candidate_path)
 
     manifest_path = (
         Path(stage_manifest_path)
@@ -112,7 +115,8 @@ def run_refinitiv_step1_lookup_api_pipeline(
         stage_name=LOOKUP_STAGE,
         ledger_path=ledger_path,
         staging_dir=stage_run.staging_dir,
-        output_artifacts={"lookup_extended_parquet": output_path},
+        output_artifacts={"lookup_extended_parquet": candidate_path},
+        declared_output_artifacts={"lookup_extended_parquet": output_path},
         rebuilders={
             "lookup_extended_parquet": lambda: _assemble_lookup_output(snapshot_df, stage_run.staging_dir),
         },
@@ -120,6 +124,7 @@ def run_refinitiv_step1_lookup_api_pipeline(
     )
     if not audit_result.passed:
         raise RuntimeError(f"lookup stage audit failed: {audit_result.to_dict()}")
+    _promote_candidate_output(candidate_path, output_path)
 
     returned_ric_cols = [f"{identifier_type}_returned_ric" for identifier_type in LOOKUP_IDENTIFIER_TYPES]
     rows_with_any_returned_ric = int(

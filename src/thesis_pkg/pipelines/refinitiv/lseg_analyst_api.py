@@ -18,6 +18,8 @@ from thesis_pkg.pipelines.refinitiv.doc_ownership import (
     _normalize_float_value,
 )
 from thesis_pkg.pipelines.refinitiv.lseg_api_common import (
+    candidate_output_path as _candidate_output_path,
+    promote_candidate_output as _promote_candidate_output,
     retry_delay_seconds as _retry_delay_seconds,
     standardize_field_frame as _standardize_field_frame,
     write_parquet_atomic as _write_parquet_atomic,
@@ -122,7 +124,8 @@ def run_refinitiv_step1_analyst_actuals_api_pipeline(
     )
     raw_df = _assemble_analyst_actuals_raw(stage_run.staging_dir)
     raw_path = output_dir / "refinitiv_analyst_actuals_raw.parquet"
-    _write_parquet_atomic(raw_df, raw_path)
+    raw_candidate_path = _candidate_output_path(raw_path)
+    _write_parquet_atomic(raw_df, raw_candidate_path)
 
     manifest_path = (
         Path(stage_manifest_path)
@@ -133,12 +136,14 @@ def run_refinitiv_step1_analyst_actuals_api_pipeline(
         stage_name=ANALYST_ACTUALS_STAGE,
         ledger_path=ledger_path,
         staging_dir=stage_run.staging_dir,
-        output_artifacts={"analyst_actuals_raw_parquet": raw_path},
+        output_artifacts={"analyst_actuals_raw_parquet": raw_candidate_path},
+        declared_output_artifacts={"analyst_actuals_raw_parquet": raw_path},
         rebuilders={"analyst_actuals_raw_parquet": lambda: _assemble_analyst_actuals_raw(stage_run.staging_dir)},
         expected_stage_manifest_path=manifest_path,
     )
     if not audit_result.passed:
         raise RuntimeError(f"analyst actuals stage audit failed: {audit_result.to_dict()}")
+    _promote_candidate_output(raw_candidate_path, raw_path)
 
     write_stage_completion_manifest(
         stage_name=ANALYST_ACTUALS_STAGE,
@@ -215,7 +220,8 @@ def run_refinitiv_step1_analyst_estimates_monthly_api_pipeline(
     )
     raw_df = _assemble_analyst_estimates_raw(stage_run.staging_dir)
     raw_path = output_dir / "refinitiv_analyst_estimates_monthly_raw.parquet"
-    _write_parquet_atomic(raw_df, raw_path)
+    raw_candidate_path = _candidate_output_path(raw_path)
+    _write_parquet_atomic(raw_df, raw_candidate_path)
 
     manifest_path = (
         Path(stage_manifest_path)
@@ -226,12 +232,14 @@ def run_refinitiv_step1_analyst_estimates_monthly_api_pipeline(
         stage_name=ANALYST_ESTIMATES_STAGE,
         ledger_path=ledger_path,
         staging_dir=stage_run.staging_dir,
-        output_artifacts={"analyst_estimates_raw_parquet": raw_path},
+        output_artifacts={"analyst_estimates_raw_parquet": raw_candidate_path},
+        declared_output_artifacts={"analyst_estimates_raw_parquet": raw_path},
         rebuilders={"analyst_estimates_raw_parquet": lambda: _assemble_analyst_estimates_raw(stage_run.staging_dir)},
         expected_stage_manifest_path=manifest_path,
     )
     if not audit_result.passed:
         raise RuntimeError(f"analyst estimates stage audit failed: {audit_result.to_dict()}")
+    _promote_candidate_output(raw_candidate_path, raw_path)
 
     write_stage_completion_manifest(
         stage_name=ANALYST_ESTIMATES_STAGE,

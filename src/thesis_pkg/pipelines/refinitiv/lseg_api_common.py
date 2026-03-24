@@ -43,6 +43,14 @@ def write_parquet_atomic(df: pl.DataFrame, output_path: Path) -> None:
     temp_path.replace(output_path)
 
 
+def candidate_output_path(output_path: Path) -> Path:
+    return output_path.with_suffix(output_path.suffix + ".candidate")
+
+
+def promote_candidate_output(candidate_path: Path, output_path: Path) -> None:
+    candidate_path.replace(output_path)
+
+
 def append_json_log(path: Path, payload: dict[str, Any]) -> None:
     payload = {
         "logged_at_utc": utc_now().strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -272,4 +280,3 @@ def _is_overload_like(status_code: int | None, error_kind: str | None, message: 
     if error_kind in {"transport_timeout", "workspace_proxy_timeout", "backend_overload"}:
         return True
     return any(token in message for token in ("timeout", "timed out", "overload", "service unavailable", "backend"))
-

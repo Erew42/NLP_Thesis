@@ -173,6 +173,68 @@ def test_build_and_attach_quarterly_accounting_panel_uses_rdq_fallback_and_90_da
     assert attached.filter(pl.col("doc_id") == "late").select("quarter_report_date").item() is None
 
 
+def test_build_quarterly_accounting_panel_ignores_overlapping_nonkey_link_columns() -> None:
+    quarterly_bs = pl.DataFrame(
+        {
+            "KYGVKEY": [1000],
+            "KEYSET": ["STD"],
+            "FYYYYQ": [20234],
+            "fyrq": [12],
+            "lpermno": [12345],
+            "lpermco": [54321],
+            "LinkRangeTypeCd": ["LC"],
+            "SEQQ": [100.0],
+            "CEQQ": [95.0],
+            "ATQ": [160.0],
+            "LTQ": [70.0],
+            "TXDITCQ": [4.0],
+            "PSTKQ": [8.0],
+        }
+    )
+    quarterly_is = pl.DataFrame(
+        {
+            "KYGVKEY": [1000],
+            "KEYSET": ["STD"],
+            "FYYYYQ": [20234],
+            "fyrq": [12],
+            "lpermno": [12345],
+            "lpermco": [54321],
+            "LinkRangeTypeCd": ["LC"],
+            "IBQ": [10.0],
+            "XINTQ": [1.0],
+            "TXDIQ": [0.5],
+            "DVPQ": [0.25],
+        }
+    )
+    quarterly_pd = pl.DataFrame(
+        {
+            "KYGVKEY": [1000],
+            "KEYSET": ["STD"],
+            "FYYYYQ": [20234],
+            "fyrq": [12],
+            "lpermno": [12345],
+            "lpermco": [54321],
+            "LinkRangeTypeCd": ["LC"],
+            "FYEARQ": [2023],
+            "FQTR": [4],
+            "APDEDATEQ": [dt.date(2023, 12, 31)],
+            "FDATEQ": [dt.date(2024, 2, 20)],
+            "PDATEQ": [dt.date(2024, 1, 31)],
+            "RDQ": [0],
+        }
+    )
+
+    quarterly_panel = build_quarterly_accounting_panel(
+        quarterly_bs.lazy(),
+        quarterly_is.lazy(),
+        quarterly_pd.lazy(),
+    ).collect()
+
+    assert quarterly_panel.select("quarter_report_date").item() == dt.date(2024, 2, 20)
+    assert "lpermno" not in quarterly_panel.columns
+    assert "lpermno_right" not in quarterly_panel.columns
+
+
 def test_attach_pre_filing_market_data_prefers_tcap_and_falls_back_to_price_times_shares() -> None:
     filings = pl.DataFrame(
         {

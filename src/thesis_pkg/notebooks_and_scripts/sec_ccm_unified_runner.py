@@ -129,6 +129,17 @@ def _env_int_list(name: str, default: list[int]) -> list[int]:
     return [int(item) for item in parsed]
 
 
+def _print_rows_table(rows: list[dict[str, object]], *, sort_by: list[str] | None = None, empty_message: str) -> None:
+    if not rows:
+        print(empty_message)
+        return
+    frame = pl.DataFrame(rows)
+    if sort_by:
+        frame = frame.sort(sort_by)
+    # Avoid Polars' Unicode box-drawing repr, which can fail on legacy Windows consoles.
+    print(frame.write_csv(None, separator="\t"))
+
+
 def _resolve_ff48_siccodes_path(work_root: Path) -> Path:
     return _env_path(
         "SEC_CCM_FF48_SICCODES_PATH",
@@ -375,9 +386,9 @@ def main() -> None:
             "CANONICAL_LINK_NAME": "canonical_link_table_after_startdate_change.parquet",
             "CCM_DAILY_NAME": "final_flagged_data_compdesc_added.parquet",
             "RUN_ROOT": drive_work_root / "results" / "sec_ccm_unified_runner",
-            "RUN_CCM_MODE": "REBUILD",
-            "RUN_SEC_PARSE": True,
-            "RUN_SEC_YEARLY_MERGE": True,
+            "RUN_CCM_MODE": "REUSE",
+            "RUN_SEC_PARSE": False,
+            "RUN_SEC_YEARLY_MERGE": False,
         },
     }
 
@@ -440,43 +451,43 @@ def main() -> None:
         RUN_SEC_YEARLY_MERGE = RUN_SEC_PARSE or not existing_year_outputs
     else:
         RUN_SEC_YEARLY_MERGE = profile_run_sec_yearly_merge
-    RUN_SEC_CCM_PREMERGE = _env_bool("SEC_CCM_RUN_SEC_CCM_PREMERGE", True)
-    RUN_REFINITIV_STEP1 = _env_bool("SEC_CCM_RUN_REFINITIV_STEP1", False)
+    RUN_SEC_CCM_PREMERGE = _env_bool("SEC_CCM_RUN_SEC_CCM_PREMERGE", False)
+    RUN_REFINITIV_STEP1 = _env_bool("SEC_CCM_RUN_REFINITIV_STEP1", True)
     RUN_REFINITIV_STEP1_RESOLUTION = _env_bool(
         "SEC_CCM_RUN_REFINITIV_STEP1_RESOLUTION",
-        False,
+        True,
     )
     RUN_REFINITIV_OWNERSHIP_UNIVERSE_HANDOFF = _env_bool(
         "SEC_CCM_RUN_REFINITIV_OWNERSHIP_UNIVERSE_HANDOFF",
-        False,
+        True,
     )
     RUN_REFINITIV_OWNERSHIP_UNIVERSE_RESULTS = _env_bool(
         "SEC_CCM_RUN_REFINITIV_OWNERSHIP_UNIVERSE_RESULTS",
-        False,
+        True,
     )
     RUN_REFINITIV_OWNERSHIP_AUTHORITY = _env_bool(
         "SEC_CCM_RUN_REFINITIV_OWNERSHIP_AUTHORITY",
-        False,
+        True,
     )
     RUN_REFINITIV_DOC_OWNERSHIP_LM2011_EXACT_HANDOFF = _env_bool(
         "SEC_CCM_RUN_REFINITIV_DOC_OWNERSHIP_LM2011_EXACT_HANDOFF",
-        False,
+        True,
     )
     RUN_REFINITIV_DOC_OWNERSHIP_LM2011_FALLBACK_HANDOFF = _env_bool(
         "SEC_CCM_RUN_REFINITIV_DOC_OWNERSHIP_LM2011_FALLBACK_HANDOFF",
-        False,
+        True,
     )
     RUN_REFINITIV_DOC_OWNERSHIP_LM2011_FINALIZE = _env_bool(
         "SEC_CCM_RUN_REFINITIV_DOC_OWNERSHIP_LM2011_FINALIZE",
-        False,
+        True,
     )
     RUN_REFINITIV_DOC_ANALYST_LM2011_ANCHORS = _env_bool(
         "SEC_CCM_RUN_REFINITIV_DOC_ANALYST_LM2011_ANCHORS",
-        False,
+        True,
     )
     RUN_REFINITIV_DOC_ANALYST_LM2011_SELECT = _env_bool(
         "SEC_CCM_RUN_REFINITIV_DOC_ANALYST_LM2011_SELECT",
-        False,
+        True,
     )
     RUN_GATED_ITEM_EXTRACTION = _env_bool(
         "SEC_CCM_RUN_GATED_ITEM_EXTRACTION",
@@ -1634,7 +1645,7 @@ def main() -> None:
             }
         )
 
-    print(pl.DataFrame(validation_rows) if validation_rows else "No validations executed")
+    _print_rows_table(validation_rows, empty_message="No validations executed")
 
     artifact_rows: list[dict[str, object]] = []
 
@@ -1681,11 +1692,7 @@ def main() -> None:
     }.items():
         _add("boundary", key, path)
 
-    print(
-        pl.DataFrame(artifact_rows).sort(["stage", "artifact"])
-        if artifact_rows
-        else "No artifacts indexed"
-    )
+    _print_rows_table(artifact_rows, sort_by=["stage", "artifact"], empty_message="No artifacts indexed")
 
     if refinitiv_artifact_stages:
         refinitiv_manifest_path = REFINITIV_STEP1_OUT_DIR / "refinitiv_step1_manifest.json"

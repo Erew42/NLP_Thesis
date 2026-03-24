@@ -698,3 +698,30 @@ def test_lseg_provider_retries_once_for_singleton_unresolved_identifier(monkeypa
     assert result is response
     assert call_count == 2
     assert reset_count == 1
+
+
+def test_lseg_provider_restores_previously_unset_request_timeout() -> None:
+    class FakeConfig:
+        def __init__(self) -> None:
+            self.values = {"http.request-timeout": None}
+            self.calls: list[tuple[str, Any]] = []
+
+        def get_param(self, key: str) -> Any:
+            return self.values[key]
+
+        def set_param(self, key: str, value: Any) -> None:
+            self.calls.append((key, value))
+            self.values[key] = value
+
+    provider = LsegDataProvider(request_timeout=7.5)
+    provider._config = FakeConfig()
+
+    provider._apply_request_timeout()
+    assert provider._config.values["http.request-timeout"] == 7.5
+
+    provider._restore_request_timeout()
+    assert provider._config.values["http.request-timeout"] is None
+    assert provider._config.calls == [
+        ("http.request-timeout", 7.5),
+        ("http.request-timeout", None),
+    ]

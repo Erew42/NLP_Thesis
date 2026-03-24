@@ -33,6 +33,7 @@ ATTEMPT_PHASE_REQUEST_FINISHED_SUCCESS = "request_finished_success"
 ATTEMPT_PHASE_REQUEST_FINISHED_ERROR = "request_finished_error"
 ATTEMPT_PHASE_REQUEUED_STALE_RUNNING = "requeued_stale_running"
 ATTEMPT_PHASE_SPLIT_INTO_CHILDREN = "split_into_children"
+ATTEMPT_PHASE_LEGACY_FINISH_BACKFILL = "legacy_finish_backfill"
 
 LEDGER_SCHEMA_VERSION = 2
 
@@ -829,6 +830,7 @@ class RequestLedger:
                 """,
                 (str(LEDGER_SCHEMA_VERSION),),
             )
+            self._backfill_missing_attempt_events(conn)
 
     @contextlib.contextmanager
     def _connect(self) -> Any:
@@ -966,6 +968,62 @@ class RequestLedger:
                 to_utc_text(utc_now()),
             ),
         )
+
+    def _backfill_missing_attempt_events(self, conn: sqlite3.Connection) -> None:
+        rows = conn.execute(
+            """
+            SELECT
+                a.batch_id,
+                a.attempt_no,
+                a.status_code,
+                a.latency_ms,
+                a.rows_returned,
+                a.response_bytes,
+                a.headers_json,
+                a.exception_class,
+                a.exception_message,
+                a.created_at_utc
+            FROM batch_attempts AS a
+            LEFT JOIN (
+                SELECT DISTINCT batch_id, attempt_no
+                FROM batch_attempt_events
+            ) AS e
+              ON e.batch_id = a.batch_id
+             AND e.attempt_no = a.attempt_no
+            WHERE e.batch_id IS NULL
+            ORDER BY a.batch_id, a.attempt_no
+            """
+        ).fetchall()
+        for row in rows:
+            headers = {}
+            if row["headers_json"] is not None:
+                try:
+                    parsed_headers = json.loads(row["headers_json"])
+                    headers = parsed_headers if isinstance(parsed_headers, dict) else {}
+                except Exception:
+                    headers = {}
+            self._insert_attempt_event(
+                conn,
+                batch_id=str(row["batch_id"]),
+                attempt_no=int(row["attempt_no"]),
+                phase=ATTEMPT_PHASE_LEGACY_FINISH_BACKFILL,
+                claim_token=None,
+                headers=headers,
+                status_code=None if row["status_code"] is None else int(row["status_code"]),
+                latency_ms=None if row["latency_ms"] is None else int(row["latency_ms"]),
+                rows_returned=None if row["rows_returned"] is None else int(row["rows_returned"]),
+                response_bytes=None if row["response_bytes"] is None else int(row["response_bytes"]),
+                exception_class=None if row["exception_class"] is None else str(row["exception_class"]),
+                exception_message=None if row["exception_message"] is None else str(row["exception_message"]),
+            )
+            conn.execute(
+                """
+                UPDATE batch_attempt_events
+                SET created_at_utc = ?
+                WHERE event_id = last_insert_rowid()
+                """,
+                (str(row["created_at_utc"]),),
+            )
 
     def _increment_item_attempts(
         self,

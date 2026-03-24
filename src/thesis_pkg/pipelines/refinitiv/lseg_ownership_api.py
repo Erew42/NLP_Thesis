@@ -6,6 +6,8 @@ from typing import Any
 import polars as pl
 
 from thesis_pkg.pipelines.refinitiv.lseg_api_common import (
+    candidate_output_path as _candidate_output_path,
+    promote_candidate_output as _promote_candidate_output,
     retry_delay_seconds as _retry_delay_seconds,
     standardize_field_frame as _standardize_field_frame,
     write_parquet_atomic as _write_parquet_atomic,
@@ -130,8 +132,10 @@ def run_refinitiv_step1_ownership_universe_api_pipeline(
 
     results_path = output_dir / "refinitiv_ownership_universe_results.parquet"
     row_summary_path = output_dir / "refinitiv_ownership_universe_row_summary.parquet"
-    _write_parquet_atomic(results_df, results_path)
-    _write_parquet_atomic(row_summary_df, row_summary_path)
+    results_candidate_path = _candidate_output_path(results_path)
+    row_summary_candidate_path = _candidate_output_path(row_summary_path)
+    _write_parquet_atomic(results_df, results_candidate_path)
+    _write_parquet_atomic(row_summary_df, row_summary_candidate_path)
 
     manifest_path = (
         Path(stage_manifest_path)
@@ -143,6 +147,10 @@ def run_refinitiv_step1_ownership_universe_api_pipeline(
         ledger_path=ledger_path,
         staging_dir=stage_run.staging_dir,
         output_artifacts={
+            "ownership_results_parquet": results_candidate_path,
+            "ownership_row_summary_parquet": row_summary_candidate_path,
+        },
+        declared_output_artifacts={
             "ownership_results_parquet": results_path,
             "ownership_row_summary_parquet": row_summary_path,
         },
@@ -157,6 +165,8 @@ def run_refinitiv_step1_ownership_universe_api_pipeline(
     )
     if not audit_result.passed:
         raise RuntimeError(f"ownership universe stage audit failed: {audit_result.to_dict()}")
+    _promote_candidate_output(results_candidate_path, results_path)
+    _promote_candidate_output(row_summary_candidate_path, row_summary_path)
 
     write_stage_completion_manifest(
         stage_name=OWNERSHIP_UNIVERSE_STAGE,
@@ -231,7 +241,8 @@ def run_refinitiv_lm2011_doc_ownership_exact_api_pipeline(
         _read_authority_exceptions_artifact(authority_exceptions_artifact_path),
     )
     requests_path = output_dir / "refinitiv_lm2011_doc_ownership_exact_requests.parquet"
-    _write_parquet_atomic(request_df, requests_path)
+    requests_candidate_path = _candidate_output_path(requests_path)
+    _write_parquet_atomic(request_df, requests_candidate_path)
 
     items = _build_doc_ownership_exact_items(request_df)
     stage_run = run_api_batches(
@@ -256,7 +267,8 @@ def run_refinitiv_lm2011_doc_ownership_exact_api_pipeline(
 
     exact_raw_df = _assemble_doc_raw(stage_run.staging_dir)
     exact_raw_path = output_dir / "refinitiv_lm2011_doc_ownership_exact_raw.parquet"
-    _write_parquet_atomic(exact_raw_df, exact_raw_path)
+    exact_raw_candidate_path = _candidate_output_path(exact_raw_path)
+    _write_parquet_atomic(exact_raw_df, exact_raw_candidate_path)
 
     manifest_path = (
         Path(stage_manifest_path)
@@ -268,6 +280,10 @@ def run_refinitiv_lm2011_doc_ownership_exact_api_pipeline(
         ledger_path=ledger_path,
         staging_dir=stage_run.staging_dir,
         output_artifacts={
+            "exact_requests_parquet": requests_candidate_path,
+            "exact_raw_parquet": exact_raw_candidate_path,
+        },
+        declared_output_artifacts={
             "exact_requests_parquet": requests_path,
             "exact_raw_parquet": exact_raw_path,
         },
@@ -276,6 +292,8 @@ def run_refinitiv_lm2011_doc_ownership_exact_api_pipeline(
     )
     if not audit_result.passed:
         raise RuntimeError(f"doc exact stage audit failed: {audit_result.to_dict()}")
+    _promote_candidate_output(requests_candidate_path, requests_path)
+    _promote_candidate_output(exact_raw_candidate_path, exact_raw_path)
 
     write_stage_completion_manifest(
         stage_name=DOC_EXACT_STAGE,
@@ -360,7 +378,8 @@ def run_refinitiv_lm2011_doc_ownership_fallback_api_pipeline(
     ).select(DOC_OWNERSHIP_RAW_COLUMNS)
     fallback_request_df = _build_fallback_request_df(request_df, exact_raw_df)
     fallback_requests_path = output_dir / "refinitiv_lm2011_doc_ownership_fallback_requests.parquet"
-    _write_parquet_atomic(fallback_request_df, fallback_requests_path)
+    fallback_requests_candidate_path = _candidate_output_path(fallback_requests_path)
+    _write_parquet_atomic(fallback_request_df, fallback_requests_candidate_path)
 
     items = _build_doc_ownership_fallback_items(fallback_request_df)
     stage_run = run_api_batches(
@@ -384,7 +403,8 @@ def run_refinitiv_lm2011_doc_ownership_fallback_api_pipeline(
     )
     fallback_raw_df = _assemble_doc_raw(stage_run.staging_dir)
     fallback_raw_path = output_dir / "refinitiv_lm2011_doc_ownership_fallback_raw.parquet"
-    _write_parquet_atomic(fallback_raw_df, fallback_raw_path)
+    fallback_raw_candidate_path = _candidate_output_path(fallback_raw_path)
+    _write_parquet_atomic(fallback_raw_df, fallback_raw_candidate_path)
 
     manifest_path = (
         Path(stage_manifest_path)
@@ -396,6 +416,10 @@ def run_refinitiv_lm2011_doc_ownership_fallback_api_pipeline(
         ledger_path=ledger_path,
         staging_dir=stage_run.staging_dir,
         output_artifacts={
+            "fallback_requests_parquet": fallback_requests_candidate_path,
+            "fallback_raw_parquet": fallback_raw_candidate_path,
+        },
+        declared_output_artifacts={
             "fallback_requests_parquet": fallback_requests_path,
             "fallback_raw_parquet": fallback_raw_path,
         },
@@ -404,6 +428,8 @@ def run_refinitiv_lm2011_doc_ownership_fallback_api_pipeline(
     )
     if not audit_result.passed:
         raise RuntimeError(f"doc fallback stage audit failed: {audit_result.to_dict()}")
+    _promote_candidate_output(fallback_requests_candidate_path, fallback_requests_path)
+    _promote_candidate_output(fallback_raw_candidate_path, fallback_raw_path)
 
     write_stage_completion_manifest(
         stage_name=DOC_FALLBACK_STAGE,

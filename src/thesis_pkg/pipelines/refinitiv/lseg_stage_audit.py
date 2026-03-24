@@ -57,17 +57,20 @@ def audit_api_stage(
     ledger_path: Path | str,
     staging_dir: Path | str,
     output_artifacts: dict[str, Path],
+    declared_output_artifacts: dict[str, Path] | None = None,
     rebuilders: dict[str, Callable[[], pl.DataFrame]] | None = None,
     expected_stage_manifest_path: Path | str | None = None,
 ) -> StageAuditResult:
     ledger_path = Path(ledger_path)
     staging_dir = Path(staging_dir)
+    declared_output_artifacts = declared_output_artifacts or output_artifacts
     rebuilders = rebuilders or {}
     issues: list[AuditIssue] = []
     metrics: dict[str, Any] = {
         "ledger_path": str(ledger_path),
         "staging_dir": str(staging_dir),
         "output_artifacts": {key: str(value) for key, value in output_artifacts.items()},
+        "declared_output_artifacts": {key: str(value) for key, value in declared_output_artifacts.items()},
         "stage_manifest_path": None if expected_stage_manifest_path is None else str(expected_stage_manifest_path),
     }
 
@@ -188,6 +191,20 @@ def audit_api_stage(
     metrics["staging_file_count"] = len(staging_paths)
     metrics["succeeded_batch_count"] = len(succeeded_batch_rows)
 
+    missing_output_labels: set[str] = set()
+    for label, output_path in output_artifacts.items():
+        if output_path.exists():
+            continue
+        missing_output_labels.add(label)
+        issues.append(
+            AuditIssue(
+                "high",
+                "missing_output_artifact",
+                f"output artifact not found: {output_path}",
+                {"label": label},
+            )
+        )
+
     rebuild_row_counts: dict[str, int] = {}
     for label, rebuilder in rebuilders.items():
         output_path = output_artifacts.get(label)
@@ -200,10 +217,7 @@ def audit_api_stage(
                 )
             )
             continue
-        if not output_path.exists():
-            issues.append(
-                AuditIssue("high", "missing_output_artifact", f"output artifact not found: {output_path}")
-            )
+        if label in missing_output_labels:
             continue
         rebuilt_df = rebuilder()
         actual_df = pl.read_parquet(output_path)
@@ -224,7 +238,7 @@ def audit_api_stage(
         if expected_stage_manifest_path.exists():
             manifest_payload = json.loads(expected_stage_manifest_path.read_text(encoding="utf-8"))
             manifest_outputs = manifest_payload.get("output_artifacts", {})
-            actual_outputs = {key: str(value) for key, value in output_artifacts.items()}
+            actual_outputs = {key: str(value) for key, value in declared_output_artifacts.items()}
             if manifest_outputs != actual_outputs:
                 issues.append(
                     AuditIssue(

@@ -105,6 +105,7 @@ class LsegDataProvider:
         self._ld: Any | None = None
         self._config: Any | None = None
         self._previous_request_timeout: Any | None = None
+        self._has_previous_request_timeout = False
         self._session_open = False
 
     def open(self) -> None:
@@ -243,17 +244,21 @@ class LsegDataProvider:
         setter = getattr(self._config, "set_param", None)
         if getter is None or setter is None:
             return
+        self._previous_request_timeout = None
+        self._has_previous_request_timeout = False
         try:
             self._previous_request_timeout = getter("http.request-timeout")
+            self._has_previous_request_timeout = True
         except Exception:
             self._previous_request_timeout = None
         try:
             setter("http.request-timeout", self.request_timeout)
         except Exception:
             self._previous_request_timeout = None
+            self._has_previous_request_timeout = False
 
     def _restore_request_timeout(self) -> None:
-        if self._config is None or self._previous_request_timeout is None:
+        if self._config is None or not self._has_previous_request_timeout:
             return
         setter = getattr(self._config, "set_param", None)
         if setter is None:
@@ -264,6 +269,7 @@ class LsegDataProvider:
             pass
         finally:
             self._previous_request_timeout = None
+            self._has_previous_request_timeout = False
 
 
 def classify_lseg_error_message(message: str) -> tuple[str | None, tuple[str, ...]]:

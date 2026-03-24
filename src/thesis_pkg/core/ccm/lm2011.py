@@ -727,9 +727,19 @@ def build_quarterly_accounting_panel(
         "quarterly_period_descriptor",
     )
 
+    quarterly_balance_sheet = quarterly_balance_sheet_lf.select(
+        [pl.col(name) for name in (*join_keys, "SEQQ", "CEQQ", "ATQ", "LTQ", "TXDITCQ", "PSTKQ")]
+    )
+    quarterly_income_statement = quarterly_income_statement_lf.select(
+        [pl.col(name) for name in (*join_keys, "IBQ", "XINTQ", "TXDIQ", "DVPQ")]
+    )
+    quarterly_period_descriptor = quarterly_period_descriptor_lf.select(
+        [pl.col(name) for name in (*join_keys, "FYEARQ", "FQTR", "APDEDATEQ", "FDATEQ", "PDATEQ", "RDQ")]
+    )
+
     joined = (
-        quarterly_balance_sheet_lf.join(quarterly_income_statement_lf, on=list(join_keys), how="inner")
-        .join(quarterly_period_descriptor_lf, on=list(join_keys), how="inner")
+        quarterly_balance_sheet.join(quarterly_income_statement, on=list(join_keys), how="inner")
+        .join(quarterly_period_descriptor, on=list(join_keys), how="inner")
         .with_columns(_parse_yyyymmdd_date_expr("RDQ").alias("_rdq_date"))
     )
 
