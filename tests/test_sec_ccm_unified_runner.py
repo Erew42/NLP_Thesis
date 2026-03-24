@@ -20,12 +20,34 @@ def test_doc_ownership_stage_runs_after_sec_ccm_premerge_block() -> None:
     assert source.index(doc_stage_marker) > source.index(premerge_marker)
 
 
+def test_doc_analyst_stage_runs_after_sec_ccm_premerge_block() -> None:
+    runner_path = Path("src/thesis_pkg/notebooks_and_scripts/sec_ccm_unified_runner.py")
+    source = runner_path.read_text(encoding="utf-8")
+
+    premerge_marker = "sec_ccm_paths = run_sec_ccm_premerge_pipeline("
+    doc_stage_marker = "if RUN_REFINITIV_DOC_ANALYST_LM2011_ANCHORS:"
+
+    assert premerge_marker in source
+    assert doc_stage_marker in source
+    assert source.index(doc_stage_marker) > source.index(premerge_marker)
+
+
 def test_first_existing_path_prefers_existing_candidate(tmp_path: Path) -> None:
     missing = tmp_path / "missing"
     existing = tmp_path / "existing"
     existing.mkdir()
 
     assert runner._first_existing_path(missing, existing) == existing
+
+
+def test_resolve_ccm_parquet_artifact_supports_nested_documents_export_layout(tmp_path: Path) -> None:
+    base_dir = tmp_path / "ccm"
+    nested_dir = base_dir / "documents-export-2025-3-19"
+    nested_dir.mkdir(parents=True)
+    target = nested_dir / "filingdates.parquet"
+    target.write_text("placeholder", encoding="utf-8")
+
+    assert runner._resolve_ccm_parquet_artifact(base_dir, "filingdates.parquet") == target
 
 
 def test_resolve_repo_root_honors_env_override(

@@ -831,6 +831,61 @@ def test_build_lm2011_sue_panel_drops_ambiguous_announcement_date_fallbacks() ->
     assert sue_panel.height == 0
 
 
+def test_build_lm2011_sue_panel_keeps_nullable_revision_only_in_upstream_artifact() -> None:
+    event_panel = pl.DataFrame(
+        {
+            "doc_id": ["doc_with_null_revision"],
+            "gvkey_int": [1000],
+            "KYPERMNO": [1],
+            "filing_date": [dt.date(2023, 9, 18)],
+            "pre_filing_trade_date": [dt.date(2023, 9, 17)],
+            "size_event": [100.0],
+            "bm_event": [1.5],
+            "share_turnover": [10.0],
+            "pre_ffalpha": [0.02],
+            "institutional_ownership": [55.0],
+            "nasdaq_dummy": [1],
+        }
+    )
+    quarterly_panel = pl.DataFrame(
+        {
+            "gvkey_int": [1000],
+            "quarter_report_date": [dt.date(2023, 10, 15)],
+            "APDEDATEQ": [dt.date(2023, 9, 30)],
+            "PDATEQ": [dt.date(2023, 9, 30)],
+        }
+    )
+    ibes = pl.DataFrame(
+        {
+            "gvkey_int": [1000],
+            "announcement_date": [dt.date(2023, 10, 15)],
+            "fiscal_period_end": [dt.date(2023, 9, 30)],
+            "actual_eps": [1.5],
+            "forecast_consensus_mean": [1.0],
+            "forecast_dispersion": [0.2],
+            "forecast_revision_4m": [None],
+            "forecast_revision_4m_status": ["MISSING_BASE_SNAPSHOT"],
+            "actual_fiscal_period_end_origin": ["API_DIRECT"],
+        }
+    )
+    daily = pl.DataFrame(
+        {
+            "KYPERMNO": [1, 1],
+            "CALDT": [dt.date(2023, 8, 31), dt.date(2023, 9, 17)],
+            "PRC": [8.0, 10.0],
+        }
+    )
+
+    sue_panel = build_lm2011_sue_panel(
+        event_panel.lazy(),
+        quarterly_panel.lazy(),
+        ibes.lazy(),
+        daily.lazy(),
+    ).collect()
+
+    assert sue_panel.height == 0
+
+
 def test_build_lm2011_trading_strategy_monthly_returns_pin_direction_and_support_weighting_modes() -> None:
     event_panel, sec_parsed, monthly_stock, monthly_factors = _build_strategy_inputs()
     equal_panel = build_lm2011_trading_strategy_monthly_returns(

@@ -7,6 +7,7 @@ import polars as pl
 import pytest
 
 from thesis_pkg.notebooks_and_scripts import refinitiv_local_api_runner as runner
+from thesis_pkg.pipelines.refinitiv.lseg_stage_audit import StageAuditResult
 
 
 def _write_parquet(path: Path) -> None:
@@ -17,6 +18,7 @@ def _write_parquet(path: Path) -> None:
 def _build_run_root(tmp_path: Path) -> Path:
     run_root = tmp_path / "run_root"
     (run_root / "sec_ccm_premerge").mkdir(parents=True)
+    (run_root / "refinitiv_step1" / "analyst_common_stock").mkdir(parents=True)
     (run_root / "refinitiv_step1" / "ownership_universe_common_stock").mkdir(parents=True)
     (run_root / "refinitiv_step1" / "ownership_authority_common_stock").mkdir(parents=True)
     (run_root / "refinitiv_doc_ownership_lm2011").mkdir(parents=True)
@@ -29,8 +31,17 @@ def test_parse_args_defaults() -> None:
     assert args.stage_start == "lookup_api"
     assert args.stage_stop == "doc_finalize"
     assert args.resume is True
+    assert args.audit_only is False
+    assert args.recover_mode is None
+    assert args.preflight_probe is False
+    assert args.stage_manifest_required is True
+    assert args.provider_session_name == "desktop.workspace"
+    assert args.provider_config_name is None
+    assert args.provider_timeout_seconds is None
     assert args.lookup_batch_size == 25
     assert args.ownership_batch_size == 10
+    assert args.analyst_actuals_batch_size == 10
+    assert args.analyst_estimates_batch_size == 10
     assert args.doc_exact_batch_size == 15
     assert args.doc_fallback_batch_size == 5
     assert args.min_seconds_between_requests == 2.0
@@ -98,6 +109,7 @@ def test_main_full_chain_uses_canonical_stage_paths(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     run_root = _build_run_root(tmp_path)
+    _write_parquet(run_root / "refinitiv_step1" / "refinitiv_bridge_universe.parquet")
     _write_parquet(run_root / "refinitiv_step1" / "refinitiv_ric_lookup_handoff_common_stock_extended_snapshot.parquet")
     _write_parquet(run_root / "sec_ccm_premerge" / "sec_ccm_matched_clean_filtered.parquet")
 
@@ -115,6 +127,12 @@ def test_main_full_chain_uses_canonical_stage_paths(
         output_path = kwargs["output_dir"] / "refinitiv_ric_resolution_common_stock.parquet"
         _write_parquet(output_path)
         return {"refinitiv_ric_resolution_common_stock_parquet": output_path}
+
+    def instrument_authority_stub(**kwargs: Path) -> dict[str, Path]:
+        calls.append(("instrument_authority", kwargs))
+        output_path = kwargs["output_dir"] / "refinitiv_instrument_authority_common_stock.parquet"
+        _write_parquet(output_path)
+        return {"refinitiv_instrument_authority_common_stock_parquet": output_path}
 
     def ownership_handoff_stub(**kwargs: Path) -> dict[str, Path]:
         calls.append(("ownership_handoff", kwargs))
@@ -142,6 +160,40 @@ def test_main_full_chain_uses_canonical_stage_paths(
         return {
             "refinitiv_permno_ownership_authority_decisions_parquet": decisions_path,
             "refinitiv_permno_ownership_authority_exceptions_parquet": exceptions_path,
+        }
+
+    def analyst_request_groups_stub(**kwargs: Path) -> dict[str, Path]:
+        calls.append(("analyst_request_groups", kwargs))
+        membership_path = kwargs["output_dir"] / "refinitiv_analyst_request_group_membership_common_stock.parquet"
+        request_path = kwargs["output_dir"] / "refinitiv_analyst_request_universe_common_stock.parquet"
+        _write_parquet(membership_path)
+        _write_parquet(request_path)
+        return {
+            "refinitiv_analyst_request_group_membership_common_stock_parquet": membership_path,
+            "refinitiv_analyst_request_universe_common_stock_parquet": request_path,
+        }
+
+    def analyst_actuals_stub(**kwargs: Path | int | float) -> dict[str, Path]:
+        calls.append(("analyst_actuals_api", kwargs))
+        raw_path = kwargs["output_dir"] / "refinitiv_analyst_actuals_raw.parquet"
+        _write_parquet(raw_path)
+        return {"refinitiv_analyst_actuals_raw_parquet": raw_path}
+
+    def analyst_estimates_stub(**kwargs: Path | int | float) -> dict[str, Path]:
+        calls.append(("analyst_estimates_api", kwargs))
+        raw_path = kwargs["output_dir"] / "refinitiv_analyst_estimates_monthly_raw.parquet"
+        _write_parquet(raw_path)
+        return {"refinitiv_analyst_estimates_monthly_raw_parquet": raw_path}
+
+    def analyst_normalize_stub(**kwargs: Path) -> dict[str, Path]:
+        calls.append(("analyst_normalize", kwargs))
+        panel_path = kwargs["output_dir"] / "refinitiv_analyst_normalized_panel.parquet"
+        rejection_path = kwargs["output_dir"] / "refinitiv_analyst_normalization_rejections.parquet"
+        _write_parquet(panel_path)
+        _write_parquet(rejection_path)
+        return {
+            "refinitiv_analyst_normalized_panel_parquet": panel_path,
+            "refinitiv_analyst_normalization_rejections_parquet": rejection_path,
         }
 
     def doc_exact_stub(**kwargs: Path | int | float) -> dict[str, Path]:
@@ -179,9 +231,14 @@ def test_main_full_chain_uses_canonical_stage_paths(
 
     monkeypatch.setattr(runner, "run_refinitiv_step1_lookup_api_pipeline", lookup_stub)
     monkeypatch.setattr(runner, "run_refinitiv_step1_resolution_pipeline", resolution_stub)
+    monkeypatch.setattr(runner, "run_refinitiv_step1_instrument_authority_pipeline", instrument_authority_stub)
     monkeypatch.setattr(runner, "run_refinitiv_step1_ownership_universe_handoff_pipeline", ownership_handoff_stub)
     monkeypatch.setattr(runner, "run_refinitiv_step1_ownership_universe_api_pipeline", ownership_api_stub)
     monkeypatch.setattr(runner, "run_refinitiv_step1_ownership_authority_pipeline", authority_stub)
+    monkeypatch.setattr(runner, "run_refinitiv_step1_analyst_request_groups_pipeline", analyst_request_groups_stub)
+    monkeypatch.setattr(runner, "run_refinitiv_step1_analyst_actuals_api_pipeline", analyst_actuals_stub)
+    monkeypatch.setattr(runner, "run_refinitiv_step1_analyst_estimates_monthly_api_pipeline", analyst_estimates_stub)
+    monkeypatch.setattr(runner, "run_refinitiv_step1_analyst_normalize_pipeline", analyst_normalize_stub)
     monkeypatch.setattr(runner, "run_refinitiv_lm2011_doc_ownership_exact_api_pipeline", doc_exact_stub)
     monkeypatch.setattr(runner, "run_refinitiv_lm2011_doc_ownership_fallback_api_pipeline", doc_fallback_stub)
     monkeypatch.setattr(runner, "run_refinitiv_lm2011_doc_ownership_finalize_pipeline", doc_finalize_stub)
@@ -191,12 +248,16 @@ def test_main_full_chain_uses_canonical_stage_paths(
     assert exit_code == 0
     assert [stage for stage, _ in calls] == list(runner.STAGE_ORDER)
     assert calls[1][1]["filled_lookup_workbook_path"] == run_root / "refinitiv_step1" / "refinitiv_ric_lookup_handoff_common_stock_extended.parquet"
-    assert calls[3][1]["handoff_parquet_path"] == run_root / "refinitiv_step1" / "ownership_universe_common_stock" / "refinitiv_ownership_universe_handoff_common_stock.parquet"
-    assert calls[4][1]["resolution_artifact_path"] == run_root / "refinitiv_step1" / "refinitiv_ric_resolution_common_stock.parquet"
-    assert calls[4][1]["ownership_results_artifact_path"] == run_root / "refinitiv_step1" / "ownership_universe_common_stock" / "refinitiv_ownership_universe_results.parquet"
-    assert calls[5][1]["doc_filing_artifact_path"] == run_root / "sec_ccm_premerge" / "sec_ccm_matched_clean_filtered.parquet"
-    assert calls[5][1]["authority_decisions_artifact_path"] == run_root / "refinitiv_step1" / "ownership_authority_common_stock" / "refinitiv_permno_ownership_authority_decisions.parquet"
-    assert calls[6][1]["output_dir"] == run_root / "refinitiv_doc_ownership_lm2011"
+    assert calls[2][1]["bridge_artifact_path"] == run_root / "refinitiv_step1" / "refinitiv_bridge_universe.parquet"
+    assert calls[4][1]["handoff_parquet_path"] == run_root / "refinitiv_step1" / "ownership_universe_common_stock" / "refinitiv_ownership_universe_handoff_common_stock.parquet"
+    assert calls[5][1]["resolution_artifact_path"] == run_root / "refinitiv_step1" / "refinitiv_ric_resolution_common_stock.parquet"
+    assert calls[5][1]["ownership_results_artifact_path"] == run_root / "refinitiv_step1" / "ownership_universe_common_stock" / "refinitiv_ownership_universe_results.parquet"
+    assert calls[6][1]["instrument_authority_artifact_path"] == run_root / "refinitiv_step1" / "refinitiv_instrument_authority_common_stock.parquet"
+    assert calls[7][1]["request_universe_parquet_path"] == run_root / "refinitiv_step1" / "analyst_common_stock" / "refinitiv_analyst_request_universe_common_stock.parquet"
+    assert calls[8][1]["request_universe_parquet_path"] == run_root / "refinitiv_step1" / "analyst_common_stock" / "refinitiv_analyst_request_universe_common_stock.parquet"
+    assert calls[10][1]["doc_filing_artifact_path"] == run_root / "sec_ccm_premerge" / "sec_ccm_matched_clean_filtered.parquet"
+    assert calls[10][1]["authority_decisions_artifact_path"] == run_root / "refinitiv_step1" / "ownership_authority_common_stock" / "refinitiv_permno_ownership_authority_decisions.parquet"
+    assert calls[11][1]["output_dir"] == run_root / "refinitiv_doc_ownership_lm2011"
 
 
 def test_main_stage_range_skips_earlier_stages_and_stops_at_stage_stop(
@@ -312,6 +373,69 @@ def test_main_missing_authority_exception_fails_fast(
                 "doc_exact_api",
             ]
         )
+
+
+def test_main_audit_only_writes_manifest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_root = _build_run_root(tmp_path)
+    _write_parquet(run_root / "refinitiv_step1" / "refinitiv_ric_lookup_handoff_common_stock_extended_snapshot.parquet")
+
+    monkeypatch.setattr(
+        runner,
+        "_audit_stage",
+        lambda stage, paths: StageAuditResult(stage_name=stage, passed=True, issues=(), metrics={"ok": True}),
+    )
+
+    exit_code = runner.main(
+        [
+            "--run-root",
+            str(run_root),
+            "--stage-start",
+            "lookup_api",
+            "--stage-stop",
+            "lookup_api",
+            "--audit-only",
+        ]
+    )
+
+    assert exit_code == 0
+    manifest = json.loads((run_root / "refinitiv_local_api_runner_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["mode"] == "audit"
+    assert manifest["audit_results"]["lookup_api"]["passed"] is True
+
+
+def test_main_recover_mode_writes_lookup_unresolved_artifact(tmp_path: Path) -> None:
+    run_root = _build_run_root(tmp_path)
+    recovery_dir = run_root / "refinitiv_recovery"
+    recovery_dir.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame(
+        {
+            "bridge_row_id": ["a", "b"],
+            "effective_collection_ric": [None, "AAA.N"],
+        }
+    ).write_parquet(run_root / "refinitiv_step1" / "refinitiv_ric_resolution_common_stock.parquet")
+
+    exit_code = runner.main(
+        [
+            "--run-root",
+            str(run_root),
+            "--recover-mode",
+            "lookup_unresolved",
+        ]
+    )
+
+    assert exit_code == 0
+    recovery_path = recovery_dir / "lookup_unresolved.parquet"
+    assert recovery_path.exists()
+    recovered = pl.read_parquet(recovery_path)
+    assert recovered.height == 1
+    assert recovered.item(0, "bridge_row_id") == "a"
+
+    manifest = json.loads((run_root / "refinitiv_local_api_runner_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["mode"] == "recover"
+    assert manifest["recovery_result"]["mode"] == "lookup_unresolved"
 
 
 def test_main_can_resume_from_ownership_api_without_rerunning_previous_stages(

@@ -20,6 +20,9 @@ from thesis_pkg.core.sec.lm2011_text import (
     build_lm2011_text_features_mda,
     build_lm2011_trading_strategy_signal_frame,
 )
+from thesis_pkg.pipelines.refinitiv.analyst import (
+    select_refinitiv_lm2011_doc_analyst_inputs,
+)
 
 
 _STRATEGY_START_DATE = dt.date(1997, 7, 1)
@@ -919,6 +922,11 @@ def build_lm2011_sue_panel(
         pl.col("forecast_consensus_mean").cast(pl.Float64, strict=False),
         pl.col("forecast_dispersion").cast(pl.Float64, strict=False),
         pl.col("forecast_revision_4m").cast(pl.Float64, strict=False),
+        (
+            pl.col("forecast_revision_1m").cast(pl.Float64, strict=False)
+            if "forecast_revision_1m" in ibes_unadjusted_earnings_lf.collect_schema()
+            else pl.lit(None, dtype=pl.Float64)
+        ).alias("forecast_revision_1m"),
     ).collect().unique(maintain_order=True)
 
     docs_df = docs_df.with_columns(
@@ -929,50 +937,10 @@ def build_lm2011_sue_panel(
             ]
         ).alias("_quarter_fiscal_period_end")
     )
-    ibes_value_cols = [
-        "actual_eps",
-        "forecast_consensus_mean",
-        "forecast_dispersion",
-        "forecast_revision_4m",
-    ]
-    exact_join = docs_df.join(
+    joined = select_refinitiv_lm2011_doc_analyst_inputs(
+        docs_df.rename({"_quarter_fiscal_period_end": "quarter_fiscal_period_end"}),
         ibes,
-        left_on=["gvkey_int", "quarter_report_date", "_quarter_fiscal_period_end"],
-        right_on=["gvkey_int", "announcement_date", "fiscal_period_end"],
-        how="left",
-    )
-    exact_hits = exact_join.filter(pl.col("actual_eps").is_not_null()).select(
-        *docs_df.columns,
-        *[pl.col(column) for column in ibes_value_cols],
-    )
-    fallback_docs = exact_join.filter(pl.col("actual_eps").is_null()).select(docs_df.columns)
-
-    announcement_unique = (
-        ibes.group_by("gvkey_int", "announcement_date")
-        .len()
-        .filter(pl.col("len") == 1)
-        .drop("len")
-    )
-    fallback_ibes = ibes.join(announcement_unique, on=["gvkey_int", "announcement_date"], how="inner")
-    fallback_hits = fallback_docs.join(
-        fallback_ibes,
-        left_on=["gvkey_int", "quarter_report_date"],
-        right_on=["gvkey_int", "announcement_date"],
-        how="left",
-    ).filter(pl.col("actual_eps").is_not_null()).select(
-        *docs_df.columns,
-        *[pl.col(column) for column in ibes_value_cols],
-    )
-    joined = (
-        pl.concat([exact_hits, fallback_hits], how="vertical_relaxed")
-        if exact_hits.height or fallback_hits.height
-        else pl.DataFrame(
-            schema={
-                **dict(docs_df.schema),
-                **{column: pl.Float64 for column in ibes_value_cols},
-            }
-        )
-    )
+    ).filter(pl.col("analyst_match_status") == "MATCHED")
 
     out = joined.with_columns(
         ((pl.col("actual_eps") - pl.col("forecast_consensus_mean")) / pl.col("pre_filing_price")).alias("sue"),

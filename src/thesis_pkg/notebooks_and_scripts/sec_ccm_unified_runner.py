@@ -141,6 +141,17 @@ def _resolve_ff48_siccodes_path(work_root: Path) -> Path:
     )
 
 
+def _resolve_ccm_parquet_artifact(base_dir: Path, parquet_name: str) -> Path:
+    candidates = [base_dir / parquet_name]
+    candidates.extend(
+        sorted(
+            (child / parquet_name for child in base_dir.glob("documents-export*") if child.is_dir()),
+            key=lambda path: str(path),
+        )
+    )
+    return _first_existing_path(*candidates)
+
+
 ROOT = _resolve_repo_root()
 SRC = ROOT / "src"
 if SRC.exists() and str(SRC) not in sys.path:
@@ -170,9 +181,13 @@ from thesis_pkg.pipeline import (
     SEC_CCM_PHASE_B_DAILY_FEATURE_COLUMNS,
     SecCcmJoinSpecV2,
     attach_lm2011_industry_classifications,
+    build_lm2011_sample_backbone,
+    build_quarterly_accounting_panel,
     build_or_reuse_ccm_daily_stage,
     is_lseg_available,
     make_sec_ccm_join_spec_preset,
+    run_refinitiv_lm2011_doc_analyst_anchor_pipeline,
+    run_refinitiv_lm2011_doc_analyst_select_pipeline,
     run_refinitiv_lm2011_doc_ownership_exact_api_pipeline,
     run_refinitiv_lm2011_doc_ownership_exact_handoff_pipeline,
     run_refinitiv_lm2011_doc_ownership_fallback_api_pipeline,
@@ -455,6 +470,14 @@ def main() -> None:
         "SEC_CCM_RUN_REFINITIV_DOC_OWNERSHIP_LM2011_FINALIZE",
         False,
     )
+    RUN_REFINITIV_DOC_ANALYST_LM2011_ANCHORS = _env_bool(
+        "SEC_CCM_RUN_REFINITIV_DOC_ANALYST_LM2011_ANCHORS",
+        False,
+    )
+    RUN_REFINITIV_DOC_ANALYST_LM2011_SELECT = _env_bool(
+        "SEC_CCM_RUN_REFINITIV_DOC_ANALYST_LM2011_SELECT",
+        False,
+    )
     RUN_GATED_ITEM_EXTRACTION = _env_bool(
         "SEC_CCM_RUN_GATED_ITEM_EXTRACTION",
         False,
@@ -507,9 +530,17 @@ def main() -> None:
         "SEC_CCM_REFINITIV_OWNERSHIP_AUTHORITY_DIR",
         REFINITIV_STEP1_OUT_DIR / "ownership_authority_common_stock",
     )
+    REFINITIV_ANALYST_COMMON_STOCK_DIR = _env_path(
+        "SEC_CCM_REFINITIV_ANALYST_COMMON_STOCK_DIR",
+        REFINITIV_STEP1_OUT_DIR / "analyst_common_stock",
+    )
     REFINITIV_DOC_OWNERSHIP_LM2011_DIR = _env_path(
         "SEC_CCM_REFINITIV_DOC_OWNERSHIP_LM2011_DIR",
         RUN_ROOT / "refinitiv_doc_ownership_lm2011",
+    )
+    REFINITIV_DOC_ANALYST_LM2011_DIR = _env_path(
+        "SEC_CCM_REFINITIV_DOC_ANALYST_LM2011_DIR",
+        RUN_ROOT / "refinitiv_doc_analyst_lm2011",
     )
 
     if IN_COLAB:
@@ -541,7 +572,9 @@ def main() -> None:
         REFINITIV_STEP1_OUT_DIR,
         REFINITIV_OWNERSHIP_UNIVERSE_DIR,
         REFINITIV_OWNERSHIP_AUTHORITY_DIR,
+        REFINITIV_ANALYST_COMMON_STOCK_DIR,
         REFINITIV_DOC_OWNERSHIP_LM2011_DIR,
+        REFINITIV_DOC_ANALYST_LM2011_DIR,
         LOCAL_TMP,
         LOCAL_WORK,
         LOCAL_ITEM_WORK,
@@ -586,6 +619,8 @@ def main() -> None:
             "RUN_SEC_PARSE": RUN_SEC_PARSE,
             "RUN_SEC_YEARLY_MERGE": RUN_SEC_YEARLY_MERGE,
             "RUN_SEC_CCM_PREMERGE": RUN_SEC_CCM_PREMERGE,
+            "RUN_REFINITIV_DOC_ANALYST_LM2011_ANCHORS": RUN_REFINITIV_DOC_ANALYST_LM2011_ANCHORS,
+            "RUN_REFINITIV_DOC_ANALYST_LM2011_SELECT": RUN_REFINITIV_DOC_ANALYST_LM2011_SELECT,
             "RUN_GATED_ITEM_EXTRACTION": RUN_GATED_ITEM_EXTRACTION,
             "RUN_VALIDATION_CHECKS": RUN_VALIDATION_CHECKS,
             "SEC_PARSE_MODE": SEC_PARSE_MODE,
@@ -772,6 +807,8 @@ def main() -> None:
     refinitiv_doc_ownership_exact_paths: dict[str, Path] | None = None
     refinitiv_doc_ownership_fallback_paths: dict[str, Path] | None = None
     refinitiv_doc_ownership_finalize_paths: dict[str, Path] | None = None
+    refinitiv_doc_analyst_anchor_paths: dict[str, Path] | None = None
+    refinitiv_doc_analyst_select_paths: dict[str, Path] | None = None
     refinitiv_artifact_stages: list[_ArtifactStage] = []
 
     def _record_refinitiv_stage(stage: str, paths: dict[str, Path] | None) -> None:
@@ -1313,6 +1350,84 @@ def main() -> None:
                     "expected_exact_raw_path": str(exact_raw_path),
                 }
             )
+    if RUN_REFINITIV_DOC_ANALYST_LM2011_ANCHORS:
+        matched_clean_path = (
+            Path(sec_ccm_paths["sec_ccm_matched_clean"])
+            if sec_ccm_paths is not None
+            else SEC_CCM_OUTPUT_DIR / "sec_ccm_matched_clean.parquet"
+        )
+        quarterly_balance_sheet_path = _resolve_ccm_parquet_artifact(CCM_BASE_DIR, "balancesheetquarterly.parquet")
+        quarterly_income_statement_path = _resolve_ccm_parquet_artifact(CCM_BASE_DIR, "incomestatementquarterly.parquet")
+        quarterly_period_descriptor_path = _resolve_ccm_parquet_artifact(CCM_BASE_DIR, "perioddescriptorquarterly.parquet")
+        filingdates_path = _resolve_ccm_parquet_artifact(CCM_BASE_DIR, "filingdates.parquet")
+        if (
+            matched_clean_path.exists()
+            and quarterly_balance_sheet_path.exists()
+            and quarterly_income_statement_path.exists()
+            and quarterly_period_descriptor_path.exists()
+            and filingdates_path.exists()
+        ):
+            sample_backbone_lf = build_lm2011_sample_backbone(
+                pl.scan_parquet(matched_clean_path),
+                pl.scan_parquet(matched_clean_path),
+                ccm_filingdates_lf=pl.scan_parquet(filingdates_path),
+            )
+            quarterly_accounting_panel_lf = build_quarterly_accounting_panel(
+                pl.scan_parquet(quarterly_balance_sheet_path),
+                pl.scan_parquet(quarterly_income_statement_path),
+                pl.scan_parquet(quarterly_period_descriptor_path),
+            )
+            refinitiv_doc_analyst_anchor_paths = run_refinitiv_lm2011_doc_analyst_anchor_pipeline(
+                sample_backbone_lf=sample_backbone_lf,
+                quarterly_accounting_panel_lf=quarterly_accounting_panel_lf,
+                output_dir=REFINITIV_DOC_ANALYST_LM2011_DIR,
+            )
+            _record_refinitiv_stage(
+                "refinitiv_doc_analyst_anchors",
+                refinitiv_doc_analyst_anchor_paths,
+            )
+            for key in sorted(refinitiv_doc_analyst_anchor_paths):
+                print(f"{key}: {refinitiv_doc_analyst_anchor_paths[key]}")
+        else:
+            print(
+                {
+                    "warning": "skipping Refinitiv LM2011 doc analyst anchors; required inputs not found",
+                    "expected_matched_clean_path": str(matched_clean_path),
+                    "expected_quarterly_balance_sheet_path": str(quarterly_balance_sheet_path),
+                    "expected_quarterly_income_statement_path": str(quarterly_income_statement_path),
+                    "expected_quarterly_period_descriptor_path": str(quarterly_period_descriptor_path),
+                    "expected_filingdates_path": str(filingdates_path),
+                }
+            )
+    if RUN_REFINITIV_DOC_ANALYST_LM2011_SELECT:
+        doc_analyst_anchors_path = (
+            refinitiv_doc_analyst_anchor_paths["refinitiv_doc_analyst_request_anchors_parquet"]
+            if refinitiv_doc_analyst_anchor_paths is not None
+            else REFINITIV_DOC_ANALYST_LM2011_DIR / "refinitiv_doc_analyst_request_anchors.parquet"
+        )
+        analyst_normalized_panel_path = (
+            REFINITIV_ANALYST_COMMON_STOCK_DIR / "refinitiv_analyst_normalized_panel.parquet"
+        )
+        if doc_analyst_anchors_path.exists() and analyst_normalized_panel_path.exists():
+            refinitiv_doc_analyst_select_paths = run_refinitiv_lm2011_doc_analyst_select_pipeline(
+                doc_anchors_artifact_path=doc_analyst_anchors_path,
+                analyst_normalized_panel_artifact_path=analyst_normalized_panel_path,
+                output_dir=REFINITIV_DOC_ANALYST_LM2011_DIR,
+            )
+            _record_refinitiv_stage(
+                "refinitiv_doc_analyst_select",
+                refinitiv_doc_analyst_select_paths,
+            )
+            for key in sorted(refinitiv_doc_analyst_select_paths):
+                print(f"{key}: {refinitiv_doc_analyst_select_paths[key]}")
+        else:
+            print(
+                {
+                    "warning": "skipping Refinitiv LM2011 doc analyst select; required artifacts not found",
+                    "expected_doc_analyst_anchors_path": str(doc_analyst_anchors_path),
+                    "expected_analyst_normalized_panel_path": str(analyst_normalized_panel_path),
+                }
+            )
 
     # ## 6) Gated item extraction
     analysis_item_paths: list[Path] = []
@@ -1589,6 +1704,9 @@ def main() -> None:
                 "reviewed_ticker_allowlist_parquet": str(
                     REFINITIV_OWNERSHIP_AUTHORITY_DIR / "refinitiv_permno_ownership_ticker_allowlist.parquet"
                 ),
+                "analyst_normalized_panel_parquet": str(
+                    REFINITIV_ANALYST_COMMON_STOCK_DIR / "refinitiv_analyst_normalized_panel.parquet"
+                ),
                 "filled_doc_ownership_exact_workbook": str(
                     REFINITIV_DOC_OWNERSHIP_LM2011_DIR / "refinitiv_lm2011_doc_ownership_exact_handoff_filled_in.xlsx"
                 ),
@@ -1601,6 +1719,9 @@ def main() -> None:
                 "bridge_rows": _row_count(REFINITIV_STEP1_OUT_DIR / "refinitiv_bridge_universe.parquet"),
                 "resolution_rows": _row_count(
                     REFINITIV_STEP1_OUT_DIR / "refinitiv_ric_resolution_common_stock.parquet"
+                ),
+                "instrument_authority_rows": _row_count(
+                    REFINITIV_STEP1_OUT_DIR / "refinitiv_instrument_authority_common_stock.parquet"
                 ),
                 "ownership_universe_handoff_rows": _row_count(
                     REFINITIV_OWNERSHIP_UNIVERSE_DIR
@@ -1634,6 +1755,27 @@ def main() -> None:
                     REFINITIV_OWNERSHIP_AUTHORITY_DIR
                     / "refinitiv_permno_date_ownership_panel.parquet"
                 ),
+                "analyst_request_group_membership_rows": _row_count(
+                    REFINITIV_ANALYST_COMMON_STOCK_DIR
+                    / "refinitiv_analyst_request_group_membership_common_stock.parquet"
+                ),
+                "analyst_request_group_rows": _row_count(
+                    REFINITIV_ANALYST_COMMON_STOCK_DIR
+                    / "refinitiv_analyst_request_universe_common_stock.parquet"
+                ),
+                "analyst_actuals_raw_rows": _row_count(
+                    REFINITIV_ANALYST_COMMON_STOCK_DIR / "refinitiv_analyst_actuals_raw.parquet"
+                ),
+                "analyst_estimates_monthly_raw_rows": _row_count(
+                    REFINITIV_ANALYST_COMMON_STOCK_DIR / "refinitiv_analyst_estimates_monthly_raw.parquet"
+                ),
+                "analyst_normalized_panel_rows": _row_count(
+                    REFINITIV_ANALYST_COMMON_STOCK_DIR / "refinitiv_analyst_normalized_panel.parquet"
+                ),
+                "analyst_normalization_rejection_rows": _row_count(
+                    REFINITIV_ANALYST_COMMON_STOCK_DIR
+                    / "refinitiv_analyst_normalization_rejections.parquet"
+                ),
                 "doc_ownership_exact_request_rows": _row_count(
                     REFINITIV_DOC_OWNERSHIP_LM2011_DIR
                     / "refinitiv_lm2011_doc_ownership_exact_requests.parquet"
@@ -1666,6 +1808,16 @@ def main() -> None:
                 "doc_ownership_retrieval_status_counts": _value_counts(
                     REFINITIV_DOC_OWNERSHIP_LM2011_DIR / "refinitiv_lm2011_doc_ownership.parquet",
                     "retrieval_status",
+                ),
+                "doc_analyst_anchor_rows": _row_count(
+                    REFINITIV_DOC_ANALYST_LM2011_DIR / "refinitiv_doc_analyst_request_anchors.parquet"
+                ),
+                "doc_analyst_selected_rows": _row_count(
+                    REFINITIV_DOC_ANALYST_LM2011_DIR / "refinitiv_doc_analyst_selected.parquet"
+                ),
+                "doc_analyst_match_status_counts": _value_counts(
+                    REFINITIV_DOC_ANALYST_LM2011_DIR / "refinitiv_doc_analyst_selected.parquet",
+                    "analyst_match_status",
                 ),
             },
             "artifacts": {

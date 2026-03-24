@@ -814,6 +814,8 @@ def run_refinitiv_lm2011_doc_ownership_finalize_pipeline(
     output_dir: Path | str,
     fallback_filled_workbook_path: Path | str | None = None,
 ) -> dict[str, Path]:
+    from thesis_pkg.pipelines.refinitiv.lseg_api_common import write_parquet_atomic
+
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -866,9 +868,9 @@ def run_refinitiv_lm2011_doc_ownership_finalize_pipeline(
     tables, _ = _build_doc_ownership_output_tables(request_df, exact_raw_df, fallback_raw_df)
     raw_path = output_dir / "refinitiv_lm2011_doc_ownership_raw.parquet"
     final_path = output_dir / "refinitiv_lm2011_doc_ownership.parquet"
-    fallback_raw_df.write_parquet(fallback_raw_path, compression="zstd")
-    tables["raw"].write_parquet(raw_path, compression="zstd")
-    tables["final"].write_parquet(final_path, compression="zstd")
+    write_parquet_atomic(fallback_raw_df, fallback_raw_path)
+    write_parquet_atomic(tables["raw"], raw_path)
+    write_parquet_atomic(tables["final"], final_path)
     return {
         "refinitiv_lm2011_doc_ownership_fallback_raw_parquet": fallback_raw_path,
         "refinitiv_lm2011_doc_ownership_raw_parquet": raw_path,

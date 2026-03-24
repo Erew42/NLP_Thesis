@@ -4,11 +4,19 @@ import contextlib
 import datetime as dt
 import json
 from dataclasses import dataclass
+import os
 from pathlib import Path
+import socket
 import sqlite3
 from typing import Any
+import uuid
 
-from thesis_pkg.pipelines.refinitiv.lseg_batching import BatchDefinition, RequestItem, stable_json_dumps
+from thesis_pkg.pipelines.refinitiv.lseg_batching import (
+    BatchDefinition,
+    RequestItem,
+    stable_hash_id,
+    stable_json_dumps,
+)
 
 
 LEDGER_PENDING = "pending"
@@ -18,6 +26,15 @@ LEDGER_RETRYABLE_ERROR = "retryable_error"
 LEDGER_DEFERRED_DAILY_LIMIT = "deferred_daily_limit"
 LEDGER_FATAL_ERROR = "fatal_error"
 LEDGER_TERMINAL_STATES = (LEDGER_SUCCEEDED, LEDGER_DEFERRED_DAILY_LIMIT, LEDGER_FATAL_ERROR)
+
+ATTEMPT_PHASE_CLAIMED = "claimed"
+ATTEMPT_PHASE_REQUEST_STARTED = "request_started"
+ATTEMPT_PHASE_REQUEST_FINISHED_SUCCESS = "request_finished_success"
+ATTEMPT_PHASE_REQUEST_FINISHED_ERROR = "request_finished_error"
+ATTEMPT_PHASE_REQUEUED_STALE_RUNNING = "requeued_stale_running"
+ATTEMPT_PHASE_SPLIT_INTO_CHILDREN = "split_into_children"
+
+LEDGER_SCHEMA_VERSION = 2
 
 
 def utc_now() -> dt.datetime:
@@ -35,6 +52,15 @@ def from_utc_text(value: str | None) -> dt.datetime | None:
     if not value:
         return None
     return dt.datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=dt.timezone.utc)
+
+
+def default_run_session_id() -> str:
+    timestamp = utc_now().strftime("%Y%m%dT%H%M%SZ")
+    return f"run_{timestamp}_{uuid.uuid4().hex[:8]}"
+
+
+def default_worker_id() -> str:
+    return f"{socket.gethostname()}:{os.getpid()}"
 
 
 @dataclass(frozen=True)
@@ -73,12 +99,24 @@ class LedgerBatch:
     header_json: dict[str, Any] | None
     last_error: str | None
     next_eligible_at_utc: dt.datetime | None
+    claim_token: str | None
+    last_run_session_id: str | None
+    last_worker_id: str | None
+    running_started_at_utc: dt.datetime | None
 
 
 class RequestLedger:
-    def __init__(self, db_path: Path | str) -> None:
+    def __init__(
+        self,
+        db_path: Path | str,
+        *,
+        run_session_id: str | None = None,
+        worker_id: str | None = None,
+    ) -> None:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self.run_session_id = run_session_id or default_run_session_id()
+        self.worker_id = worker_id or default_worker_id()
         self._initialize()
 
     def enqueue(self, items: list[RequestItem], batches: list[BatchDefinition]) -> None:
@@ -142,62 +180,109 @@ class RequestLedger:
         cutoff = utc_now() - dt.timedelta(seconds=older_than_seconds)
         cutoff_text = to_utc_text(cutoff)
         now_text = to_utc_text(utc_now())
+        requeued = 0
         with self._connect() as conn:
-            cursor = conn.execute(
+            rows = conn.execute(
                 """
-                UPDATE batches
-                SET state = ?, updated_at_utc = ?
+                SELECT *
+                FROM batches
                 WHERE state = ? AND updated_at_utc < ?
+                ORDER BY updated_at_utc, batch_id
                 """,
-                (
-                    LEDGER_PENDING,
-                    now_text,
-                    LEDGER_RUNNING,
-                    cutoff_text,
-                ),
-            )
-            return int(cursor.rowcount or 0)
+                (LEDGER_RUNNING, cutoff_text),
+            ).fetchall()
+            for row in rows:
+                batch_id = str(row["batch_id"])
+                item_ids = self._item_ids_from_row(row)
+                conn.execute(
+                    """
+                    UPDATE batches
+                    SET state = ?, updated_at_utc = ?, claim_token = NULL, running_started_at_utc = NULL
+                    WHERE batch_id = ?
+                    """,
+                    (
+                        LEDGER_PENDING,
+                        now_text,
+                        batch_id,
+                    ),
+                )
+                self._update_items_for_ids(
+                    conn,
+                    item_ids=item_ids,
+                    state=LEDGER_PENDING,
+                    last_error="requeued_stale_running",
+                    next_eligible_at_utc=None,
+                    updated_at_utc=now_text,
+                )
+                attempt_no = int(row["attempt_count"] or 0)
+                if attempt_no > 0:
+                    self._insert_attempt_event(
+                        conn,
+                        batch_id=batch_id,
+                        attempt_no=attempt_no,
+                        phase=ATTEMPT_PHASE_REQUEUED_STALE_RUNNING,
+                        claim_token=None if row["claim_token"] is None else str(row["claim_token"]),
+                        headers=None,
+                        status_code=None,
+                        latency_ms=None,
+                        rows_returned=None,
+                        response_bytes=None,
+                        exception_class=None,
+                        exception_message="requeued stale running batch",
+                    )
+                requeued += 1
+        return requeued
 
     def requeue_known_fixable_fatal_batches(self, *, stage: str | None = None) -> int:
-        now_text = to_utc_text(utc_now())
         predicates = (
             "last_error LIKE 'Unable to resolve all requested identifiers%'",
             "last_error LIKE 'could not append value:%'",
             "last_error LIKE 'failed to convert LSEG response to Polars:%'",
         )
         where_clause = " OR ".join(predicates)
+        now_text = to_utc_text(utc_now())
+        requeued = 0
         with self._connect() as conn:
-            if stage is None:
-                cursor = conn.execute(
-                    f"""
+            params: list[Any] = [LEDGER_FATAL_ERROR]
+            query = f"""
+                SELECT *
+                FROM batches
+                WHERE state = ?
+                  AND ({where_clause})
+            """
+            if stage is not None:
+                query += " AND stage = ?"
+                params.append(stage)
+            rows = conn.execute(query, params).fetchall()
+            for row in rows:
+                batch_id = str(row["batch_id"])
+                item_ids = self._item_ids_from_row(row)
+                conn.execute(
+                    """
                     UPDATE batches
                     SET state = ?, last_error = NULL, next_eligible_at_utc = NULL, updated_at_utc = ?
-                    WHERE state = ? AND ({where_clause})
+                    WHERE batch_id = ?
                     """,
                     (
                         LEDGER_PENDING,
                         now_text,
-                        LEDGER_FATAL_ERROR,
+                        batch_id,
                     ),
                 )
-            else:
-                cursor = conn.execute(
-                    f"""
-                    UPDATE batches
-                    SET state = ?, last_error = NULL, next_eligible_at_utc = NULL, updated_at_utc = ?
-                    WHERE stage = ? AND state = ? AND ({where_clause})
-                    """,
-                    (
-                        LEDGER_PENDING,
-                        now_text,
-                        stage,
-                        LEDGER_FATAL_ERROR,
-                    ),
+                self._update_items_for_ids(
+                    conn,
+                    item_ids=item_ids,
+                    state=LEDGER_PENDING,
+                    last_error=None,
+                    next_eligible_at_utc=None,
+                    updated_at_utc=now_text,
                 )
-            return int(cursor.rowcount or 0)
+                requeued += 1
+        return requeued
 
     def claim_next_batch(self, *, stage: str) -> LedgerBatch | None:
-        now_text = to_utc_text(utc_now())
+        now = utc_now()
+        now_text = to_utc_text(now)
         with self._connect() as conn:
             row = conn.execute(
                 """
@@ -227,21 +312,69 @@ class RequestLedger:
             ).fetchone()
             if row is None:
                 return None
+            attempt_no = int(row["attempt_count"]) + 1
+            claim_token = stable_hash_id(row["batch_id"], attempt_no, now_text, prefix="claim")
+            batch_id = str(row["batch_id"])
+            item_ids = self._item_ids_from_row(row)
             conn.execute(
                 """
                 UPDATE batches
-                SET state = ?, updated_at_utc = ?, attempt_count = attempt_count + 1
+                SET state = ?,
+                    updated_at_utc = ?,
+                    attempt_count = attempt_count + 1,
+                    claim_token = ?,
+                    running_started_at_utc = ?,
+                    last_run_session_id = ?,
+                    last_worker_id = ?,
+                    next_eligible_at_utc = NULL
                 WHERE batch_id = ?
                 """,
                 (
                     LEDGER_RUNNING,
                     now_text,
-                    row["batch_id"],
+                    claim_token,
+                    now_text,
+                    self.run_session_id,
+                    self.worker_id,
+                    batch_id,
                 ),
+            )
+            self._increment_item_attempts(
+                conn,
+                item_ids=item_ids,
+                updated_at_utc=now_text,
+            )
+            self._insert_attempt_event(
+                conn,
+                batch_id=batch_id,
+                attempt_no=attempt_no,
+                phase=ATTEMPT_PHASE_CLAIMED,
+                claim_token=claim_token,
+                headers=None,
+                status_code=None,
+                latency_ms=None,
+                rows_returned=None,
+                response_bytes=None,
+                exception_class=None,
+                exception_message=None,
+            )
+            self._insert_attempt_event(
+                conn,
+                batch_id=batch_id,
+                attempt_no=attempt_no,
+                phase=ATTEMPT_PHASE_REQUEST_STARTED,
+                claim_token=claim_token,
+                headers=None,
+                status_code=None,
+                latency_ms=None,
+                rows_returned=None,
+                response_bytes=None,
+                exception_class=None,
+                exception_message=None,
             )
             updated_row = conn.execute(
                 "SELECT * FROM batches WHERE batch_id = ?",
-                (row["batch_id"],),
+                (batch_id,),
             ).fetchone()
             if updated_row is None:
                 return None
@@ -275,7 +408,8 @@ class RequestLedger:
             batch_row = conn.execute("SELECT * FROM batches WHERE batch_id = ?", (batch_id,)).fetchone()
             if batch_row is None:
                 raise KeyError(f"unknown batch_id: {batch_id}")
-            item_ids = tuple(json.loads(batch_row["item_ids_json"]))
+            attempt_no = int(batch_row["attempt_count"])
+            item_ids = self._item_ids_from_row(batch_row)
             for item_id in item_ids:
                 conn.execute(
                     """
@@ -298,7 +432,7 @@ class RequestLedger:
                 UPDATE batches
                 SET state = ?, result_file_path = ?, header_json = ?, last_status_code = ?,
                     last_latency_ms = ?, rows_returned = ?, response_bytes = ?, last_error = NULL,
-                    next_eligible_at_utc = NULL, updated_at_utc = ?
+                    next_eligible_at_utc = NULL, updated_at_utc = ?, claim_token = NULL, running_started_at_utc = NULL
                 WHERE batch_id = ?
                 """,
                 (
@@ -316,12 +450,26 @@ class RequestLedger:
             self._insert_attempt_row(
                 conn,
                 batch_id=batch_id,
-                attempt_no=int(batch_row["attempt_count"]),
+                attempt_no=attempt_no,
                 status_code=status_code,
                 latency_ms=latency_ms,
                 rows_returned=rows_returned,
                 response_bytes=response_bytes,
                 headers=headers,
+                exception_class=None,
+                exception_message=None,
+            )
+            self._insert_attempt_event(
+                conn,
+                batch_id=batch_id,
+                attempt_no=attempt_no,
+                phase=ATTEMPT_PHASE_REQUEST_FINISHED_SUCCESS,
+                claim_token=None if batch_row["claim_token"] is None else str(batch_row["claim_token"]),
+                headers=headers,
+                status_code=status_code,
+                latency_ms=latency_ms,
+                rows_returned=rows_returned,
+                response_bytes=response_bytes,
                 exception_class=None,
                 exception_message=None,
             )
@@ -345,11 +493,14 @@ class RequestLedger:
             batch_row = conn.execute("SELECT * FROM batches WHERE batch_id = ?", (batch_id,)).fetchone()
             if batch_row is None:
                 raise KeyError(f"unknown batch_id: {batch_id}")
+            attempt_no = int(batch_row["attempt_count"])
+            item_ids = self._item_ids_from_row(batch_row)
             conn.execute(
                 """
                 UPDATE batches
                 SET state = ?, last_error = ?, header_json = ?, last_status_code = ?,
-                    last_latency_ms = ?, response_bytes = ?, next_eligible_at_utc = ?, updated_at_utc = ?
+                    last_latency_ms = ?, response_bytes = ?, next_eligible_at_utc = ?, updated_at_utc = ?,
+                    claim_token = NULL, running_started_at_utc = NULL
                 WHERE batch_id = ?
                 """,
                 (
@@ -364,10 +515,18 @@ class RequestLedger:
                     batch_id,
                 ),
             )
+            self._update_items_for_ids(
+                conn,
+                item_ids=item_ids,
+                state=next_state,
+                last_error=error_message,
+                next_eligible_at_utc=next_eligible_text,
+                updated_at_utc=now_text,
+            )
             self._insert_attempt_row(
                 conn,
                 batch_id=batch_id,
-                attempt_no=int(batch_row["attempt_count"]),
+                attempt_no=attempt_no,
                 status_code=status_code,
                 latency_ms=latency_ms,
                 rows_returned=None,
@@ -376,14 +535,32 @@ class RequestLedger:
                 exception_class=exception_class,
                 exception_message=error_message,
             )
+            self._insert_attempt_event(
+                conn,
+                batch_id=batch_id,
+                attempt_no=attempt_no,
+                phase=ATTEMPT_PHASE_REQUEST_FINISHED_ERROR,
+                claim_token=None if batch_row["claim_token"] is None else str(batch_row["claim_token"]),
+                headers=headers,
+                status_code=status_code,
+                latency_ms=latency_ms,
+                rows_returned=None,
+                response_bytes=response_bytes,
+                exception_class=exception_class,
+                exception_message=error_message,
+            )
 
     def split_batch(self, *, parent_batch_id: str, child_batches: list[BatchDefinition], reason: str) -> None:
         now_text = to_utc_text(utc_now())
         with self._connect() as conn:
+            parent_row = conn.execute("SELECT * FROM batches WHERE batch_id = ?", (parent_batch_id,)).fetchone()
+            if parent_row is None:
+                raise KeyError(f"unknown batch_id: {parent_batch_id}")
+            item_ids = self._item_ids_from_row(parent_row)
             conn.execute(
                 """
                 UPDATE batches
-                SET state = ?, last_error = ?, updated_at_utc = ?
+                SET state = ?, last_error = ?, updated_at_utc = ?, claim_token = NULL, running_started_at_utc = NULL
                 WHERE batch_id = ?
                 """,
                 (
@@ -393,6 +570,30 @@ class RequestLedger:
                     parent_batch_id,
                 ),
             )
+            self._update_items_for_ids(
+                conn,
+                item_ids=item_ids,
+                state=LEDGER_PENDING,
+                last_error="split_into_children",
+                next_eligible_at_utc=None,
+                updated_at_utc=now_text,
+            )
+            attempt_no = int(parent_row["attempt_count"] or 0)
+            if attempt_no > 0:
+                self._insert_attempt_event(
+                    conn,
+                    batch_id=parent_batch_id,
+                    attempt_no=attempt_no,
+                    phase=ATTEMPT_PHASE_SPLIT_INTO_CHILDREN,
+                    claim_token=None if parent_row["claim_token"] is None else str(parent_row["claim_token"]),
+                    headers=None,
+                    status_code=None,
+                    latency_ms=None,
+                    rows_returned=None,
+                    response_bytes=None,
+                    exception_class=None,
+                    exception_message=reason,
+                )
             for batch in child_batches:
                 conn.execute(
                     """
@@ -438,10 +639,92 @@ class RequestLedger:
                     LEDGER_RETRYABLE_ERROR,
                 ),
             )
+            conn.execute(
+                """
+                UPDATE request_items
+                SET state = ?, next_eligible_at_utc = ?, last_error = ?, updated_at_utc = ?
+                WHERE stage = ? AND state IN (?, ?)
+                """,
+                (
+                    LEDGER_DEFERRED_DAILY_LIMIT,
+                    next_text,
+                    reason,
+                    now_text,
+                    stage,
+                    LEDGER_PENDING,
+                    LEDGER_RETRYABLE_ERROR,
+                ),
+            )
             return int(cursor.rowcount or 0)
+
+    def state_counts(self, *, table: str) -> dict[str, int]:
+        if table not in {"batches", "request_items"}:
+            raise ValueError(f"unsupported table: {table}")
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"SELECT state, COUNT(*) AS row_count FROM {table} GROUP BY state ORDER BY state"
+            ).fetchall()
+        return {str(row["state"]): int(row["row_count"]) for row in rows}
+
+    def attempt_mismatches(self) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    b.batch_id,
+                    b.attempt_count,
+                    COALESCE(a.finished_attempt_count, 0) AS finished_attempt_count,
+                    COALESCE(e.event_attempt_count, 0) AS event_attempt_count
+                FROM batches AS b
+                LEFT JOIN (
+                    SELECT batch_id, COUNT(*) AS finished_attempt_count
+                    FROM batch_attempts
+                    GROUP BY batch_id
+                ) AS a
+                  ON a.batch_id = b.batch_id
+                LEFT JOIN (
+                    SELECT batch_id, COUNT(DISTINCT attempt_no) AS event_attempt_count
+                    FROM batch_attempt_events
+                    GROUP BY batch_id
+                ) AS e
+                  ON e.batch_id = b.batch_id
+                WHERE b.attempt_count != COALESCE(a.finished_attempt_count, 0)
+                   OR b.attempt_count != COALESCE(e.event_attempt_count, 0)
+                ORDER BY b.batch_id
+                """
+            ).fetchall()
+        return [
+            {
+                "batch_id": str(row["batch_id"]),
+                "attempt_count": int(row["attempt_count"]),
+                "finished_attempt_count": int(row["finished_attempt_count"]),
+                "event_attempt_count": int(row["event_attempt_count"]),
+            }
+            for row in rows
+        ]
+
+    def run_session_ids(self) -> list[str]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT DISTINCT run_session_id
+                FROM batch_attempt_events
+                WHERE run_session_id IS NOT NULL
+                ORDER BY run_session_id
+                """
+            ).fetchall()
+        return [str(row["run_session_id"]) for row in rows]
 
     def _initialize(self) -> None:
         with self._connect() as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS ledger_meta (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                )
+                """
+            )
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS request_items (
@@ -507,6 +790,45 @@ class RequestLedger:
                 )
                 """
             )
+            self._ensure_column(conn, table="batches", column="claim_token", column_type="TEXT")
+            self._ensure_column(conn, table="batches", column="running_started_at_utc", column_type="TEXT")
+            self._ensure_column(conn, table="batches", column="last_run_session_id", column_type="TEXT")
+            self._ensure_column(conn, table="batches", column="last_worker_id", column_type="TEXT")
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS batch_attempt_events (
+                    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    batch_id TEXT NOT NULL,
+                    attempt_no INTEGER NOT NULL,
+                    phase TEXT NOT NULL,
+                    run_session_id TEXT,
+                    worker_id TEXT,
+                    claim_token TEXT,
+                    status_code INTEGER,
+                    latency_ms INTEGER,
+                    rows_returned INTEGER,
+                    response_bytes INTEGER,
+                    headers_json TEXT,
+                    exception_class TEXT,
+                    exception_message TEXT,
+                    created_at_utc TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_batch_attempt_events_batch_attempt
+                ON batch_attempt_events (batch_id, attempt_no, phase)
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO ledger_meta (key, value)
+                VALUES ('schema_version', ?)
+                ON CONFLICT(key) DO UPDATE SET value=excluded.value
+                """,
+                (str(LEDGER_SCHEMA_VERSION),),
+            )
 
     @contextlib.contextmanager
     def _connect(self) -> Any:
@@ -560,6 +882,10 @@ class RequestLedger:
             header_json=header_json,
             last_error=None if row["last_error"] is None else str(row["last_error"]),
             next_eligible_at_utc=from_utc_text(row["next_eligible_at_utc"]),
+            claim_token=None if row["claim_token"] is None else str(row["claim_token"]),
+            last_run_session_id=None if row["last_run_session_id"] is None else str(row["last_run_session_id"]),
+            last_worker_id=None if row["last_worker_id"] is None else str(row["last_worker_id"]),
+            running_started_at_utc=from_utc_text(row["running_started_at_utc"]),
         )
 
     def _insert_attempt_row(
@@ -597,3 +923,112 @@ class RequestLedger:
                 to_utc_text(utc_now()),
             ),
         )
+
+    def _insert_attempt_event(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        batch_id: str,
+        attempt_no: int,
+        phase: str,
+        claim_token: str | None,
+        headers: dict[str, Any] | None,
+        status_code: int | None,
+        latency_ms: int | None,
+        rows_returned: int | None,
+        response_bytes: int | None,
+        exception_class: str | None,
+        exception_message: str | None,
+    ) -> None:
+        conn.execute(
+            """
+            INSERT INTO batch_attempt_events (
+                batch_id, attempt_no, phase, run_session_id, worker_id, claim_token,
+                status_code, latency_ms, rows_returned, response_bytes,
+                headers_json, exception_class, exception_message, created_at_utc
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                batch_id,
+                attempt_no,
+                phase,
+                self.run_session_id,
+                self.worker_id,
+                claim_token,
+                status_code,
+                latency_ms,
+                rows_returned,
+                response_bytes,
+                stable_json_dumps(headers or {}),
+                exception_class,
+                exception_message,
+                to_utc_text(utc_now()),
+            ),
+        )
+
+    def _increment_item_attempts(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        item_ids: tuple[str, ...],
+        updated_at_utc: str,
+    ) -> None:
+        for item_id in item_ids:
+            conn.execute(
+                """
+                UPDATE request_items
+                SET state = ?, attempt_count = attempt_count + 1, updated_at_utc = ?, next_eligible_at_utc = NULL
+                WHERE item_id = ?
+                """,
+                (
+                    LEDGER_RUNNING,
+                    updated_at_utc,
+                    item_id,
+                ),
+            )
+
+    def _update_items_for_ids(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        item_ids: tuple[str, ...],
+        state: str,
+        last_error: str | None,
+        next_eligible_at_utc: str | None,
+        updated_at_utc: str,
+    ) -> None:
+        for item_id in item_ids:
+            conn.execute(
+                """
+                UPDATE request_items
+                SET state = ?, last_error = ?, next_eligible_at_utc = ?, updated_at_utc = ?
+                WHERE item_id = ?
+                """,
+                (
+                    state,
+                    last_error,
+                    next_eligible_at_utc,
+                    updated_at_utc,
+                    item_id,
+                ),
+            )
+
+    def _item_ids_from_row(self, row: sqlite3.Row) -> tuple[str, ...]:
+        return tuple(str(item_id) for item_id in json.loads(row["item_ids_json"]))
+
+    def _ensure_column(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        table: str,
+        column: str,
+        column_type: str,
+    ) -> None:
+        columns = {
+            str(row["name"])
+            for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+        }
+        if column in columns:
+            return
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {column_type}")

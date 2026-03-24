@@ -26,6 +26,12 @@ SESSION_NOT_OPENED_MARKERS = (
     "can't send any request",
 )
 
+WORKSPACE_PROXY_MARKERS = (
+    "localhost:9000",
+    "/api/udf",
+    "refinitivworkspace.exe",
+)
+
 UNRESOLVED_IDENTIFIERS_RE = re.compile(
     r"Unable to resolve all requested identifiers in \[(?P<identifiers>.*?)\]\.",
     re.IGNORECASE,
@@ -90,11 +96,15 @@ class LsegDataProvider:
         self,
         *,
         session_name: str = "desktop.workspace",
+        config_name: str | None = None,
         request_timeout: float | None = None,
     ) -> None:
         self.session_name = session_name
+        self.config_name = config_name
         self.request_timeout = request_timeout
         self._ld: Any | None = None
+        self._config: Any | None = None
+        self._previous_request_timeout: Any | None = None
         self._session_open = False
 
     def open(self) -> None:
@@ -106,21 +116,40 @@ class LsegDataProvider:
             raise LsegProviderImportError("lseg.data is not installed in this runtime") from exc
 
         self._ld = ld
+        self._config = self._load_config(ld)
+        self._apply_request_timeout()
         try:
-            ld.open_session(name=self.session_name)
+            open_kwargs: dict[str, Any] = {"name": self.session_name}
+            if self.config_name is not None:
+                open_kwargs["config_name"] = self.config_name
+            ld.open_session(**open_kwargs)
         except Exception as exc:  # pragma: no cover - exercised only with the real library
-            raise LsegSessionError(f"failed to open LSEG session {self.session_name!r}") from exc
+            self._restore_request_timeout()
+            config_suffix = "" if self.config_name is None else f" using config {self.config_name!r}"
+            raise LsegSessionError(f"failed to open LSEG session {self.session_name!r}{config_suffix}") from exc
         self._session_open = True
 
     def close(self) -> None:
-        if not self._session_open or self._ld is None:
+        if self._ld is None:
+            self._restore_request_timeout()
             return
         try:
-            self._ld.close_session()
+            if self._session_open:
+                self._ld.close_session()
         except Exception:
             pass
         finally:
             self._session_open = False
+            self._restore_request_timeout()
+
+    def probe(
+        self,
+        *,
+        universe: list[str],
+        fields: list[str],
+        parameters: dict[str, Any] | None = None,
+    ) -> LsegDataResponse:
+        return self.get_data(universe=universe, fields=fields, parameters=parameters)
 
     def get_data(
         self,
@@ -198,11 +227,58 @@ class LsegDataProvider:
         self.close()
         self.open()
 
+    def _load_config(self, ld: Any) -> Any | None:
+        getter = getattr(ld, "get_config", None)
+        if getter is None:
+            return None
+        try:
+            return getter()
+        except Exception:
+            return None
+
+    def _apply_request_timeout(self) -> None:
+        if self.request_timeout is None or self._config is None:
+            return
+        getter = getattr(self._config, "get_param", None)
+        setter = getattr(self._config, "set_param", None)
+        if getter is None or setter is None:
+            return
+        try:
+            self._previous_request_timeout = getter("http.request-timeout")
+        except Exception:
+            self._previous_request_timeout = None
+        try:
+            setter("http.request-timeout", self.request_timeout)
+        except Exception:
+            self._previous_request_timeout = None
+
+    def _restore_request_timeout(self) -> None:
+        if self._config is None or self._previous_request_timeout is None:
+            return
+        setter = getattr(self._config, "set_param", None)
+        if setter is None:
+            return
+        try:
+            setter("http.request-timeout", self._previous_request_timeout)
+        except Exception:
+            pass
+        finally:
+            self._previous_request_timeout = None
+
 
 def classify_lseg_error_message(message: str) -> tuple[str | None, tuple[str, ...]]:
     unresolved_identifiers = _parse_unresolved_identifiers(message)
     if unresolved_identifiers:
         return "unresolved_identifiers", unresolved_identifiers
+    normalized = message.lower()
+    if _is_session_not_opened_message(message):
+        return "session_open_failed", ()
+    if "timed out" in normalized or "timeout" in normalized:
+        if any(marker in normalized for marker in WORKSPACE_PROXY_MARKERS):
+            return "workspace_proxy_timeout", ()
+        return "transport_timeout", ()
+    if any(token in normalized for token in ("service unavailable", "overload", "backend", "502", "503", "504")):
+        return "backend_overload", ()
     return None, ()
 
 
@@ -219,7 +295,7 @@ def _should_refresh_and_retry_request(
 ) -> bool:
     if refresh_attempt > 0:
         return False
-    if _is_session_not_opened_message(str(exc)):
+    if exc.error_kind in {"session_open_failed", "workspace_proxy_timeout"} or _is_session_not_opened_message(str(exc)):
         return True
     return len(universe) == 1 and exc.error_kind == "unresolved_identifiers"
 

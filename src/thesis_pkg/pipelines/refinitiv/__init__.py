@@ -8,14 +8,32 @@ from thesis_pkg.pipelines.refinitiv.authority import (
     build_refinitiv_step1_ownership_authority_tables,
     run_refinitiv_step1_ownership_authority_pipeline,
 )
+from thesis_pkg.pipelines.refinitiv.analyst import (
+    build_refinitiv_analyst_normalized_outputs,
+    build_refinitiv_lm2011_doc_analyst_anchors,
+    build_refinitiv_step1_analyst_request_groups,
+    run_refinitiv_lm2011_doc_analyst_anchor_pipeline,
+    run_refinitiv_lm2011_doc_analyst_select_pipeline,
+    run_refinitiv_step1_analyst_normalize_pipeline,
+    run_refinitiv_step1_analyst_request_groups_pipeline,
+    select_refinitiv_lm2011_doc_analyst_inputs,
+)
 from thesis_pkg.pipelines.refinitiv.doc_ownership import (
     build_refinitiv_lm2011_doc_ownership_requests,
     run_refinitiv_lm2011_doc_ownership_exact_handoff_pipeline,
     run_refinitiv_lm2011_doc_ownership_fallback_handoff_pipeline,
     run_refinitiv_lm2011_doc_ownership_finalize_pipeline,
 )
+from thesis_pkg.pipelines.refinitiv.instrument_authority import (
+    build_refinitiv_step1_instrument_authority_frame,
+    run_refinitiv_step1_instrument_authority_pipeline,
+)
 from thesis_pkg.pipelines.refinitiv.lseg_lookup_api import (
     run_refinitiv_step1_lookup_api_pipeline,
+)
+from thesis_pkg.pipelines.refinitiv.lseg_analyst_api import (
+    run_refinitiv_step1_analyst_actuals_api_pipeline,
+    run_refinitiv_step1_analyst_estimates_monthly_api_pipeline,
 )
 from thesis_pkg.pipelines.refinitiv.lseg_ownership_api import (
     run_refinitiv_lm2011_doc_ownership_exact_api_pipeline,
@@ -39,8 +57,20 @@ __all__ = [
     "run_refinitiv_step1_bridge_pipeline",
     "build_refinitiv_step1_resolution_frame",
     "run_refinitiv_step1_resolution_pipeline",
+    "build_refinitiv_step1_instrument_authority_frame",
+    "run_refinitiv_step1_instrument_authority_pipeline",
     "build_refinitiv_step1_ownership_authority_tables",
     "run_refinitiv_step1_ownership_authority_pipeline",
+    "build_refinitiv_step1_analyst_request_groups",
+    "run_refinitiv_step1_analyst_request_groups_pipeline",
+    "run_refinitiv_step1_analyst_actuals_api_pipeline",
+    "run_refinitiv_step1_analyst_estimates_monthly_api_pipeline",
+    "build_refinitiv_analyst_normalized_outputs",
+    "run_refinitiv_step1_analyst_normalize_pipeline",
+    "build_refinitiv_lm2011_doc_analyst_anchors",
+    "run_refinitiv_lm2011_doc_analyst_anchor_pipeline",
+    "select_refinitiv_lm2011_doc_analyst_inputs",
+    "run_refinitiv_lm2011_doc_analyst_select_pipeline",
     "build_refinitiv_lm2011_doc_ownership_requests",
     "run_refinitiv_lm2011_doc_ownership_exact_handoff_pipeline",
     "run_refinitiv_lm2011_doc_ownership_exact_api_pipeline",
