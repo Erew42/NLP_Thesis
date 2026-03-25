@@ -83,7 +83,9 @@ def run_refinitiv_step1_analyst_actuals_api_pipeline(
     request_log_path: Path | str | None = None,
     max_batch_size: int = 10,
     min_seconds_between_requests: float = 2.0,
+    min_seconds_between_request_starts_total: float | None = None,
     max_attempts: int = 4,
+    max_workers: int = 1,
     provider_session_name: str = "desktop.workspace",
     provider_config_name: str | None = None,
     provider_timeout_seconds: float | None = None,
@@ -116,11 +118,13 @@ def run_refinitiv_step1_analyst_actuals_api_pipeline(
         preflight_probe=preflight_probe,
         max_batch_size=max_batch_size,
         min_seconds_between_requests=min_seconds_between_requests,
+        min_seconds_between_request_starts_total=min_seconds_between_request_starts_total,
         max_attempts=max_attempts,
         response_normalizer=_normalize_analyst_actuals_batch_response,
         lookup_normalizer=str,
         split_after_attempt=2,
         retry_delay_seconds_fn=_retry_delay_seconds,
+        max_workers=max_workers,
     )
     raw_df = _assemble_analyst_actuals_raw(stage_run.staging_dir)
     raw_path = output_dir / "refinitiv_analyst_actuals_raw.parquet"
@@ -179,7 +183,9 @@ def run_refinitiv_step1_analyst_estimates_monthly_api_pipeline(
     request_log_path: Path | str | None = None,
     max_batch_size: int = 10,
     min_seconds_between_requests: float = 2.0,
+    min_seconds_between_request_starts_total: float | None = None,
     max_attempts: int = 4,
+    max_workers: int = 1,
     provider_session_name: str = "desktop.workspace",
     provider_config_name: str | None = None,
     provider_timeout_seconds: float | None = None,
@@ -212,11 +218,13 @@ def run_refinitiv_step1_analyst_estimates_monthly_api_pipeline(
         preflight_probe=preflight_probe,
         max_batch_size=max_batch_size,
         min_seconds_between_requests=min_seconds_between_requests,
+        min_seconds_between_request_starts_total=min_seconds_between_request_starts_total,
         max_attempts=max_attempts,
         response_normalizer=_normalize_analyst_estimates_batch_response,
         lookup_normalizer=str,
         split_after_attempt=2,
         retry_delay_seconds_fn=_retry_delay_seconds,
+        max_workers=max_workers,
     )
     raw_df = _assemble_analyst_estimates_raw(stage_run.staging_dir)
     raw_path = output_dir / "refinitiv_analyst_estimates_monthly_raw.parquet"
@@ -404,7 +412,10 @@ def _normalize_analyst_actuals_batch_response(items: list[Any], frame: pl.DataFr
             )
     if not rows:
         return pl.DataFrame(schema=_actuals_raw_schema())
-    return _cast_df_to_schema(pl.DataFrame(rows), _actuals_raw_schema())
+    return _cast_df_to_schema(
+        pl.DataFrame(rows, schema=_actuals_raw_schema()),
+        _actuals_raw_schema(),
+    )
 
 
 def _normalize_analyst_estimates_batch_response(items: list[Any], frame: pl.DataFrame) -> pl.DataFrame:
@@ -471,7 +482,10 @@ def _normalize_analyst_estimates_batch_response(items: list[Any], frame: pl.Data
             )
     if not rows:
         return pl.DataFrame(schema=_estimates_raw_schema())
-    return _cast_df_to_schema(pl.DataFrame(rows), _estimates_raw_schema())
+    return _cast_df_to_schema(
+        pl.DataFrame(rows, schema=_estimates_raw_schema()),
+        _estimates_raw_schema(),
+    )
 
 
 __all__ = [

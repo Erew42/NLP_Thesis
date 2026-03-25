@@ -204,7 +204,22 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--doc-exact-batch-size", type=int, default=15)
     parser.add_argument("--doc-fallback-batch-size", type=int, default=5)
     parser.add_argument("--min-seconds-between-requests", type=float, default=2.0)
+    parser.add_argument(
+        "--min-seconds-between-request-starts-total",
+        type=float,
+        default=None,
+        help=(
+            "Aggregate minimum gap between request starts across all workers when --max-workers > 1. "
+            "Required for concurrent mode."
+        ),
+    )
     parser.add_argument("--max-attempts", type=int, default=4)
+    parser.add_argument(
+        "--max-workers",
+        type=int,
+        default=1,
+        help="Number of worker processes for API-backed stages. Use 1 to preserve sequential execution.",
+    )
     parser.add_argument(
         "--reviewed-ticker-allowlist-path",
         type=Path,
@@ -224,6 +239,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         args.reviewed_ticker_allowlist_path = args.reviewed_ticker_allowlist_path.expanduser().resolve()
     if args.recovery_output_path is not None:
         args.recovery_output_path = args.recovery_output_path.expanduser().resolve()
+    if args.max_workers > 1 and args.min_seconds_between_request_starts_total is None:
+        parser.error(
+            "--min-seconds-between-request-starts-total is required when --max-workers is greater than 1"
+        )
     return args
 
 
@@ -553,7 +572,9 @@ def _run_stage(stage: str, args: argparse.Namespace, paths: RunPaths) -> dict[st
                 output_dir=paths.refinitiv_step1_dir,
                 max_batch_size=args.lookup_batch_size,
                 min_seconds_between_requests=args.min_seconds_between_requests,
+                min_seconds_between_request_starts_total=args.min_seconds_between_request_starts_total,
                 max_attempts=args.max_attempts,
+                max_workers=args.max_workers,
                 provider_session_name=args.provider_session_name,
                 provider_config_name=args.provider_config_name,
                 provider_timeout_seconds=args.provider_timeout_seconds,
@@ -590,7 +611,9 @@ def _run_stage(stage: str, args: argparse.Namespace, paths: RunPaths) -> dict[st
                 output_dir=paths.ownership_universe_dir,
                 max_batch_size=args.ownership_batch_size,
                 min_seconds_between_requests=args.min_seconds_between_requests,
+                min_seconds_between_request_starts_total=args.min_seconds_between_request_starts_total,
                 max_attempts=args.max_attempts,
+                max_workers=args.max_workers,
                 provider_session_name=args.provider_session_name,
                 provider_config_name=args.provider_config_name,
                 provider_timeout_seconds=args.provider_timeout_seconds,
@@ -622,7 +645,9 @@ def _run_stage(stage: str, args: argparse.Namespace, paths: RunPaths) -> dict[st
                 output_dir=paths.analyst_dir,
                 max_batch_size=args.analyst_actuals_batch_size,
                 min_seconds_between_requests=args.min_seconds_between_requests,
+                min_seconds_between_request_starts_total=args.min_seconds_between_request_starts_total,
                 max_attempts=args.max_attempts,
+                max_workers=args.max_workers,
                 provider_session_name=args.provider_session_name,
                 provider_config_name=args.provider_config_name,
                 provider_timeout_seconds=args.provider_timeout_seconds,
@@ -637,7 +662,9 @@ def _run_stage(stage: str, args: argparse.Namespace, paths: RunPaths) -> dict[st
                 output_dir=paths.analyst_dir,
                 max_batch_size=args.analyst_estimates_batch_size,
                 min_seconds_between_requests=args.min_seconds_between_requests,
+                min_seconds_between_request_starts_total=args.min_seconds_between_request_starts_total,
                 max_attempts=args.max_attempts,
+                max_workers=args.max_workers,
                 provider_session_name=args.provider_session_name,
                 provider_config_name=args.provider_config_name,
                 provider_timeout_seconds=args.provider_timeout_seconds,
@@ -662,7 +689,9 @@ def _run_stage(stage: str, args: argparse.Namespace, paths: RunPaths) -> dict[st
                 output_dir=paths.doc_ownership_dir,
                 max_batch_size=args.doc_exact_batch_size,
                 min_seconds_between_requests=args.min_seconds_between_requests,
+                min_seconds_between_request_starts_total=args.min_seconds_between_request_starts_total,
                 max_attempts=args.max_attempts,
+                max_workers=args.max_workers,
                 provider_session_name=args.provider_session_name,
                 provider_config_name=args.provider_config_name,
                 provider_timeout_seconds=args.provider_timeout_seconds,
@@ -676,7 +705,9 @@ def _run_stage(stage: str, args: argparse.Namespace, paths: RunPaths) -> dict[st
                 output_dir=paths.doc_ownership_dir,
                 max_batch_size=args.doc_fallback_batch_size,
                 min_seconds_between_requests=args.min_seconds_between_requests,
+                min_seconds_between_request_starts_total=args.min_seconds_between_request_starts_total,
                 max_attempts=args.max_attempts,
+                max_workers=args.max_workers,
                 provider_session_name=args.provider_session_name,
                 provider_config_name=args.provider_config_name,
                 provider_timeout_seconds=args.provider_timeout_seconds,

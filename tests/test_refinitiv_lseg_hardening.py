@@ -90,7 +90,7 @@ def test_request_ledger_records_claim_and_stale_requeue_history(tmp_path: Path) 
                 (claimed.batch_id,),
             ).fetchall()
         ]
-        assert phases == ["claimed", "request_started"]
+        assert phases == ["claimed"]
         conn.execute(
             "UPDATE batches SET updated_at_utc = '2000-01-01T00:00:00Z' WHERE batch_id = ?",
             (claimed.batch_id,),

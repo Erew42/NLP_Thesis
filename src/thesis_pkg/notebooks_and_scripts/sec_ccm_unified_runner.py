@@ -129,6 +129,46 @@ def _env_int_list(name: str, default: list[int]) -> list[int]:
     return [int(item) for item in parsed]
 
 
+def _env_int(name: str, default: int) -> int:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    stripped = value.strip()
+    if not stripped:
+        return default
+    return int(stripped)
+
+
+def _env_float(name: str, default: float) -> float:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    stripped = value.strip()
+    if not stripped:
+        return default
+    return float(stripped)
+
+
+def _env_optional_float(name: str, default: float | None) -> float | None:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    stripped = value.strip()
+    if stripped.lower() in {"", "none", "null"}:
+        return None
+    return float(stripped)
+
+
+def _env_optional_str(name: str, default: str | None) -> str | None:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    stripped = value.strip()
+    if stripped.lower() in {"", "none", "null"}:
+        return None
+    return stripped
+
+
 def _print_rows_table(rows: list[dict[str, object]], *, sort_by: list[str] | None = None, empty_message: str) -> None:
     if not rows:
         print(empty_message)
@@ -514,6 +554,70 @@ def main() -> None:
         "SEC_CCM_RUN_REFINITIV_ANALYST_NORMALIZE",
         True,
     )
+    REFINITIV_PROVIDER_SESSION_NAME = _env_str(
+        "SEC_CCM_REFINITIV_PROVIDER_SESSION_NAME",
+        "desktop.workspace",
+    )
+    REFINITIV_PROVIDER_CONFIG_NAME = _env_optional_str(
+        "SEC_CCM_REFINITIV_PROVIDER_CONFIG_NAME",
+        None,
+    )
+    REFINITIV_PROVIDER_TIMEOUT_SECONDS = _env_optional_float(
+        "SEC_CCM_REFINITIV_PROVIDER_TIMEOUT_SECONDS",
+        None,
+    )
+    REFINITIV_PREFLIGHT_PROBE = _env_bool(
+        "SEC_CCM_REFINITIV_PREFLIGHT_PROBE",
+        False,
+    )
+    REFINITIV_LOOKUP_BATCH_SIZE = _env_int(
+        "SEC_CCM_REFINITIV_LOOKUP_BATCH_SIZE",
+        25,
+    )
+    REFINITIV_OWNERSHIP_BATCH_SIZE = _env_int(
+        "SEC_CCM_REFINITIV_OWNERSHIP_BATCH_SIZE",
+        10,
+    )
+    REFINITIV_ANALYST_ACTUALS_BATCH_SIZE = _env_int(
+        "SEC_CCM_REFINITIV_ANALYST_ACTUALS_BATCH_SIZE",
+        10,
+    )
+    REFINITIV_ANALYST_ESTIMATES_BATCH_SIZE = _env_int(
+        "SEC_CCM_REFINITIV_ANALYST_ESTIMATES_BATCH_SIZE",
+        10,
+    )
+    REFINITIV_DOC_EXACT_BATCH_SIZE = _env_int(
+        "SEC_CCM_REFINITIV_DOC_EXACT_BATCH_SIZE",
+        15,
+    )
+    REFINITIV_DOC_FALLBACK_BATCH_SIZE = _env_int(
+        "SEC_CCM_REFINITIV_DOC_FALLBACK_BATCH_SIZE",
+        5,
+    )
+    REFINITIV_MIN_SECONDS_BETWEEN_REQUESTS = _env_float(
+        "SEC_CCM_REFINITIV_MIN_SECONDS_BETWEEN_REQUESTS",
+        0.5,
+    )
+    REFINITIV_MIN_SECONDS_BETWEEN_REQUEST_STARTS_TOTAL = _env_optional_float(
+        "SEC_CCM_REFINITIV_MIN_SECONDS_BETWEEN_REQUEST_STARTS_TOTAL",
+        1,
+    )
+    REFINITIV_MAX_ATTEMPTS = _env_int(
+        "SEC_CCM_REFINITIV_MAX_ATTEMPTS",
+        4,
+    )
+    REFINITIV_MAX_WORKERS = _env_int(
+        "SEC_CCM_REFINITIV_MAX_WORKERS",
+        1,
+    )
+    if (
+        REFINITIV_MAX_WORKERS > 1
+        and REFINITIV_MIN_SECONDS_BETWEEN_REQUEST_STARTS_TOTAL is None
+    ):
+        raise ValueError(
+            "SEC_CCM_REFINITIV_MIN_SECONDS_BETWEEN_REQUEST_STARTS_TOTAL must be set when "
+            "SEC_CCM_REFINITIV_MAX_WORKERS > 1"
+        )
     RUN_GATED_ITEM_EXTRACTION = _env_bool(
         "SEC_CCM_RUN_GATED_ITEM_EXTRACTION",
         False,
@@ -662,6 +766,20 @@ def main() -> None:
             "RUN_REFINITIV_ANALYST_ACTUALS": RUN_REFINITIV_ANALYST_ACTUALS,
             "RUN_REFINITIV_ANALYST_ESTIMATES_MONTHLY": RUN_REFINITIV_ANALYST_ESTIMATES_MONTHLY,
             "RUN_REFINITIV_ANALYST_NORMALIZE": RUN_REFINITIV_ANALYST_NORMALIZE,
+            "REFINITIV_PROVIDER_SESSION_NAME": REFINITIV_PROVIDER_SESSION_NAME,
+            "REFINITIV_PROVIDER_CONFIG_NAME": REFINITIV_PROVIDER_CONFIG_NAME,
+            "REFINITIV_PROVIDER_TIMEOUT_SECONDS": REFINITIV_PROVIDER_TIMEOUT_SECONDS,
+            "REFINITIV_PREFLIGHT_PROBE": REFINITIV_PREFLIGHT_PROBE,
+            "REFINITIV_LOOKUP_BATCH_SIZE": REFINITIV_LOOKUP_BATCH_SIZE,
+            "REFINITIV_OWNERSHIP_BATCH_SIZE": REFINITIV_OWNERSHIP_BATCH_SIZE,
+            "REFINITIV_ANALYST_ACTUALS_BATCH_SIZE": REFINITIV_ANALYST_ACTUALS_BATCH_SIZE,
+            "REFINITIV_ANALYST_ESTIMATES_BATCH_SIZE": REFINITIV_ANALYST_ESTIMATES_BATCH_SIZE,
+            "REFINITIV_DOC_EXACT_BATCH_SIZE": REFINITIV_DOC_EXACT_BATCH_SIZE,
+            "REFINITIV_DOC_FALLBACK_BATCH_SIZE": REFINITIV_DOC_FALLBACK_BATCH_SIZE,
+            "REFINITIV_MIN_SECONDS_BETWEEN_REQUESTS": REFINITIV_MIN_SECONDS_BETWEEN_REQUESTS,
+            "REFINITIV_MIN_SECONDS_BETWEEN_REQUEST_STARTS_TOTAL": REFINITIV_MIN_SECONDS_BETWEEN_REQUEST_STARTS_TOTAL,
+            "REFINITIV_MAX_ATTEMPTS": REFINITIV_MAX_ATTEMPTS,
+            "REFINITIV_MAX_WORKERS": REFINITIV_MAX_WORKERS,
             "RUN_GATED_ITEM_EXTRACTION": RUN_GATED_ITEM_EXTRACTION,
             "RUN_VALIDATION_CHECKS": RUN_VALIDATION_CHECKS,
             "SEC_PARSE_MODE": SEC_PARSE_MODE,
@@ -897,6 +1015,15 @@ def main() -> None:
             refinitiv_lookup_api_paths = run_refinitiv_step1_lookup_api_pipeline(
                 snapshot_parquet_path=api_lookup_snapshot_path,
                 output_dir=REFINITIV_STEP1_OUT_DIR,
+                max_batch_size=REFINITIV_LOOKUP_BATCH_SIZE,
+                min_seconds_between_requests=REFINITIV_MIN_SECONDS_BETWEEN_REQUESTS,
+                min_seconds_between_request_starts_total=REFINITIV_MIN_SECONDS_BETWEEN_REQUEST_STARTS_TOTAL,
+                max_attempts=REFINITIV_MAX_ATTEMPTS,
+                max_workers=REFINITIV_MAX_WORKERS,
+                provider_session_name=REFINITIV_PROVIDER_SESSION_NAME,
+                provider_config_name=REFINITIV_PROVIDER_CONFIG_NAME,
+                provider_timeout_seconds=REFINITIV_PROVIDER_TIMEOUT_SECONDS,
+                preflight_probe=REFINITIV_PREFLIGHT_PROBE,
             )
             _record_refinitiv_stage("refinitiv_lookup_api", refinitiv_lookup_api_paths)
             for key in sorted(refinitiv_lookup_api_paths):
@@ -961,6 +1088,15 @@ def main() -> None:
             refinitiv_ownership_universe_results_paths = run_refinitiv_step1_ownership_universe_api_pipeline(
                 handoff_parquet_path=ownership_universe_handoff_parquet_path,
                 output_dir=REFINITIV_OWNERSHIP_UNIVERSE_DIR,
+                max_batch_size=REFINITIV_OWNERSHIP_BATCH_SIZE,
+                min_seconds_between_requests=REFINITIV_MIN_SECONDS_BETWEEN_REQUESTS,
+                min_seconds_between_request_starts_total=REFINITIV_MIN_SECONDS_BETWEEN_REQUEST_STARTS_TOTAL,
+                max_attempts=REFINITIV_MAX_ATTEMPTS,
+                max_workers=REFINITIV_MAX_WORKERS,
+                provider_session_name=REFINITIV_PROVIDER_SESSION_NAME,
+                provider_config_name=REFINITIV_PROVIDER_CONFIG_NAME,
+                provider_timeout_seconds=REFINITIV_PROVIDER_TIMEOUT_SECONDS,
+                preflight_probe=REFINITIV_PREFLIGHT_PROBE,
             )
             _record_refinitiv_stage(
                 "refinitiv_ownership_universe_results",
@@ -1097,6 +1233,15 @@ def main() -> None:
             refinitiv_analyst_actuals_paths = run_refinitiv_step1_analyst_actuals_api_pipeline(
                 request_universe_parquet_path=analyst_request_universe_path,
                 output_dir=REFINITIV_ANALYST_COMMON_STOCK_DIR,
+                max_batch_size=REFINITIV_ANALYST_ACTUALS_BATCH_SIZE,
+                min_seconds_between_requests=REFINITIV_MIN_SECONDS_BETWEEN_REQUESTS,
+                min_seconds_between_request_starts_total=REFINITIV_MIN_SECONDS_BETWEEN_REQUEST_STARTS_TOTAL,
+                max_attempts=REFINITIV_MAX_ATTEMPTS,
+                max_workers=REFINITIV_MAX_WORKERS,
+                provider_session_name=REFINITIV_PROVIDER_SESSION_NAME,
+                provider_config_name=REFINITIV_PROVIDER_CONFIG_NAME,
+                provider_timeout_seconds=REFINITIV_PROVIDER_TIMEOUT_SECONDS,
+                preflight_probe=REFINITIV_PREFLIGHT_PROBE,
             )
             _record_refinitiv_stage(
                 "refinitiv_analyst_actuals",
@@ -1122,6 +1267,15 @@ def main() -> None:
             refinitiv_analyst_estimates_paths = run_refinitiv_step1_analyst_estimates_monthly_api_pipeline(
                 request_universe_parquet_path=analyst_request_universe_path,
                 output_dir=REFINITIV_ANALYST_COMMON_STOCK_DIR,
+                max_batch_size=REFINITIV_ANALYST_ESTIMATES_BATCH_SIZE,
+                min_seconds_between_requests=REFINITIV_MIN_SECONDS_BETWEEN_REQUESTS,
+                min_seconds_between_request_starts_total=REFINITIV_MIN_SECONDS_BETWEEN_REQUEST_STARTS_TOTAL,
+                max_attempts=REFINITIV_MAX_ATTEMPTS,
+                max_workers=REFINITIV_MAX_WORKERS,
+                provider_session_name=REFINITIV_PROVIDER_SESSION_NAME,
+                provider_config_name=REFINITIV_PROVIDER_CONFIG_NAME,
+                provider_timeout_seconds=REFINITIV_PROVIDER_TIMEOUT_SECONDS,
+                preflight_probe=REFINITIV_PREFLIGHT_PROBE,
             )
             _record_refinitiv_stage(
                 "refinitiv_analyst_estimates_monthly",
@@ -1412,6 +1566,15 @@ def main() -> None:
                     authority_decisions_artifact_path=authority_decisions_artifact_path,
                     authority_exceptions_artifact_path=authority_exceptions_artifact_path,
                     output_dir=REFINITIV_DOC_OWNERSHIP_LM2011_DIR,
+                    max_batch_size=REFINITIV_DOC_EXACT_BATCH_SIZE,
+                    min_seconds_between_requests=REFINITIV_MIN_SECONDS_BETWEEN_REQUESTS,
+                    min_seconds_between_request_starts_total=REFINITIV_MIN_SECONDS_BETWEEN_REQUEST_STARTS_TOTAL,
+                    max_attempts=REFINITIV_MAX_ATTEMPTS,
+                    max_workers=REFINITIV_MAX_WORKERS,
+                    provider_session_name=REFINITIV_PROVIDER_SESSION_NAME,
+                    provider_config_name=REFINITIV_PROVIDER_CONFIG_NAME,
+                    provider_timeout_seconds=REFINITIV_PROVIDER_TIMEOUT_SECONDS,
+                    preflight_probe=REFINITIV_PREFLIGHT_PROBE,
                 )
             else:
                 refinitiv_doc_ownership_exact_paths = run_refinitiv_lm2011_doc_ownership_exact_handoff_pipeline(
@@ -1453,6 +1616,15 @@ def main() -> None:
         if LSEG_API_READY and exact_requests_path.exists() and exact_raw_path.exists():
             refinitiv_doc_ownership_fallback_paths = run_refinitiv_lm2011_doc_ownership_fallback_api_pipeline(
                 output_dir=REFINITIV_DOC_OWNERSHIP_LM2011_DIR,
+                max_batch_size=REFINITIV_DOC_FALLBACK_BATCH_SIZE,
+                min_seconds_between_requests=REFINITIV_MIN_SECONDS_BETWEEN_REQUESTS,
+                min_seconds_between_request_starts_total=REFINITIV_MIN_SECONDS_BETWEEN_REQUEST_STARTS_TOTAL,
+                max_attempts=REFINITIV_MAX_ATTEMPTS,
+                max_workers=REFINITIV_MAX_WORKERS,
+                provider_session_name=REFINITIV_PROVIDER_SESSION_NAME,
+                provider_config_name=REFINITIV_PROVIDER_CONFIG_NAME,
+                provider_timeout_seconds=REFINITIV_PROVIDER_TIMEOUT_SECONDS,
+                preflight_probe=REFINITIV_PREFLIGHT_PROBE,
             )
             _record_refinitiv_stage(
                 "refinitiv_doc_ownership_fallback",

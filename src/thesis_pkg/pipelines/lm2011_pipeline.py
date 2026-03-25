@@ -3,9 +3,13 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 import datetime as dt
 import math
-from typing import Any
+import warnings
 
 import polars as pl
+try:
+    import statsmodels.api as sm
+except ImportError:  # pragma: no cover - exercised only when the dependency is missing
+    sm = None
 
 from thesis_pkg.core.ccm.lm2011 import (
     attach_eligible_quarterly_accounting,
@@ -480,55 +484,68 @@ def _build_window_rows(docs_df: pl.DataFrame, daily_df: pl.DataFrame) -> pl.Data
         )
         .collect()
     )
+def _require_statsmodels():
+    if sm is None:
+        raise ImportError("statsmodels is required for LM2011 regression fitting")
+    return sm
 
 
-def _solve_linear_system(matrix: list[list[float]], vector: list[float]) -> list[float] | None:
-    size = len(vector)
-    aug = [row[:] + [vector[idx]] for idx, row in enumerate(matrix)]
-    for pivot in range(size):
-        pivot_row = max(range(pivot, size), key=lambda idx: abs(aug[idx][pivot]))
-        if abs(aug[pivot_row][pivot]) < 1e-12:
-            return None
-        if pivot_row != pivot:
-            aug[pivot], aug[pivot_row] = aug[pivot_row], aug[pivot]
-        pivot_value = aug[pivot][pivot]
-        aug[pivot] = [value / pivot_value for value in aug[pivot]]
-        for row_idx in range(size):
-            if row_idx == pivot:
-                continue
-            factor = aug[row_idx][pivot]
-            if factor == 0:
-                continue
-            aug[row_idx] = [
-                aug[row_idx][col_idx] - factor * aug[pivot][col_idx]
-                for col_idx in range(size + 1)
-            ]
-    return [aug[idx][-1] for idx in range(size)]
+def _fit_checked_ols(
+    endog: object,
+    exog: object,
+    *,
+    exog_names: tuple[str, ...],
+    label: str,
+):
+    sm_api = _require_statsmodels()
+    design = sm_api.add_constant(exog, has_constant="add")
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message="divide by zero encountered in scalar divide",
+            category=RuntimeWarning,
+        )
+        results = sm_api.OLS(endog, design).fit()
+    rank = int(results.model.rank)
+    column_count = len(exog_names) + 1
+    if rank < column_count:
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message="divide by zero encountered in scalar divide",
+                category=RuntimeWarning,
+            )
+            condition_number = getattr(results, "condition_number", None)
+        condition_suffix = (
+            f", condition_number={float(condition_number):.6g}"
+            if condition_number is not None
+            else ""
+        )
+        regressors = ", ".join(("intercept", *exog_names))
+        raise ValueError(
+            f"{label} rank-deficient OLS design: rank={rank}, columns={column_count}"
+            f"{condition_suffix}, regressors=[{regressors}]"
+        )
+    return results
 
 
-def _ols_alpha_and_rmse(summary_row: dict[str, Any]) -> tuple[float | None, float | None]:
-    n = int(summary_row["n_obs"] or 0)
+def _ols_alpha_and_rmse(df: pl.DataFrame, *, label: str) -> tuple[float | None, float | None]:
+    n = df.height
     if n <= 4:
         return None, None
-    xtx = [
-        [float(summary_row["n_obs"]), float(summary_row["sx1"]), float(summary_row["sx2"]), float(summary_row["sx3"])],
-        [float(summary_row["sx1"]), float(summary_row["sxx11"]), float(summary_row["sxx12"]), float(summary_row["sxx13"])],
-        [float(summary_row["sx2"]), float(summary_row["sxx12"]), float(summary_row["sxx22"]), float(summary_row["sxx23"])],
-        [float(summary_row["sx3"]), float(summary_row["sxx13"]), float(summary_row["sxx23"]), float(summary_row["sxx33"])],
-    ]
-    xty = [
-        float(summary_row["sy"]),
-        float(summary_row["sxy1"]),
-        float(summary_row["sxy2"]),
-        float(summary_row["sxy3"]),
-    ]
-    beta = _solve_linear_system(xtx, xty)
-    if beta is None:
-        return None, None
-    syy = float(summary_row["syy"])
-    sse = syy - sum(beta[idx] * xty[idx] for idx in range(len(beta)))
-    rmse = math.sqrt(max(sse / float(n - 4), 0.0))
-    return float(beta[0]), float(rmse)
+    results = _fit_checked_ols(
+        df.get_column("_y").cast(pl.Float64, strict=False).to_numpy(),
+        df.select(
+            pl.col("_x1").cast(pl.Float64, strict=False),
+            pl.col("_x2").cast(pl.Float64, strict=False),
+            pl.col("_x3").cast(pl.Float64, strict=False),
+        ).to_numpy(),
+        exog_names=("_x1", "_x2", "_x3"),
+        label=label,
+    )
+    alpha = float(results.params[0])
+    rmse = math.sqrt(max(float(results.mse_resid), 0.0))
+    return alpha, rmse
 
 
 def _regression_metrics_from_window(
@@ -561,35 +578,30 @@ def _regression_metrics_from_window(
                 "n_obs": pl.Int32,
             }
         )
-    summary = subset.group_by("doc_id").agg(
-        pl.len().cast(pl.Int32).alias("n_obs"),
-        pl.col("_y").sum().alias("sy"),
-        pl.col("_y").pow(2).sum().alias("syy"),
-        pl.col("_x1").sum().alias("sx1"),
-        pl.col("_x2").sum().alias("sx2"),
-        pl.col("_x3").sum().alias("sx3"),
-        (pl.col("_x1") * pl.col("_y")).sum().alias("sxy1"),
-        (pl.col("_x2") * pl.col("_y")).sum().alias("sxy2"),
-        (pl.col("_x3") * pl.col("_y")).sum().alias("sxy3"),
-        pl.col("_x1").pow(2).sum().alias("sxx11"),
-        (pl.col("_x1") * pl.col("_x2")).sum().alias("sxx12"),
-        (pl.col("_x1") * pl.col("_x3")).sum().alias("sxx13"),
-        pl.col("_x2").pow(2).sum().alias("sxx22"),
-        (pl.col("_x2") * pl.col("_x3")).sum().alias("sxx23"),
-        pl.col("_x3").pow(2).sum().alias("sxx33"),
-    )
     rows: list[dict[str, object]] = []
-    for row in summary.iter_rows(named=True):
-        alpha, rmse = _ols_alpha_and_rmse(row)
+    for group in subset.sort("doc_id", "relative_day").partition_by("doc_id", maintain_order=True):
+        doc_id = str(group.item(0, "doc_id"))
+        alpha, rmse = _ols_alpha_and_rmse(
+            group,
+            label=f"{alpha_name} regression for doc_id={doc_id}",
+        )
         rows.append(
             {
-                "doc_id": row["doc_id"],
+                "doc_id": doc_id,
                 alpha_name: alpha,
                 rmse_name: rmse,
-                "n_obs": row["n_obs"],
+                "n_obs": group.height,
             }
         )
-    return pl.DataFrame(rows)
+    return pl.DataFrame(
+        rows,
+        schema_overrides={
+            "doc_id": pl.Utf8,
+            alpha_name: pl.Float64,
+            rmse_name: pl.Float64,
+            "n_obs": pl.Int32,
+        },
+    )
 
 
 def _winsorize_column(df: pl.DataFrame, column: str, *, lower_q: float = 0.01, upper_q: float = 0.99) -> pl.DataFrame:
@@ -1152,34 +1164,15 @@ def _ols_coefficients_and_r2(
     size = len(x_cols) + 1
     if n_obs <= len(x_cols):
         return tuple(None for _ in range(size)), None
-
-    xtx = [[0.0 for _ in range(size)] for _ in range(size)]
-    xty = [0.0 for _ in range(size)]
-    cached_rows: list[dict[str, float]] = []
-    for row in subset.select(y_col, *x_cols).iter_rows(named=True):
-        typed_row = {column: float(row[column]) for column in (y_col, *x_cols)}
-        cached_rows.append(typed_row)
-        xs = [1.0] + [typed_row[column] for column in x_cols]
-        y_value = typed_row[y_col]
-        for idx in range(size):
-            xty[idx] += xs[idx] * y_value
-            for jdx in range(size):
-                xtx[idx][jdx] += xs[idx] * xs[jdx]
-    beta = _solve_linear_system(xtx, xty)
-    if beta is None:
-        return tuple(None for _ in range(size)), None
-
-    y_mean = sum(row[y_col] for row in cached_rows) / float(n_obs)
-    sse = 0.0
-    sst = 0.0
-    for row in cached_rows:
-        fitted = beta[0] + sum(beta[idx + 1] * row[column] for idx, column in enumerate(x_cols))
-        residual = row[y_col] - fitted
-        centered = row[y_col] - y_mean
-        sse += residual * residual
-        sst += centered * centered
-    r2 = None if sst <= 0 else float(1.0 - (sse / sst))
-    return tuple(float(value) for value in beta), r2
+    results = _fit_checked_ols(
+        subset.get_column(y_col).cast(pl.Float64, strict=False).to_numpy(),
+        subset.select(*[pl.col(column).cast(pl.Float64, strict=False) for column in x_cols]).to_numpy(),
+        exog_names=x_cols,
+        label=f"FF4 regression for dependent={y_col}",
+    )
+    r2_value = float(results.rsquared)
+    r2 = r2_value if math.isfinite(r2_value) else None
+    return tuple(float(value) for value in results.params), r2
 
 
 def _fit_strategy_factor_loadings(strategy_df: pl.DataFrame) -> pl.DataFrame:

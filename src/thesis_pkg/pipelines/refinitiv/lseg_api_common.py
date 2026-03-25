@@ -56,9 +56,46 @@ def append_json_log(path: Path, payload: dict[str, Any]) -> None:
         "logged_at_utc": utc_now().strftime("%Y-%m-%dT%H:%M:%SZ"),
         **payload,
     }
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(payload, sort_keys=True, default=str))
-        handle.write("\n")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    line = json.dumps(payload, sort_keys=True, default=str) + "\n"
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    with lock_path.open("a+b") as lock_handle:
+        _acquire_file_lock(lock_handle)
+        try:
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(line)
+        finally:
+            _release_file_lock(lock_handle)
+
+
+def _acquire_file_lock(handle: Any) -> None:
+    handle.seek(0, 2)
+    if handle.tell() == 0:
+        handle.write(b"0")
+        handle.flush()
+    handle.seek(0)
+    if handle.closed:
+        raise ValueError("cannot lock a closed file handle")
+    try:
+        import msvcrt
+
+        msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+    except ImportError:
+        import fcntl
+
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+
+
+def _release_file_lock(handle: Any) -> None:
+    handle.seek(0)
+    try:
+        import msvcrt
+
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+    except ImportError:
+        import fcntl
+
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def standardize_field_frame(

@@ -63,7 +63,9 @@ def run_refinitiv_step1_lookup_api_pipeline(
     request_log_path: Path | str | None = None,
     max_batch_size: int = 25,
     min_seconds_between_requests: float = 2.0,
+    min_seconds_between_request_starts_total: float | None = None,
     max_attempts: int = 4,
+    max_workers: int = 1,
     provider_session_name: str = "desktop.workspace",
     provider_config_name: str | None = None,
     provider_timeout_seconds: float | None = None,
@@ -95,10 +97,12 @@ def run_refinitiv_step1_lookup_api_pipeline(
         preflight_probe=preflight_probe,
         max_batch_size=max_batch_size,
         min_seconds_between_requests=min_seconds_between_requests,
+        min_seconds_between_request_starts_total=min_seconds_between_request_starts_total,
         max_attempts=max_attempts,
         response_normalizer=_normalize_lookup_batch_response,
         lookup_normalizer=_normalize_lookup_text,
         retry_delay_seconds_fn=_retry_delay_seconds,
+        max_workers=max_workers,
     )
 
     final_df = _assemble_lookup_output(snapshot_df, stage_run.staging_dir)

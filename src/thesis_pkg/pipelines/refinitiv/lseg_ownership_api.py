@@ -81,7 +81,9 @@ def run_refinitiv_step1_ownership_universe_api_pipeline(
     request_log_path: Path | str | None = None,
     max_batch_size: int = 10,
     min_seconds_between_requests: float = 2.0,
+    min_seconds_between_request_starts_total: float | None = None,
     max_attempts: int = 4,
+    max_workers: int = 1,
     provider_session_name: str = "desktop.workspace",
     provider_config_name: str | None = None,
     provider_timeout_seconds: float | None = None,
@@ -120,11 +122,13 @@ def run_refinitiv_step1_ownership_universe_api_pipeline(
         preflight_probe=preflight_probe,
         max_batch_size=max_batch_size,
         min_seconds_between_requests=min_seconds_between_requests,
+        min_seconds_between_request_starts_total=min_seconds_between_request_starts_total,
         max_attempts=max_attempts,
         response_normalizer=_normalize_ownership_universe_batch_response,
         lookup_normalizer=_normalize_lookup_text,
         split_after_attempt=2,
         retry_delay_seconds_fn=_retry_delay_seconds,
+        max_workers=max_workers,
     )
 
     results_df = _assemble_ownership_universe_results(stage_run.staging_dir)
@@ -211,7 +215,9 @@ def run_refinitiv_lm2011_doc_ownership_exact_api_pipeline(
     request_log_path: Path | str | None = None,
     max_batch_size: int = 15,
     min_seconds_between_requests: float = 2.0,
+    min_seconds_between_request_starts_total: float | None = None,
     max_attempts: int = 4,
+    max_workers: int = 1,
     provider_session_name: str = "desktop.workspace",
     provider_config_name: str | None = None,
     provider_timeout_seconds: float | None = None,
@@ -258,11 +264,13 @@ def run_refinitiv_lm2011_doc_ownership_exact_api_pipeline(
         preflight_probe=preflight_probe,
         max_batch_size=max_batch_size,
         min_seconds_between_requests=min_seconds_between_requests,
+        min_seconds_between_request_starts_total=min_seconds_between_request_starts_total,
         max_attempts=max_attempts,
         response_normalizer=_normalize_doc_exact_batch_response,
         lookup_normalizer=_normalize_lookup_text,
         split_after_attempt=2,
         retry_delay_seconds_fn=_retry_delay_seconds,
+        max_workers=max_workers,
     )
 
     exact_raw_df = _assemble_doc_raw(stage_run.staging_dir)
@@ -341,7 +349,9 @@ def run_refinitiv_lm2011_doc_ownership_fallback_api_pipeline(
     request_log_path: Path | str | None = None,
     max_batch_size: int = 5,
     min_seconds_between_requests: float = 2.0,
+    min_seconds_between_request_starts_total: float | None = None,
     max_attempts: int = 4,
+    max_workers: int = 1,
     provider_session_name: str = "desktop.workspace",
     provider_config_name: str | None = None,
     provider_timeout_seconds: float | None = None,
@@ -395,11 +405,13 @@ def run_refinitiv_lm2011_doc_ownership_fallback_api_pipeline(
         preflight_probe=preflight_probe,
         max_batch_size=max_batch_size,
         min_seconds_between_requests=min_seconds_between_requests,
+        min_seconds_between_request_starts_total=min_seconds_between_request_starts_total,
         max_attempts=max_attempts,
         response_normalizer=_normalize_doc_fallback_batch_response,
         lookup_normalizer=_normalize_lookup_text,
         split_after_attempt=1,
         retry_delay_seconds_fn=_retry_delay_seconds,
+        max_workers=max_workers,
     )
     fallback_raw_df = _assemble_doc_raw(stage_run.staging_dir)
     fallback_raw_path = output_dir / "refinitiv_lm2011_doc_ownership_fallback_raw.parquet"

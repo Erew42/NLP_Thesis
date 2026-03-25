@@ -10,8 +10,8 @@ import polars as pl
 from thesis_pkg.core.ccm.lm2011 import attach_lm2011_industry_classifications
 from thesis_pkg.pipelines.lm2011_pipeline import (
     _apply_lm2011_regression_transforms,
+    _fit_checked_ols,
     _require_columns,
-    _solve_linear_system,
     build_lm2011_trading_strategy_ff4_summary,
     build_lm2011_trading_strategy_monthly_returns,
 )
@@ -302,6 +302,7 @@ def _fit_cross_sectional_ols(
     dependent_variable: str,
     regressor_columns: tuple[str, ...],
     industry_col: str,
+    label: str,
 ) -> tuple[dict[str, float], int] | None:
     industries = sorted(
         {
@@ -320,22 +321,21 @@ def _fit_cross_sectional_ols(
     if n_obs < len(full_names):
         return None
 
-    xtx = [[0.0 for _ in range(len(full_names))] for _ in range(len(full_names))]
-    xty = [0.0 for _ in range(len(full_names))]
+    endog: list[float] = []
+    exog_rows: list[list[float]] = []
     for row in df.select(dependent_variable, industry_col, *regressor_columns).iter_rows(named=True):
-        design_row = [1.0]
-        design_row.extend(float(row[column]) for column in regressor_columns)
+        design_row = [float(row[column]) for column in regressor_columns]
         industry_value = int(row[industry_col])
         design_row.extend(1.0 if industry_value == industry_id else 0.0 for industry_id in dummy_industries)
-        y_value = float(row[dependent_variable])
-        for idx in range(len(full_names)):
-            xty[idx] += design_row[idx] * y_value
-            for jdx in range(len(full_names)):
-                xtx[idx][jdx] += design_row[idx] * design_row[jdx]
-    beta = _solve_linear_system(xtx, xty)
-    if beta is None:
-        return None
-    return {name: float(value) for name, value in zip(full_names, beta, strict=True)}, n_obs
+        endog.append(float(row[dependent_variable]))
+        exog_rows.append(design_row)
+    results = _fit_checked_ols(
+        endog,
+        exog_rows,
+        exog_names=full_names[1:],
+        label=label,
+    )
+    return {name: float(value) for name, value in zip(full_names, results.params, strict=True)}, n_obs
 
 
 def run_lm2011_quarterly_fama_macbeth(
@@ -392,11 +392,16 @@ def run_lm2011_quarterly_fama_macbeth(
     retained_quarters = 0
 
     for quarter_df in with_quarters.partition_by("_quarter_start", maintain_order=True):
+        quarter_start = quarter_df.item(0, "_quarter_start")
         fit = _fit_cross_sectional_ols(
             quarter_df,
             dependent_variable=dependent_variable,
             regressor_columns=regressor_columns,
             industry_col=industry_col,
+            label=(
+                f"Quarterly Fama-MacBeth quarter={quarter_start} "
+                f"dependent={dependent_variable} signal={signal_column}"
+            ),
         )
         if fit is None:
             continue

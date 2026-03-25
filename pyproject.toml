@@ -9,6 +9,7 @@ dependencies = [
   "pandas",
   "openpyxl",
   "pyarrow",
+  "statsmodels",
   "xlsxwriter",
   "refinitiv-data",
   "lseg-data",

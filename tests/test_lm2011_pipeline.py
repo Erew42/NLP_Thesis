@@ -23,7 +23,7 @@ from thesis_pkg.pipelines.lm2011_pipeline import (
     _apply_lm2011_regression_transforms,
     _ensure_factor_scale,
     _ols_alpha_and_rmse,
-    _solve_linear_system,
+    _ols_coefficients_and_r2,
 )
 
 
@@ -677,49 +677,75 @@ def test_factor_scaling_is_uniform_across_columns() -> None:
     assert unchanged.row(0, named=True)["mkt_rf"] == pytest.approx(0.12)
 
 
-def test_ols_alpha_and_rmse_uses_n_minus_4_denominator() -> None:
-    rows = [
-        {"y": 1.0, "x1": 0.0, "x2": 0.0, "x3": 0.0},
-        {"y": 2.2, "x1": 1.0, "x2": 0.0, "x3": 0.0},
-        {"y": 4.1, "x1": 0.0, "x2": 1.0, "x3": 0.0},
-        {"y": 4.8, "x1": 0.0, "x2": 0.0, "x3": 1.0},
-        {"y": 1.3, "x1": 1.0, "x2": 1.0, "x3": 0.0},
-        {"y": 0.7, "x1": 0.0, "x2": 1.0, "x3": 1.0},
+def test_ols_alpha_and_rmse_matches_deterministic_ff3_fixture_and_uses_n_minus_4() -> None:
+    residuals = [0.0, -1.0, 0.0, 1.0, 1.0, -1.0]
+    base_rows = [
+        {"x1": 0.0, "x2": 0.0, "x3": 0.0},
+        {"x1": 1.0, "x2": 0.0, "x3": 0.0},
+        {"x1": 0.0, "x2": 1.0, "x3": 0.0},
+        {"x1": 0.0, "x2": 0.0, "x3": 1.0},
+        {"x1": 1.0, "x2": 1.0, "x3": 0.0},
+        {"x1": 0.0, "x2": 1.0, "x3": 1.0},
     ]
-    xtx = [[0.0] * 4 for _ in range(4)]
-    xty = [0.0] * 4
-    syy = 0.0
-    for row in rows:
-        xs = [1.0, row["x1"], row["x2"], row["x3"]]
-        y_value = row["y"]
-        syy += y_value * y_value
-        for idx in range(4):
-            xty[idx] += xs[idx] * y_value
-            for jdx in range(4):
-                xtx[idx][jdx] += xs[idx] * xs[jdx]
-    summary = {
-        "n_obs": len(rows),
-        "sx1": xtx[0][1],
-        "sx2": xtx[0][2],
-        "sx3": xtx[0][3],
-        "sxx11": xtx[1][1],
-        "sxx12": xtx[1][2],
-        "sxx13": xtx[1][3],
-        "sxx22": xtx[2][2],
-        "sxx23": xtx[2][3],
-        "sxx33": xtx[3][3],
-        "sy": xty[0],
-        "syy": syy,
-        "sxy1": xty[1],
-        "sxy2": xty[2],
-        "sxy3": xty[3],
-    }
-    _, rmse = _ols_alpha_and_rmse(summary)
-    beta = _solve_linear_system(xtx, xty)
-    assert beta is not None
-    sse = syy - sum(beta[idx] * xty[idx] for idx in range(len(beta)))
-    expected_rmse = math.sqrt(sse / float(len(rows) - 4))
-    assert rmse == pytest.approx(expected_rmse)
+    alpha_true = 1.5
+    beta_1 = 0.8
+    beta_2 = -1.2
+    beta_3 = 0.4
+    frame = pl.DataFrame(
+        {
+            "_y": [
+                alpha_true + beta_1 * row["x1"] + beta_2 * row["x2"] + beta_3 * row["x3"] + residual
+                for row, residual in zip(base_rows, residuals, strict=True)
+            ],
+            "_x1": [row["x1"] for row in base_rows],
+            "_x2": [row["x2"] for row in base_rows],
+            "_x3": [row["x3"] for row in base_rows],
+        }
+    )
+
+    alpha, rmse = _ols_alpha_and_rmse(frame, label="unit_test_ff3")
+
+    assert alpha == pytest.approx(alpha_true)
+    assert rmse == pytest.approx(math.sqrt(sum(residual * residual for residual in residuals) / 2.0))
+
+
+def test_ols_alpha_and_rmse_raises_on_rank_deficient_ff3_design() -> None:
+    frame = pl.DataFrame(
+        {
+            "_y": [1.0, 2.0, 3.0, 4.0, 5.0],
+            "_x1": [0.0, 1.0, 2.0, 3.0, 4.0],
+            "_x2": [0.0, 2.0, 4.0, 6.0, 8.0],
+            "_x3": [1.0, 1.0, 1.0, 1.0, 1.0],
+        }
+    )
+
+    with pytest.raises(ValueError, match="rank-deficient OLS design"):
+        _ols_alpha_and_rmse(frame, label="rank_deficient_ff3")
+
+
+def test_ols_coefficients_and_r2_match_deterministic_ff4_fixture() -> None:
+    frame = pl.DataFrame(
+        {
+            "long_short_return": [0.3, 0.5, 0.2, 0.7, 0.1],
+            "mkt_rf": [0.0, 1.0, 0.0, 0.0, 0.0],
+            "smb": [0.0, 0.0, 1.0, 0.0, 0.0],
+            "hml": [0.0, 0.0, 0.0, 1.0, 0.0],
+            "mom": [0.0, 0.0, 0.0, 0.0, 1.0],
+        }
+    )
+
+    coefficients, r2 = _ols_coefficients_and_r2(
+        frame,
+        y_col="long_short_return",
+        x_cols=("mkt_rf", "smb", "hml", "mom"),
+    )
+
+    assert coefficients[0] == pytest.approx(0.3)
+    assert coefficients[1] == pytest.approx(0.2)
+    assert coefficients[2] == pytest.approx(-0.1)
+    assert coefficients[3] == pytest.approx(0.4)
+    assert coefficients[4] == pytest.approx(-0.2)
+    assert r2 == pytest.approx(1.0)
 
 
 def test_build_lm2011_sue_panel_supports_exact_and_safe_fallback_matching() -> None:

@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import socket
 import sqlite3
+import time
 from typing import Any
 import uuid
 
@@ -35,7 +36,7 @@ ATTEMPT_PHASE_REQUEUED_STALE_RUNNING = "requeued_stale_running"
 ATTEMPT_PHASE_SPLIT_INTO_CHILDREN = "split_into_children"
 ATTEMPT_PHASE_LEGACY_FINISH_BACKFILL = "legacy_finish_backfill"
 
-LEDGER_SCHEMA_VERSION = 2
+LEDGER_SCHEMA_VERSION = 3
 
 
 def utc_now() -> dt.datetime:
@@ -104,6 +105,13 @@ class LedgerBatch:
     last_run_session_id: str | None
     last_worker_id: str | None
     running_started_at_utc: dt.datetime | None
+
+
+@dataclass(frozen=True)
+class RequestStartReservation:
+    status: str
+    scheduled_start_epoch_utc: float | None
+    wait_seconds: float
 
 
 class RequestLedger:
@@ -281,10 +289,124 @@ class RequestLedger:
                 requeued += 1
         return requeued
 
+    def clear_runtime_halt(self, *, stage: str) -> None:
+        now_text = to_utc_text(utc_now())
+        with self._connect(begin_immediate=True) as conn:
+            conn.execute(
+                """
+                INSERT INTO stage_runtime_control (
+                    stage, halt_new_work, halt_reason, updated_at_utc
+                )
+                VALUES (?, 0, NULL, ?)
+                ON CONFLICT(stage) DO UPDATE SET
+                    halt_new_work = 0,
+                    halt_reason = NULL,
+                    updated_at_utc = excluded.updated_at_utc
+                """,
+                (stage, now_text),
+            )
+
+    def halt_runtime_work(self, *, stage: str, reason: str) -> None:
+        now_text = to_utc_text(utc_now())
+        with self._connect(begin_immediate=True) as conn:
+            conn.execute(
+                """
+                INSERT INTO stage_runtime_control (
+                    stage, halt_new_work, halt_reason, updated_at_utc
+                )
+                VALUES (?, 1, ?, ?)
+                ON CONFLICT(stage) DO UPDATE SET
+                    halt_new_work = 1,
+                    halt_reason = excluded.halt_reason,
+                    updated_at_utc = excluded.updated_at_utc
+                """,
+                (stage, reason, now_text),
+            )
+
+    def is_runtime_halted(self, *, stage: str) -> bool:
+        with self._connect() as conn:
+            return self._runtime_halt_active(conn, stage=stage)
+
+    def reset_request_start_scheduler(self, *, stage: str, initial_delay_seconds: float = 0.0) -> None:
+        now_text = to_utc_text(utc_now())
+        now_epoch = time.time() + max(initial_delay_seconds, 0.0)
+        with self._connect(begin_immediate=True) as conn:
+            conn.execute(
+                """
+                INSERT INTO request_start_scheduler (
+                    stage, next_request_start_epoch_utc, updated_at_utc
+                )
+                VALUES (?, ?, ?)
+                ON CONFLICT(stage) DO UPDATE SET
+                    next_request_start_epoch_utc = excluded.next_request_start_epoch_utc,
+                    updated_at_utc = excluded.updated_at_utc
+                """,
+                (stage, now_epoch, now_text),
+            )
+
+    def reserve_next_request_start(
+        self,
+        *,
+        stage: str,
+        min_seconds_between_request_starts_total: float,
+        idle_poll_seconds: float = 0.1,
+    ) -> RequestStartReservation:
+        if min_seconds_between_request_starts_total < 0:
+            raise ValueError("min_seconds_between_request_starts_total must be >= 0")
+
+        with self._connect(begin_immediate=True) as conn:
+            now_dt = utc_now()
+            now_text = to_utc_text(now_dt)
+            now_epoch = time.time()
+            if self._runtime_halt_active(conn, stage=stage):
+                return RequestStartReservation(status="halted", scheduled_start_epoch_utc=None, wait_seconds=0.0)
+            if self._has_claimable_batch(conn, stage=stage, now_text=now_text):
+                row = conn.execute(
+                    """
+                    SELECT next_request_start_epoch_utc
+                    FROM request_start_scheduler
+                    WHERE stage = ?
+                    """,
+                    (stage,),
+                ).fetchone()
+                current_next_epoch = now_epoch if row is None else float(row["next_request_start_epoch_utc"])
+                scheduled_start_epoch = max(now_epoch, current_next_epoch)
+                next_request_start_epoch = scheduled_start_epoch + min_seconds_between_request_starts_total
+                conn.execute(
+                    """
+                    INSERT INTO request_start_scheduler (
+                        stage, next_request_start_epoch_utc, updated_at_utc
+                    )
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(stage) DO UPDATE SET
+                        next_request_start_epoch_utc = excluded.next_request_start_epoch_utc,
+                        updated_at_utc = excluded.updated_at_utc
+                    """,
+                    (stage, next_request_start_epoch, now_text),
+                )
+                return RequestStartReservation(
+                    status="reserved",
+                    scheduled_start_epoch_utc=scheduled_start_epoch,
+                    wait_seconds=max(0.0, scheduled_start_epoch - now_epoch),
+                )
+
+            if self._has_outstanding_batch(conn, stage=stage):
+                wait_seconds = self._runtime_idle_wait_seconds(
+                    conn,
+                    stage=stage,
+                    now_dt=now_dt,
+                    idle_poll_seconds=idle_poll_seconds,
+                )
+                return RequestStartReservation(status="wait", scheduled_start_epoch_utc=None, wait_seconds=wait_seconds)
+
+            return RequestStartReservation(status="drained", scheduled_start_epoch_utc=None, wait_seconds=0.0)
+
     def claim_next_batch(self, *, stage: str) -> LedgerBatch | None:
         now = utc_now()
         now_text = to_utc_text(now)
-        with self._connect() as conn:
+        with self._connect(begin_immediate=True) as conn:
+            if self._runtime_halt_active(conn, stage=stage):
+                return None
             row = conn.execute(
                 """
                 SELECT *
@@ -317,29 +439,35 @@ class RequestLedger:
             claim_token = stable_hash_id(row["batch_id"], attempt_no, now_text, prefix="claim")
             batch_id = str(row["batch_id"])
             item_ids = self._item_ids_from_row(row)
-            conn.execute(
+            cursor = conn.execute(
                 """
                 UPDATE batches
                 SET state = ?,
                     updated_at_utc = ?,
                     attempt_count = attempt_count + 1,
                     claim_token = ?,
-                    running_started_at_utc = ?,
+                    running_started_at_utc = NULL,
                     last_run_session_id = ?,
                     last_worker_id = ?,
                     next_eligible_at_utc = NULL
                 WHERE batch_id = ?
+                  AND state IN (?, ?)
+                  AND (next_eligible_at_utc IS NULL OR next_eligible_at_utc <= ?)
                 """,
                 (
                     LEDGER_RUNNING,
                     now_text,
                     claim_token,
-                    now_text,
                     self.run_session_id,
                     self.worker_id,
                     batch_id,
+                    LEDGER_PENDING,
+                    LEDGER_RETRYABLE_ERROR,
+                    now_text,
                 ),
             )
+            if int(cursor.rowcount or 0) != 1:
+                return None
             self._increment_item_attempts(
                 conn,
                 item_ids=item_ids,
@@ -359,12 +487,36 @@ class RequestLedger:
                 exception_class=None,
                 exception_message=None,
             )
+            updated_row = conn.execute(
+                "SELECT * FROM batches WHERE batch_id = ?",
+                (batch_id,),
+            ).fetchone()
+            if updated_row is None:
+                return None
+            return self._batch_from_row(updated_row)
+
+    def record_request_started(self, *, batch_id: str) -> None:
+        now = utc_now()
+        now_text = to_utc_text(now)
+        with self._connect() as conn:
+            batch_row = conn.execute("SELECT * FROM batches WHERE batch_id = ?", (batch_id,)).fetchone()
+            if batch_row is None:
+                raise KeyError(f"unknown batch_id: {batch_id}")
+            attempt_no = int(batch_row["attempt_count"])
+            conn.execute(
+                """
+                UPDATE batches
+                SET updated_at_utc = ?, running_started_at_utc = COALESCE(running_started_at_utc, ?)
+                WHERE batch_id = ?
+                """,
+                (now_text, now_text, batch_id),
+            )
             self._insert_attempt_event(
                 conn,
                 batch_id=batch_id,
                 attempt_no=attempt_no,
                 phase=ATTEMPT_PHASE_REQUEST_STARTED,
-                claim_token=claim_token,
+                claim_token=None if batch_row["claim_token"] is None else str(batch_row["claim_token"]),
                 headers=None,
                 status_code=None,
                 latency_ms=None,
@@ -373,13 +525,6 @@ class RequestLedger:
                 exception_class=None,
                 exception_message=None,
             )
-            updated_row = conn.execute(
-                "SELECT * FROM batches WHERE batch_id = ?",
-                (batch_id,),
-            ).fetchone()
-            if updated_row is None:
-                return None
-            return self._batch_from_row(updated_row)
 
     def fetch_items(self, batch: LedgerBatch) -> list[LedgerItem]:
         placeholders = ", ".join("?" for _ in batch.item_ids)
@@ -791,6 +936,25 @@ class RequestLedger:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS stage_runtime_control (
+                    stage TEXT PRIMARY KEY,
+                    halt_new_work INTEGER NOT NULL DEFAULT 0,
+                    halt_reason TEXT,
+                    updated_at_utc TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS request_start_scheduler (
+                    stage TEXT PRIMARY KEY,
+                    next_request_start_epoch_utc REAL NOT NULL,
+                    updated_at_utc TEXT NOT NULL
+                )
+                """
+            )
             self._ensure_column(conn, table="batches", column="claim_token", column_type="TEXT")
             self._ensure_column(conn, table="batches", column="running_started_at_utc", column_type="TEXT")
             self._ensure_column(conn, table="batches", column="last_run_session_id", column_type="TEXT")
@@ -833,12 +997,14 @@ class RequestLedger:
             self._backfill_missing_attempt_events(conn)
 
     @contextlib.contextmanager
-    def _connect(self) -> Any:
-        conn = sqlite3.connect(self.db_path)
+    def _connect(self, *, begin_immediate: bool = False) -> Any:
+        conn = sqlite3.connect(self.db_path, timeout=30.0)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
         try:
+            if begin_immediate:
+                conn.execute("BEGIN IMMEDIATE")
             yield conn
             conn.commit()
         except Exception:
@@ -1071,6 +1237,100 @@ class RequestLedger:
                     item_id,
                 ),
             )
+
+    def _runtime_halt_active(self, conn: sqlite3.Connection, *, stage: str) -> bool:
+        row = conn.execute(
+            """
+            SELECT halt_new_work
+            FROM stage_runtime_control
+            WHERE stage = ?
+            """,
+            (stage,),
+        ).fetchone()
+        if row is None:
+            return False
+        return bool(int(row["halt_new_work"] or 0))
+
+    def _has_claimable_batch(self, conn: sqlite3.Connection, *, stage: str, now_text: str) -> bool:
+        row = conn.execute(
+            """
+            SELECT 1
+            FROM batches
+            WHERE stage = ?
+              AND state IN (?, ?)
+              AND (next_eligible_at_utc IS NULL OR next_eligible_at_utc <= ?)
+            LIMIT 1
+            """,
+            (
+                stage,
+                LEDGER_PENDING,
+                LEDGER_RETRYABLE_ERROR,
+                now_text,
+            ),
+        ).fetchone()
+        return row is not None
+
+    def _has_outstanding_batch(self, conn: sqlite3.Connection, *, stage: str) -> bool:
+        row = conn.execute(
+            """
+            SELECT 1
+            FROM batches
+            WHERE stage = ?
+              AND state IN (?, ?, ?)
+            LIMIT 1
+            """,
+            (
+                stage,
+                LEDGER_PENDING,
+                LEDGER_RETRYABLE_ERROR,
+                LEDGER_RUNNING,
+            ),
+        ).fetchone()
+        return row is not None
+
+    def _runtime_idle_wait_seconds(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        stage: str,
+        now_dt: dt.datetime,
+        idle_poll_seconds: float,
+    ) -> float:
+        running_row = conn.execute(
+            """
+            SELECT 1
+            FROM batches
+            WHERE stage = ? AND state = ?
+            LIMIT 1
+            """,
+            (stage, LEDGER_RUNNING),
+        ).fetchone()
+        if running_row is not None:
+            return idle_poll_seconds
+
+        next_row = conn.execute(
+            """
+            SELECT next_eligible_at_utc
+            FROM batches
+            WHERE stage = ?
+              AND state IN (?, ?)
+              AND next_eligible_at_utc IS NOT NULL
+            ORDER BY next_eligible_at_utc
+            LIMIT 1
+            """,
+            (
+                stage,
+                LEDGER_PENDING,
+                LEDGER_RETRYABLE_ERROR,
+            ),
+        ).fetchone()
+        if next_row is None or next_row["next_eligible_at_utc"] is None:
+            return idle_poll_seconds
+
+        next_eligible = from_utc_text(str(next_row["next_eligible_at_utc"]))
+        if next_eligible is None:
+            return idle_poll_seconds
+        return max(0.0, (next_eligible - now_dt).total_seconds())
 
     def _item_ids_from_row(self, row: sqlite3.Row) -> tuple[str, ...]:
         return tuple(str(item_id) for item_id in json.loads(row["item_ids_json"]))

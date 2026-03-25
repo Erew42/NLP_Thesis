@@ -4,6 +4,7 @@ import datetime as dt
 import math
 
 import polars as pl
+import pytest
 
 from thesis_pkg.pipeline import (
     build_lm2011_normalized_difference_panel,
@@ -187,6 +188,7 @@ def _regression_test_inputs(tmp_path) -> dict[str, object]:
                     + 0.0005 * quarter_idx
                     + 0.0002 * industry_idx
                     + 0.00017 * ((obs_idx + quarter_idx + industry_idx) % 2)
+                    + 0.000019 * (((obs_idx + 1) * (industry_idx + 1) * (quarter_idx + 1)) % 5)
                 )
                 analyst_revisions = (
                     -0.02
@@ -195,6 +197,7 @@ def _regression_test_inputs(tmp_path) -> dict[str, object]:
                     + 0.001 * quarter_idx
                     + 0.00035 * industry_idx
                     + 0.00021 * ((obs_idx + (2 * quarter_idx) + industry_idx) % 3)
+                    + 0.000023 * (((obs_idx + 2) * (quarter_idx + 1) + industry_idx) % 4)
                 )
                 quarter_effect = 0.002 * quarter_idx
                 industry_effect = 0.003 * industry_idx
@@ -358,6 +361,63 @@ def test_run_lm2011_quarterly_fama_macbeth_weights_quarters_and_hides_industry_d
     assert math.isclose(by_name["signal"]["mean_quarter_n"], 5.0, rel_tol=0.0, abs_tol=1e-12)
     assert by_name["signal"]["weighting_rule"] == "quarter_observation_count"
     assert all(not row["coefficient_name"].startswith("_industry_dummy_") for row in results.to_dicts())
+
+
+def test_run_lm2011_quarterly_fama_macbeth_raises_on_rank_deficient_quarter() -> None:
+    rows: list[dict[str, object]] = []
+    filing_date = dt.date(2021, 2, 15)
+    for industry_id in (1, 12):
+        for obs_idx in range(2):
+            rows.append(
+                {
+                    "filing_date": filing_date,
+                    "ff48_industry_id": industry_id,
+                    "signal": 1.0 if industry_id == 12 else 0.0,
+                    "dependent": 1.0 + float(obs_idx) + (3.0 if industry_id == 12 else 0.0),
+                }
+            )
+
+    with pytest.raises(ValueError, match=r"Quarterly Fama-MacBeth quarter=2021-01-01 .*rank-deficient OLS design"):
+        run_lm2011_quarterly_fama_macbeth(
+            pl.DataFrame(rows).lazy(),
+            table_id="unit_test_table",
+            text_scope="full_10k",
+            dependent_variable="dependent",
+            signal_column="signal",
+            control_columns=(),
+        )
+
+
+def test_run_lm2011_quarterly_fama_macbeth_keeps_near_singular_small_sample_quarter() -> None:
+    rows: list[dict[str, object]] = []
+    filing_date = dt.date(2021, 2, 15)
+    for industry_id, industry_effect in ((1, 0.0), (12, 0.25)):
+        for signal_value, epsilon in zip((0.0, 1.0, 2.0), (1e-6, 2e-6, 4e-6), strict=True):
+            control = signal_value + (epsilon if industry_id == 1 else -epsilon)
+            rows.append(
+                {
+                    "filing_date": filing_date,
+                    "ff48_industry_id": industry_id,
+                    "signal": signal_value,
+                    "control": control,
+                    "dependent": 1.0 + 1.75 * signal_value - 0.5 * control + industry_effect,
+                }
+            )
+
+    results = run_lm2011_quarterly_fama_macbeth(
+        pl.DataFrame(rows).lazy(),
+        table_id="unit_test_table",
+        text_scope="full_10k",
+        dependent_variable="dependent",
+        signal_column="signal",
+        control_columns=("control",),
+    ).sort("coefficient_name")
+
+    by_name = {row["coefficient_name"]: row for row in results.to_dicts()}
+    assert by_name["intercept"]["estimate"] == pytest.approx(1.0, abs=1e-6)
+    assert by_name["signal"]["estimate"] == pytest.approx(1.75, abs=1e-6)
+    assert by_name["control"]["estimate"] == pytest.approx(-0.5, abs=1e-6)
+    assert by_name["signal"]["n_quarters"] == 1
 
 
 def test_build_lm2011_normalized_difference_panel_uses_prior_year_industry_prop_stats() -> None:
