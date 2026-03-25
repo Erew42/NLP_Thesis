@@ -5,6 +5,7 @@ import hashlib
 import json
 import re
 import time
+import warnings
 from typing import Any
 
 import polars as pl
@@ -36,7 +37,6 @@ UNRESOLVED_IDENTIFIERS_RE = re.compile(
     r"Unable to resolve all requested identifiers in \[(?P<identifiers>.*?)\]\.",
     re.IGNORECASE,
 )
-
 
 class LsegProviderImportError(RuntimeError):
     pass
@@ -187,7 +187,14 @@ class LsegDataProvider:
         started = time.perf_counter()
         response: Any
         try:
-            response = self._ld.get_data(universe=universe, fields=fields, parameters=parameters or {})
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    message=r"Downcasting behavior in `replace` is deprecated.*",
+                    category=FutureWarning,
+                    module=r"lseg\.data\._tools\._dataframe",
+                )
+                response = self._ld.get_data(universe=universe, fields=fields, parameters=parameters or {})
         except Exception as exc:  # pragma: no cover - exercised only with the real library
             headers, status_code, response_bytes = _extract_http_metadata(exc)
             error_kind, unresolved_identifiers = classify_lseg_error_message(str(exc))
@@ -350,6 +357,7 @@ def _to_polars_frame(response: Any) -> pl.DataFrame:
     candidate = getattr(data, "df", data)
     if hasattr(candidate, "reset_index") and hasattr(candidate, "columns"):
         pandas_df = candidate if "Instrument" in list(candidate.columns) else candidate.reset_index(drop=False)
+        pandas_df = _normalize_lseg_pandas_frame(pandas_df)
         try:
             return pl.from_pandas(pandas_df)
         except Exception:
@@ -413,3 +421,13 @@ def _coerce_pandas_frame_to_utf8(*, candidate: Any) -> pl.DataFrame:
         normalized_records,
         schema={column: pl.Utf8 for column in columns},
     )
+
+
+def _normalize_lseg_pandas_frame(candidate: Any) -> Any:
+    infer_objects = getattr(candidate, "infer_objects", None)
+    if infer_objects is None:
+        return candidate
+    try:
+        return infer_objects(copy=False)
+    except TypeError:
+        return infer_objects()

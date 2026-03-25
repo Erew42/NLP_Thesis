@@ -4,6 +4,7 @@ from datetime import date
 import json
 from pathlib import Path
 from typing import Any
+import warnings
 
 import polars as pl
 import pytest
@@ -620,6 +621,60 @@ def test_to_polars_frame_falls_back_to_utf8_records_when_from_pandas_raises(monk
         {"Instrument": "AAA.N", "MixedValue": "1"},
         {"Instrument": "BBB.N", "MixedValue": "Desktop Metal Inc"},
     ]
+
+
+def test_to_polars_frame_preserves_legacy_infer_objects_behavior(monkeypatch: pytest.MonkeyPatch) -> None:
+    pd = pytest.importorskip("pandas")
+    pandas_df = pd.DataFrame(
+        {
+            "Instrument": ["AAA.N"],
+            "Value": [1],
+        }
+    )
+    calls: list[bool] = []
+    original = pd.DataFrame.infer_objects
+
+    def _record_infer_objects(self: Any, copy: bool = True) -> Any:
+        calls.append(copy)
+        return original(self, copy=copy)
+
+    monkeypatch.setattr(pd.DataFrame, "infer_objects", _record_infer_objects)
+
+    converted = lseg_provider._to_polars_frame(pandas_df)
+
+    assert converted.to_dicts() == [{"Instrument": "AAA.N", "Value": 1}]
+    assert calls == [False]
+
+
+def test_lseg_provider_suppresses_lseg_replace_downcasting_futurewarning() -> None:
+    pd = pytest.importorskip("pandas")
+
+    class FakeLsegResponse:
+        def __init__(self) -> None:
+            self.data = pd.DataFrame({"Instrument": ["AAA.N"], "Value": [1]})
+
+    class FakeLsegModule:
+        @staticmethod
+        def get_data(*, universe: list[str], fields: list[str], parameters: dict[str, Any]) -> FakeLsegResponse:
+            warnings.warn_explicit(
+                "Downcasting behavior in `replace` is deprecated and will be removed in a future version.",
+                category=FutureWarning,
+                filename="C:\\\\fake\\\\site-packages\\\\lseg\\\\data\\\\_tools\\\\_dataframe.py",
+                lineno=192,
+                module="lseg.data._tools._dataframe",
+            )
+            return FakeLsegResponse()
+
+    provider = LsegDataProvider()
+    provider._ld = FakeLsegModule()
+    provider._session_open = True
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        response = provider._get_data_once(universe=["AAA.N"], fields=["TR.RIC"], parameters={})
+
+    assert response.frame.to_dicts() == [{"Instrument": "AAA.N", "Value": 1}]
+    assert not any("Downcasting behavior in `replace` is deprecated" in str(item.message) for item in caught)
 
 
 def test_lseg_provider_retries_once_for_session_not_opened_error(monkeypatch: pytest.MonkeyPatch) -> None:
