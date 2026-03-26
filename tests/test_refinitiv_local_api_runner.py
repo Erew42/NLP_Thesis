@@ -42,10 +42,95 @@ def test_parse_args_defaults() -> None:
     assert args.ownership_batch_size == 10
     assert args.analyst_actuals_batch_size == 10
     assert args.analyst_estimates_batch_size == 10
+    assert args.analyst_actuals_max_batch_items is None
+    assert args.analyst_actuals_max_extra_rows_abs is None
+    assert args.analyst_actuals_max_extra_rows_ratio is None
+    assert args.analyst_actuals_max_union_span_days is None
+    assert args.analyst_actuals_row_density_rows_per_day is None
+    assert args.analyst_estimates_max_batch_items is None
+    assert args.analyst_estimates_max_extra_rows_abs is None
+    assert args.analyst_estimates_max_extra_rows_ratio is None
+    assert args.analyst_estimates_max_union_span_days is None
+    assert args.analyst_estimates_row_density_rows_per_day is None
     assert args.doc_exact_batch_size == 15
     assert args.doc_fallback_batch_size == 5
     assert args.min_seconds_between_requests == 2.0
     assert args.max_attempts == 4
+
+
+def test_main_passes_analyst_interval_batching_args_and_records_manifest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_root = _build_run_root(tmp_path)
+    _write_parquet(run_root / "refinitiv_step1" / "analyst_common_stock" / "refinitiv_analyst_request_universe_common_stock.parquet")
+
+    monkeypatch.setattr(runner, "is_lseg_available", lambda: True)
+    captured: dict[str, dict[str, Path | int | float | None]] = {}
+
+    def actuals_stub(**kwargs: Path | int | float | None) -> dict[str, Path]:
+        captured["actuals"] = kwargs
+        output_path = kwargs["output_dir"] / "refinitiv_analyst_actuals_raw.parquet"
+        _write_parquet(output_path)
+        return {"refinitiv_analyst_actuals_raw_parquet": output_path}
+
+    def estimates_stub(**kwargs: Path | int | float | None) -> dict[str, Path]:
+        captured["estimates"] = kwargs
+        output_path = kwargs["output_dir"] / "refinitiv_analyst_estimates_monthly_raw.parquet"
+        _write_parquet(output_path)
+        return {"refinitiv_analyst_estimates_monthly_raw_parquet": output_path}
+
+    monkeypatch.setattr(runner, "run_refinitiv_step1_analyst_actuals_api_pipeline", actuals_stub)
+    monkeypatch.setattr(runner, "run_refinitiv_step1_analyst_estimates_monthly_api_pipeline", estimates_stub)
+
+    exit_code = runner.main(
+        [
+            "--run-root",
+            str(run_root),
+            "--stage-start",
+            "analyst_actuals_api",
+            "--stage-stop",
+            "analyst_estimates_api",
+            "--analyst-actuals-max-batch-items",
+            "17",
+            "--analyst-actuals-max-extra-rows-abs",
+            "12.5",
+            "--analyst-actuals-max-extra-rows-ratio",
+            "0.2",
+            "--analyst-actuals-max-union-span-days",
+            "180",
+            "--analyst-actuals-row-density-rows-per-day",
+            "0.05",
+            "--analyst-estimates-max-batch-items",
+            "19",
+            "--analyst-estimates-max-extra-rows-abs",
+            "24.5",
+            "--analyst-estimates-max-extra-rows-ratio",
+            "0.15",
+            "--analyst-estimates-max-union-span-days",
+            "210",
+            "--analyst-estimates-row-density-rows-per-day",
+            "0.07",
+        ]
+    )
+
+    assert exit_code == 0
+    assert captured["actuals"]["max_batch_items"] == 17
+    assert captured["actuals"]["max_extra_rows_abs"] == 12.5
+    assert captured["actuals"]["max_extra_rows_ratio"] == 0.2
+    assert captured["actuals"]["max_union_span_days"] == 180
+    assert captured["actuals"]["row_density_rows_per_day"] == 0.05
+    assert captured["estimates"]["max_batch_items"] == 19
+    assert captured["estimates"]["max_extra_rows_abs"] == 24.5
+    assert captured["estimates"]["max_extra_rows_ratio"] == 0.15
+    assert captured["estimates"]["max_union_span_days"] == 210
+    assert captured["estimates"]["row_density_rows_per_day"] == 0.07
+
+    manifest = json.loads((run_root / "refinitiv_local_api_runner_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["batching"]["analyst_actuals_max_batch_items"] == 17
+    assert manifest["batching"]["analyst_actuals_max_extra_rows_abs"] == 12.5
+    assert manifest["batching"]["analyst_estimates_max_batch_items"] == 19
+    assert manifest["batching"]["analyst_estimates_row_density_rows_per_day"] == 0.07
 
 
 def test_parse_args_rejects_invalid_stage_range() -> None:

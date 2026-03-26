@@ -185,6 +185,56 @@ class RequestLedger:
                     ),
                 )
 
+    def get_meta(self, key: str) -> str | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT value FROM ledger_meta WHERE key = ?",
+                (key,),
+            ).fetchone()
+        if row is None:
+            return None
+        return str(row["value"])
+
+    def set_meta(self, key: str, value: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO ledger_meta (key, value)
+                VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET value=excluded.value
+                """,
+                (key, value),
+            )
+
+    def stage_batch_count(self, *, stage: str) -> int:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS batch_count
+                FROM batches
+                WHERE stage = ?
+                """,
+                (stage,),
+            ).fetchone()
+        return 0 if row is None else int(row["batch_count"] or 0)
+
+    def ensure_stage_meta_value(self, *, stage: str, key: str, value: str) -> None:
+        meta_key = f"stage:{stage}:{key}"
+        existing = self.get_meta(meta_key)
+        if existing is None:
+            if self.stage_batch_count(stage=stage) > 0:
+                raise RuntimeError(
+                    f"ledger already contains stage={stage!r} batches but is missing compatibility metadata "
+                    f"for {meta_key!r}; remove the stage ledger/staging artifacts before resuming"
+                )
+            self.set_meta(meta_key, value)
+            return
+        if existing != value:
+            raise RuntimeError(
+                f"incompatible resume state for stage={stage!r}: {meta_key!r} changed "
+                f"from {existing!r} to {value!r}"
+            )
+
     def requeue_stale_running(self, *, older_than_seconds: int = 900) -> int:
         cutoff = utc_now() - dt.timedelta(seconds=older_than_seconds)
         cutoff_text = to_utc_text(cutoff)
@@ -860,6 +910,22 @@ class RequestLedger:
                 """
             ).fetchall()
         return [str(row["run_session_id"]) for row in rows]
+
+    def succeeded_stage_output_paths(self, *, stage: str | None = None) -> list[Path]:
+        params: list[Any] = [LEDGER_SUCCEEDED]
+        query = """
+            SELECT DISTINCT result_file_path
+            FROM batches
+            WHERE state = ?
+              AND result_file_path IS NOT NULL
+        """
+        if stage is not None:
+            query += " AND stage = ?"
+            params.append(stage)
+        query += " ORDER BY result_file_path"
+        with self._connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [Path(str(row["result_file_path"])) for row in rows]
 
     def _initialize(self) -> None:
         with self._connect() as conn:

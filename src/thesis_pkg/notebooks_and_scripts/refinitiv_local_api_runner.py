@@ -201,6 +201,16 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ownership-batch-size", type=int, default=10)
     parser.add_argument("--analyst-actuals-batch-size", type=int, default=10)
     parser.add_argument("--analyst-estimates-batch-size", type=int, default=10)
+    parser.add_argument("--analyst-actuals-max-batch-items", type=int, default=None)
+    parser.add_argument("--analyst-actuals-max-extra-rows-abs", type=float, default=None)
+    parser.add_argument("--analyst-actuals-max-extra-rows-ratio", type=float, default=None)
+    parser.add_argument("--analyst-actuals-max-union-span-days", type=int, default=None)
+    parser.add_argument("--analyst-actuals-row-density-rows-per-day", type=float, default=None)
+    parser.add_argument("--analyst-estimates-max-batch-items", type=int, default=None)
+    parser.add_argument("--analyst-estimates-max-extra-rows-abs", type=float, default=None)
+    parser.add_argument("--analyst-estimates-max-extra-rows-ratio", type=float, default=None)
+    parser.add_argument("--analyst-estimates-max-union-span-days", type=int, default=None)
+    parser.add_argument("--analyst-estimates-row-density-rows-per-day", type=float, default=None)
     parser.add_argument("--doc-exact-batch-size", type=int, default=15)
     parser.add_argument("--doc-fallback-batch-size", type=int, default=5)
     parser.add_argument("--min-seconds-between-requests", type=float, default=2.0)
@@ -644,6 +654,11 @@ def _run_stage(stage: str, args: argparse.Namespace, paths: RunPaths) -> dict[st
                 request_universe_parquet_path=paths.analyst_request_universe_parquet,
                 output_dir=paths.analyst_dir,
                 max_batch_size=args.analyst_actuals_batch_size,
+                max_batch_items=args.analyst_actuals_max_batch_items,
+                max_extra_rows_abs=args.analyst_actuals_max_extra_rows_abs,
+                max_extra_rows_ratio=args.analyst_actuals_max_extra_rows_ratio,
+                max_union_span_days=args.analyst_actuals_max_union_span_days,
+                row_density_rows_per_day=args.analyst_actuals_row_density_rows_per_day,
                 min_seconds_between_requests=args.min_seconds_between_requests,
                 min_seconds_between_request_starts_total=args.min_seconds_between_request_starts_total,
                 max_attempts=args.max_attempts,
@@ -661,6 +676,11 @@ def _run_stage(stage: str, args: argparse.Namespace, paths: RunPaths) -> dict[st
                 request_universe_parquet_path=paths.analyst_request_universe_parquet,
                 output_dir=paths.analyst_dir,
                 max_batch_size=args.analyst_estimates_batch_size,
+                max_batch_items=args.analyst_estimates_max_batch_items,
+                max_extra_rows_abs=args.analyst_estimates_max_extra_rows_abs,
+                max_extra_rows_ratio=args.analyst_estimates_max_extra_rows_ratio,
+                max_union_span_days=args.analyst_estimates_max_union_span_days,
+                row_density_rows_per_day=args.analyst_estimates_row_density_rows_per_day,
                 min_seconds_between_requests=args.min_seconds_between_requests,
                 min_seconds_between_request_starts_total=args.min_seconds_between_request_starts_total,
                 max_attempts=args.max_attempts,
@@ -764,6 +784,24 @@ def _write_manifest(
         "provider_session_name": args.provider_session_name,
         "provider_config_name": args.provider_config_name,
         "provider_timeout_seconds": args.provider_timeout_seconds,
+        "batching": {
+            "lookup_batch_size": args.lookup_batch_size,
+            "ownership_batch_size": args.ownership_batch_size,
+            "analyst_actuals_batch_size": args.analyst_actuals_batch_size,
+            "analyst_actuals_max_batch_items": args.analyst_actuals_max_batch_items,
+            "analyst_actuals_max_extra_rows_abs": args.analyst_actuals_max_extra_rows_abs,
+            "analyst_actuals_max_extra_rows_ratio": args.analyst_actuals_max_extra_rows_ratio,
+            "analyst_actuals_max_union_span_days": args.analyst_actuals_max_union_span_days,
+            "analyst_actuals_row_density_rows_per_day": args.analyst_actuals_row_density_rows_per_day,
+            "analyst_estimates_batch_size": args.analyst_estimates_batch_size,
+            "analyst_estimates_max_batch_items": args.analyst_estimates_max_batch_items,
+            "analyst_estimates_max_extra_rows_abs": args.analyst_estimates_max_extra_rows_abs,
+            "analyst_estimates_max_extra_rows_ratio": args.analyst_estimates_max_extra_rows_ratio,
+            "analyst_estimates_max_union_span_days": args.analyst_estimates_max_union_span_days,
+            "analyst_estimates_row_density_rows_per_day": args.analyst_estimates_row_density_rows_per_day,
+            "doc_exact_batch_size": args.doc_exact_batch_size,
+            "doc_fallback_batch_size": args.doc_fallback_batch_size,
+        },
         "generated_artifacts": {
             stage: {label: str(path) for label, path in stage_artifacts.items()}
             for stage, stage_artifacts in generated_artifacts.items()
@@ -823,7 +861,8 @@ def _audit_stage(stage: str, paths: RunPaths) -> StageAuditResult:
             output_artifacts={"analyst_actuals_raw_parquet": paths.analyst_actuals_raw_parquet},
             rebuilders={
                 "analyst_actuals_raw_parquet": lambda: _assemble_analyst_actuals_raw(
-                    paths.analyst_dir / "staging" / ANALYST_ACTUALS_STAGE
+                    paths.analyst_dir / "staging" / ANALYST_ACTUALS_STAGE,
+                    ledger_path=paths.analyst_dir / "refinitiv_analyst_actuals_api_ledger.sqlite3",
                 )
             },
             expected_stage_manifest_path=paths.analyst_actuals_stage_manifest_path,
@@ -836,7 +875,8 @@ def _audit_stage(stage: str, paths: RunPaths) -> StageAuditResult:
             output_artifacts={"analyst_estimates_raw_parquet": paths.analyst_estimates_raw_parquet},
             rebuilders={
                 "analyst_estimates_raw_parquet": lambda: _assemble_analyst_estimates_raw(
-                    paths.analyst_dir / "staging" / ANALYST_ESTIMATES_STAGE
+                    paths.analyst_dir / "staging" / ANALYST_ESTIMATES_STAGE,
+                    ledger_path=paths.analyst_dir / "refinitiv_analyst_estimates_api_ledger.sqlite3",
                 )
             },
             expected_stage_manifest_path=paths.analyst_estimates_stage_manifest_path,

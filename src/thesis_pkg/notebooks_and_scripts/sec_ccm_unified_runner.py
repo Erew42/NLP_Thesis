@@ -159,6 +159,16 @@ def _env_optional_float(name: str, default: float | None) -> float | None:
     return float(stripped)
 
 
+def _env_optional_int(name: str, default: int | None) -> int | None:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    stripped = value.strip()
+    if stripped.lower() in {"", "none", "null"}:
+        return None
+    return int(stripped)
+
+
 def _env_optional_str(name: str, default: str | None) -> str | None:
     value = os.environ.get(name)
     if value is None:
@@ -580,11 +590,51 @@ def main() -> None:
     )
     REFINITIV_ANALYST_ACTUALS_BATCH_SIZE = _env_int(
         "SEC_CCM_REFINITIV_ANALYST_ACTUALS_BATCH_SIZE",
-        200,
+        500,
+    )
+    REFINITIV_ANALYST_ACTUALS_MAX_BATCH_ITEMS = _env_optional_int(
+        "SEC_CCM_REFINITIV_ANALYST_ACTUALS_MAX_BATCH_ITEMS",
+        500,
+    )
+    REFINITIV_ANALYST_ACTUALS_MAX_EXTRA_ROWS_ABS = _env_optional_float(
+        "SEC_CCM_REFINITIV_ANALYST_ACTUALS_MAX_EXTRA_ROWS_ABS",
+        120,
+    )
+    REFINITIV_ANALYST_ACTUALS_MAX_EXTRA_ROWS_RATIO = _env_optional_float(
+        "SEC_CCM_REFINITIV_ANALYST_ACTUALS_MAX_EXTRA_ROWS_RATIO",
+        0.25,
+    )
+    REFINITIV_ANALYST_ACTUALS_MAX_UNION_SPAN_DAYS = _env_optional_int(
+        "SEC_CCM_REFINITIV_ANALYST_ACTUALS_MAX_UNION_SPAN_DAYS",
+        None,
+    )
+    REFINITIV_ANALYST_ACTUALS_ROW_DENSITY_ROWS_PER_DAY = _env_optional_float(
+        "SEC_CCM_REFINITIV_ANALYST_ACTUALS_ROW_DENSITY_ROWS_PER_DAY",
+        None,
     )
     REFINITIV_ANALYST_ESTIMATES_BATCH_SIZE = _env_int(
         "SEC_CCM_REFINITIV_ANALYST_ESTIMATES_BATCH_SIZE",
         200,
+    )
+    REFINITIV_ANALYST_ESTIMATES_MAX_BATCH_ITEMS = _env_optional_int(
+        "SEC_CCM_REFINITIV_ANALYST_ESTIMATES_MAX_BATCH_ITEMS",
+        400,
+    )
+    REFINITIV_ANALYST_ESTIMATES_MAX_EXTRA_ROWS_ABS = _env_optional_float(
+        "SEC_CCM_REFINITIV_ANALYST_ESTIMATES_MAX_EXTRA_ROWS_ABS",
+        240,
+    )
+    REFINITIV_ANALYST_ESTIMATES_MAX_EXTRA_ROWS_RATIO = _env_optional_float(
+        "SEC_CCM_REFINITIV_ANALYST_ESTIMATES_MAX_EXTRA_ROWS_RATIO",
+        0.15,
+    )
+    REFINITIV_ANALYST_ESTIMATES_MAX_UNION_SPAN_DAYS = _env_optional_int(
+        "SEC_CCM_REFINITIV_ANALYST_ESTIMATES_MAX_UNION_SPAN_DAYS",
+        None,
+    )
+    REFINITIV_ANALYST_ESTIMATES_ROW_DENSITY_ROWS_PER_DAY = _env_optional_float(
+        "SEC_CCM_REFINITIV_ANALYST_ESTIMATES_ROW_DENSITY_ROWS_PER_DAY",
+        None,
     )
     REFINITIV_DOC_EXACT_BATCH_SIZE = _env_int(
         "SEC_CCM_REFINITIV_DOC_EXACT_BATCH_SIZE",
@@ -773,7 +823,17 @@ def main() -> None:
             "REFINITIV_LOOKUP_BATCH_SIZE": REFINITIV_LOOKUP_BATCH_SIZE,
             "REFINITIV_OWNERSHIP_BATCH_SIZE": REFINITIV_OWNERSHIP_BATCH_SIZE,
             "REFINITIV_ANALYST_ACTUALS_BATCH_SIZE": REFINITIV_ANALYST_ACTUALS_BATCH_SIZE,
+            "REFINITIV_ANALYST_ACTUALS_MAX_BATCH_ITEMS": REFINITIV_ANALYST_ACTUALS_MAX_BATCH_ITEMS,
+            "REFINITIV_ANALYST_ACTUALS_MAX_EXTRA_ROWS_ABS": REFINITIV_ANALYST_ACTUALS_MAX_EXTRA_ROWS_ABS,
+            "REFINITIV_ANALYST_ACTUALS_MAX_EXTRA_ROWS_RATIO": REFINITIV_ANALYST_ACTUALS_MAX_EXTRA_ROWS_RATIO,
+            "REFINITIV_ANALYST_ACTUALS_MAX_UNION_SPAN_DAYS": REFINITIV_ANALYST_ACTUALS_MAX_UNION_SPAN_DAYS,
+            "REFINITIV_ANALYST_ACTUALS_ROW_DENSITY_ROWS_PER_DAY": REFINITIV_ANALYST_ACTUALS_ROW_DENSITY_ROWS_PER_DAY,
             "REFINITIV_ANALYST_ESTIMATES_BATCH_SIZE": REFINITIV_ANALYST_ESTIMATES_BATCH_SIZE,
+            "REFINITIV_ANALYST_ESTIMATES_MAX_BATCH_ITEMS": REFINITIV_ANALYST_ESTIMATES_MAX_BATCH_ITEMS,
+            "REFINITIV_ANALYST_ESTIMATES_MAX_EXTRA_ROWS_ABS": REFINITIV_ANALYST_ESTIMATES_MAX_EXTRA_ROWS_ABS,
+            "REFINITIV_ANALYST_ESTIMATES_MAX_EXTRA_ROWS_RATIO": REFINITIV_ANALYST_ESTIMATES_MAX_EXTRA_ROWS_RATIO,
+            "REFINITIV_ANALYST_ESTIMATES_MAX_UNION_SPAN_DAYS": REFINITIV_ANALYST_ESTIMATES_MAX_UNION_SPAN_DAYS,
+            "REFINITIV_ANALYST_ESTIMATES_ROW_DENSITY_ROWS_PER_DAY": REFINITIV_ANALYST_ESTIMATES_ROW_DENSITY_ROWS_PER_DAY,
             "REFINITIV_DOC_EXACT_BATCH_SIZE": REFINITIV_DOC_EXACT_BATCH_SIZE,
             "REFINITIV_DOC_FALLBACK_BATCH_SIZE": REFINITIV_DOC_FALLBACK_BATCH_SIZE,
             "REFINITIV_MIN_SECONDS_BETWEEN_REQUESTS": REFINITIV_MIN_SECONDS_BETWEEN_REQUESTS,
@@ -1234,6 +1294,11 @@ def main() -> None:
                 request_universe_parquet_path=analyst_request_universe_path,
                 output_dir=REFINITIV_ANALYST_COMMON_STOCK_DIR,
                 max_batch_size=REFINITIV_ANALYST_ACTUALS_BATCH_SIZE,
+                max_batch_items=REFINITIV_ANALYST_ACTUALS_MAX_BATCH_ITEMS,
+                max_extra_rows_abs=REFINITIV_ANALYST_ACTUALS_MAX_EXTRA_ROWS_ABS,
+                max_extra_rows_ratio=REFINITIV_ANALYST_ACTUALS_MAX_EXTRA_ROWS_RATIO,
+                max_union_span_days=REFINITIV_ANALYST_ACTUALS_MAX_UNION_SPAN_DAYS,
+                row_density_rows_per_day=REFINITIV_ANALYST_ACTUALS_ROW_DENSITY_ROWS_PER_DAY,
                 min_seconds_between_requests=REFINITIV_MIN_SECONDS_BETWEEN_REQUESTS,
                 min_seconds_between_request_starts_total=REFINITIV_MIN_SECONDS_BETWEEN_REQUEST_STARTS_TOTAL,
                 max_attempts=REFINITIV_MAX_ATTEMPTS,
@@ -1268,6 +1333,11 @@ def main() -> None:
                 request_universe_parquet_path=analyst_request_universe_path,
                 output_dir=REFINITIV_ANALYST_COMMON_STOCK_DIR,
                 max_batch_size=REFINITIV_ANALYST_ESTIMATES_BATCH_SIZE,
+                max_batch_items=REFINITIV_ANALYST_ESTIMATES_MAX_BATCH_ITEMS,
+                max_extra_rows_abs=REFINITIV_ANALYST_ESTIMATES_MAX_EXTRA_ROWS_ABS,
+                max_extra_rows_ratio=REFINITIV_ANALYST_ESTIMATES_MAX_EXTRA_ROWS_RATIO,
+                max_union_span_days=REFINITIV_ANALYST_ESTIMATES_MAX_UNION_SPAN_DAYS,
+                row_density_rows_per_day=REFINITIV_ANALYST_ESTIMATES_ROW_DENSITY_ROWS_PER_DAY,
                 min_seconds_between_requests=REFINITIV_MIN_SECONDS_BETWEEN_REQUESTS,
                 min_seconds_between_request_starts_total=REFINITIV_MIN_SECONDS_BETWEEN_REQUEST_STARTS_TOTAL,
                 max_attempts=REFINITIV_MAX_ATTEMPTS,

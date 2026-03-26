@@ -9,8 +9,9 @@ import polars as pl
 import pytest
 
 from thesis_pkg.pipelines.refinitiv import lseg_lookup_api
+from thesis_pkg.pipelines.refinitiv.lseg_analyst_api import _assemble_analyst_actuals_raw
 from thesis_pkg.pipelines.refinitiv.lseg_api_execution import run_api_batches
-from thesis_pkg.pipelines.refinitiv.lseg_batching import RequestItem, batch_items
+from thesis_pkg.pipelines.refinitiv.lseg_batching import RequestItem, batch_items, build_batch_definition
 from thesis_pkg.pipelines.refinitiv.lseg_ledger import RequestLedger
 from thesis_pkg.pipelines.refinitiv.lseg_provider import (
     LsegDataResponse,
@@ -52,6 +53,36 @@ class TimeoutThenSuccessProvider:
             raise LsegRequestError("request timed out", error_kind="transport_timeout")
         return LsegDataResponse(
             frame=pl.DataFrame({"Instrument": list(universe), "Value": [1.0 for _ in universe]}),
+            metadata=LsegResponseMetadata(
+                status_code=200,
+                headers={"X-Request-Limit-Remaining": "100"},
+                latency_ms=10,
+                response_bytes=64,
+                fingerprint="ok",
+            ),
+        )
+
+
+class EmptySuccessProvider:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    def open(self) -> None:
+        return None
+
+    def close(self) -> None:
+        return None
+
+    def get_data(
+        self,
+        *,
+        universe: list[str],
+        fields: list[str],
+        parameters: dict[str, Any] | None = None,
+    ) -> LsegDataResponse:
+        self.calls.append({"universe": list(universe), "fields": list(fields), "parameters": dict(parameters or {})})
+        return LsegDataResponse(
+            frame=pl.DataFrame({"Instrument": []}),
             metadata=LsegResponseMetadata(
                 status_code=200,
                 headers={"X-Request-Limit-Remaining": "100"},
@@ -238,6 +269,200 @@ def test_run_api_batches_splits_timeout_prone_batch(tmp_path: Path) -> None:
     assert ledger.state_counts(table="batches") == {"fatal_error": 1, "succeeded": 2}
     assert len(list(result.staging_dir.glob("*.parquet"))) == 2
     assert len(provider.calls) == 3
+
+
+def test_run_api_batches_rejects_mismatched_batch_plan_fingerprint(tmp_path: Path) -> None:
+    items = [
+        RequestItem(
+            item_id="item-1",
+            stage="test_stage",
+            instrument="AAA.N",
+            batch_key="2020-01-01|2020-01-31",
+            fields=("TR.Field",),
+            parameters={"SDate": "2020-01-01", "EDate": "2020-01-31"},
+            payload={"row": 1},
+        )
+    ]
+    planned_batch = build_batch_definition(
+        items,
+        batch_key="2020-01-01|2020-01-31",
+        parameters={"SDate": "2020-01-01", "EDate": "2020-01-31"},
+    )
+    provider = EmptySuccessProvider()
+
+    run_api_batches(
+        stage="test_stage",
+        items=items,
+        output_dir=tmp_path,
+        ledger_path=tmp_path / "ledger.sqlite3",
+        request_log_path=tmp_path / "requests.jsonl",
+        provider=provider,
+        provider_session_name="desktop.workspace",
+        provider_config_name=None,
+        provider_timeout_seconds=None,
+        preflight_probe=False,
+        max_batch_size=1,
+        min_seconds_between_requests=0.0,
+        max_attempts=2,
+        response_normalizer=lambda _items, _frame: pl.DataFrame({"item_id": [], "value": []}),
+        lookup_normalizer=lambda value: None if value is None else str(value),
+        planned_batches=[planned_batch],
+        batch_plan_fingerprint="plan-alpha",
+    )
+
+    with pytest.raises(RuntimeError, match="batch_plan_fingerprint"):
+        run_api_batches(
+            stage="test_stage",
+            items=items,
+            output_dir=tmp_path,
+            ledger_path=tmp_path / "ledger.sqlite3",
+            request_log_path=tmp_path / "requests.jsonl",
+            provider=provider,
+            provider_session_name="desktop.workspace",
+            provider_config_name=None,
+            provider_timeout_seconds=None,
+            preflight_probe=False,
+            max_batch_size=1,
+            min_seconds_between_requests=0.0,
+            max_attempts=2,
+            response_normalizer=lambda _items, _frame: pl.DataFrame({"item_id": [], "value": []}),
+            lookup_normalizer=lambda value: None if value is None else str(value),
+            planned_batches=[planned_batch],
+            batch_plan_fingerprint="plan-beta",
+        )
+
+
+def test_run_api_batches_accepts_matching_batch_plan_fingerprint_on_resume(tmp_path: Path) -> None:
+    items = [
+        RequestItem(
+            item_id="item-1",
+            stage="test_stage",
+            instrument="AAA.N",
+            batch_key="2020-01-01|2020-01-31",
+            fields=("TR.Field",),
+            parameters={"SDate": "2020-01-01", "EDate": "2020-01-31"},
+            payload={"row": 1},
+        )
+    ]
+    planned_batch = build_batch_definition(
+        items,
+        batch_key="2020-01-01|2020-01-31",
+        parameters={"SDate": "2020-01-01", "EDate": "2020-01-31"},
+    )
+    provider = EmptySuccessProvider()
+
+    first = run_api_batches(
+        stage="test_stage",
+        items=items,
+        output_dir=tmp_path,
+        ledger_path=tmp_path / "ledger.sqlite3",
+        request_log_path=tmp_path / "requests.jsonl",
+        provider=provider,
+        provider_session_name="desktop.workspace",
+        provider_config_name=None,
+        provider_timeout_seconds=None,
+        preflight_probe=False,
+        max_batch_size=1,
+        min_seconds_between_requests=0.0,
+        max_attempts=2,
+        response_normalizer=lambda _items, _frame: pl.DataFrame({"item_id": [], "value": []}),
+        lookup_normalizer=lambda value: None if value is None else str(value),
+        planned_batches=[planned_batch],
+        batch_plan_fingerprint="plan-alpha",
+    )
+    initial_call_count = len(provider.calls)
+
+    second = run_api_batches(
+        stage="test_stage",
+        items=items,
+        output_dir=tmp_path,
+        ledger_path=tmp_path / "ledger.sqlite3",
+        request_log_path=tmp_path / "requests.jsonl",
+        provider=provider,
+        provider_session_name="desktop.workspace",
+        provider_config_name=None,
+        provider_timeout_seconds=None,
+        preflight_probe=False,
+        max_batch_size=1,
+        min_seconds_between_requests=0.0,
+        max_attempts=2,
+        response_normalizer=lambda _items, _frame: pl.DataFrame({"item_id": [], "value": []}),
+        lookup_normalizer=lambda value: None if value is None else str(value),
+        planned_batches=[planned_batch],
+        batch_plan_fingerprint="plan-alpha",
+    )
+
+    assert first.ledger_path == second.ledger_path
+    assert len(provider.calls) == initial_call_count
+
+
+def test_assemble_analyst_actuals_raw_ignores_orphan_staging_when_ledger_is_provided(tmp_path: Path) -> None:
+    item = RequestItem(
+        item_id="item-1",
+        stage="analyst_actuals",
+        instrument="AAA.N",
+        batch_key="2020-01-01|2020-01-31",
+        fields=("TR.Field",),
+        parameters={"SDate": "2020-01-01", "EDate": "2020-01-31"},
+        payload={"request_row": {"request_group_id": "group-1"}},
+    )
+    batch = build_batch_definition(
+        [item],
+        batch_key=item.batch_key,
+        parameters=item.parameters,
+    )
+    ledger_path = tmp_path / "ledger.sqlite3"
+    staging_dir = tmp_path / "staging" / "analyst_actuals"
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    ledger = RequestLedger(ledger_path)
+    ledger.enqueue([item], [batch])
+    claimed = ledger.claim_next_batch(stage="analyst_actuals")
+    assert claimed is not None
+    succeeded_path = staging_dir / f"{claimed.batch_id}.parquet"
+    pl.DataFrame(
+        {
+            "item_id": ["item-1"],
+            "response_row_index": [0],
+            "request_group_id": ["group-1"],
+            "gvkey_int": [1000],
+            "effective_collection_ric": ["AAA.N"],
+            "announcement_date": [date(2020, 1, 15)],
+            "fiscal_period_end": [date(2019, 12, 31)],
+            "actual_eps": [1.0],
+            "raw_fperiod": ["FY2019Q4"],
+            "row_parse_status": ["OK"],
+        }
+    ).write_parquet(succeeded_path)
+    pl.DataFrame(
+        {
+            "item_id": ["orphan-item"],
+            "response_row_index": [0],
+            "request_group_id": ["orphan-group"],
+            "gvkey_int": [9999],
+            "effective_collection_ric": ["ZZZ.N"],
+            "announcement_date": [date(2020, 1, 20)],
+            "fiscal_period_end": [date(2019, 12, 31)],
+            "actual_eps": [9.9],
+            "raw_fperiod": ["FY2019Q4"],
+            "row_parse_status": ["OK"],
+        }
+    ).write_parquet(staging_dir / "orphan.parquet")
+    ledger.record_success(
+        batch_id=claimed.batch_id,
+        row_count_by_item_id={"item-1": 1},
+        stage_output_path=succeeded_path,
+        response_fingerprint="ok",
+        headers={},
+        status_code=200,
+        latency_ms=1,
+        rows_returned=1,
+        response_bytes=10,
+    )
+
+    rebuilt = _assemble_analyst_actuals_raw(staging_dir, ledger_path=ledger_path)
+
+    assert rebuilt.height == 1
+    assert rebuilt.item(0, "request_group_id") == "group-1"
 
 
 def test_audit_api_stage_flags_orphan_staging_files(tmp_path: Path) -> None:

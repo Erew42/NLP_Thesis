@@ -65,6 +65,7 @@ class _WorkerConfig:
     min_seconds_between_requests: float
     min_seconds_between_request_starts_total: float | None
     provider_factory: ProviderFactory | None
+    planned_batch_metrics: dict[str, dict[str, Any]] | None = None
     idle_poll_seconds: float = 0.1
     claim_lead_seconds: float = 0.2
 
@@ -91,6 +92,9 @@ def run_api_batches(
     max_workers: int = 1,
     min_seconds_between_request_starts_total: float | None = None,
     provider_factory: ProviderFactory | None = None,
+    planned_batches: list[BatchDefinition] | None = None,
+    batch_plan_fingerprint: str | None = None,
+    planned_batch_metrics: dict[str, dict[str, Any]] | None = None,
 ) -> ApiStageRunResult:
     if max_workers < 1:
         raise ValueError("max_workers must be >= 1")
@@ -104,9 +108,38 @@ def run_api_batches(
     staging_dir = output_dir / "staging" / stage
     staging_dir.mkdir(parents=True, exist_ok=True)
 
-    planned_batches = batch_items(items, max_batch_size=max_batch_size, unique_instrument_limit=True)
     ledger = RequestLedger(ledger_path)
+    if batch_plan_fingerprint is not None:
+        ledger.ensure_stage_meta_value(
+            stage=stage,
+            key="batch_plan_fingerprint",
+            value=batch_plan_fingerprint,
+        )
+    item_by_id = {item.item_id: item for item in items}
+    planned_batches = (
+        planned_batches
+        if planned_batches is not None
+        else batch_items(items, max_batch_size=max_batch_size, unique_instrument_limit=True)
+    )
+    _validate_planned_batches(
+        stage=stage,
+        items_by_id=item_by_id,
+        planned_batches=planned_batches,
+        max_batch_size=max_batch_size,
+    )
     ledger.enqueue(items, planned_batches)
+    if batch_plan_fingerprint is not None:
+        _append_log(
+            request_log_path,
+            ledger,
+            {
+                "event": "batch_plan_created",
+                "stage": stage,
+                "batch_plan_fingerprint": batch_plan_fingerprint,
+                "planned_batch_count": len(planned_batches),
+                "planned_item_count": len(items),
+            },
+        )
 
     requeued_stale = ledger.requeue_stale_running()
     if requeued_stale:
@@ -148,6 +181,7 @@ def run_api_batches(
         min_seconds_between_requests=min_seconds_between_requests,
         min_seconds_between_request_starts_total=min_seconds_between_request_starts_total,
         provider_factory=provider_factory,
+        planned_batch_metrics=planned_batch_metrics,
     )
 
     ledger.clear_runtime_halt(stage=stage)
@@ -389,6 +423,7 @@ def _execute_claimed_batch(
                 "headers": response.metadata.headers,
                 "scheduled_start_utc": _format_utc_timestamp(scheduled_start_utc),
                 "actual_request_started_utc": _format_utc_timestamp(actual_request_started_utc),
+                **_planned_metrics_payload(worker_config, batch.batch_id),
             },
         )
         if daily_limit_likely_exhausted(response.metadata.headers):
@@ -463,6 +498,7 @@ def _execute_claimed_batch(
                     "unresolved_identifiers": error_details["unresolved_identifiers"],
                     "scheduled_start_utc": _format_utc_timestamp(scheduled_start_utc),
                     "actual_request_started_utc": _format_utc_timestamp(actual_request_started_utc),
+                    **_planned_metrics_payload(worker_config, batch.batch_id),
                 },
             )
             return
@@ -497,6 +533,7 @@ def _execute_claimed_batch(
                 "split_batch": policy["split_batch"],
                 "scheduled_start_utc": _format_utc_timestamp(scheduled_start_utc),
                 "actual_request_started_utc": _format_utc_timestamp(actual_request_started_utc),
+                **_planned_metrics_payload(worker_config, batch.batch_id),
             },
         )
         if policy["defer_stage"]:
@@ -539,6 +576,7 @@ def _execute_claimed_batch(
                     "exception_message": str(exc),
                     "scheduled_start_utc": _format_utc_timestamp(scheduled_start_utc),
                     "actual_request_started_utc": _format_utc_timestamp(actual_request_started_utc),
+                    **_planned_metrics_payload(worker_config, batch.batch_id),
                 },
             )
             return
@@ -703,6 +741,12 @@ def _append_log(request_log_path: Path, ledger: RequestLedger, payload: dict[str
     )
 
 
+def _planned_metrics_payload(worker_config: _WorkerConfig, batch_id: str) -> dict[str, Any]:
+    if worker_config.planned_batch_metrics is None:
+        return {}
+    return dict(worker_config.planned_batch_metrics.get(batch_id, {}))
+
+
 def _format_utc_timestamp(value: dt.datetime | None) -> str | None:
     if value is None:
         return None
@@ -729,3 +773,39 @@ def _build_child_batches(batch: Any, batch_items_rows: list[Any]) -> list[BatchD
         instruments=tuple(item.instrument for item in batch_items_rows),
     )
     return split_batch(parent)
+
+
+def _validate_planned_batches(
+    *,
+    stage: str,
+    items_by_id: dict[str, RequestItem],
+    planned_batches: list[BatchDefinition],
+    max_batch_size: int,
+) -> None:
+    seen_item_ids: set[str] = set()
+    for batch in planned_batches:
+        if batch.stage != stage:
+            raise ValueError(f"planned batch stage mismatch: expected {stage!r}, got {batch.stage!r}")
+        if not batch.item_ids:
+            raise ValueError(f"planned batch {batch.batch_id} is empty")
+        unknown_item_ids = [item_id for item_id in batch.item_ids if item_id not in items_by_id]
+        if unknown_item_ids:
+            raise ValueError(
+                f"planned batch {batch.batch_id} references unknown item_ids: {unknown_item_ids}"
+            )
+        unique_instruments = {
+            items_by_id[item_id].instrument
+            for item_id in batch.item_ids
+        }
+        if len(unique_instruments) > max_batch_size:
+            raise ValueError(
+                f"planned batch {batch.batch_id} exceeds max_batch_size={max_batch_size} "
+                f"with {len(unique_instruments)} unique instruments"
+            )
+        for item_id in batch.item_ids:
+            if item_id in seen_item_ids:
+                raise ValueError(f"planned item_id {item_id!r} appears in multiple batches")
+            seen_item_ids.add(item_id)
+    missing_item_ids = sorted(set(items_by_id) - seen_item_ids)
+    if missing_item_ids:
+        raise ValueError(f"planned batches did not cover all items: {missing_item_ids}")

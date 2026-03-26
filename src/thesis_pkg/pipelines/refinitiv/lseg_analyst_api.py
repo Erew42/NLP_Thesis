@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime as dt
 from pathlib import Path
 from typing import Any
 
@@ -25,7 +26,16 @@ from thesis_pkg.pipelines.refinitiv.lseg_api_common import (
     write_parquet_atomic as _write_parquet_atomic,
 )
 from thesis_pkg.pipelines.refinitiv.lseg_api_execution import run_api_batches
-from thesis_pkg.pipelines.refinitiv.lseg_batching import RequestItem, stable_hash_id
+from thesis_pkg.pipelines.refinitiv.lseg_batching import (
+    IntervalBatchPlan,
+    IntervalBatchPlannerConfig,
+    RequestItem,
+    build_batch_definition,
+    plan_interval_batches,
+    request_signature,
+    stable_hash_id,
+)
+from thesis_pkg.pipelines.refinitiv.lseg_ledger import RequestLedger
 from thesis_pkg.pipelines.refinitiv.lseg_stage_audit import (
     audit_api_stage,
     default_stage_manifest_path,
@@ -38,6 +48,17 @@ from thesis_pkg.pipelines.refinitiv_bridge_pipeline import (
 
 ANALYST_ACTUALS_STAGE = "analyst_actuals"
 ANALYST_ESTIMATES_STAGE = "analyst_estimates_monthly"
+
+ANALYST_INTERVAL_BATCH_PLANNER_VERSION = "analyst_interval_batching_v1"
+_ANALYST_INTERVAL_SIGNATURE_EXCLUDED_PARAMETER_KEYS = ("SDate", "EDate")
+
+ANALYST_ACTUALS_DEFAULT_ROW_DENSITY_ROWS_PER_DAY = 1.0 / 91.0
+ANALYST_ACTUALS_DEFAULT_MAX_EXTRA_ROWS_ABS = 120.0
+ANALYST_ACTUALS_DEFAULT_MAX_EXTRA_ROWS_RATIO = 0.25
+
+ANALYST_ESTIMATES_DEFAULT_ROW_DENSITY_ROWS_PER_DAY = 1.0 / 30.5
+ANALYST_ESTIMATES_DEFAULT_MAX_EXTRA_ROWS_ABS = 240.0
+ANALYST_ESTIMATES_DEFAULT_MAX_EXTRA_ROWS_RATIO = 0.15
 
 ANALYST_ACTUALS_FIELDS: tuple[str, ...] = (
     "TR.EPSActValue",
@@ -82,6 +103,11 @@ def run_refinitiv_step1_analyst_actuals_api_pipeline(
     ledger_path: Path | str | None = None,
     request_log_path: Path | str | None = None,
     max_batch_size: int = 10,
+    max_batch_items: int | None = None,
+    max_extra_rows_abs: float | None = None,
+    max_extra_rows_ratio: float | None = None,
+    max_union_span_days: int | None = None,
+    row_density_rows_per_day: float | None = None,
     min_seconds_between_requests: float = 2.0,
     min_seconds_between_request_starts_total: float | None = None,
     max_attempts: int = 4,
@@ -105,6 +131,18 @@ def run_refinitiv_step1_analyst_actuals_api_pipeline(
         _request_group_schema(),
     ).select(ANALYST_REQUEST_GROUP_COLUMNS)
     items = _build_analyst_actuals_items(request_df)
+    planner_config = _resolve_interval_batch_config(
+        max_batch_size=max_batch_size,
+        max_batch_items=max_batch_items,
+        max_extra_rows_abs=max_extra_rows_abs,
+        max_extra_rows_ratio=max_extra_rows_ratio,
+        max_union_span_days=max_union_span_days,
+        row_density_rows_per_day=row_density_rows_per_day,
+        default_row_density_rows_per_day=ANALYST_ACTUALS_DEFAULT_ROW_DENSITY_ROWS_PER_DAY,
+        default_max_extra_rows_abs=ANALYST_ACTUALS_DEFAULT_MAX_EXTRA_ROWS_ABS,
+        default_max_extra_rows_ratio=ANALYST_ACTUALS_DEFAULT_MAX_EXTRA_ROWS_RATIO,
+    )
+    interval_plan = _plan_analyst_actuals_batches(items, config=planner_config)
     stage_run = run_api_batches(
         stage=ANALYST_ACTUALS_STAGE,
         items=items,
@@ -125,8 +163,11 @@ def run_refinitiv_step1_analyst_actuals_api_pipeline(
         split_after_attempt=2,
         retry_delay_seconds_fn=_retry_delay_seconds,
         max_workers=max_workers,
+        planned_batches=list(interval_plan.batches),
+        batch_plan_fingerprint=interval_plan.fingerprint,
+        planned_batch_metrics=interval_plan.batch_metrics_by_id,
     )
-    raw_df = _assemble_analyst_actuals_raw(stage_run.staging_dir)
+    raw_df = _assemble_analyst_actuals_raw(stage_run.staging_dir, ledger_path=stage_run.ledger_path)
     raw_path = output_dir / "refinitiv_analyst_actuals_raw.parquet"
     raw_candidate_path = _candidate_output_path(raw_path)
     _write_parquet_atomic(raw_df, raw_candidate_path)
@@ -142,7 +183,12 @@ def run_refinitiv_step1_analyst_actuals_api_pipeline(
         staging_dir=stage_run.staging_dir,
         output_artifacts={"analyst_actuals_raw_parquet": raw_candidate_path},
         declared_output_artifacts={"analyst_actuals_raw_parquet": raw_path},
-        rebuilders={"analyst_actuals_raw_parquet": lambda: _assemble_analyst_actuals_raw(stage_run.staging_dir)},
+        rebuilders={
+            "analyst_actuals_raw_parquet": lambda: _assemble_analyst_actuals_raw(
+                stage_run.staging_dir,
+                ledger_path=stage_run.ledger_path,
+            )
+        },
         expected_stage_manifest_path=manifest_path,
     )
     if not audit_result.passed:
@@ -161,6 +207,9 @@ def run_refinitiv_step1_analyst_actuals_api_pipeline(
         summary={
             "request_group_row_count": int(request_df.height),
             "request_item_count": len(items),
+            "planned_batch_count": len(interval_plan.batches),
+            "batch_plan_fingerprint": interval_plan.fingerprint,
+            "batching_config": planner_config.to_serializable_dict(),
             "raw_row_count": int(raw_df.height),
             "run_session_id": stage_run.run_session_id,
         },
@@ -182,6 +231,11 @@ def run_refinitiv_step1_analyst_estimates_monthly_api_pipeline(
     ledger_path: Path | str | None = None,
     request_log_path: Path | str | None = None,
     max_batch_size: int = 10,
+    max_batch_items: int | None = None,
+    max_extra_rows_abs: float | None = None,
+    max_extra_rows_ratio: float | None = None,
+    max_union_span_days: int | None = None,
+    row_density_rows_per_day: float | None = None,
     min_seconds_between_requests: float = 2.0,
     min_seconds_between_request_starts_total: float | None = None,
     max_attempts: int = 4,
@@ -205,6 +259,18 @@ def run_refinitiv_step1_analyst_estimates_monthly_api_pipeline(
         _request_group_schema(),
     ).select(ANALYST_REQUEST_GROUP_COLUMNS)
     items = _build_analyst_estimate_items(request_df)
+    planner_config = _resolve_interval_batch_config(
+        max_batch_size=max_batch_size,
+        max_batch_items=max_batch_items,
+        max_extra_rows_abs=max_extra_rows_abs,
+        max_extra_rows_ratio=max_extra_rows_ratio,
+        max_union_span_days=max_union_span_days,
+        row_density_rows_per_day=row_density_rows_per_day,
+        default_row_density_rows_per_day=ANALYST_ESTIMATES_DEFAULT_ROW_DENSITY_ROWS_PER_DAY,
+        default_max_extra_rows_abs=ANALYST_ESTIMATES_DEFAULT_MAX_EXTRA_ROWS_ABS,
+        default_max_extra_rows_ratio=ANALYST_ESTIMATES_DEFAULT_MAX_EXTRA_ROWS_RATIO,
+    )
+    interval_plan = _plan_analyst_estimate_batches(items, config=planner_config)
     stage_run = run_api_batches(
         stage=ANALYST_ESTIMATES_STAGE,
         items=items,
@@ -225,8 +291,11 @@ def run_refinitiv_step1_analyst_estimates_monthly_api_pipeline(
         split_after_attempt=2,
         retry_delay_seconds_fn=_retry_delay_seconds,
         max_workers=max_workers,
+        planned_batches=list(interval_plan.batches),
+        batch_plan_fingerprint=interval_plan.fingerprint,
+        planned_batch_metrics=interval_plan.batch_metrics_by_id,
     )
-    raw_df = _assemble_analyst_estimates_raw(stage_run.staging_dir)
+    raw_df = _assemble_analyst_estimates_raw(stage_run.staging_dir, ledger_path=stage_run.ledger_path)
     raw_path = output_dir / "refinitiv_analyst_estimates_monthly_raw.parquet"
     raw_candidate_path = _candidate_output_path(raw_path)
     _write_parquet_atomic(raw_df, raw_candidate_path)
@@ -242,7 +311,12 @@ def run_refinitiv_step1_analyst_estimates_monthly_api_pipeline(
         staging_dir=stage_run.staging_dir,
         output_artifacts={"analyst_estimates_raw_parquet": raw_candidate_path},
         declared_output_artifacts={"analyst_estimates_raw_parquet": raw_path},
-        rebuilders={"analyst_estimates_raw_parquet": lambda: _assemble_analyst_estimates_raw(stage_run.staging_dir)},
+        rebuilders={
+            "analyst_estimates_raw_parquet": lambda: _assemble_analyst_estimates_raw(
+                stage_run.staging_dir,
+                ledger_path=stage_run.ledger_path,
+            )
+        },
         expected_stage_manifest_path=manifest_path,
     )
     if not audit_result.passed:
@@ -261,6 +335,9 @@ def run_refinitiv_step1_analyst_estimates_monthly_api_pipeline(
         summary={
             "request_group_row_count": int(request_df.height),
             "request_item_count": len(items),
+            "planned_batch_count": len(interval_plan.batches),
+            "batch_plan_fingerprint": interval_plan.fingerprint,
+            "batching_config": planner_config.to_serializable_dict(),
             "raw_row_count": int(raw_df.height),
             "run_session_id": stage_run.run_session_id,
         },
@@ -274,8 +351,16 @@ def run_refinitiv_step1_analyst_estimates_monthly_api_pipeline(
     return result
 
 
-def _assemble_analyst_actuals_raw(staging_dir: Path) -> pl.DataFrame:
-    staging_paths = sorted(staging_dir.glob("*.parquet"))
+def _assemble_analyst_actuals_raw(
+    staging_dir: Path,
+    *,
+    ledger_path: Path | str | None = None,
+) -> pl.DataFrame:
+    staging_paths = _resolved_stage_output_paths(
+        stage=ANALYST_ACTUALS_STAGE,
+        staging_dir=staging_dir,
+        ledger_path=ledger_path,
+    )
     raw_df = (
         pl.concat([pl.read_parquet(path) for path in staging_paths], how="vertical_relaxed")
         if staging_paths
@@ -288,8 +373,16 @@ def _assemble_analyst_actuals_raw(staging_dir: Path) -> pl.DataFrame:
     )
 
 
-def _assemble_analyst_estimates_raw(staging_dir: Path) -> pl.DataFrame:
-    staging_paths = sorted(staging_dir.glob("*.parquet"))
+def _assemble_analyst_estimates_raw(
+    staging_dir: Path,
+    *,
+    ledger_path: Path | str | None = None,
+) -> pl.DataFrame:
+    staging_paths = _resolved_stage_output_paths(
+        stage=ANALYST_ESTIMATES_STAGE,
+        staging_dir=staging_dir,
+        ledger_path=ledger_path,
+    )
     raw_df = (
         pl.concat([pl.read_parquet(path) for path in staging_paths], how="vertical_relaxed")
         if staging_paths
@@ -366,19 +459,23 @@ def _normalize_analyst_actuals_batch_response(items: list[Any], frame: pl.DataFr
         expected_fields=ANALYST_ACTUALS_FIELDS,
         field_aliases=ANALYST_ACTUALS_FIELD_ALIASES,
     )
-    rows_by_instrument: dict[str, list[tuple[int, dict[str, Any]]]] = {}
-    for idx, row in enumerate(normalized_frame.to_dicts()):
+    rows_by_instrument: dict[str, list[dict[str, Any]]] = {}
+    for row in normalized_frame.to_dicts():
         instrument = str(row.get("instrument")) if row.get("instrument") is not None else None
         if instrument is None:
             continue
-        rows_by_instrument.setdefault(instrument, []).append((idx, row))
+        rows_by_instrument.setdefault(instrument, []).append(row)
 
     rows: list[dict[str, Any]] = []
     for item in items:
         request_row = dict(item.payload["request_row"])
+        item_start_date, item_end_date = _item_window(item)
         matched_rows = rows_by_instrument.get(item.instrument, [])
-        for response_row_index, matched_row in matched_rows:
+        response_row_index = 0
+        for matched_row in matched_rows:
             announcement_date = _normalize_date_value(matched_row.get("TR.EPSActValue.date"))
+            if announcement_date is None or not (item_start_date <= announcement_date <= item_end_date):
+                continue
             fiscal_period_end = _normalize_date_value(matched_row.get("TR.EPSActValue.periodenddate"))
             actual_eps = _normalize_float_value(matched_row.get("TR.EPSActValue"))
             raw_fperiod = (
@@ -400,9 +497,7 @@ def _normalize_analyst_actuals_batch_response(items: list[Any], frame: pl.DataFr
                     "actual_eps": actual_eps,
                     "raw_fperiod": raw_fperiod,
                     "row_parse_status": (
-                        "MISSING_ANNOUNCEMENT_DATE"
-                        if announcement_date is None
-                        else "MISSING_ACTUAL_EPS"
+                        "MISSING_ACTUAL_EPS"
                         if actual_eps is None
                         else "MISSING_FISCAL_PERIOD_END"
                         if fiscal_period_end is None
@@ -410,6 +505,7 @@ def _normalize_analyst_actuals_batch_response(items: list[Any], frame: pl.DataFr
                     ),
                 }
             )
+            response_row_index += 1
     if not rows:
         return pl.DataFrame(schema=_actuals_raw_schema())
     return _cast_df_to_schema(
@@ -424,19 +520,23 @@ def _normalize_analyst_estimates_batch_response(items: list[Any], frame: pl.Data
         expected_fields=ANALYST_ESTIMATES_FIELDS,
         field_aliases=ANALYST_ESTIMATES_FIELD_ALIASES,
     )
-    rows_by_instrument: dict[str, list[tuple[int, dict[str, Any]]]] = {}
-    for idx, row in enumerate(normalized_frame.to_dicts()):
+    rows_by_instrument: dict[str, list[dict[str, Any]]] = {}
+    for row in normalized_frame.to_dicts():
         instrument = str(row.get("instrument")) if row.get("instrument") is not None else None
         if instrument is None:
             continue
-        rows_by_instrument.setdefault(instrument, []).append((idx, row))
+        rows_by_instrument.setdefault(instrument, []).append(row)
 
     rows: list[dict[str, Any]] = []
     for item in items:
         request_row = dict(item.payload["request_row"])
+        item_start_date, item_end_date = _item_window(item)
         matched_rows = rows_by_instrument.get(item.instrument, [])
-        for response_row_index, matched_row in matched_rows:
+        response_row_index = 0
+        for matched_row in matched_rows:
             calc_date = _normalize_date_value(matched_row.get("TR.EPSMean.calcdate"))
+            if calc_date is None or not (item_start_date <= calc_date <= item_end_date):
+                continue
             fiscal_period_end = _normalize_date_value(matched_row.get("TR.EPSMean.periodenddate"))
             forecast_consensus_mean = _normalize_float_value(matched_row.get("TR.EPSMean"))
             forecast_dispersion = _normalize_float_value(matched_row.get("TR.EPSStdDev"))
@@ -455,9 +555,7 @@ def _normalize_analyst_estimates_batch_response(items: list[Any], frame: pl.Data
             ):
                 continue
             row_parse_status = (
-                "MISSING_CALC_DATE"
-                if calc_date is None
-                else "MISSING_FISCAL_PERIOD_END"
+                "MISSING_FISCAL_PERIOD_END"
                 if fiscal_period_end is None
                 else "MISSING_CONSENSUS_MEAN"
                 if forecast_consensus_mean is None
@@ -480,12 +578,142 @@ def _normalize_analyst_estimates_batch_response(items: list[Any], frame: pl.Data
                     "row_parse_status": row_parse_status,
                 }
             )
+            response_row_index += 1
     if not rows:
         return pl.DataFrame(schema=_estimates_raw_schema())
     return _cast_df_to_schema(
         pl.DataFrame(rows, schema=_estimates_raw_schema()),
         _estimates_raw_schema(),
     )
+
+
+def _resolve_interval_batch_config(
+    *,
+    max_batch_size: int,
+    max_batch_items: int | None,
+    max_extra_rows_abs: float | None,
+    max_extra_rows_ratio: float | None,
+    max_union_span_days: int | None,
+    row_density_rows_per_day: float | None,
+    default_row_density_rows_per_day: float,
+    default_max_extra_rows_abs: float,
+    default_max_extra_rows_ratio: float,
+) -> IntervalBatchPlannerConfig:
+    return IntervalBatchPlannerConfig(
+        max_batch_size=max_batch_size,
+        max_batch_items=max_batch_size if max_batch_items is None else max_batch_items,
+        max_extra_rows_abs=(
+            default_max_extra_rows_abs
+            if max_extra_rows_abs is None
+            else max_extra_rows_abs
+        ),
+        max_extra_rows_ratio=(
+            default_max_extra_rows_ratio
+            if max_extra_rows_ratio is None
+            else max_extra_rows_ratio
+        ),
+        max_union_span_days=max_union_span_days,
+        row_density_rows_per_day=(
+            default_row_density_rows_per_day
+            if row_density_rows_per_day is None
+            else row_density_rows_per_day
+        ),
+    )
+
+
+def _plan_analyst_actuals_batches(
+    items: list[RequestItem],
+    *,
+    config: IntervalBatchPlannerConfig,
+) -> IntervalBatchPlan:
+    return plan_interval_batches(
+        items,
+        config=config,
+        planner_version=ANALYST_INTERVAL_BATCH_PLANNER_VERSION,
+        signature_fn=_analyst_interval_signature,
+        interval_fn=_item_window,
+        batch_builder=_build_analyst_actuals_interval_batch,
+    )
+
+
+def _plan_analyst_estimate_batches(
+    items: list[RequestItem],
+    *,
+    config: IntervalBatchPlannerConfig,
+) -> IntervalBatchPlan:
+    return plan_interval_batches(
+        items,
+        config=config,
+        planner_version=ANALYST_INTERVAL_BATCH_PLANNER_VERSION,
+        signature_fn=_analyst_interval_signature,
+        interval_fn=_item_window,
+        batch_builder=_build_analyst_estimates_interval_batch,
+    )
+
+
+def _analyst_interval_signature(item: RequestItem) -> str:
+    return request_signature(
+        stage=item.stage,
+        fields=item.fields,
+        parameters=item.parameters,
+        excluded_parameter_keys=_ANALYST_INTERVAL_SIGNATURE_EXCLUDED_PARAMETER_KEYS,
+    )
+
+
+def _item_window(item: Any) -> tuple[dt.date, dt.date]:
+    start_text = item.parameters.get("SDate")
+    end_text = item.parameters.get("EDate")
+    if not start_text or not end_text:
+        raise ValueError(f"missing interval parameters for item_id={item.item_id}")
+    return (dt.date.fromisoformat(str(start_text)), dt.date.fromisoformat(str(end_text)))
+
+
+def _build_analyst_actuals_interval_batch(
+    items: list[RequestItem],
+    start_date: dt.date,
+    end_date: dt.date,
+) -> Any:
+    start_text = start_date.isoformat()
+    end_text = end_date.isoformat()
+    return build_batch_definition(
+        items,
+        batch_key=f"{start_text}|{end_text}",
+        parameters={"Frq": "FQ", "Period": "FI0", "SDate": start_text, "EDate": end_text},
+    )
+
+
+def _build_analyst_estimates_interval_batch(
+    items: list[RequestItem],
+    start_date: dt.date,
+    end_date: dt.date,
+) -> Any:
+    periods = {str(item.parameters.get("Period")) for item in items}
+    if len(periods) != 1:
+        raise ValueError(f"analyst estimate batch contains mixed request periods: {sorted(periods)}")
+    request_period = next(iter(periods))
+    start_text = start_date.isoformat()
+    end_text = end_date.isoformat()
+    return build_batch_definition(
+        items,
+        batch_key=f"{start_text}|{end_text}|{request_period}",
+        parameters={"Frq": "M", "Period": request_period, "SDate": start_text, "EDate": end_text},
+    )
+
+
+def _resolved_stage_output_paths(
+    *,
+    stage: str,
+    staging_dir: Path,
+    ledger_path: Path | str | None,
+) -> list[Path]:
+    if ledger_path is None:
+        return sorted(staging_dir.glob("*.parquet"))
+    ledger = RequestLedger(ledger_path)
+    paths = []
+    for path in ledger.succeeded_stage_output_paths(stage=stage):
+        if path.exists():
+            paths.append(path)
+    return paths
 
 
 __all__ = [
