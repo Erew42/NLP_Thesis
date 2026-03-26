@@ -285,9 +285,33 @@ def _normalize_group_list(values: set[str]) -> list[str]:
     return sorted(value for value in values if value)
 
 
+def _clip_start_expr(column_name: str, bound: dt.date | None) -> pl.Expr:
+    expr = pl.col(column_name)
+    if bound is None:
+        return expr
+    return pl.when(expr.is_not_null() & expr.lt(pl.lit(bound))).then(pl.lit(bound)).otherwise(expr)
+
+
+def _clip_end_expr(column_name: str, bound: dt.date | None) -> pl.Expr:
+    expr = pl.col(column_name)
+    if bound is None:
+        return expr
+    return pl.when(expr.is_not_null() & expr.gt(pl.lit(bound))).then(pl.lit(bound)).otherwise(expr)
+
+
 def build_refinitiv_step1_analyst_request_groups(
     instrument_authority_df: pl.DataFrame,
+    *,
+    request_min_date: dt.date | None = None,
+    request_max_date: dt.date | None = None,
 ) -> tuple[pl.DataFrame, pl.DataFrame]:
+    if (
+        request_min_date is not None
+        and request_max_date is not None
+        and request_min_date > request_max_date
+    ):
+        raise ValueError("request_min_date must be <= request_max_date")
+
     authority_schema = {
         "bridge_row_id": pl.Utf8,
         "KYPERMNO": pl.Int32,
@@ -338,9 +362,37 @@ def build_refinitiv_step1_analyst_request_groups(
             (pl.col("bridge_end_date_max") + pl.duration(days=120)).alias("actuals_request_end_date"),
             (pl.col("bridge_start_date_min") - pl.duration(days=270)).alias("estimates_request_start_date"),
             (pl.col("bridge_end_date_max") + pl.duration(days=31)).alias("estimates_request_end_date"),
-            pl.lit(True).alias("retrieval_eligible"),
-            pl.lit(None, dtype=pl.Utf8).alias("retrieval_exclusion_reason"),
         )
+        .with_columns(
+            _clip_start_expr("actuals_request_start_date", request_min_date).alias("actuals_request_start_date"),
+            _clip_end_expr("actuals_request_end_date", request_max_date).alias("actuals_request_end_date"),
+            _clip_start_expr("estimates_request_start_date", request_min_date).alias("estimates_request_start_date"),
+            _clip_end_expr("estimates_request_end_date", request_max_date).alias("estimates_request_end_date"),
+        )
+        .with_columns(
+            (pl.col("actuals_request_start_date") > pl.col("actuals_request_end_date")).fill_null(False).alias(
+                "_actuals_window_outside_bounds"
+            ),
+            (pl.col("estimates_request_start_date") > pl.col("estimates_request_end_date")).fill_null(False).alias(
+                "_estimates_window_outside_bounds"
+            ),
+        )
+        .with_columns(
+            (
+                ~(
+                    pl.col("_actuals_window_outside_bounds") | pl.col("_estimates_window_outside_bounds")
+                )
+            ).alias("retrieval_eligible"),
+            pl.when(pl.col("_actuals_window_outside_bounds") & pl.col("_estimates_window_outside_bounds"))
+            .then(pl.lit("actuals_and_estimates_windows_outside_request_bounds"))
+            .when(pl.col("_actuals_window_outside_bounds"))
+            .then(pl.lit("actuals_window_outside_request_bounds"))
+            .when(pl.col("_estimates_window_outside_bounds"))
+            .then(pl.lit("estimates_window_outside_request_bounds"))
+            .otherwise(pl.lit(None, dtype=pl.Utf8))
+            .alias("retrieval_exclusion_reason"),
+        )
+        .drop("_actuals_window_outside_bounds", "_estimates_window_outside_bounds")
         .sort("request_group_id")
     )
     request_group_df = _cast_df_to_schema(
@@ -354,12 +406,18 @@ def run_refinitiv_step1_analyst_request_groups_pipeline(
     *,
     instrument_authority_artifact_path: Path | str,
     output_dir: Path | str,
+    request_min_date: dt.date | None = None,
+    request_max_date: dt.date | None = None,
 ) -> dict[str, Path]:
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     instrument_authority_df = pl.read_parquet(instrument_authority_artifact_path)
-    membership_df, request_group_df = build_refinitiv_step1_analyst_request_groups(instrument_authority_df)
+    membership_df, request_group_df = build_refinitiv_step1_analyst_request_groups(
+        instrument_authority_df,
+        request_min_date=request_min_date,
+        request_max_date=request_max_date,
+    )
 
     membership_path = output_dir / "refinitiv_analyst_request_group_membership_common_stock.parquet"
     request_group_path = output_dir / "refinitiv_analyst_request_universe_common_stock.parquet"

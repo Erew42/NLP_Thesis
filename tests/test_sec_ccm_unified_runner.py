@@ -69,11 +69,11 @@ def test_new_analyst_step1_booleans_exist_and_default_false() -> None:
     source = runner_path.read_text(encoding="utf-8")
 
     expected_defaults = [
-        'RUN_REFINITIV_INSTRUMENT_AUTHORITY = _env_bool(\n        "SEC_CCM_RUN_REFINITIV_INSTRUMENT_AUTHORITY",\n        False,',
-        'RUN_REFINITIV_ANALYST_REQUEST_GROUPS = _env_bool(\n        "SEC_CCM_RUN_REFINITIV_ANALYST_REQUEST_GROUPS",\n        False,',
-        'RUN_REFINITIV_ANALYST_ACTUALS = _env_bool(\n        "SEC_CCM_RUN_REFINITIV_ANALYST_ACTUALS",\n        False,',
-        'RUN_REFINITIV_ANALYST_ESTIMATES_MONTHLY = _env_bool(\n        "SEC_CCM_RUN_REFINITIV_ANALYST_ESTIMATES_MONTHLY",\n        False,',
-        'RUN_REFINITIV_ANALYST_NORMALIZE = _env_bool(\n        "SEC_CCM_RUN_REFINITIV_ANALYST_NORMALIZE",\n        False,',
+        'RUN_REFINITIV_INSTRUMENT_AUTHORITY = _env_bool(\n        "SEC_CCM_RUN_REFINITIV_INSTRUMENT_AUTHORITY",\n        True,',
+        'RUN_REFINITIV_ANALYST_REQUEST_GROUPS = _env_bool(\n        "SEC_CCM_RUN_REFINITIV_ANALYST_REQUEST_GROUPS",\n        True,',
+        'RUN_REFINITIV_ANALYST_ACTUALS = _env_bool(\n        "SEC_CCM_RUN_REFINITIV_ANALYST_ACTUALS",\n        True,',
+        'RUN_REFINITIV_ANALYST_ESTIMATES_MONTHLY = _env_bool(\n        "SEC_CCM_RUN_REFINITIV_ANALYST_ESTIMATES_MONTHLY",\n        True,',
+        'RUN_REFINITIV_ANALYST_NORMALIZE = _env_bool(\n        "SEC_CCM_RUN_REFINITIV_ANALYST_NORMALIZE",\n        True,',
     ]
 
     for snippet in expected_defaults:
@@ -150,6 +150,40 @@ def test_env_list_and_bool_helpers(monkeypatch: MonkeyPatch) -> None:
     assert runner._env_optional_bool("TEST_OPTIONAL_BOOL", False) is None
     assert runner._env_str_list("TEST_STR_LIST", ["x"]) == ["a", "b"]
     assert runner._env_int_list("TEST_INT_LIST", [1]) == [1993, 1994]
+
+
+def test_env_optional_date_helper(monkeypatch: MonkeyPatch) -> None:
+    monkeypatch.setenv("TEST_OPTIONAL_DATE", "2024-12-31")
+    monkeypatch.setenv("TEST_OPTIONAL_DATE_NONE", "none")
+
+    assert runner._env_optional_date("TEST_OPTIONAL_DATE", None) == runner.dt.date(2024, 12, 31)
+    assert runner._env_optional_date("TEST_OPTIONAL_DATE_NONE", runner.dt.date(2024, 1, 1)) is None
+
+
+def test_runner_exposes_lseg_request_bound_env_defaults() -> None:
+    runner_path = Path("src/thesis_pkg/notebooks_and_scripts/sec_ccm_unified_runner.py")
+    source = runner_path.read_text(encoding="utf-8")
+
+    assert 'LSEG_REQUEST_MIN_DATE = _env_optional_date(\n        "SEC_CCM_LSEG_REQUEST_MIN_DATE",\n        dt.date(1994, 1, 1),' in source
+    assert 'LSEG_REQUEST_MAX_DATE = _env_optional_date(\n        "SEC_CCM_LSEG_REQUEST_MAX_DATE",\n        dt.date(2024, 12, 31),' in source
+
+
+def test_runner_passes_lseg_request_bounds_to_request_building_stages() -> None:
+    runner_path = Path("src/thesis_pkg/notebooks_and_scripts/sec_ccm_unified_runner.py")
+    source = runner_path.read_text(encoding="utf-8")
+
+    assert "request_min_date=LSEG_REQUEST_MIN_DATE" in source
+    assert "request_max_date=LSEG_REQUEST_MAX_DATE" in source
+
+
+def test_notebook_config_exports_lseg_request_bound_env_keys() -> None:
+    notebook_path = Path("src/thesis_pkg/notebooks_and_scripts/sec_ccm_unified_runner.ipynb")
+    source = notebook_path.read_text(encoding="utf-8")
+
+    assert 'LSEG_REQUEST_MIN_DATE = \\"1994-01-01\\"  # ISO date | None' in source
+    assert 'LSEG_REQUEST_MAX_DATE = \\"2024-12-31\\"  # ISO date | None' in source
+    assert '"    \\"SEC_CCM_LSEG_REQUEST_MIN_DATE\\": LSEG_REQUEST_MIN_DATE,\\n"' in source
+    assert '"    \\"SEC_CCM_LSEG_REQUEST_MAX_DATE\\": LSEG_REQUEST_MAX_DATE,\\n"' in source
 
 
 def test_print_rows_table_uses_tabular_ascii_output(capsys) -> None:

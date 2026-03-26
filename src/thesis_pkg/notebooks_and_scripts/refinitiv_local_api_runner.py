@@ -199,6 +199,11 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--provider-timeout-seconds", type=float, default=None)
     parser.add_argument("--lookup-batch-size", type=int, default=25)
     parser.add_argument("--ownership-batch-size", type=int, default=10)
+    parser.add_argument("--ownership-max-batch-items", type=int, default=None)
+    parser.add_argument("--ownership-max-extra-rows-abs", type=float, default=None)
+    parser.add_argument("--ownership-max-extra-rows-ratio", type=float, default=None)
+    parser.add_argument("--ownership-max-union-span-days", type=int, default=None)
+    parser.add_argument("--ownership-row-density-rows-per-day", type=float, default=None)
     parser.add_argument("--analyst-actuals-batch-size", type=int, default=10)
     parser.add_argument("--analyst-estimates-batch-size", type=int, default=10)
     parser.add_argument("--analyst-actuals-max-batch-items", type=int, default=None)
@@ -620,6 +625,11 @@ def _run_stage(stage: str, args: argparse.Namespace, paths: RunPaths) -> dict[st
                 handoff_parquet_path=paths.ownership_handoff_parquet,
                 output_dir=paths.ownership_universe_dir,
                 max_batch_size=args.ownership_batch_size,
+                max_batch_items=args.ownership_max_batch_items,
+                max_extra_rows_abs=args.ownership_max_extra_rows_abs,
+                max_extra_rows_ratio=args.ownership_max_extra_rows_ratio,
+                max_union_span_days=args.ownership_max_union_span_days,
+                row_density_rows_per_day=args.ownership_row_density_rows_per_day,
                 min_seconds_between_requests=args.min_seconds_between_requests,
                 min_seconds_between_request_starts_total=args.min_seconds_between_request_starts_total,
                 max_attempts=args.max_attempts,
@@ -787,6 +797,11 @@ def _write_manifest(
         "batching": {
             "lookup_batch_size": args.lookup_batch_size,
             "ownership_batch_size": args.ownership_batch_size,
+            "ownership_max_batch_items": args.ownership_max_batch_items,
+            "ownership_max_extra_rows_abs": args.ownership_max_extra_rows_abs,
+            "ownership_max_extra_rows_ratio": args.ownership_max_extra_rows_ratio,
+            "ownership_max_union_span_days": args.ownership_max_union_span_days,
+            "ownership_row_density_rows_per_day": args.ownership_row_density_rows_per_day,
             "analyst_actuals_batch_size": args.analyst_actuals_batch_size,
             "analyst_actuals_max_batch_items": args.analyst_actuals_max_batch_items,
             "analyst_actuals_max_extra_rows_abs": args.analyst_actuals_max_extra_rows_abs,
@@ -842,12 +857,14 @@ def _audit_stage(stage: str, paths: RunPaths) -> StageAuditResult:
             },
             rebuilders={
                 "ownership_results_parquet": lambda: _assemble_ownership_universe_results(
-                    paths.ownership_universe_dir / "staging" / OWNERSHIP_UNIVERSE_STAGE
+                    paths.ownership_universe_dir / "staging" / OWNERSHIP_UNIVERSE_STAGE,
+                    ledger_path=paths.ownership_universe_dir / "refinitiv_ownership_universe_api_ledger.sqlite3",
                 ),
                 "ownership_row_summary_parquet": lambda: build_refinitiv_ownership_universe_row_summary(
                     handoff_df,
                     _assemble_ownership_universe_results(
-                        paths.ownership_universe_dir / "staging" / OWNERSHIP_UNIVERSE_STAGE
+                        paths.ownership_universe_dir / "staging" / OWNERSHIP_UNIVERSE_STAGE,
+                        ledger_path=paths.ownership_universe_dir / "refinitiv_ownership_universe_api_ledger.sqlite3",
                     ),
                 ),
             },
@@ -891,7 +908,11 @@ def _audit_stage(stage: str, paths: RunPaths) -> StageAuditResult:
                 "exact_raw_parquet": paths.exact_raw_parquet,
             },
             rebuilders={
-                "exact_raw_parquet": lambda: _assemble_doc_raw(paths.doc_ownership_dir / "staging" / DOC_EXACT_STAGE)
+                "exact_raw_parquet": lambda: _assemble_doc_raw(
+                    paths.doc_ownership_dir / "staging" / DOC_EXACT_STAGE,
+                    ledger_path=paths.doc_ownership_dir / "refinitiv_doc_ownership_exact_api_ledger.sqlite3",
+                    stage=DOC_EXACT_STAGE,
+                )
             },
             expected_stage_manifest_path=paths.doc_exact_stage_manifest_path,
         )
@@ -906,7 +927,9 @@ def _audit_stage(stage: str, paths: RunPaths) -> StageAuditResult:
             },
             rebuilders={
                 "fallback_raw_parquet": lambda: _assemble_doc_raw(
-                    paths.doc_ownership_dir / "staging" / DOC_FALLBACK_STAGE
+                    paths.doc_ownership_dir / "staging" / DOC_FALLBACK_STAGE,
+                    ledger_path=paths.doc_ownership_dir / "refinitiv_doc_ownership_fallback_api_ledger.sqlite3",
+                    stage=DOC_FALLBACK_STAGE,
                 )
             },
             expected_stage_manifest_path=paths.doc_fallback_stage_manifest_path,

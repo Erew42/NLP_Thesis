@@ -87,6 +87,104 @@ def test_build_refinitiv_step1_analyst_request_groups_collapses_bridge_rows() ->
     assert row["actuals_request_end_date"] == dt.date(2021, 1, 28)
     assert row["estimates_request_start_date"] == dt.date(2019, 4, 6)
     assert row["estimates_request_end_date"] == dt.date(2020, 10, 31)
+    assert row["retrieval_eligible"] is True
+    assert row["retrieval_exclusion_reason"] is None
+
+
+def test_build_refinitiv_step1_analyst_request_groups_clips_to_request_bounds() -> None:
+    authority = pl.DataFrame(
+        {
+            "bridge_row_id": ["bridge-1"],
+            "KYPERMNO": [1],
+            "gvkey_int": [1000],
+            "gvkey_source_column": ["KYGVKEY_final"],
+            "first_seen_caldt": [dt.date(1994, 1, 15)],
+            "last_seen_caldt": [dt.date(2024, 11, 1)],
+            "effective_collection_ric": ["AAA.N"],
+            "effective_collection_ric_source": ["ISIN"],
+            "effective_resolution_status": ["ok"],
+            "authority_eligible": [True],
+            "authority_exclusion_reason": [None],
+        }
+    )
+
+    _, request_groups = build_refinitiv_step1_analyst_request_groups(
+        authority,
+        request_min_date=dt.date(1994, 1, 1),
+        request_max_date=dt.date(2024, 12, 31),
+    )
+
+    row = request_groups.row(0, named=True)
+    assert row["actuals_request_start_date"] == dt.date(1994, 1, 1)
+    assert row["actuals_request_end_date"] == dt.date(2024, 12, 31)
+    assert row["estimates_request_start_date"] == dt.date(1994, 1, 1)
+    assert row["estimates_request_end_date"] == dt.date(2024, 12, 2)
+    assert row["retrieval_eligible"] is True
+    assert row["retrieval_exclusion_reason"] is None
+
+
+def test_build_refinitiv_step1_analyst_request_groups_marks_out_of_bounds_windows_ineligible() -> None:
+    authority = pl.DataFrame(
+        {
+            "bridge_row_id": ["bridge-1"],
+            "KYPERMNO": [1],
+            "gvkey_int": [1000],
+            "gvkey_source_column": ["KYGVKEY_final"],
+            "first_seen_caldt": [dt.date(2030, 1, 1)],
+            "last_seen_caldt": [dt.date(2030, 1, 31)],
+            "effective_collection_ric": ["AAA.N"],
+            "effective_collection_ric_source": ["ISIN"],
+            "effective_resolution_status": ["ok"],
+            "authority_eligible": [True],
+            "authority_exclusion_reason": [None],
+        }
+    )
+
+    _, request_groups = build_refinitiv_step1_analyst_request_groups(
+        authority,
+        request_min_date=dt.date(1994, 1, 1),
+        request_max_date=dt.date(2024, 12, 31),
+    )
+
+    row = request_groups.row(0, named=True)
+    assert row["actuals_request_start_date"] == dt.date(2029, 12, 1)
+    assert row["actuals_request_end_date"] == dt.date(2024, 12, 31)
+    assert row["estimates_request_start_date"] == dt.date(2029, 4, 6)
+    assert row["estimates_request_end_date"] == dt.date(2024, 12, 31)
+    assert row["retrieval_eligible"] is False
+    assert row["retrieval_exclusion_reason"] == "actuals_and_estimates_windows_outside_request_bounds"
+
+
+def test_build_refinitiv_step1_analyst_request_groups_keeps_boundary_equality_eligible() -> None:
+    authority = pl.DataFrame(
+        {
+            "bridge_row_id": ["bridge-1"],
+            "KYPERMNO": [1],
+            "gvkey_int": [1000],
+            "gvkey_source_column": ["KYGVKEY_final"],
+            "first_seen_caldt": [dt.date(1994, 2, 1)],
+            "last_seen_caldt": [dt.date(1994, 1, 31)],
+            "effective_collection_ric": ["AAA.N"],
+            "effective_collection_ric_source": ["ISIN"],
+            "effective_resolution_status": ["ok"],
+            "authority_eligible": [True],
+            "authority_exclusion_reason": [None],
+        }
+    )
+
+    _, request_groups = build_refinitiv_step1_analyst_request_groups(
+        authority,
+        request_min_date=dt.date(1994, 1, 1),
+        request_max_date=dt.date(1994, 1, 1),
+    )
+
+    row = request_groups.row(0, named=True)
+    assert row["actuals_request_start_date"] == dt.date(1994, 1, 1)
+    assert row["actuals_request_end_date"] == dt.date(1994, 1, 1)
+    assert row["estimates_request_start_date"] == dt.date(1994, 1, 1)
+    assert row["estimates_request_end_date"] == dt.date(1994, 1, 1)
+    assert row["retrieval_eligible"] is True
+    assert row["retrieval_exclusion_reason"] is None
 
 
 def test_build_refinitiv_analyst_normalized_outputs_supports_unique_period_derivation() -> None:

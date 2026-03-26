@@ -580,11 +580,12 @@ def _execute_claimed_batch(
                 },
             )
             return
-        next_eligible_at_utc = (
-            utc_now() + dt.timedelta(seconds=worker_config.retry_delay_seconds_fn(batch.attempt_count))
-            if policy["state"] == LEDGER_RETRYABLE_ERROR
-            else None
-        )
+        next_eligible_at_utc = None
+        if policy["state"] == LEDGER_RETRYABLE_ERROR:
+            if error_details["error_kind"] != "unresolved_identifiers":
+                next_eligible_at_utc = utc_now() + dt.timedelta(
+                    seconds=worker_config.retry_delay_seconds_fn(batch.attempt_count)
+                )
         ledger.record_error(
             batch_id=batch.batch_id,
             next_state=policy["state"],

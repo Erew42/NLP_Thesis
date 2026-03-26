@@ -37,6 +37,11 @@ UNRESOLVED_IDENTIFIERS_RE = re.compile(
     r"Unable to resolve all requested identifiers in \[(?P<identifiers>.*?)\]\.",
     re.IGNORECASE,
 )
+FIELD_SPECIFIC_IDENTIFIER_FAILURE_RE = re.compile(
+    r"Unable to collect data for the field '.*?' and some specific identifier\(s\)\.\s*"
+    r"Requested universes:\s*\[(?P<identifiers>.*?)\]",
+    re.IGNORECASE | re.DOTALL,
+)
 
 class LsegProviderImportError(RuntimeError):
     pass
@@ -190,7 +195,10 @@ class LsegDataProvider:
             with warnings.catch_warnings():
                 warnings.filterwarnings(
                     "ignore",
-                    message=r"Downcasting behavior in `replace` is deprecated.*",
+                    message=(
+                        r"(Downcasting behavior in `replace` is deprecated.*|"
+                        r"Downcasting object dtype arrays on \.fillna, \.ffill, \.bfill is deprecated.*)"
+                    ),
                     category=FutureWarning,
                     module=r"lseg\.data\._tools\._dataframe",
                 )
@@ -393,11 +401,21 @@ def _coerce_int(value: Any) -> int | None:
 
 def _parse_unresolved_identifiers(message: str) -> tuple[str, ...]:
     match = UNRESOLVED_IDENTIFIERS_RE.search(message)
+    if match is not None:
+        return _parse_identifier_list(match.group("identifiers"))
+
+    match = FIELD_SPECIFIC_IDENTIFIER_FAILURE_RE.search(message)
     if match is None:
         return ()
-    raw_identifiers = match.group("identifiers").strip()
+
+    return _parse_identifier_list(match.group("identifiers"))
+
+
+def _parse_identifier_list(raw_identifiers: str) -> tuple[str, ...]:
+    raw_identifiers = raw_identifiers.strip()
     if not raw_identifiers:
         return ()
+
     identifiers: list[str] = []
     for token in raw_identifiers.split(","):
         normalized = token.strip().strip("'\"")

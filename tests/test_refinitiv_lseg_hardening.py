@@ -9,7 +9,14 @@ import polars as pl
 import pytest
 
 from thesis_pkg.pipelines.refinitiv import lseg_lookup_api
+from thesis_pkg.pipelines.refinitiv.doc_ownership import DOC_OWNERSHIP_RAW_COLUMNS
 from thesis_pkg.pipelines.refinitiv.lseg_analyst_api import _assemble_analyst_actuals_raw
+from thesis_pkg.pipelines.refinitiv.lseg_ownership_api import (
+    _assemble_doc_raw,
+    _assemble_ownership_universe_results,
+    DOC_EXACT_STAGE,
+    run_refinitiv_step1_ownership_universe_api_pipeline,
+)
 from thesis_pkg.pipelines.refinitiv.lseg_api_execution import run_api_batches
 from thesis_pkg.pipelines.refinitiv.lseg_batching import RequestItem, batch_items, build_batch_definition
 from thesis_pkg.pipelines.refinitiv.lseg_ledger import RequestLedger
@@ -26,6 +33,7 @@ from thesis_pkg.pipelines.refinitiv.lseg_recovery import (
 from thesis_pkg.pipelines.refinitiv.lseg_stage_audit import AuditIssue, StageAuditResult, audit_api_stage
 from thesis_pkg.pipeline import run_refinitiv_step1_lookup_api_pipeline
 from thesis_pkg.pipelines.refinitiv_bridge_pipeline import (
+    OWNERSHIP_UNIVERSE_HANDOFF_COLUMNS,
     RIC_LOOKUP_COLUMNS,
     build_refinitiv_lookup_extended_diagnostic_artifact,
 )
@@ -91,6 +99,44 @@ class EmptySuccessProvider:
                 fingerprint="ok",
             ),
         )
+
+
+def _ownership_handoff_row(
+    *,
+    lookup_row_id: str,
+    candidate_ric: str,
+    request_start_date: str,
+    request_end_date: str,
+) -> dict[str, Any]:
+    handoff_row = {name: None for name in OWNERSHIP_UNIVERSE_HANDOFF_COLUMNS}
+    handoff_row.update({
+        "bridge_row_id": lookup_row_id.replace("|", ":"),
+        "KYPERMNO": "1",
+        "CUSIP": "111111111",
+        "ISIN": "US1111111111",
+        "TICKER": "ALFA",
+        "first_seen_caldt": date.fromisoformat(request_start_date),
+        "last_seen_caldt": date.fromisoformat(request_end_date),
+        "accepted_ric": candidate_ric,
+        "accepted_ric_source": "ISIN",
+        "accepted_resolution_status": "resolved_from_isin",
+        "conventional_identity_conflict": False,
+        "ticker_candidate_available": False,
+        "effective_collection_ric": candidate_ric,
+        "effective_collection_ric_source": "ISIN",
+        "effective_resolution_status": "effective_from_accepted_ric",
+        "diagnostic_case_id": lookup_row_id.replace("|", ":"),
+        "candidate_slot": "UNIVERSE_EFFECTIVE",
+        "candidate_ric": candidate_ric,
+        "ownership_lookup_row_id": lookup_row_id,
+        "ownership_lookup_role": "UNIVERSE_EFFECTIVE",
+        "lookup_input": candidate_ric,
+        "lookup_input_source": "effective_collection_ric",
+        "request_start_date": request_start_date,
+        "request_end_date": request_end_date,
+        "retrieval_eligible": True,
+    })
+    return handoff_row
 
 
 def test_request_ledger_records_claim_and_stale_requeue_history(tmp_path: Path) -> None:
@@ -463,6 +509,245 @@ def test_assemble_analyst_actuals_raw_ignores_orphan_staging_when_ledger_is_prov
 
     assert rebuilt.height == 1
     assert rebuilt.item(0, "request_group_id") == "group-1"
+
+
+def test_ownership_universe_stage_fails_on_mismatched_batch_plan_resume(tmp_path: Path) -> None:
+    handoff_path = tmp_path / "handoff.parquet"
+    pl.DataFrame(
+        [
+            _ownership_handoff_row(
+                lookup_row_id="row-1|UNIVERSE_EFFECTIVE",
+                candidate_ric="AAA.N",
+                request_start_date="2024-01-01",
+                request_end_date="2024-01-31",
+            ),
+            _ownership_handoff_row(
+                lookup_row_id="row-2|UNIVERSE_EFFECTIVE",
+                candidate_ric="BBB.N",
+                request_start_date="2024-01-15",
+                request_end_date="2024-01-31",
+            ),
+        ]
+    ).write_parquet(handoff_path)
+    provider = EmptySuccessProvider()
+    ledger_path = tmp_path / "ownership.sqlite3"
+
+    run_refinitiv_step1_ownership_universe_api_pipeline(
+        handoff_parquet_path=handoff_path,
+        output_dir=tmp_path,
+        provider=provider,
+        ledger_path=ledger_path,
+        min_seconds_between_requests=0.0,
+    )
+
+    with pytest.raises(RuntimeError, match="batch_plan_fingerprint"):
+        run_refinitiv_step1_ownership_universe_api_pipeline(
+            handoff_parquet_path=handoff_path,
+            output_dir=tmp_path,
+            provider=provider,
+            ledger_path=ledger_path,
+            max_batch_items=1,
+            min_seconds_between_requests=0.0,
+        )
+
+
+def test_ownership_universe_stage_resumes_cleanly_with_matching_batch_plan(tmp_path: Path) -> None:
+    handoff_path = tmp_path / "handoff.parquet"
+    pl.DataFrame(
+        [
+            _ownership_handoff_row(
+                lookup_row_id="row-1|UNIVERSE_EFFECTIVE",
+                candidate_ric="AAA.N",
+                request_start_date="2024-01-01",
+                request_end_date="2024-01-31",
+            )
+        ]
+    ).write_parquet(handoff_path)
+    provider = EmptySuccessProvider()
+    ledger_path = tmp_path / "ownership.sqlite3"
+
+    run_refinitiv_step1_ownership_universe_api_pipeline(
+        handoff_parquet_path=handoff_path,
+        output_dir=tmp_path,
+        provider=provider,
+        ledger_path=ledger_path,
+        min_seconds_between_requests=0.0,
+    )
+    initial_call_count = len(provider.calls)
+
+    run_refinitiv_step1_ownership_universe_api_pipeline(
+        handoff_parquet_path=handoff_path,
+        output_dir=tmp_path,
+        provider=provider,
+        ledger_path=ledger_path,
+        min_seconds_between_requests=0.0,
+    )
+
+    assert len(provider.calls) == initial_call_count
+
+
+def test_assemble_ownership_universe_results_ignores_orphan_staging_when_ledger_is_provided(tmp_path: Path) -> None:
+    item = RequestItem(
+        item_id="item-1",
+        stage="ownership_universe",
+        instrument="AAA.N",
+        batch_key="2024-01-01|2024-01-31",
+        fields=(
+            "TR.CategoryOwnershipPct.Date",
+            "TR.CategoryOwnershipPct",
+            "TR.InstrStatTypeValue",
+        ),
+        parameters={"StatType": 7, "SDate": "2024-01-01", "EDate": "2024-01-31"},
+        payload={"handoff_row": {"ownership_lookup_row_id": "row-1|UNIVERSE_EFFECTIVE"}},
+    )
+    batch = build_batch_definition(
+        [item],
+        batch_key=item.batch_key,
+        parameters=item.parameters,
+    )
+    ledger_path = tmp_path / "ledger.sqlite3"
+    staging_dir = tmp_path / "staging" / "ownership_universe"
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    ledger = RequestLedger(ledger_path)
+    ledger.enqueue([item], [batch])
+    claimed = ledger.claim_next_batch(stage="ownership_universe")
+    assert claimed is not None
+    succeeded_path = staging_dir / f"{claimed.batch_id}.parquet"
+    succeeded_row = _ownership_handoff_row(
+        lookup_row_id="row-1|UNIVERSE_EFFECTIVE",
+        candidate_ric="AAA.N",
+        request_start_date="2024-01-01",
+        request_end_date="2024-01-31",
+    )
+    orphan_row = _ownership_handoff_row(
+        lookup_row_id="orphan|UNIVERSE_EFFECTIVE",
+        candidate_ric="ZZZ.N",
+        request_start_date="2024-01-01",
+        request_end_date="2024-01-31",
+    )
+    pl.DataFrame(
+        {
+            "item_id": ["item-1"],
+            **{name: [succeeded_row.get(name)] for name in OWNERSHIP_UNIVERSE_HANDOFF_COLUMNS},
+            "returned_ric": ["AAA.N"],
+            "returned_date": [date(2024, 1, 15)],
+            "returned_category": ["Holdings by Institutions"],
+            "returned_value": [55.0],
+        }
+    ).write_parquet(succeeded_path)
+    pl.DataFrame(
+        {
+            "item_id": ["orphan-item"],
+            **{name: [orphan_row.get(name)] for name in OWNERSHIP_UNIVERSE_HANDOFF_COLUMNS},
+            "returned_ric": ["ZZZ.N"],
+            "returned_date": [date(2024, 1, 20)],
+            "returned_category": ["Holdings by Institutions"],
+            "returned_value": [99.0],
+        }
+    ).write_parquet(staging_dir / "orphan.parquet")
+    ledger.record_success(
+        batch_id=claimed.batch_id,
+        row_count_by_item_id={"item-1": 1},
+        stage_output_path=succeeded_path,
+        response_fingerprint="ok",
+        headers={},
+        status_code=200,
+        latency_ms=1,
+        rows_returned=1,
+        response_bytes=10,
+    )
+
+    rebuilt = _assemble_ownership_universe_results(staging_dir, ledger_path=ledger_path)
+
+    assert rebuilt.height == 1
+    assert rebuilt.item(0, "ownership_lookup_row_id") == "row-1|UNIVERSE_EFFECTIVE"
+
+
+def test_assemble_doc_raw_ignores_orphan_staging_when_ledger_is_provided(tmp_path: Path) -> None:
+    item = RequestItem(
+        item_id="item-1",
+        stage=DOC_EXACT_STAGE,
+        instrument="AAA.N",
+        batch_key="2024-04-01",
+        fields=(
+            "TR.CategoryOwnershipPct.Date",
+            "TR.CategoryOwnershipPct",
+            "TR.InstrStatTypeValue",
+        ),
+        parameters={"StatType": 7, "SDate": "2024-04-01", "EDate": "2024-04-01"},
+        payload={"request_row": {"doc_id": "doc-1"}},
+    )
+    batch = build_batch_definition(
+        [item],
+        batch_key=item.batch_key,
+        parameters=item.parameters,
+    )
+    ledger_path = tmp_path / "ledger.sqlite3"
+    staging_dir = tmp_path / "staging" / DOC_EXACT_STAGE
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    ledger = RequestLedger(ledger_path)
+    ledger.enqueue([item], [batch])
+    claimed = ledger.claim_next_batch(stage=DOC_EXACT_STAGE)
+    assert claimed is not None
+    succeeded_path = staging_dir / f"{claimed.batch_id}.parquet"
+    succeeded_row = {
+        "item_id": "item-1",
+        "doc_id": "doc-1",
+        "filing_date": date(2024, 4, 15),
+        "KYPERMNO": "100",
+        "authoritative_ric": "AAA.N",
+        "authority_decision_status": "STATIC_CONVENTIONAL",
+        "target_quarter_end": date(2024, 3, 31),
+        "target_effective_date": date(2024, 4, 1),
+        "request_stage": "EXACT",
+        "response_date": date(2024, 4, 1),
+        "response_date_is_imputed": False,
+        "returned_category": "Holdings by Institutions",
+        "returned_category_normalized": "Holdings by Institutions",
+        "returned_value": 55.0,
+        "is_institutional_category": True,
+    }
+    orphan_row = {
+        "item_id": "orphan-item",
+        "doc_id": "orphan-doc",
+        "filing_date": date(2024, 4, 15),
+        "KYPERMNO": "999",
+        "authoritative_ric": "ZZZ.N",
+        "authority_decision_status": "STATIC_CONVENTIONAL",
+        "target_quarter_end": date(2024, 3, 31),
+        "target_effective_date": date(2024, 4, 1),
+        "request_stage": "EXACT",
+        "response_date": date(2024, 4, 1),
+        "response_date_is_imputed": False,
+        "returned_category": "Holdings by Institutions",
+        "returned_category_normalized": "Holdings by Institutions",
+        "returned_value": 99.0,
+        "is_institutional_category": True,
+    }
+    pl.DataFrame([succeeded_row]).select(["item_id", *DOC_OWNERSHIP_RAW_COLUMNS]).write_parquet(succeeded_path)
+    pl.DataFrame([orphan_row]).select(["item_id", *DOC_OWNERSHIP_RAW_COLUMNS]).write_parquet(
+        staging_dir / "orphan.parquet"
+    )
+    ledger.record_success(
+        batch_id=claimed.batch_id,
+        row_count_by_item_id={"item-1": 1},
+        stage_output_path=succeeded_path,
+        response_fingerprint="ok",
+        headers={},
+        status_code=200,
+        latency_ms=1,
+        rows_returned=1,
+        response_bytes=10,
+    )
+
+    rebuilt = _assemble_doc_raw(
+        staging_dir,
+        ledger_path=ledger_path,
+        stage=DOC_EXACT_STAGE,
+    )
+
+    assert rebuilt.height == 1
+    assert rebuilt.item(0, "doc_id") == "doc-1"
 
 
 def test_audit_api_stage_flags_orphan_staging_files(tmp_path: Path) -> None:

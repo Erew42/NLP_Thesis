@@ -21,11 +21,19 @@ from thesis_pkg.pipelines.refinitiv.doc_ownership import DOC_OWNERSHIP_REQUEST_C
 from thesis_pkg.pipelines.refinitiv.doc_ownership import _normalize_date_value
 from thesis_pkg.pipelines.refinitiv import lseg_ownership_api
 from thesis_pkg.pipelines.refinitiv.lseg_batching import RequestItem
-from thesis_pkg.pipelines.refinitiv.lseg_ownership_api import _normalize_ownership_universe_batch_response
+from thesis_pkg.pipelines.refinitiv.lseg_ownership_api import (
+    _assemble_doc_raw,
+    _normalize_ownership_universe_batch_response,
+)
 from thesis_pkg.pipelines.refinitiv import lseg_provider
 from thesis_pkg.pipelines.refinitiv.lseg_ledger import RequestLedger
 from thesis_pkg.pipelines.refinitiv.lseg_lookup_api import _classify_error
-from thesis_pkg.pipelines.refinitiv.lseg_provider import LsegDataProvider, LsegDataResponse, LsegResponseMetadata
+from thesis_pkg.pipelines.refinitiv.lseg_provider import (
+    LsegDataProvider,
+    LsegDataResponse,
+    LsegResponseMetadata,
+    classify_lseg_error_message,
+)
 from thesis_pkg.pipelines.refinitiv.lseg_provider import LsegRequestError
 from thesis_pkg.pipelines.refinitiv_bridge_pipeline import (
     OWNERSHIP_UNIVERSE_HANDOFF_COLUMNS,
@@ -102,6 +110,128 @@ class ErrorProvider:
         if not self._errors:
             raise AssertionError("error provider exhausted")
         raise self._errors.pop(0)
+
+
+class SelectiveOwnershipErrorProvider:
+    def __init__(
+        self,
+        *,
+        good_instrument: str,
+        good_response_date: date,
+    ) -> None:
+        self.good_instrument = good_instrument
+        self.good_response_date = good_response_date
+        self.calls: list[dict[str, Any]] = []
+
+    def open(self) -> None:
+        return None
+
+    def close(self) -> None:
+        return None
+
+    def get_data(
+        self,
+        *,
+        universe: list[str],
+        fields: list[str],
+        parameters: dict[str, Any] | None = None,
+    ) -> LsegDataResponse:
+        normalized_universe = list(universe)
+        self.calls.append(
+            {
+                "universe": normalized_universe,
+                "fields": list(fields),
+                "parameters": dict(parameters or {}),
+            }
+        )
+        if len(normalized_universe) > 1 or normalized_universe[0] != self.good_instrument:
+            raise LsegRequestError(
+                "Unable to collect data for the field 'TR.CATEGORYOWNERSHIPPCT.DATE' and some specific "
+                f"identifier(s). Requested universes: {normalized_universe!r}. Requested fields: {list(fields)!r}"
+            )
+        return LsegDataResponse(
+            frame=pl.DataFrame(
+                {
+                    "Instrument": [self.good_instrument],
+                    "Date": [self.good_response_date],
+                    "Category Percent Of Traded Shares": [55.0],
+                    "Investor Statistics Category Value": ["Holdings by Institutions"],
+                }
+            ),
+            metadata=LsegResponseMetadata(
+                status_code=200,
+                headers={"X-Request-Limit-Remaining": "100"},
+                latency_ms=25,
+                response_bytes=256,
+                fingerprint="fake",
+            ),
+        )
+
+
+def _ownership_handoff_row(
+    *,
+    lookup_row_id: str,
+    candidate_ric: str,
+    request_start_date: str,
+    request_end_date: str,
+    kypermno: str = "1",
+) -> dict[str, Any]:
+    handoff_row = {name: None for name in OWNERSHIP_UNIVERSE_HANDOFF_COLUMNS}
+    handoff_row.update(
+        {
+            "bridge_row_id": lookup_row_id.replace("|", ":"),
+            "KYPERMNO": kypermno,
+            "CUSIP": "111111111",
+            "ISIN": "US1111111111",
+            "TICKER": "ALFA",
+            "first_seen_caldt": date.fromisoformat(request_start_date),
+            "last_seen_caldt": date.fromisoformat(request_end_date),
+            "accepted_ric": candidate_ric,
+            "accepted_ric_source": "ISIN",
+            "accepted_resolution_status": "resolved_from_isin",
+            "conventional_identity_conflict": False,
+            "ticker_candidate_available": False,
+            "effective_collection_ric": candidate_ric,
+            "effective_collection_ric_source": "ISIN",
+            "effective_resolution_status": "effective_from_accepted_ric",
+            "diagnostic_case_id": lookup_row_id.replace("|", ":"),
+            "candidate_slot": "UNIVERSE_EFFECTIVE",
+            "candidate_ric": candidate_ric,
+            "ownership_lookup_row_id": lookup_row_id,
+            "ownership_lookup_role": "UNIVERSE_EFFECTIVE",
+            "lookup_input": candidate_ric,
+            "lookup_input_source": "effective_collection_ric",
+            "request_start_date": request_start_date,
+            "request_end_date": request_end_date,
+            "retrieval_eligible": True,
+        }
+    )
+    return handoff_row
+
+
+def _write_doc_ownership_test_inputs(
+    tmp_path: Path,
+    *,
+    doc_rows: list[dict[str, Any]],
+    authority_rows: list[dict[str, Any]],
+) -> tuple[Path, Path, Path]:
+    doc_filing_path = tmp_path / "sec_ccm_matched_clean_filtered.parquet"
+    authority_decisions_path = tmp_path / "refinitiv_permno_ownership_authority_decisions.parquet"
+    authority_exceptions_path = tmp_path / "refinitiv_permno_ownership_authority_exceptions.parquet"
+
+    pl.DataFrame(doc_rows).write_parquet(doc_filing_path)
+    pl.DataFrame(authority_rows).write_parquet(authority_decisions_path)
+    pl.DataFrame(
+        {
+            "KYPERMNO": pl.Series([], dtype=pl.Utf8),
+            "authoritative_ric": pl.Series([], dtype=pl.Utf8),
+            "authoritative_source_family": pl.Series([], dtype=pl.Utf8),
+            "authority_window_start_date": pl.Series([], dtype=pl.Date),
+            "authority_window_end_date": pl.Series([], dtype=pl.Date),
+            "authority_exception_status": pl.Series([], dtype=pl.Utf8),
+        }
+    ).write_parquet(authority_exceptions_path)
+    return doc_filing_path, authority_decisions_path, authority_exceptions_path
 
 
 def test_lookup_api_pipeline_builds_extended_parquet_and_resolution_from_snapshot(tmp_path: Path) -> None:
@@ -323,6 +453,61 @@ def test_ownership_universe_api_pipeline_treats_unresolved_identifier_as_empty_r
     assert request_log[-1]["unresolved_identifiers"] == ["QRHC"]
 
 
+def test_ownership_universe_api_pipeline_splits_field_specific_identifier_failures(tmp_path: Path) -> None:
+    handoff_path = tmp_path / "refinitiv_ownership_universe_handoff_common_stock.parquet"
+    pl.DataFrame(
+        [
+            _ownership_handoff_row(
+                lookup_row_id="row-good|UNIVERSE_EFFECTIVE",
+                candidate_ric="AAA.N",
+                request_start_date="2024-01-01",
+                request_end_date="2024-01-31",
+                kypermno="1",
+            ),
+            _ownership_handoff_row(
+                lookup_row_id="row-bad|UNIVERSE_EFFECTIVE",
+                candidate_ric="BAD.N",
+                request_start_date="2024-01-01",
+                request_end_date="2024-01-31",
+                kypermno="2",
+            ),
+        ]
+    ).write_parquet(handoff_path)
+
+    provider = SelectiveOwnershipErrorProvider(
+        good_instrument="AAA.N",
+        good_response_date=date(2024, 1, 15),
+    )
+    out = run_refinitiv_step1_ownership_universe_api_pipeline(
+        handoff_parquet_path=handoff_path,
+        output_dir=tmp_path,
+        provider=provider,
+        min_seconds_between_requests=0.0,
+        max_attempts=2,
+    )
+
+    results_df = pl.read_parquet(out["refinitiv_ownership_universe_results_parquet"]).sort("ownership_lookup_row_id")
+    row_summary_df = pl.read_parquet(out["refinitiv_ownership_universe_row_summary_parquet"]).sort(
+        "ownership_lookup_row_id"
+    )
+    request_log = [
+        json.loads(line)
+        for line in Path(out["refinitiv_ownership_universe_api_requests_jsonl"]).read_text().splitlines()
+    ]
+
+    assert len(provider.calls) == 4
+    assert sorted(provider.calls[0]["universe"]) == ["AAA.N", "BAD.N"]
+    assert results_df.height == 1
+    assert results_df.item(0, "ownership_lookup_row_id") == "row-good|UNIVERSE_EFFECTIVE"
+    assert row_summary_df.get_column("ownership_rows_returned").to_list() == [0, 1]
+    assert any(entry["event"] == "request_batch_split" for entry in request_log)
+    assert any(
+        entry["event"] == "request_unresolved_identifiers_treated_as_empty"
+        and entry["unresolved_identifiers"] == ["BAD.N"]
+        for entry in request_log
+    )
+
+
 def test_ownership_universe_api_pipeline_ignores_blank_shell_rows(tmp_path: Path) -> None:
     handoff_row = {name: None for name in OWNERSHIP_UNIVERSE_HANDOFF_COLUMNS}
     handoff_row.update(
@@ -380,6 +565,124 @@ def test_ownership_universe_api_pipeline_ignores_blank_shell_rows(tmp_path: Path
     assert results_df.height == 0
     assert row_summary_df.item(0, "ownership_rows_returned") == 0
     assert row_summary_df.item(0, "ownership_nonnull_value_count") == 0
+
+
+def test_ownership_universe_api_pipeline_batches_close_windows(tmp_path: Path) -> None:
+    handoff_path = tmp_path / "refinitiv_ownership_universe_handoff_common_stock.parquet"
+    pl.DataFrame(
+        [
+            _ownership_handoff_row(
+                lookup_row_id="row-1|UNIVERSE_EFFECTIVE",
+                candidate_ric="AAA.N",
+                request_start_date="2024-01-01",
+                request_end_date="2024-03-31",
+                kypermno="1",
+            ),
+            _ownership_handoff_row(
+                lookup_row_id="row-2|UNIVERSE_EFFECTIVE",
+                candidate_ric="BBB.N",
+                request_start_date="2024-01-15",
+                request_end_date="2024-03-31",
+                kypermno="2",
+            ),
+        ]
+    ).write_parquet(handoff_path)
+
+    provider = FakeProvider(
+        [
+            pl.DataFrame(
+                {
+                    "Instrument": ["AAA.N", "BBB.N"],
+                    "Date": [date(2024, 3, 31), date(2024, 3, 31)],
+                    "Category Percent Of Traded Shares": [55.0, 45.0],
+                    "Investor Statistics Category Value": [
+                        "Holdings by Institutions",
+                        "Holdings by Institutions",
+                    ],
+                }
+            )
+        ]
+    )
+    out = run_refinitiv_step1_ownership_universe_api_pipeline(
+        handoff_parquet_path=handoff_path,
+        output_dir=tmp_path,
+        provider=provider,
+        min_seconds_between_requests=0.0,
+    )
+
+    results_df = pl.read_parquet(out["refinitiv_ownership_universe_results_parquet"])
+    row_summary_df = pl.read_parquet(out["refinitiv_ownership_universe_row_summary_parquet"]).sort(
+        "ownership_lookup_row_id"
+    )
+    assert len(provider.calls) == 1
+    assert provider.calls[0]["parameters"] == {
+        "StatType": 7,
+        "SDate": "2024-01-01",
+        "EDate": "2024-03-31",
+    }
+    assert sorted(provider.calls[0]["universe"]) == ["AAA.N", "BBB.N"]
+    assert results_df.height == 2
+    assert row_summary_df.get_column("ownership_rows_returned").to_list() == [1, 1]
+
+
+def test_ownership_universe_api_pipeline_filters_widened_batch_rows_per_item_window(tmp_path: Path) -> None:
+    handoff_path = tmp_path / "refinitiv_ownership_universe_handoff_common_stock.parquet"
+    pl.DataFrame(
+        [
+            _ownership_handoff_row(
+                lookup_row_id="row-jan|UNIVERSE_EFFECTIVE",
+                candidate_ric="AAA.N",
+                request_start_date="2024-01-01",
+                request_end_date="2024-01-31",
+                kypermno="1",
+            ),
+            _ownership_handoff_row(
+                lookup_row_id="row-feb|UNIVERSE_EFFECTIVE",
+                candidate_ric="AAA.N",
+                request_start_date="2024-02-01",
+                request_end_date="2024-02-29",
+                kypermno="1",
+            ),
+        ]
+    ).write_parquet(handoff_path)
+
+    provider = FakeProvider(
+        [
+            pl.DataFrame(
+                {
+                    "Instrument": ["AAA.N", "AAA.N", "AAA.N"],
+                    "Date": [date(2024, 1, 15), date(2024, 2, 10), None],
+                    "Category Percent Of Traded Shares": [51.0, 52.0, 53.0],
+                    "Investor Statistics Category Value": [
+                        "Holdings by Institutions",
+                        "Holdings by Institutions",
+                        "Holdings by Institutions",
+                    ],
+                }
+            )
+        ]
+    )
+    out = run_refinitiv_step1_ownership_universe_api_pipeline(
+        handoff_parquet_path=handoff_path,
+        output_dir=tmp_path,
+        provider=provider,
+        min_seconds_between_requests=0.0,
+    )
+
+    results_df = pl.read_parquet(out["refinitiv_ownership_universe_results_parquet"]).sort(
+        ["ownership_lookup_row_id", "returned_date"]
+    )
+    row_summary_df = pl.read_parquet(out["refinitiv_ownership_universe_row_summary_parquet"]).sort(
+        "ownership_lookup_row_id"
+    )
+    assert len(provider.calls) == 1
+    assert results_df.height == 2
+    assert results_df.get_column("ownership_lookup_row_id").to_list() == [
+        "row-feb|UNIVERSE_EFFECTIVE",
+        "row-jan|UNIVERSE_EFFECTIVE",
+    ]
+    assert results_df.get_column("returned_date").to_list() == [date(2024, 2, 10), date(2024, 1, 15)]
+    assert row_summary_df.get_column("ownership_rows_returned").to_list() == [1, 1]
 
 
 def test_normalize_ownership_universe_batch_response_handles_sparse_late_text_values() -> None:
@@ -537,8 +840,143 @@ def test_doc_ownership_exact_and_fallback_api_pipelines_finalize_without_workboo
     assert fallback_provider.calls[0]["parameters"] == {"StatType": 7, "SDate": "2024-04-01", "EDate": "2024-05-16"}
 
 
+def test_doc_ownership_exact_pipeline_splits_field_specific_identifier_failures(tmp_path: Path) -> None:
+    output_dir = tmp_path / "refinitiv_doc_ownership_lm2011"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    doc_filing_path, authority_decisions_path, authority_exceptions_path = _write_doc_ownership_test_inputs(
+        tmp_path,
+        doc_rows=[
+            {"doc_id": "doc-good", "filing_date": date(2024, 4, 15), "kypermno": "100"},
+            {"doc_id": "doc-bad", "filing_date": date(2024, 4, 15), "kypermno": "200"},
+        ],
+        authority_rows=[
+            {
+                "KYPERMNO": "100",
+                "authoritative_ric": "AAA.N",
+                "authoritative_source_family": "CONVENTIONAL",
+                "authority_decision_status": "STATIC_CONVENTIONAL",
+                "requires_review": False,
+            },
+            {
+                "KYPERMNO": "200",
+                "authoritative_ric": "BAD.N",
+                "authoritative_source_family": "CONVENTIONAL",
+                "authority_decision_status": "STATIC_CONVENTIONAL",
+                "requires_review": False,
+            },
+        ],
+    )
+
+    provider = SelectiveOwnershipErrorProvider(
+        good_instrument="AAA.N",
+        good_response_date=date(2024, 4, 1),
+    )
+    out = run_refinitiv_lm2011_doc_ownership_exact_api_pipeline(
+        doc_filing_artifact_path=doc_filing_path,
+        authority_decisions_artifact_path=authority_decisions_path,
+        authority_exceptions_artifact_path=authority_exceptions_path,
+        output_dir=output_dir,
+        provider=provider,
+        min_seconds_between_requests=0.0,
+        max_attempts=2,
+    )
+
+    exact_raw_df = pl.read_parquet(out["refinitiv_lm2011_doc_ownership_exact_raw_parquet"]).sort("doc_id")
+    request_log = [
+        json.loads(line)
+        for line in Path(out["refinitiv_doc_ownership_exact_api_requests_jsonl"]).read_text().splitlines()
+    ]
+
+    assert len(provider.calls) == 4
+    assert sorted(provider.calls[0]["universe"]) == ["AAA.N", "BAD.N"]
+    assert exact_raw_df.height == 1
+    assert exact_raw_df.item(0, "doc_id") == "doc-good"
+    assert any(entry["event"] == "request_batch_split" for entry in request_log)
+    assert any(
+        entry["event"] == "request_unresolved_identifiers_treated_as_empty"
+        and entry["unresolved_identifiers"] == ["BAD.N"]
+        for entry in request_log
+    )
+
+
+def test_doc_ownership_fallback_pipeline_splits_field_specific_identifier_failures(tmp_path: Path) -> None:
+    output_dir = tmp_path / "refinitiv_doc_ownership_lm2011"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    doc_filing_path, authority_decisions_path, authority_exceptions_path = _write_doc_ownership_test_inputs(
+        tmp_path,
+        doc_rows=[
+            {"doc_id": "doc-good", "filing_date": date(2024, 4, 15), "kypermno": "100"},
+            {"doc_id": "doc-bad", "filing_date": date(2024, 4, 15), "kypermno": "200"},
+        ],
+        authority_rows=[
+            {
+                "KYPERMNO": "100",
+                "authoritative_ric": "AAA.N",
+                "authoritative_source_family": "CONVENTIONAL",
+                "authority_decision_status": "STATIC_CONVENTIONAL",
+                "requires_review": False,
+            },
+            {
+                "KYPERMNO": "200",
+                "authoritative_ric": "BAD.N",
+                "authoritative_source_family": "CONVENTIONAL",
+                "authority_decision_status": "STATIC_CONVENTIONAL",
+                "requires_review": False,
+            },
+        ],
+    )
+
+    run_refinitiv_lm2011_doc_ownership_exact_api_pipeline(
+        doc_filing_artifact_path=doc_filing_path,
+        authority_decisions_artifact_path=authority_decisions_path,
+        authority_exceptions_artifact_path=authority_exceptions_path,
+        output_dir=output_dir,
+        provider=FakeProvider([pl.DataFrame(schema={"Instrument": pl.Utf8, "Date": pl.Date})]),
+        min_seconds_between_requests=0.0,
+    )
+
+    provider = SelectiveOwnershipErrorProvider(
+        good_instrument="AAA.N",
+        good_response_date=date(2024, 4, 15),
+    )
+    out = run_refinitiv_lm2011_doc_ownership_fallback_api_pipeline(
+        output_dir=output_dir,
+        provider=provider,
+        min_seconds_between_requests=0.0,
+        max_attempts=2,
+    )
+
+    fallback_raw_df = pl.read_parquet(out["refinitiv_lm2011_doc_ownership_fallback_raw_parquet"]).sort("doc_id")
+    request_log = [
+        json.loads(line)
+        for line in Path(out["refinitiv_doc_ownership_fallback_api_requests_jsonl"]).read_text().splitlines()
+    ]
+
+    assert len(provider.calls) == 4
+    assert sorted(provider.calls[0]["universe"]) == ["AAA.N", "BAD.N"]
+    assert fallback_raw_df.height == 1
+    assert fallback_raw_df.item(0, "doc_id") == "doc-good"
+    assert any(entry["event"] == "request_batch_split" for entry in request_log)
+    assert any(
+        entry["event"] == "request_unresolved_identifiers_treated_as_empty"
+        and entry["unresolved_identifiers"] == ["BAD.N"]
+        for entry in request_log
+    )
+
+
 def test_normalize_date_value_accepts_iso_datetime_text() -> None:
     assert _normalize_date_value("2024-12-01 00:00:00") == date(2024, 12, 1)
+
+
+def test_classify_lseg_error_message_parses_field_specific_identifier_failure() -> None:
+    error_kind, unresolved_identifiers = classify_lseg_error_message(
+        "Unable to collect data for the field 'TR.CATEGORYOWNERSHIPPCT.DATE' and some specific identifier(s). "
+        "Requested universes: ['YUMY.P^D24', 'BHa', 'SYST']. Requested fields: "
+        "['TR.CATEGORYOWNERSHIPPCT.DATE', 'TR.CATEGORYOWNERSHIPPCT', 'TR.INSTRSTATTYPEVALUE']"
+    )
+
+    assert error_kind == "unresolved_identifiers"
+    assert unresolved_identifiers == ("YUMY.P^D24", "BHa", "SYST")
 
 
 def test_classify_error_splits_unresolved_identifier_batches() -> None:
@@ -677,6 +1115,38 @@ def test_lseg_provider_suppresses_lseg_replace_downcasting_futurewarning() -> No
     assert not any("Downcasting behavior in `replace` is deprecated" in str(item.message) for item in caught)
 
 
+def test_lseg_provider_suppresses_lseg_fillna_downcasting_futurewarning() -> None:
+    pd = pytest.importorskip("pandas")
+
+    class FakeLsegResponse:
+        def __init__(self) -> None:
+            self.data = pd.DataFrame({"Instrument": ["AAA.N"], "Value": [1]})
+
+    class FakeLsegModule:
+        @staticmethod
+        def get_data(*, universe: list[str], fields: list[str], parameters: dict[str, Any]) -> FakeLsegResponse:
+            warnings.warn_explicit(
+                "Downcasting object dtype arrays on .fillna, .ffill, .bfill is deprecated and will change in a "
+                "future version. Call result.infer_objects(copy=False) instead.",
+                category=FutureWarning,
+                filename="C:\\\\fake\\\\site-packages\\\\lseg\\\\data\\\\_tools\\\\_dataframe.py",
+                lineno=177,
+                module="lseg.data._tools._dataframe",
+            )
+            return FakeLsegResponse()
+
+    provider = LsegDataProvider()
+    provider._ld = FakeLsegModule()
+    provider._session_open = True
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        response = provider._get_data_once(universe=["AAA.N"], fields=["TR.RIC"], parameters={})
+
+    assert response.frame.to_dicts() == [{"Instrument": "AAA.N", "Value": 1}]
+    assert not any("Downcasting object dtype arrays on .fillna, .ffill, .bfill is deprecated" in str(item.message) for item in caught)
+
+
 def test_lseg_provider_retries_once_for_session_not_opened_error(monkeypatch: pytest.MonkeyPatch) -> None:
     provider = LsegDataProvider()
     provider._ld = object()
@@ -750,6 +1220,53 @@ def test_lseg_provider_retries_once_for_singleton_unresolved_identifier(monkeypa
     monkeypatch.setattr(provider, "_reset_session", fake_reset_session)
 
     result = provider.get_data(universe=["PNRA.OQ^G17"], fields=["TR.RIC"], parameters={})
+    assert result is response
+    assert call_count == 2
+    assert reset_count == 1
+
+
+def test_lseg_provider_retries_once_for_singleton_field_specific_identifier_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = LsegDataProvider()
+    provider._ld = object()
+    provider._session_open = True
+    response = LsegDataResponse(
+        frame=pl.DataFrame({"Instrument": ["BAD.N"]}),
+        metadata=LsegResponseMetadata(
+            status_code=200,
+            headers={},
+            latency_ms=1,
+            response_bytes=16,
+            fingerprint="ok",
+        ),
+    )
+    call_count = 0
+    reset_count = 0
+
+    def fake_get_data_once(*, universe: list[str], fields: list[str], parameters: dict[str, Any] | None = None) -> LsegDataResponse:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise LsegRequestError(
+                "Unable to collect data for the field 'TR.CATEGORYOWNERSHIPPCT.DATE' and some specific "
+                "identifier(s). Requested universes: ['BAD.N']. Requested fields: "
+                "['TR.CATEGORYOWNERSHIPPCT.DATE', 'TR.CATEGORYOWNERSHIPPCT', 'TR.INSTRSTATTYPEVALUE']"
+            )
+        return response
+
+    def fake_reset_session() -> None:
+        nonlocal reset_count
+        reset_count += 1
+
+    monkeypatch.setattr(provider, "_get_data_once", fake_get_data_once)
+    monkeypatch.setattr(provider, "_reset_session", fake_reset_session)
+
+    result = provider.get_data(
+        universe=["BAD.N"],
+        fields=["TR.CATEGORYOWNERSHIPPCT.DATE"],
+        parameters={"StatType": 7},
+    )
     assert result is response
     assert call_count == 2
     assert reset_count == 1

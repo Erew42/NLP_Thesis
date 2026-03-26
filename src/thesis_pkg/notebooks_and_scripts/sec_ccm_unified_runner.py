@@ -179,6 +179,19 @@ def _env_optional_str(name: str, default: str | None) -> str | None:
     return stripped
 
 
+def _env_optional_date(name: str, default: dt.date | None) -> dt.date | None:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    stripped = value.strip()
+    if stripped.lower() in {"", "none", "null"}:
+        return None
+    try:
+        return dt.date.fromisoformat(stripped)
+    except ValueError as exc:
+        raise ValueError(f"Invalid ISO date value for {name}: {value!r}") from exc
+
+
 def _print_rows_table(rows: list[dict[str, object]], *, sort_by: list[str] | None = None, empty_message: str) -> None:
     if not rows:
         print(empty_message)
@@ -588,6 +601,26 @@ def main() -> None:
         "SEC_CCM_REFINITIV_OWNERSHIP_BATCH_SIZE",
         25,
     )
+    REFINITIV_OWNERSHIP_MAX_BATCH_ITEMS = _env_optional_int(
+        "SEC_CCM_REFINITIV_OWNERSHIP_MAX_BATCH_ITEMS",
+        None,
+    )
+    REFINITIV_OWNERSHIP_MAX_EXTRA_ROWS_ABS = _env_optional_float(
+        "SEC_CCM_REFINITIV_OWNERSHIP_MAX_EXTRA_ROWS_ABS",
+        None,
+    )
+    REFINITIV_OWNERSHIP_MAX_EXTRA_ROWS_RATIO = _env_optional_float(
+        "SEC_CCM_REFINITIV_OWNERSHIP_MAX_EXTRA_ROWS_RATIO",
+        None,
+    )
+    REFINITIV_OWNERSHIP_MAX_UNION_SPAN_DAYS = _env_optional_int(
+        "SEC_CCM_REFINITIV_OWNERSHIP_MAX_UNION_SPAN_DAYS",
+        None,
+    )
+    REFINITIV_OWNERSHIP_ROW_DENSITY_ROWS_PER_DAY = _env_optional_float(
+        "SEC_CCM_REFINITIV_OWNERSHIP_ROW_DENSITY_ROWS_PER_DAY",
+        None,
+    )
     REFINITIV_ANALYST_ACTUALS_BATCH_SIZE = _env_int(
         "SEC_CCM_REFINITIV_ANALYST_ACTUALS_BATCH_SIZE",
         500,
@@ -644,6 +677,22 @@ def main() -> None:
         "SEC_CCM_REFINITIV_DOC_FALLBACK_BATCH_SIZE",
         10,
     )
+    LSEG_REQUEST_MIN_DATE = _env_optional_date(
+        "SEC_CCM_LSEG_REQUEST_MIN_DATE",
+        dt.date(1994, 1, 1),
+    )
+    LSEG_REQUEST_MAX_DATE = _env_optional_date(
+        "SEC_CCM_LSEG_REQUEST_MAX_DATE",
+        dt.date(2024, 12, 31),
+    )
+    if (
+        LSEG_REQUEST_MIN_DATE is not None
+        and LSEG_REQUEST_MAX_DATE is not None
+        and LSEG_REQUEST_MIN_DATE > LSEG_REQUEST_MAX_DATE
+    ):
+        raise ValueError(
+            "SEC_CCM_LSEG_REQUEST_MIN_DATE must be <= SEC_CCM_LSEG_REQUEST_MAX_DATE"
+        )
     REFINITIV_MIN_SECONDS_BETWEEN_REQUESTS = _env_float(
         "SEC_CCM_REFINITIV_MIN_SECONDS_BETWEEN_REQUESTS",
         0.5,
@@ -822,6 +871,11 @@ def main() -> None:
             "REFINITIV_PREFLIGHT_PROBE": REFINITIV_PREFLIGHT_PROBE,
             "REFINITIV_LOOKUP_BATCH_SIZE": REFINITIV_LOOKUP_BATCH_SIZE,
             "REFINITIV_OWNERSHIP_BATCH_SIZE": REFINITIV_OWNERSHIP_BATCH_SIZE,
+            "REFINITIV_OWNERSHIP_MAX_BATCH_ITEMS": REFINITIV_OWNERSHIP_MAX_BATCH_ITEMS,
+            "REFINITIV_OWNERSHIP_MAX_EXTRA_ROWS_ABS": REFINITIV_OWNERSHIP_MAX_EXTRA_ROWS_ABS,
+            "REFINITIV_OWNERSHIP_MAX_EXTRA_ROWS_RATIO": REFINITIV_OWNERSHIP_MAX_EXTRA_ROWS_RATIO,
+            "REFINITIV_OWNERSHIP_MAX_UNION_SPAN_DAYS": REFINITIV_OWNERSHIP_MAX_UNION_SPAN_DAYS,
+            "REFINITIV_OWNERSHIP_ROW_DENSITY_ROWS_PER_DAY": REFINITIV_OWNERSHIP_ROW_DENSITY_ROWS_PER_DAY,
             "REFINITIV_ANALYST_ACTUALS_BATCH_SIZE": REFINITIV_ANALYST_ACTUALS_BATCH_SIZE,
             "REFINITIV_ANALYST_ACTUALS_MAX_BATCH_ITEMS": REFINITIV_ANALYST_ACTUALS_MAX_BATCH_ITEMS,
             "REFINITIV_ANALYST_ACTUALS_MAX_EXTRA_ROWS_ABS": REFINITIV_ANALYST_ACTUALS_MAX_EXTRA_ROWS_ABS,
@@ -836,6 +890,12 @@ def main() -> None:
             "REFINITIV_ANALYST_ESTIMATES_ROW_DENSITY_ROWS_PER_DAY": REFINITIV_ANALYST_ESTIMATES_ROW_DENSITY_ROWS_PER_DAY,
             "REFINITIV_DOC_EXACT_BATCH_SIZE": REFINITIV_DOC_EXACT_BATCH_SIZE,
             "REFINITIV_DOC_FALLBACK_BATCH_SIZE": REFINITIV_DOC_FALLBACK_BATCH_SIZE,
+            "LSEG_REQUEST_MIN_DATE": (
+                LSEG_REQUEST_MIN_DATE.isoformat() if LSEG_REQUEST_MIN_DATE is not None else None
+            ),
+            "LSEG_REQUEST_MAX_DATE": (
+                LSEG_REQUEST_MAX_DATE.isoformat() if LSEG_REQUEST_MAX_DATE is not None else None
+            ),
             "REFINITIV_MIN_SECONDS_BETWEEN_REQUESTS": REFINITIV_MIN_SECONDS_BETWEEN_REQUESTS,
             "REFINITIV_MIN_SECONDS_BETWEEN_REQUEST_STARTS_TOTAL": REFINITIV_MIN_SECONDS_BETWEEN_REQUEST_STARTS_TOTAL,
             "REFINITIV_MAX_ATTEMPTS": REFINITIV_MAX_ATTEMPTS,
@@ -1149,6 +1209,11 @@ def main() -> None:
                 handoff_parquet_path=ownership_universe_handoff_parquet_path,
                 output_dir=REFINITIV_OWNERSHIP_UNIVERSE_DIR,
                 max_batch_size=REFINITIV_OWNERSHIP_BATCH_SIZE,
+                max_batch_items=REFINITIV_OWNERSHIP_MAX_BATCH_ITEMS,
+                max_extra_rows_abs=REFINITIV_OWNERSHIP_MAX_EXTRA_ROWS_ABS,
+                max_extra_rows_ratio=REFINITIV_OWNERSHIP_MAX_EXTRA_ROWS_RATIO,
+                max_union_span_days=REFINITIV_OWNERSHIP_MAX_UNION_SPAN_DAYS,
+                row_density_rows_per_day=REFINITIV_OWNERSHIP_ROW_DENSITY_ROWS_PER_DAY,
                 min_seconds_between_requests=REFINITIV_MIN_SECONDS_BETWEEN_REQUESTS,
                 min_seconds_between_request_starts_total=REFINITIV_MIN_SECONDS_BETWEEN_REQUEST_STARTS_TOTAL,
                 max_attempts=REFINITIV_MAX_ATTEMPTS,
@@ -1269,6 +1334,8 @@ def main() -> None:
             refinitiv_analyst_request_group_paths = run_refinitiv_step1_analyst_request_groups_pipeline(
                 instrument_authority_artifact_path=instrument_authority_artifact_path,
                 output_dir=REFINITIV_ANALYST_COMMON_STOCK_DIR,
+                request_min_date=LSEG_REQUEST_MIN_DATE,
+                request_max_date=LSEG_REQUEST_MAX_DATE,
             )
             _record_refinitiv_stage(
                 "refinitiv_analyst_request_groups",
@@ -1636,6 +1703,8 @@ def main() -> None:
                     authority_decisions_artifact_path=authority_decisions_artifact_path,
                     authority_exceptions_artifact_path=authority_exceptions_artifact_path,
                     output_dir=REFINITIV_DOC_OWNERSHIP_LM2011_DIR,
+                    request_min_date=LSEG_REQUEST_MIN_DATE,
+                    request_max_date=LSEG_REQUEST_MAX_DATE,
                     max_batch_size=REFINITIV_DOC_EXACT_BATCH_SIZE,
                     min_seconds_between_requests=REFINITIV_MIN_SECONDS_BETWEEN_REQUESTS,
                     min_seconds_between_request_starts_total=REFINITIV_MIN_SECONDS_BETWEEN_REQUEST_STARTS_TOTAL,
@@ -1652,6 +1721,8 @@ def main() -> None:
                     authority_decisions_artifact_path=authority_decisions_artifact_path,
                     authority_exceptions_artifact_path=authority_exceptions_artifact_path,
                     output_dir=REFINITIV_DOC_OWNERSHIP_LM2011_DIR,
+                    request_min_date=LSEG_REQUEST_MIN_DATE,
+                    request_max_date=LSEG_REQUEST_MAX_DATE,
                 )
             _record_refinitiv_stage(
                 "refinitiv_doc_ownership_exact",

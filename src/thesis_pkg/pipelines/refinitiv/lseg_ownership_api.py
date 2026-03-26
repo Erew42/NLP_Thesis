@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime as dt
 from pathlib import Path
 from typing import Any
 
@@ -13,7 +14,16 @@ from thesis_pkg.pipelines.refinitiv.lseg_api_common import (
     write_parquet_atomic as _write_parquet_atomic,
 )
 from thesis_pkg.pipelines.refinitiv.lseg_api_execution import run_api_batches
-from thesis_pkg.pipelines.refinitiv.lseg_batching import RequestItem, stable_hash_id
+from thesis_pkg.pipelines.refinitiv.lseg_batching import (
+    IntervalBatchPlan,
+    IntervalBatchPlannerConfig,
+    RequestItem,
+    build_batch_definition,
+    plan_interval_batches,
+    request_signature,
+    stable_hash_id,
+)
+from thesis_pkg.pipelines.refinitiv.lseg_ledger import RequestLedger
 from thesis_pkg.pipelines.refinitiv.lseg_stage_audit import (
     audit_api_stage,
     default_stage_manifest_path,
@@ -50,6 +60,13 @@ OWNERSHIP_UNIVERSE_STAGE = "ownership_universe"
 DOC_EXACT_STAGE = "doc_ownership_exact"
 DOC_FALLBACK_STAGE = "doc_ownership_fallback"
 
+OWNERSHIP_UNIVERSE_INTERVAL_BATCH_PLANNER_VERSION = "ownership_universe_interval_batching_v1"
+_OWNERSHIP_INTERVAL_SIGNATURE_EXCLUDED_PARAMETER_KEYS = ("SDate", "EDate")
+
+OWNERSHIP_UNIVERSE_DEFAULT_ROW_DENSITY_ROWS_PER_DAY = 1.0 / 91.0
+OWNERSHIP_UNIVERSE_DEFAULT_MAX_EXTRA_ROWS_ABS = 120.0
+OWNERSHIP_UNIVERSE_DEFAULT_MAX_EXTRA_ROWS_RATIO = 0.25
+
 OWNERSHIP_UNIVERSE_FIELDS: tuple[str, ...] = (
     "TR.CategoryOwnershipPct.Date",
     "TR.CategoryOwnershipPct",
@@ -80,6 +97,11 @@ def run_refinitiv_step1_ownership_universe_api_pipeline(
     ledger_path: Path | str | None = None,
     request_log_path: Path | str | None = None,
     max_batch_size: int = 10,
+    max_batch_items: int | None = None,
+    max_extra_rows_abs: float | None = None,
+    max_extra_rows_ratio: float | None = None,
+    max_union_span_days: int | None = None,
+    row_density_rows_per_day: float | None = None,
     min_seconds_between_requests: float = 2.0,
     min_seconds_between_request_starts_total: float | None = None,
     max_attempts: int = 4,
@@ -109,6 +131,18 @@ def run_refinitiv_step1_ownership_universe_api_pipeline(
     ).select(OWNERSHIP_UNIVERSE_HANDOFF_COLUMNS)
 
     items = _build_ownership_universe_items(handoff_df)
+    planner_config = _resolve_interval_batch_config(
+        max_batch_size=max_batch_size,
+        max_batch_items=max_batch_items,
+        max_extra_rows_abs=max_extra_rows_abs,
+        max_extra_rows_ratio=max_extra_rows_ratio,
+        max_union_span_days=max_union_span_days,
+        row_density_rows_per_day=row_density_rows_per_day,
+        default_row_density_rows_per_day=OWNERSHIP_UNIVERSE_DEFAULT_ROW_DENSITY_ROWS_PER_DAY,
+        default_max_extra_rows_abs=OWNERSHIP_UNIVERSE_DEFAULT_MAX_EXTRA_ROWS_ABS,
+        default_max_extra_rows_ratio=OWNERSHIP_UNIVERSE_DEFAULT_MAX_EXTRA_ROWS_RATIO,
+    )
+    interval_plan = _plan_ownership_universe_batches(items, config=planner_config)
     stage_run = run_api_batches(
         stage=OWNERSHIP_UNIVERSE_STAGE,
         items=items,
@@ -129,9 +163,16 @@ def run_refinitiv_step1_ownership_universe_api_pipeline(
         split_after_attempt=2,
         retry_delay_seconds_fn=_retry_delay_seconds,
         max_workers=max_workers,
+        planned_batches=list(interval_plan.batches),
+        batch_plan_fingerprint=interval_plan.fingerprint,
+        planned_batch_metrics=interval_plan.batch_metrics_by_id,
     )
+    stage_run_ledger_path = getattr(stage_run, "ledger_path", ledger_path)
 
-    results_df = _assemble_ownership_universe_results(stage_run.staging_dir)
+    results_df = _assemble_ownership_universe_results(
+        stage_run.staging_dir,
+        ledger_path=stage_run_ledger_path,
+    )
     row_summary_df = build_refinitiv_ownership_universe_row_summary(handoff_df, results_df)
 
     results_path = output_dir / "refinitiv_ownership_universe_results.parquet"
@@ -159,12 +200,18 @@ def run_refinitiv_step1_ownership_universe_api_pipeline(
             "ownership_row_summary_parquet": row_summary_path,
         },
         rebuilders={
-            "ownership_results_parquet": lambda: _assemble_ownership_universe_results(stage_run.staging_dir),
-            "ownership_row_summary_parquet": lambda: build_refinitiv_ownership_universe_row_summary(
-                handoff_df,
-                _assemble_ownership_universe_results(stage_run.staging_dir),
-            ),
-        },
+                "ownership_results_parquet": lambda: _assemble_ownership_universe_results(
+                    stage_run.staging_dir,
+                    ledger_path=stage_run_ledger_path,
+                ),
+                "ownership_row_summary_parquet": lambda: build_refinitiv_ownership_universe_row_summary(
+                    handoff_df,
+                    _assemble_ownership_universe_results(
+                        stage_run.staging_dir,
+                        ledger_path=stage_run_ledger_path,
+                    ),
+                ),
+            },
         expected_stage_manifest_path=manifest_path,
     )
     if not audit_result.passed:
@@ -187,6 +234,9 @@ def run_refinitiv_step1_ownership_universe_api_pipeline(
         summary={
             "handoff_row_count": int(handoff_df.height),
             "request_item_count": len(items),
+            "planned_batch_count": len(interval_plan.batches),
+            "batch_plan_fingerprint": interval_plan.fingerprint,
+            "batching_config": planner_config.to_serializable_dict(),
             "results_row_count": int(results_df.height),
             "rows_with_results": int(
                 row_summary_df.filter(pl.col("ownership_rows_returned").fill_null(0) > 0).height
@@ -210,6 +260,8 @@ def run_refinitiv_lm2011_doc_ownership_exact_api_pipeline(
     authority_decisions_artifact_path: Path | str,
     authority_exceptions_artifact_path: Path | str,
     output_dir: Path | str,
+    request_min_date: dt.date | None = None,
+    request_max_date: dt.date | None = None,
     provider: Any | None = None,
     ledger_path: Path | str | None = None,
     request_log_path: Path | str | None = None,
@@ -245,6 +297,8 @@ def run_refinitiv_lm2011_doc_ownership_exact_api_pipeline(
         _read_doc_filing_artifact(doc_filing_artifact_path),
         _read_authority_decisions_artifact(authority_decisions_artifact_path),
         _read_authority_exceptions_artifact(authority_exceptions_artifact_path),
+        request_min_date=request_min_date,
+        request_max_date=request_max_date,
     )
     requests_path = output_dir / "refinitiv_lm2011_doc_ownership_exact_requests.parquet"
     requests_candidate_path = _candidate_output_path(requests_path)
@@ -272,8 +326,13 @@ def run_refinitiv_lm2011_doc_ownership_exact_api_pipeline(
         retry_delay_seconds_fn=_retry_delay_seconds,
         max_workers=max_workers,
     )
+    stage_run_ledger_path = getattr(stage_run, "ledger_path", ledger_path)
 
-    exact_raw_df = _assemble_doc_raw(stage_run.staging_dir)
+    exact_raw_df = _assemble_doc_raw(
+        stage_run.staging_dir,
+        ledger_path=stage_run_ledger_path,
+        stage=DOC_EXACT_STAGE,
+    )
     exact_raw_path = output_dir / "refinitiv_lm2011_doc_ownership_exact_raw.parquet"
     exact_raw_candidate_path = _candidate_output_path(exact_raw_path)
     _write_parquet_atomic(exact_raw_df, exact_raw_candidate_path)
@@ -295,7 +354,13 @@ def run_refinitiv_lm2011_doc_ownership_exact_api_pipeline(
             "exact_requests_parquet": requests_path,
             "exact_raw_parquet": exact_raw_path,
         },
-        rebuilders={"exact_raw_parquet": lambda: _assemble_doc_raw(stage_run.staging_dir)},
+        rebuilders={
+            "exact_raw_parquet": lambda: _assemble_doc_raw(
+                stage_run.staging_dir,
+                ledger_path=stage_run_ledger_path,
+                stage=DOC_EXACT_STAGE,
+            )
+        },
         expected_stage_manifest_path=manifest_path,
     )
     if not audit_result.passed:
@@ -413,7 +478,12 @@ def run_refinitiv_lm2011_doc_ownership_fallback_api_pipeline(
         retry_delay_seconds_fn=_retry_delay_seconds,
         max_workers=max_workers,
     )
-    fallback_raw_df = _assemble_doc_raw(stage_run.staging_dir)
+    stage_run_ledger_path = getattr(stage_run, "ledger_path", ledger_path)
+    fallback_raw_df = _assemble_doc_raw(
+        stage_run.staging_dir,
+        ledger_path=stage_run_ledger_path,
+        stage=DOC_FALLBACK_STAGE,
+    )
     fallback_raw_path = output_dir / "refinitiv_lm2011_doc_ownership_fallback_raw.parquet"
     fallback_raw_candidate_path = _candidate_output_path(fallback_raw_path)
     _write_parquet_atomic(fallback_raw_df, fallback_raw_candidate_path)
@@ -435,7 +505,13 @@ def run_refinitiv_lm2011_doc_ownership_fallback_api_pipeline(
             "fallback_requests_parquet": fallback_requests_path,
             "fallback_raw_parquet": fallback_raw_path,
         },
-        rebuilders={"fallback_raw_parquet": lambda: _assemble_doc_raw(stage_run.staging_dir)},
+        rebuilders={
+            "fallback_raw_parquet": lambda: _assemble_doc_raw(
+                stage_run.staging_dir,
+                ledger_path=stage_run_ledger_path,
+                stage=DOC_FALLBACK_STAGE,
+            )
+        },
         expected_stage_manifest_path=manifest_path,
     )
     if not audit_result.passed:
@@ -481,8 +557,16 @@ def run_refinitiv_lm2011_doc_ownership_fallback_api_pipeline(
     return result
 
 
-def _assemble_ownership_universe_results(staging_dir: Path) -> pl.DataFrame:
-    staging_paths = sorted(staging_dir.glob("*.parquet"))
+def _assemble_ownership_universe_results(
+    staging_dir: Path,
+    *,
+    ledger_path: Path | str | None = None,
+) -> pl.DataFrame:
+    staging_paths = _resolved_stage_output_paths(
+        stage=OWNERSHIP_UNIVERSE_STAGE,
+        staging_dir=staging_dir,
+        ledger_path=ledger_path,
+    )
     results_df = (
         pl.concat([pl.read_parquet(path) for path in staging_paths], how="vertical_relaxed")
         if staging_paths
@@ -504,8 +588,21 @@ def _assemble_ownership_universe_results(staging_dir: Path) -> pl.DataFrame:
     )
 
 
-def _assemble_doc_raw(staging_dir: Path) -> pl.DataFrame:
-    staging_paths = sorted(staging_dir.glob("*.parquet"))
+def _assemble_doc_raw(
+    staging_dir: Path,
+    *,
+    ledger_path: Path | str | None = None,
+    stage: str | None = None,
+) -> pl.DataFrame:
+    staging_paths = (
+        _resolved_stage_output_paths(
+            stage=stage,
+            staging_dir=staging_dir,
+            ledger_path=ledger_path,
+        )
+        if ledger_path is not None and stage is not None
+        else sorted(staging_dir.glob("*.parquet"))
+    )
     raw_df = (
         pl.concat([pl.read_parquet(path) for path in staging_paths], how="vertical_relaxed")
         if staging_paths
@@ -546,6 +643,86 @@ def _build_ownership_universe_items(handoff_df: pl.DataFrame) -> list[RequestIte
             )
         )
     return items
+
+
+def _resolve_interval_batch_config(
+    *,
+    max_batch_size: int,
+    max_batch_items: int | None,
+    max_extra_rows_abs: float | None,
+    max_extra_rows_ratio: float | None,
+    max_union_span_days: int | None,
+    row_density_rows_per_day: float | None,
+    default_row_density_rows_per_day: float,
+    default_max_extra_rows_abs: float,
+    default_max_extra_rows_ratio: float,
+) -> IntervalBatchPlannerConfig:
+    return IntervalBatchPlannerConfig(
+        max_batch_size=max_batch_size,
+        max_batch_items=max_batch_size if max_batch_items is None else max_batch_items,
+        max_extra_rows_abs=(
+            default_max_extra_rows_abs
+            if max_extra_rows_abs is None
+            else max_extra_rows_abs
+        ),
+        max_extra_rows_ratio=(
+            default_max_extra_rows_ratio
+            if max_extra_rows_ratio is None
+            else max_extra_rows_ratio
+        ),
+        max_union_span_days=max_union_span_days,
+        row_density_rows_per_day=(
+            default_row_density_rows_per_day
+            if row_density_rows_per_day is None
+            else row_density_rows_per_day
+        ),
+    )
+
+
+def _plan_ownership_universe_batches(
+    items: list[RequestItem],
+    *,
+    config: IntervalBatchPlannerConfig,
+) -> IntervalBatchPlan:
+    return plan_interval_batches(
+        items,
+        config=config,
+        planner_version=OWNERSHIP_UNIVERSE_INTERVAL_BATCH_PLANNER_VERSION,
+        signature_fn=_ownership_universe_interval_signature,
+        interval_fn=_item_window,
+        batch_builder=_build_ownership_universe_interval_batch,
+    )
+
+
+def _ownership_universe_interval_signature(item: RequestItem) -> str:
+    return request_signature(
+        stage=item.stage,
+        fields=item.fields,
+        parameters=item.parameters,
+        excluded_parameter_keys=_OWNERSHIP_INTERVAL_SIGNATURE_EXCLUDED_PARAMETER_KEYS,
+    )
+
+
+def _item_window(item: Any) -> tuple[dt.date, dt.date]:
+    start_text = item.parameters.get("SDate")
+    end_text = item.parameters.get("EDate")
+    if not start_text or not end_text:
+        raise ValueError(f"missing interval parameters for item_id={item.item_id}")
+    return (dt.date.fromisoformat(str(start_text)), dt.date.fromisoformat(str(end_text)))
+
+
+def _build_ownership_universe_interval_batch(
+    items: list[RequestItem],
+    start_date: dt.date,
+    end_date: dt.date,
+) -> Any:
+    start_text = start_date.isoformat()
+    end_text = end_date.isoformat()
+    return build_batch_definition(
+        items,
+        batch_key=f"{start_text}|{end_text}",
+        parameters={"StatType": 7, "SDate": start_text, "EDate": end_text},
+    )
 
 
 def _build_doc_ownership_exact_items(request_df: pl.DataFrame) -> list[RequestItem]:
@@ -612,13 +789,18 @@ def _normalize_ownership_universe_batch_response(items: list[Any], frame: pl.Dat
     rows: list[dict[str, Any]] = []
     for item in items:
         handoff_row = dict(item.payload["handoff_row"])
+        item_start_date, item_end_date = _item_window(item)
         matched_rows = rows_by_instrument.get(item.instrument, [])
         for matched_row in matched_rows:
             returned_ric = _normalize_lookup_text(matched_row.get("instrument"))
             returned_date = _normalize_date_value(matched_row.get("TR.CategoryOwnershipPct.Date"))
             returned_value = _normalize_float_value(matched_row.get("TR.CategoryOwnershipPct"))
             returned_category = _normalize_lookup_text(matched_row.get("TR.InstrStatTypeValue"))
-            if returned_date is None and returned_value is None and returned_category is None:
+            if returned_date is None:
+                continue
+            if not (item_start_date <= returned_date <= item_end_date):
+                continue
+            if returned_value is None and returned_category is None:
                 continue
             rows.append(
                 {
@@ -742,3 +924,19 @@ def _build_ownership_results_with_item_id_df(rows: list[dict[str, Any]]) -> pl.D
         pl.DataFrame(rows, infer_schema_length=None),
         schema,
     ).select(["item_id", *OWNERSHIP_UNIVERSE_RESULTS_COLUMNS])
+
+
+def _resolved_stage_output_paths(
+    *,
+    stage: str,
+    staging_dir: Path,
+    ledger_path: Path | str | None,
+) -> list[Path]:
+    if ledger_path is None:
+        return sorted(staging_dir.glob("*.parquet"))
+    ledger = RequestLedger(ledger_path)
+    return [
+        path
+        for path in ledger.succeeded_stage_output_paths(stage=stage)
+        if path.exists()
+    ]

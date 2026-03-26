@@ -230,6 +230,18 @@ def _target_effective_date_for_quarter_end(target_quarter_end: dt.date) -> dt.da
     return target_quarter_end + dt.timedelta(days=1)
 
 
+def _clip_date_lower(value: dt.date | None, lower_bound: dt.date | None) -> dt.date | None:
+    if value is None or lower_bound is None:
+        return value
+    return max(value, lower_bound)
+
+
+def _clip_date_upper(value: dt.date | None, upper_bound: dt.date | None) -> dt.date | None:
+    if value is None or upper_bound is None:
+        return value
+    return min(value, upper_bound)
+
+
 def _read_doc_filing_artifact(parquet_path: Path | str) -> pl.DataFrame:
     parquet_path = Path(parquet_path)
     if not parquet_path.exists():
@@ -323,7 +335,17 @@ def build_refinitiv_lm2011_doc_ownership_requests(
     doc_filing_df: pl.DataFrame,
     authority_decisions_df: pl.DataFrame,
     authority_exceptions_df: pl.DataFrame,
+    *,
+    request_min_date: dt.date | None = None,
+    request_max_date: dt.date | None = None,
 ) -> pl.DataFrame:
+    if (
+        request_min_date is not None
+        and request_max_date is not None
+        and request_min_date > request_max_date
+    ):
+        raise ValueError("request_min_date must be <= request_max_date")
+
     decisions_by_permno = {
         _normalize_kypermno(row["KYPERMNO"]): row
         for row in authority_decisions_df.to_dicts()
@@ -403,6 +425,16 @@ def build_refinitiv_lm2011_doc_ownership_requests(
                 authoritative_ric = decision_authoritative_ric
             else:
                 retrieval_exclusion_reason = "no_authoritative_ric"
+
+        if retrieval_exclusion_reason is None and target_effective_date is not None:
+            if request_min_date is not None and target_effective_date < request_min_date:
+                retrieval_exclusion_reason = "target_effective_date_before_request_min_date"
+            elif request_max_date is not None and target_effective_date > request_max_date:
+                retrieval_exclusion_reason = "target_effective_date_after_request_max_date"
+
+        if retrieval_exclusion_reason is None:
+            fallback_window_start = _clip_date_lower(fallback_window_start, request_min_date)
+            fallback_window_end = _clip_date_upper(fallback_window_end, request_max_date)
 
         retrieval_eligible = authoritative_ric is not None and retrieval_exclusion_reason is None
         rows.append(
@@ -737,6 +769,8 @@ def run_refinitiv_lm2011_doc_ownership_exact_handoff_pipeline(
     authority_decisions_artifact_path: Path | str,
     authority_exceptions_artifact_path: Path | str,
     output_dir: Path | str,
+    request_min_date: dt.date | None = None,
+    request_max_date: dt.date | None = None,
 ) -> dict[str, Path]:
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -745,6 +779,8 @@ def run_refinitiv_lm2011_doc_ownership_exact_handoff_pipeline(
         _read_doc_filing_artifact(doc_filing_artifact_path),
         _read_authority_decisions_artifact(authority_decisions_artifact_path),
         _read_authority_exceptions_artifact(authority_exceptions_artifact_path),
+        request_min_date=request_min_date,
+        request_max_date=request_max_date,
     )
 
     requests_parquet_path = output_dir / "refinitiv_lm2011_doc_ownership_exact_requests.parquet"

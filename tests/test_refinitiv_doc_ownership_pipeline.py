@@ -11,6 +11,7 @@ from thesis_pkg.pipeline import (
     run_refinitiv_lm2011_doc_ownership_fallback_handoff_pipeline,
     run_refinitiv_lm2011_doc_ownership_finalize_pipeline,
 )
+from thesis_pkg.pipelines.refinitiv import lseg_ownership_api
 from thesis_pkg.pipelines.refinitiv.doc_ownership import (
     DOC_OWNERSHIP_BLOCK_HEADERS,
     DOC_OWNERSHIP_INPUT_FIELDS,
@@ -176,6 +177,143 @@ def test_build_refinitiv_lm2011_doc_ownership_requests_handles_static_exception_
 
     assert rows["doc_no_authority"]["retrieval_eligible"] is False
     assert rows["doc_no_authority"]["retrieval_exclusion_reason"] == "no_authoritative_ric"
+
+
+def test_build_refinitiv_lm2011_doc_ownership_requests_applies_request_bounds(tmp_path: Path) -> None:
+    doc_filing_path, authority_decisions_path, authority_exceptions_path = _build_doc_ownership_inputs(tmp_path)
+    request_df = build_refinitiv_lm2011_doc_ownership_requests(
+        pl.read_parquet(doc_filing_path),
+        pl.read_parquet(authority_decisions_path),
+        pl.read_parquet(authority_exceptions_path),
+        request_min_date=date(2024, 4, 1),
+        request_max_date=date(2024, 12, 31),
+    )
+    rows = {row["doc_id"]: row for row in request_df.to_dicts()}
+
+    assert rows["doc_exact"]["retrieval_eligible"] is True
+    assert rows["doc_exact"]["target_effective_date"] == date(2024, 4, 1)
+    assert rows["doc_exact"]["fallback_window_start"] == date(2024, 4, 1)
+    assert rows["doc_exact"]["fallback_window_end"] == date(2024, 4, 15)
+
+    assert rows["doc_exception"]["retrieval_eligible"] is True
+    assert rows["doc_exception"]["target_effective_date"] == date(2024, 7, 1)
+    assert rows["doc_exception"]["fallback_window_start"] == date(2024, 7, 1)
+    assert rows["doc_exception"]["fallback_window_end"] == date(2024, 8, 15)
+
+
+def test_build_refinitiv_lm2011_doc_ownership_requests_marks_pre_min_docs_ineligible(tmp_path: Path) -> None:
+    doc_filing_path, authority_decisions_path, authority_exceptions_path = _build_doc_ownership_inputs(tmp_path)
+    request_df = build_refinitiv_lm2011_doc_ownership_requests(
+        pl.read_parquet(doc_filing_path),
+        pl.read_parquet(authority_decisions_path),
+        pl.read_parquet(authority_exceptions_path),
+        request_min_date=date(2024, 5, 1),
+        request_max_date=date(2024, 12, 31),
+    )
+    rows = {row["doc_id"]: row for row in request_df.to_dicts()}
+
+    assert rows["doc_exact"]["retrieval_eligible"] is False
+    assert rows["doc_exact"]["retrieval_exclusion_reason"] == "target_effective_date_before_request_min_date"
+    assert rows["doc_fallback"]["retrieval_eligible"] is False
+    assert rows["doc_fallback"]["retrieval_exclusion_reason"] == "target_effective_date_before_request_min_date"
+
+
+def test_build_refinitiv_lm2011_doc_ownership_requests_marks_post_max_docs_ineligible(tmp_path: Path) -> None:
+    doc_filing_path, authority_decisions_path, authority_exceptions_path = _build_doc_ownership_inputs(tmp_path)
+    late_doc_df = pl.read_parquet(doc_filing_path).vstack(
+        pl.DataFrame({"doc_id": ["doc_post_max"], "filing_date": [date(2025, 2, 15)], "kypermno": ["100"]})
+    )
+    request_df = build_refinitiv_lm2011_doc_ownership_requests(
+        late_doc_df,
+        pl.read_parquet(authority_decisions_path),
+        pl.read_parquet(authority_exceptions_path),
+        request_min_date=date(2024, 1, 1),
+        request_max_date=date(2024, 12, 31),
+    )
+    rows = {row["doc_id"]: row for row in request_df.to_dicts()}
+
+    assert rows["doc_post_max"]["retrieval_eligible"] is False
+    assert rows["doc_post_max"]["retrieval_exclusion_reason"] == "target_effective_date_after_request_max_date"
+
+
+def test_doc_ownership_exact_handoff_pipeline_threads_request_bounds(tmp_path: Path) -> None:
+    doc_filing_path, authority_decisions_path, authority_exceptions_path = _build_doc_ownership_inputs(tmp_path)
+    output_dir = tmp_path / "refinitiv_doc_ownership_lm2011"
+
+    exact_paths = run_refinitiv_lm2011_doc_ownership_exact_handoff_pipeline(
+        doc_filing_artifact_path=doc_filing_path,
+        authority_decisions_artifact_path=authority_decisions_path,
+        authority_exceptions_artifact_path=authority_exceptions_path,
+        output_dir=output_dir,
+        request_min_date=date(2024, 5, 1),
+        request_max_date=date(2024, 12, 31),
+    )
+    exact_request_df = pl.read_parquet(exact_paths["refinitiv_lm2011_doc_ownership_exact_requests_parquet"])
+    rows = {row["doc_id"]: row for row in exact_request_df.to_dicts()}
+
+    assert rows["doc_exact"]["retrieval_eligible"] is False
+    assert rows["doc_exact"]["retrieval_exclusion_reason"] == "target_effective_date_before_request_min_date"
+    assert rows["doc_exception"]["retrieval_eligible"] is True
+
+
+def test_doc_ownership_exact_api_pipeline_threads_request_bounds(tmp_path: Path, monkeypatch) -> None:
+    doc_filing_path, authority_decisions_path, authority_exceptions_path = _build_doc_ownership_inputs(tmp_path)
+    output_dir = tmp_path / "refinitiv_doc_ownership_lm2011"
+    captured: dict[str, object] = {}
+
+    def fake_build_requests(
+        doc_filing_df: pl.DataFrame,
+        authority_decisions_df: pl.DataFrame,
+        authority_exceptions_df: pl.DataFrame,
+        *,
+        request_min_date=None,
+        request_max_date=None,
+    ) -> pl.DataFrame:
+        captured["request_min_date"] = request_min_date
+        captured["request_max_date"] = request_max_date
+        return build_refinitiv_lm2011_doc_ownership_requests(
+            doc_filing_df,
+            authority_decisions_df,
+            authority_exceptions_df,
+            request_min_date=request_min_date,
+            request_max_date=request_max_date,
+        )
+
+    class _StageRun:
+        def __init__(self, staging_dir: Path) -> None:
+            self.staging_dir = staging_dir
+            self.run_session_id = "test-session"
+
+    class _AuditResult:
+        passed = True
+
+        @staticmethod
+        def to_dict() -> dict[str, object]:
+            return {}
+
+    monkeypatch.setattr(lseg_ownership_api, "build_refinitiv_lm2011_doc_ownership_requests", fake_build_requests)
+    monkeypatch.setattr(lseg_ownership_api, "run_api_batches", lambda **kwargs: _StageRun(output_dir / "staging"))
+    monkeypatch.setattr(
+        lseg_ownership_api,
+        "_assemble_doc_raw",
+        lambda staging_dir, **kwargs: pl.DataFrame(schema=lseg_ownership_api._doc_ownership_raw_schema()).select(
+            lseg_ownership_api.DOC_OWNERSHIP_RAW_COLUMNS
+        ),
+    )
+    monkeypatch.setattr(lseg_ownership_api, "audit_api_stage", lambda **kwargs: _AuditResult())
+    monkeypatch.setattr(lseg_ownership_api, "write_stage_completion_manifest", lambda **kwargs: None)
+
+    lseg_ownership_api.run_refinitiv_lm2011_doc_ownership_exact_api_pipeline(
+        doc_filing_artifact_path=doc_filing_path,
+        authority_decisions_artifact_path=authority_decisions_path,
+        authority_exceptions_artifact_path=authority_exceptions_path,
+        output_dir=output_dir,
+        request_min_date=date(2024, 5, 1),
+        request_max_date=date(2024, 12, 31),
+    )
+
+    assert captured["request_min_date"] == date(2024, 5, 1)
+    assert captured["request_max_date"] == date(2024, 12, 31)
 
 
 def test_doc_ownership_workbooks_write_expected_exact_and_fallback_formulas(tmp_path: Path) -> None:
