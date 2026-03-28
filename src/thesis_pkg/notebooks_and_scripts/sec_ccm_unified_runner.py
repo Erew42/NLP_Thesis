@@ -255,6 +255,7 @@ from thesis_pkg.pipeline import (
     SEC_CCM_PHASE_B_DAILY_FEATURE_COLUMNS,
     SecCcmJoinSpecV2,
     attach_lm2011_industry_classifications,
+    build_refinitiv_lm2011_doc_ownership_requests,
     build_lm2011_sample_backbone,
     build_quarterly_accounting_panel,
     build_or_reuse_ccm_daily_stage,
@@ -281,6 +282,8 @@ from thesis_pkg.pipeline import (
     run_refinitiv_step1_bridge_pipeline,
     run_sec_ccm_premerge_pipeline,
 )
+from thesis_pkg.pipelines.refinitiv.doc_ownership import _build_lm2011_doc_ownership_universe_diagnostics
+from thesis_pkg.pipelines.refinitiv.lseg_ledger import LsegResumeCompatibilityError
 
 LSEG_API_READY = is_lseg_available()
 
@@ -370,6 +373,86 @@ def _value_counts(path: Path, column: str) -> dict[str, int] | None:
         .collect()
         .to_dicts()
     }
+
+
+def _write_json_payload(path: Path, payload: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def _json_payload(path: Path) -> dict[str, object] | None:
+    if not path.exists() or path.suffix.lower() != ".json":
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _json_value(path: Path, key: str) -> object | None:
+    payload = _json_payload(path)
+    if payload is None:
+        return None
+    return payload.get(key)
+
+
+def _existing_year_parquet_paths(year_dir: Path, years: list[int]) -> list[Path]:
+    return [year_dir / f"{year}.parquet" for year in years if (year_dir / f"{year}.parquet").exists()]
+
+
+def _write_lm2011_backbone_artifact(
+    *,
+    sec_year_paths: list[Path],
+    matched_clean_path: Path,
+    filingdates_path: Path,
+    output_path: Path,
+) -> Path:
+    if not sec_year_paths:
+        raise FileNotFoundError("No SEC year-merged parquet inputs found for LM2011 backbone construction")
+    if not matched_clean_path.exists():
+        raise FileNotFoundError(f"matched_clean parquet not found: {matched_clean_path}")
+    if not filingdates_path.exists():
+        raise FileNotFoundError(f"filingdates parquet not found: {filingdates_path}")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    build_lm2011_sample_backbone(
+        pl.scan_parquet([str(path) for path in sec_year_paths]),
+        pl.scan_parquet(matched_clean_path),
+        ccm_filingdates_lf=pl.scan_parquet(filingdates_path),
+    ).sink_parquet(output_path, compression="zstd")
+    return output_path
+
+
+def _write_doc_ownership_universe_diagnostics(
+    *,
+    output_dir: Path,
+    stage_label: str,
+    backbone_df: pl.DataFrame,
+    request_df: pl.DataFrame,
+    final_df: pl.DataFrame | None = None,
+    write_request_snapshot: bool = False,
+) -> tuple[dict[str, Path], dict[str, object]]:
+    tables, summary = _build_lm2011_doc_ownership_universe_diagnostics(
+        backbone_df,
+        request_df,
+        final_df=final_df,
+    )
+    output_dir.mkdir(parents=True, exist_ok=True)
+    artifact_paths: dict[str, Path] = {}
+    if write_request_snapshot:
+        requests_path = output_dir / f"refinitiv_lm2011_doc_ownership_{stage_label}_requests.parquet"
+        request_df.write_parquet(requests_path, compression="zstd")
+        artifact_paths[f"refinitiv_lm2011_doc_ownership_{stage_label}_requests_parquet"] = requests_path
+    detail_path = output_dir / f"refinitiv_lm2011_doc_ownership_{stage_label}_universe_detail.parquet"
+    breakdown_path = output_dir / f"refinitiv_lm2011_doc_ownership_{stage_label}_universe_breakdown.parquet"
+    summary_path = output_dir / f"refinitiv_lm2011_doc_ownership_{stage_label}_summary.json"
+    tables["detail"].write_parquet(detail_path, compression="zstd")
+    tables["breakdown"].write_parquet(breakdown_path, compression="zstd")
+    _write_json_payload(summary_path, summary)
+    artifact_paths.update(
+        {
+            f"refinitiv_lm2011_doc_ownership_{stage_label}_universe_detail_parquet": detail_path,
+            f"refinitiv_lm2011_doc_ownership_{stage_label}_universe_breakdown_parquet": breakdown_path,
+            f"refinitiv_lm2011_doc_ownership_{stage_label}_summary_json": summary_path,
+        }
+    )
+    return artifact_paths, summary
 
 
 def main() -> None:
@@ -563,19 +646,19 @@ def main() -> None:
     )
     RUN_REFINITIV_ANALYST_REQUEST_GROUPS = _env_bool(
         "SEC_CCM_RUN_REFINITIV_ANALYST_REQUEST_GROUPS",
-        True,
+        False,
     )
     RUN_REFINITIV_ANALYST_ACTUALS = _env_bool(
         "SEC_CCM_RUN_REFINITIV_ANALYST_ACTUALS",
-        True,
+        False,
     )
     RUN_REFINITIV_ANALYST_ESTIMATES_MONTHLY = _env_bool(
         "SEC_CCM_RUN_REFINITIV_ANALYST_ESTIMATES_MONTHLY",
-        True,
+        False,
     )
     RUN_REFINITIV_ANALYST_NORMALIZE = _env_bool(
         "SEC_CCM_RUN_REFINITIV_ANALYST_NORMALIZE",
-        True,
+        False,
     )
     REFINITIV_PROVIDER_SESSION_NAME = _env_str(
         "SEC_CCM_REFINITIV_PROVIDER_SESSION_NAME",
@@ -1088,9 +1171,12 @@ def main() -> None:
     refinitiv_analyst_actuals_paths: dict[str, Path] | None = None
     refinitiv_analyst_estimates_paths: dict[str, Path] | None = None
     refinitiv_analyst_normalize_paths: dict[str, Path] | None = None
+    lm2011_backbone_artifact_paths: dict[str, Path] | None = None
     refinitiv_doc_ownership_exact_paths: dict[str, Path] | None = None
     refinitiv_doc_ownership_fallback_paths: dict[str, Path] | None = None
     refinitiv_doc_ownership_finalize_paths: dict[str, Path] | None = None
+    refinitiv_doc_ownership_preflight_paths: dict[str, Path] | None = None
+    refinitiv_doc_ownership_postfinal_paths: dict[str, Path] | None = None
     refinitiv_doc_analyst_anchor_paths: dict[str, Path] | None = None
     refinitiv_doc_analyst_select_paths: dict[str, Path] | None = None
     refinitiv_artifact_stages: list[_ArtifactStage] = []
@@ -1357,24 +1443,31 @@ def main() -> None:
             else REFINITIV_ANALYST_COMMON_STOCK_DIR / "refinitiv_analyst_request_universe_common_stock.parquet"
         )
         if LSEG_API_READY and analyst_request_universe_path.exists():
-            refinitiv_analyst_actuals_paths = run_refinitiv_step1_analyst_actuals_api_pipeline(
-                request_universe_parquet_path=analyst_request_universe_path,
-                output_dir=REFINITIV_ANALYST_COMMON_STOCK_DIR,
-                max_batch_size=REFINITIV_ANALYST_ACTUALS_BATCH_SIZE,
-                max_batch_items=REFINITIV_ANALYST_ACTUALS_MAX_BATCH_ITEMS,
-                max_extra_rows_abs=REFINITIV_ANALYST_ACTUALS_MAX_EXTRA_ROWS_ABS,
-                max_extra_rows_ratio=REFINITIV_ANALYST_ACTUALS_MAX_EXTRA_ROWS_RATIO,
-                max_union_span_days=REFINITIV_ANALYST_ACTUALS_MAX_UNION_SPAN_DAYS,
-                row_density_rows_per_day=REFINITIV_ANALYST_ACTUALS_ROW_DENSITY_ROWS_PER_DAY,
-                min_seconds_between_requests=REFINITIV_MIN_SECONDS_BETWEEN_REQUESTS,
-                min_seconds_between_request_starts_total=REFINITIV_MIN_SECONDS_BETWEEN_REQUEST_STARTS_TOTAL,
-                max_attempts=REFINITIV_MAX_ATTEMPTS,
-                max_workers=REFINITIV_MAX_WORKERS,
-                provider_session_name=REFINITIV_PROVIDER_SESSION_NAME,
-                provider_config_name=REFINITIV_PROVIDER_CONFIG_NAME,
-                provider_timeout_seconds=REFINITIV_PROVIDER_TIMEOUT_SECONDS,
-                preflight_probe=REFINITIV_PREFLIGHT_PROBE,
-            )
+            try:
+                refinitiv_analyst_actuals_paths = run_refinitiv_step1_analyst_actuals_api_pipeline(
+                    request_universe_parquet_path=analyst_request_universe_path,
+                    output_dir=REFINITIV_ANALYST_COMMON_STOCK_DIR,
+                    max_batch_size=REFINITIV_ANALYST_ACTUALS_BATCH_SIZE,
+                    max_batch_items=REFINITIV_ANALYST_ACTUALS_MAX_BATCH_ITEMS,
+                    max_extra_rows_abs=REFINITIV_ANALYST_ACTUALS_MAX_EXTRA_ROWS_ABS,
+                    max_extra_rows_ratio=REFINITIV_ANALYST_ACTUALS_MAX_EXTRA_ROWS_RATIO,
+                    max_union_span_days=REFINITIV_ANALYST_ACTUALS_MAX_UNION_SPAN_DAYS,
+                    row_density_rows_per_day=REFINITIV_ANALYST_ACTUALS_ROW_DENSITY_ROWS_PER_DAY,
+                    min_seconds_between_requests=REFINITIV_MIN_SECONDS_BETWEEN_REQUESTS,
+                    min_seconds_between_request_starts_total=REFINITIV_MIN_SECONDS_BETWEEN_REQUEST_STARTS_TOTAL,
+                    max_attempts=REFINITIV_MAX_ATTEMPTS,
+                    max_workers=REFINITIV_MAX_WORKERS,
+                    provider_session_name=REFINITIV_PROVIDER_SESSION_NAME,
+                    provider_config_name=REFINITIV_PROVIDER_CONFIG_NAME,
+                    provider_timeout_seconds=REFINITIV_PROVIDER_TIMEOUT_SECONDS,
+                    preflight_probe=REFINITIV_PREFLIGHT_PROBE,
+                )
+            except LsegResumeCompatibilityError as exc:
+                raise SystemExit(
+                    "Refinitiv analyst actuals stage was enabled for this run and hit an incompatible resume state.\n"
+                    f"Request universe path: {analyst_request_universe_path}\n"
+                    f"{exc}"
+                ) from exc
             _record_refinitiv_stage(
                 "refinitiv_analyst_actuals",
                 refinitiv_analyst_actuals_paths,
@@ -1396,24 +1489,32 @@ def main() -> None:
             else REFINITIV_ANALYST_COMMON_STOCK_DIR / "refinitiv_analyst_request_universe_common_stock.parquet"
         )
         if LSEG_API_READY and analyst_request_universe_path.exists():
-            refinitiv_analyst_estimates_paths = run_refinitiv_step1_analyst_estimates_monthly_api_pipeline(
-                request_universe_parquet_path=analyst_request_universe_path,
-                output_dir=REFINITIV_ANALYST_COMMON_STOCK_DIR,
-                max_batch_size=REFINITIV_ANALYST_ESTIMATES_BATCH_SIZE,
-                max_batch_items=REFINITIV_ANALYST_ESTIMATES_MAX_BATCH_ITEMS,
-                max_extra_rows_abs=REFINITIV_ANALYST_ESTIMATES_MAX_EXTRA_ROWS_ABS,
-                max_extra_rows_ratio=REFINITIV_ANALYST_ESTIMATES_MAX_EXTRA_ROWS_RATIO,
-                max_union_span_days=REFINITIV_ANALYST_ESTIMATES_MAX_UNION_SPAN_DAYS,
-                row_density_rows_per_day=REFINITIV_ANALYST_ESTIMATES_ROW_DENSITY_ROWS_PER_DAY,
-                min_seconds_between_requests=REFINITIV_MIN_SECONDS_BETWEEN_REQUESTS,
-                min_seconds_between_request_starts_total=REFINITIV_MIN_SECONDS_BETWEEN_REQUEST_STARTS_TOTAL,
-                max_attempts=REFINITIV_MAX_ATTEMPTS,
-                max_workers=REFINITIV_MAX_WORKERS,
-                provider_session_name=REFINITIV_PROVIDER_SESSION_NAME,
-                provider_config_name=REFINITIV_PROVIDER_CONFIG_NAME,
-                provider_timeout_seconds=REFINITIV_PROVIDER_TIMEOUT_SECONDS,
-                preflight_probe=REFINITIV_PREFLIGHT_PROBE,
-            )
+            try:
+                refinitiv_analyst_estimates_paths = run_refinitiv_step1_analyst_estimates_monthly_api_pipeline(
+                    request_universe_parquet_path=analyst_request_universe_path,
+                    output_dir=REFINITIV_ANALYST_COMMON_STOCK_DIR,
+                    max_batch_size=REFINITIV_ANALYST_ESTIMATES_BATCH_SIZE,
+                    max_batch_items=REFINITIV_ANALYST_ESTIMATES_MAX_BATCH_ITEMS,
+                    max_extra_rows_abs=REFINITIV_ANALYST_ESTIMATES_MAX_EXTRA_ROWS_ABS,
+                    max_extra_rows_ratio=REFINITIV_ANALYST_ESTIMATES_MAX_EXTRA_ROWS_RATIO,
+                    max_union_span_days=REFINITIV_ANALYST_ESTIMATES_MAX_UNION_SPAN_DAYS,
+                    row_density_rows_per_day=REFINITIV_ANALYST_ESTIMATES_ROW_DENSITY_ROWS_PER_DAY,
+                    min_seconds_between_requests=REFINITIV_MIN_SECONDS_BETWEEN_REQUESTS,
+                    min_seconds_between_request_starts_total=REFINITIV_MIN_SECONDS_BETWEEN_REQUEST_STARTS_TOTAL,
+                    max_attempts=REFINITIV_MAX_ATTEMPTS,
+                    max_workers=REFINITIV_MAX_WORKERS,
+                    provider_session_name=REFINITIV_PROVIDER_SESSION_NAME,
+                    provider_config_name=REFINITIV_PROVIDER_CONFIG_NAME,
+                    provider_timeout_seconds=REFINITIV_PROVIDER_TIMEOUT_SECONDS,
+                    preflight_probe=REFINITIV_PREFLIGHT_PROBE,
+                )
+            except LsegResumeCompatibilityError as exc:
+                raise SystemExit(
+                    "Refinitiv analyst estimates monthly stage was enabled for this run and hit an incompatible "
+                    "resume state.\n"
+                    f"Request universe path: {analyst_request_universe_path}\n"
+                    f"{exc}"
+                ) from exc
             _record_refinitiv_stage(
                 "refinitiv_analyst_estimates_monthly",
                 refinitiv_analyst_estimates_paths,
@@ -1439,6 +1540,17 @@ def main() -> None:
             if refinitiv_analyst_estimates_paths is not None
             else REFINITIV_ANALYST_COMMON_STOCK_DIR / "refinitiv_analyst_estimates_monthly_raw.parquet"
         )
+        if not RUN_REFINITIV_ANALYST_ACTUALS or not RUN_REFINITIV_ANALYST_ESTIMATES_MONTHLY:
+            print(
+                {
+                    "info": "reusing existing analyst raw artifacts for normalization because upstream analyst API "
+                    "stage flags are disabled",
+                    "run_refinitiv_analyst_actuals": RUN_REFINITIV_ANALYST_ACTUALS,
+                    "run_refinitiv_analyst_estimates_monthly": RUN_REFINITIV_ANALYST_ESTIMATES_MONTHLY,
+                    "actuals_raw_path": str(analyst_actuals_raw_path),
+                    "estimates_raw_path": str(analyst_estimates_raw_path),
+                }
+            )
         if analyst_actuals_raw_path.exists() and analyst_estimates_raw_path.exists():
             refinitiv_analyst_normalize_paths = run_refinitiv_step1_analyst_normalize_pipeline(
                 actuals_raw_artifact_path=analyst_actuals_raw_path,
@@ -1601,6 +1713,7 @@ def main() -> None:
     # ## 5) SEC-CCM pre-merge
     sec_ccm_paths: dict[str, Path] | None = None
     lm2011_industry_enriched_path: Path | None = None
+    lm2011_backbone_path: Path | None = None
 
     if RUN_SEC_CCM_PREMERGE:
         join_spec_base = SecCcmJoinSpecV2(
@@ -1676,12 +1789,75 @@ def main() -> None:
                 }
             )
 
-    if RUN_REFINITIV_DOC_OWNERSHIP_LM2011_EXACT_HANDOFF:
-        doc_filing_artifact_path = (
-            Path(sec_ccm_paths["sec_ccm_matched_clean_filtered"])
-            if sec_ccm_paths is not None
-            else SEC_CCM_OUTPUT_DIR / "sec_ccm_matched_clean_filtered.parquet"
+    requires_lm2011_backbone = (
+        RUN_REFINITIV_DOC_OWNERSHIP_LM2011_EXACT_HANDOFF
+        or RUN_REFINITIV_DOC_OWNERSHIP_LM2011_FINALIZE
+        or RUN_REFINITIV_DOC_ANALYST_LM2011_ANCHORS
+    )
+    lm2011_backbone_candidate_path = SEC_CCM_OUTPUT_DIR / "lm2011_sample_backbone.parquet"
+    lm2011_matched_clean_path = (
+        Path(sec_ccm_paths["sec_ccm_matched_clean"])
+        if sec_ccm_paths is not None
+        else SEC_CCM_OUTPUT_DIR / "sec_ccm_matched_clean.parquet"
+    )
+    lm2011_year_paths = _existing_year_parquet_paths(SEC_YEAR_MERGED_DIR, YEARS)
+    try:
+        lm2011_filingdates_path = _resolve_ccm_parquet_artifact(CCM_BASE_DIR, "filingdates.parquet")
+    except FileNotFoundError:
+        lm2011_filingdates_path = None
+    can_build_lm2011_backbone = (
+        bool(lm2011_year_paths)
+        and lm2011_matched_clean_path.exists()
+        and lm2011_filingdates_path is not None
+        and lm2011_filingdates_path.exists()
+    )
+    should_build_lm2011_backbone = RUN_SEC_CCM_PREMERGE or (
+        requires_lm2011_backbone and not lm2011_backbone_candidate_path.exists()
+    )
+    if should_build_lm2011_backbone:
+        if can_build_lm2011_backbone:
+            lm2011_backbone_path = _write_lm2011_backbone_artifact(
+                sec_year_paths=lm2011_year_paths,
+                matched_clean_path=lm2011_matched_clean_path,
+                filingdates_path=lm2011_filingdates_path,
+                output_path=lm2011_backbone_candidate_path,
+            )
+            print("lm2011_backbone_path:", lm2011_backbone_path)
+        elif requires_lm2011_backbone:
+            raise RuntimeError(
+                "LM2011 backbone artifact is required for enabled LM2011 Refinitiv stages but could not be built.\n"
+                f"Expected year paths: {[str(path) for path in lm2011_year_paths]}\n"
+                f"Matched clean path: {lm2011_matched_clean_path}\n"
+                f"Filingdates path: {lm2011_filingdates_path}"
+            )
+        else:
+            print(
+                {
+                    "warning": "skipping canonical LM2011 backbone build; required inputs not found",
+                    "year_paths": [str(path) for path in lm2011_year_paths],
+                    "matched_clean_path": str(lm2011_matched_clean_path),
+                    "filingdates_path": None if lm2011_filingdates_path is None else str(lm2011_filingdates_path),
+                }
+            )
+    elif lm2011_backbone_candidate_path.exists():
+        lm2011_backbone_path = lm2011_backbone_candidate_path
+        print("lm2011_backbone_path:", lm2011_backbone_path)
+    elif requires_lm2011_backbone:
+        raise RuntimeError(
+            "LM2011 backbone artifact is required for enabled LM2011 Refinitiv stages but was not found.\n"
+            f"Expected artifact path: {lm2011_backbone_candidate_path}"
         )
+
+    if lm2011_backbone_path is not None:
+        lm2011_backbone_artifact_paths = {
+            "lm2011_sample_backbone_parquet": lm2011_backbone_path,
+        }
+        _record_refinitiv_stage("lm2011_backbone", lm2011_backbone_artifact_paths)
+
+    if RUN_REFINITIV_DOC_OWNERSHIP_LM2011_EXACT_HANDOFF:
+        if lm2011_backbone_path is None:
+            raise RuntimeError("LM2011 backbone artifact is required before LM2011 doc ownership exact retrieval")
+        doc_filing_artifact_path = lm2011_backbone_path
         authority_decisions_artifact_path = (
             refinitiv_ownership_authority_paths["refinitiv_permno_ownership_authority_decisions_parquet"]
             if refinitiv_ownership_authority_paths is not None
@@ -1697,6 +1873,32 @@ def main() -> None:
             and authority_decisions_artifact_path.exists()
             and authority_exceptions_artifact_path.exists()
         ):
+            preflight_request_df = build_refinitiv_lm2011_doc_ownership_requests(
+                pl.read_parquet(doc_filing_artifact_path),
+                pl.read_parquet(authority_decisions_artifact_path),
+                pl.read_parquet(authority_exceptions_artifact_path),
+                request_min_date=LSEG_REQUEST_MIN_DATE,
+                request_max_date=LSEG_REQUEST_MAX_DATE,
+            )
+            refinitiv_doc_ownership_preflight_paths, preflight_summary = _write_doc_ownership_universe_diagnostics(
+                output_dir=REFINITIV_DOC_OWNERSHIP_LM2011_DIR,
+                stage_label="preflight",
+                backbone_df=pl.read_parquet(doc_filing_artifact_path),
+                request_df=preflight_request_df,
+                write_request_snapshot=True,
+            )
+            _record_refinitiv_stage(
+                "refinitiv_doc_ownership_preflight",
+                refinitiv_doc_ownership_preflight_paths,
+            )
+            if not bool(preflight_summary["backbone_request_doc_sets_equal"]):
+                raise AssertionError(
+                    "LM2011 ownership preflight detected a request/backbone universe mismatch.\n"
+                    f"Backbone docs: {preflight_summary['backbone_doc_count']}\n"
+                    f"Request docs: {preflight_summary['request_doc_count']}\n"
+                    f"Backbone-only docs: {preflight_summary['backbone_only_doc_count']}\n"
+                    f"Request-only docs: {preflight_summary['request_only_doc_count']}"
+                )
             if LSEG_API_READY:
                 refinitiv_doc_ownership_exact_paths = run_refinitiv_lm2011_doc_ownership_exact_api_pipeline(
                     doc_filing_artifact_path=doc_filing_artifact_path,
@@ -1793,6 +1995,8 @@ def main() -> None:
                 }
             )
     if RUN_REFINITIV_DOC_OWNERSHIP_LM2011_FINALIZE:
+        if lm2011_backbone_path is None:
+            raise RuntimeError("LM2011 backbone artifact is required before LM2011 doc ownership finalize diagnostics")
         fallback_requests_path = (
             refinitiv_doc_ownership_fallback_paths["refinitiv_lm2011_doc_ownership_fallback_requests_parquet"]
             if refinitiv_doc_ownership_fallback_paths is not None
@@ -1837,6 +2041,34 @@ def main() -> None:
                 )
                 for key in sorted(refinitiv_doc_ownership_finalize_paths):
                     print(f"{key}: {refinitiv_doc_ownership_finalize_paths[key]}")
+                exact_requests_path = (
+                    refinitiv_doc_ownership_exact_paths["refinitiv_lm2011_doc_ownership_exact_requests_parquet"]
+                    if refinitiv_doc_ownership_exact_paths is not None
+                    else REFINITIV_DOC_OWNERSHIP_LM2011_DIR / "refinitiv_lm2011_doc_ownership_exact_requests.parquet"
+                )
+                final_output_path = refinitiv_doc_ownership_finalize_paths["refinitiv_lm2011_doc_ownership_parquet"]
+                if exact_requests_path.exists() and final_output_path.exists():
+                    refinitiv_doc_ownership_postfinal_paths, postfinal_summary = _write_doc_ownership_universe_diagnostics(
+                        output_dir=REFINITIV_DOC_OWNERSHIP_LM2011_DIR,
+                        stage_label="postfinal",
+                        backbone_df=pl.read_parquet(lm2011_backbone_path),
+                        request_df=pl.read_parquet(exact_requests_path),
+                        final_df=pl.read_parquet(final_output_path),
+                    )
+                    _record_refinitiv_stage(
+                        "refinitiv_doc_ownership_postfinal",
+                        refinitiv_doc_ownership_postfinal_paths,
+                    )
+                    if not bool(postfinal_summary["all_doc_sets_equal"]):
+                        raise AssertionError(
+                            "LM2011 ownership post-final universe mismatch detected.\n"
+                            f"Backbone docs: {postfinal_summary['backbone_doc_count']}\n"
+                            f"Request docs: {postfinal_summary['request_doc_count']}\n"
+                            f"Final docs: {postfinal_summary['final_doc_count']}\n"
+                            f"Backbone->final missing docs: {postfinal_summary['backbone_missing_from_final_doc_count']}\n"
+                            f"Request->final missing docs: {postfinal_summary['request_missing_from_final_doc_count']}\n"
+                            f"Final-only docs: {postfinal_summary['final_only_doc_count']}"
+                        )
         else:
             print(
                 {
@@ -1846,34 +2078,24 @@ def main() -> None:
                 }
             )
     if RUN_REFINITIV_DOC_ANALYST_LM2011_ANCHORS:
-        matched_clean_path = (
-            Path(sec_ccm_paths["sec_ccm_matched_clean"])
-            if sec_ccm_paths is not None
-            else SEC_CCM_OUTPUT_DIR / "sec_ccm_matched_clean.parquet"
-        )
+        if lm2011_backbone_path is None:
+            raise RuntimeError("LM2011 backbone artifact is required before LM2011 doc analyst anchor construction")
         quarterly_balance_sheet_path = _resolve_ccm_parquet_artifact(CCM_BASE_DIR, "balancesheetquarterly.parquet")
         quarterly_income_statement_path = _resolve_ccm_parquet_artifact(CCM_BASE_DIR, "incomestatementquarterly.parquet")
         quarterly_period_descriptor_path = _resolve_ccm_parquet_artifact(CCM_BASE_DIR, "perioddescriptorquarterly.parquet")
-        filingdates_path = _resolve_ccm_parquet_artifact(CCM_BASE_DIR, "filingdates.parquet")
         if (
-            matched_clean_path.exists()
+            lm2011_backbone_path.exists()
             and quarterly_balance_sheet_path.exists()
             and quarterly_income_statement_path.exists()
             and quarterly_period_descriptor_path.exists()
-            and filingdates_path.exists()
         ):
-            sample_backbone_lf = build_lm2011_sample_backbone(
-                pl.scan_parquet(matched_clean_path),
-                pl.scan_parquet(matched_clean_path),
-                ccm_filingdates_lf=pl.scan_parquet(filingdates_path),
-            )
             quarterly_accounting_panel_lf = build_quarterly_accounting_panel(
                 pl.scan_parquet(quarterly_balance_sheet_path),
                 pl.scan_parquet(quarterly_income_statement_path),
                 pl.scan_parquet(quarterly_period_descriptor_path),
             )
             refinitiv_doc_analyst_anchor_paths = run_refinitiv_lm2011_doc_analyst_anchor_pipeline(
-                sample_backbone_lf=sample_backbone_lf,
+                sample_backbone_lf=pl.scan_parquet(lm2011_backbone_path),
                 quarterly_accounting_panel_lf=quarterly_accounting_panel_lf,
                 output_dir=REFINITIV_DOC_ANALYST_LM2011_DIR,
             )
@@ -1887,11 +2109,10 @@ def main() -> None:
             print(
                 {
                     "warning": "skipping Refinitiv LM2011 doc analyst anchors; required inputs not found",
-                    "expected_matched_clean_path": str(matched_clean_path),
+                    "expected_lm2011_backbone_path": str(lm2011_backbone_path),
                     "expected_quarterly_balance_sheet_path": str(quarterly_balance_sheet_path),
                     "expected_quarterly_income_statement_path": str(quarterly_income_statement_path),
                     "expected_quarterly_period_descriptor_path": str(quarterly_period_descriptor_path),
-                    "expected_filingdates_path": str(filingdates_path),
                 }
             )
     if RUN_REFINITIV_DOC_ANALYST_LM2011_SELECT:
@@ -2180,9 +2401,15 @@ def main() -> None:
 
     if refinitiv_artifact_stages:
         refinitiv_manifest_path = REFINITIV_STEP1_OUT_DIR / "refinitiv_step1_manifest.json"
+        doc_ownership_preflight_summary_path = (
+            REFINITIV_DOC_OWNERSHIP_LM2011_DIR / "refinitiv_lm2011_doc_ownership_preflight_summary.json"
+        )
+        doc_ownership_postfinal_summary_path = (
+            REFINITIV_DOC_OWNERSHIP_LM2011_DIR / "refinitiv_lm2011_doc_ownership_postfinal_summary.json"
+        )
         refinitiv_manifest_payload = {
             "pipeline_name": "refinitiv_step1",
-            "artifact_version": "v2",
+            "artifact_version": "v3",
             "generated_at_utc": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "manual_inputs": {
                 "filled_extended_lookup_workbook": str(
@@ -2267,6 +2494,34 @@ def main() -> None:
                     REFINITIV_ANALYST_COMMON_STOCK_DIR
                     / "refinitiv_analyst_normalization_rejections.parquet"
                 ),
+                "lm2011_sample_backbone_rows": _row_count(SEC_CCM_OUTPUT_DIR / "lm2011_sample_backbone.parquet"),
+                "doc_ownership_preflight_request_rows": _row_count(
+                    REFINITIV_DOC_OWNERSHIP_LM2011_DIR / "refinitiv_lm2011_doc_ownership_preflight_requests.parquet"
+                ),
+                "doc_ownership_preflight_backbone_docs": _json_value(
+                    doc_ownership_preflight_summary_path,
+                    "backbone_doc_count",
+                ),
+                "doc_ownership_preflight_request_docs": _json_value(
+                    doc_ownership_preflight_summary_path,
+                    "request_doc_count",
+                ),
+                "doc_ownership_preflight_overlap_docs": _json_value(
+                    doc_ownership_preflight_summary_path,
+                    "backbone_request_overlap_doc_count",
+                ),
+                "doc_ownership_preflight_backbone_only_docs": _json_value(
+                    doc_ownership_preflight_summary_path,
+                    "backbone_only_doc_count",
+                ),
+                "doc_ownership_preflight_request_only_docs": _json_value(
+                    doc_ownership_preflight_summary_path,
+                    "request_only_doc_count",
+                ),
+                "doc_ownership_preflight_doc_sets_equal": _json_value(
+                    doc_ownership_preflight_summary_path,
+                    "backbone_request_doc_sets_equal",
+                ),
                 "doc_ownership_exact_request_rows": _row_count(
                     REFINITIV_DOC_OWNERSHIP_LM2011_DIR
                     / "refinitiv_lm2011_doc_ownership_exact_requests.parquet"
@@ -2299,6 +2554,50 @@ def main() -> None:
                 "doc_ownership_retrieval_status_counts": _value_counts(
                     REFINITIV_DOC_OWNERSHIP_LM2011_DIR / "refinitiv_lm2011_doc_ownership.parquet",
                     "retrieval_status",
+                ),
+                "doc_ownership_postfinal_backbone_docs": _json_value(
+                    doc_ownership_postfinal_summary_path,
+                    "backbone_doc_count",
+                ),
+                "doc_ownership_postfinal_request_docs": _json_value(
+                    doc_ownership_postfinal_summary_path,
+                    "request_doc_count",
+                ),
+                "doc_ownership_postfinal_final_docs": _json_value(
+                    doc_ownership_postfinal_summary_path,
+                    "final_doc_count",
+                ),
+                "doc_ownership_postfinal_backbone_overlap_docs": _json_value(
+                    doc_ownership_postfinal_summary_path,
+                    "final_backbone_overlap_doc_count",
+                ),
+                "doc_ownership_postfinal_request_overlap_docs": _json_value(
+                    doc_ownership_postfinal_summary_path,
+                    "final_request_overlap_doc_count",
+                ),
+                "doc_ownership_postfinal_backbone_only_docs": _json_value(
+                    doc_ownership_postfinal_summary_path,
+                    "backbone_only_doc_count",
+                ),
+                "doc_ownership_postfinal_request_only_docs": _json_value(
+                    doc_ownership_postfinal_summary_path,
+                    "request_only_doc_count",
+                ),
+                "doc_ownership_postfinal_backbone_missing_from_final_docs": _json_value(
+                    doc_ownership_postfinal_summary_path,
+                    "backbone_missing_from_final_doc_count",
+                ),
+                "doc_ownership_postfinal_request_missing_from_final_docs": _json_value(
+                    doc_ownership_postfinal_summary_path,
+                    "request_missing_from_final_doc_count",
+                ),
+                "doc_ownership_postfinal_final_only_docs": _json_value(
+                    doc_ownership_postfinal_summary_path,
+                    "final_only_doc_count",
+                ),
+                "doc_ownership_postfinal_all_doc_sets_equal": _json_value(
+                    doc_ownership_postfinal_summary_path,
+                    "all_doc_sets_equal",
                 ),
                 "doc_analyst_anchor_rows": _row_count(
                     REFINITIV_DOC_ANALYST_LM2011_DIR / "refinitiv_doc_analyst_request_anchors.parquet"

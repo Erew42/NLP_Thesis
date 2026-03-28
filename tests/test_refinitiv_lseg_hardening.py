@@ -25,6 +25,7 @@ from thesis_pkg.pipelines.refinitiv.lseg_provider import (
     LsegRequestError,
     LsegResponseMetadata,
 )
+from thesis_pkg.pipelines.refinitiv.lseg_ledger import LsegResumeCompatibilityError
 from thesis_pkg.pipelines.refinitiv.lseg_recovery import (
     build_doc_unresolved_recovery_artifact,
     build_lookup_unresolved_recovery_artifact,
@@ -356,7 +357,7 @@ def test_run_api_batches_rejects_mismatched_batch_plan_fingerprint(tmp_path: Pat
         batch_plan_fingerprint="plan-alpha",
     )
 
-    with pytest.raises(RuntimeError, match="batch_plan_fingerprint"):
+    with pytest.raises(LsegResumeCompatibilityError) as exc_info:
         run_api_batches(
             stage="test_stage",
             items=items,
@@ -376,6 +377,12 @@ def test_run_api_batches_rejects_mismatched_batch_plan_fingerprint(tmp_path: Pat
             planned_batches=[planned_batch],
             batch_plan_fingerprint="plan-beta",
         )
+    exc = exc_info.value
+    assert exc.stage == "test_stage"
+    assert exc.meta_key == "stage:test_stage:batch_plan_fingerprint"
+    assert exc.existing_value == "plan-alpha"
+    assert exc.current_value == "plan-beta"
+    assert exc.current_stage_meta["batch_plan_fingerprint"] == "plan-beta"
 
 
 def test_run_api_batches_accepts_matching_batch_plan_fingerprint_on_resume(tmp_path: Path) -> None:
@@ -540,7 +547,7 @@ def test_ownership_universe_stage_fails_on_mismatched_batch_plan_resume(tmp_path
         min_seconds_between_requests=0.0,
     )
 
-    with pytest.raises(RuntimeError, match="batch_plan_fingerprint"):
+    with pytest.raises(LsegResumeCompatibilityError, match="batch_plan_fingerprint"):
         run_refinitiv_step1_ownership_universe_api_pipeline(
             handoff_parquet_path=handoff_path,
             output_dir=tmp_path,

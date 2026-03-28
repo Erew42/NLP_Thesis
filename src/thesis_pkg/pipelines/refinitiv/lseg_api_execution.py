@@ -30,6 +30,7 @@ from thesis_pkg.pipelines.refinitiv.lseg_batching import (
 from thesis_pkg.pipelines.refinitiv.lseg_ledger import (
     LEDGER_DEFERRED_DAILY_LIMIT,
     LEDGER_RETRYABLE_ERROR,
+    LsegResumeCompatibilityError,
     RequestLedger,
     utc_now,
 )
@@ -95,6 +96,7 @@ def run_api_batches(
     planned_batches: list[BatchDefinition] | None = None,
     batch_plan_fingerprint: str | None = None,
     planned_batch_metrics: dict[str, dict[str, Any]] | None = None,
+    resume_compatibility_metadata: dict[str, str] | None = None,
 ) -> ApiStageRunResult:
     if max_workers < 1:
         raise ValueError("max_workers must be >= 1")
@@ -109,12 +111,31 @@ def run_api_batches(
     staging_dir.mkdir(parents=True, exist_ok=True)
 
     ledger = RequestLedger(ledger_path)
+    compatibility_metadata: dict[str, str] = {}
     if batch_plan_fingerprint is not None:
-        ledger.ensure_stage_meta_value(
-            stage=stage,
-            key="batch_plan_fingerprint",
-            value=batch_plan_fingerprint,
-        )
+        compatibility_metadata["batch_plan_fingerprint"] = batch_plan_fingerprint
+    if resume_compatibility_metadata is not None:
+        compatibility_metadata.update({str(key): str(value) for key, value in resume_compatibility_metadata.items()})
+    if compatibility_metadata:
+        try:
+            for key, value in compatibility_metadata.items():
+                ledger.ensure_stage_meta_value(
+                    stage=stage,
+                    key=key,
+                    value=value,
+                )
+        except LsegResumeCompatibilityError as exc:
+            raise LsegResumeCompatibilityError(
+                stage=exc.stage,
+                meta_key=exc.meta_key,
+                existing_value=exc.existing_value,
+                current_value=exc.current_value,
+                ledger_path=exc.ledger_path,
+                existing_stage_meta=exc.existing_stage_meta,
+                current_stage_meta=compatibility_metadata,
+                explanation=exc.explanation,
+                guidance=exc.guidance,
+            ) from exc
     item_by_id = {item.item_id: item for item in items}
     planned_batches = (
         planned_batches

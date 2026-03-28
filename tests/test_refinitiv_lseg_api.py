@@ -23,6 +23,7 @@ from thesis_pkg.pipelines.refinitiv import lseg_ownership_api
 from thesis_pkg.pipelines.refinitiv.lseg_batching import RequestItem
 from thesis_pkg.pipelines.refinitiv.lseg_ownership_api import (
     _assemble_doc_raw,
+    _normalize_to_month_boundaries,
     _normalize_ownership_universe_batch_response,
 )
 from thesis_pkg.pipelines.refinitiv import lseg_provider
@@ -232,6 +233,33 @@ def _write_doc_ownership_test_inputs(
         }
     ).write_parquet(authority_exceptions_path)
     return doc_filing_path, authority_decisions_path, authority_exceptions_path
+
+
+def test_normalize_to_month_boundaries_extends_mid_month_dates() -> None:
+    assert _normalize_to_month_boundaries("1998-04-24", "1998-04-29") == (
+        "1998-04-01",
+        "1998-04-30",
+    )
+    assert _normalize_to_month_boundaries("2024-01-01", "2024-01-31") == (
+        "2024-01-01",
+        "2024-01-31",
+    )
+    assert _normalize_to_month_boundaries("2024-02-15", "2024-02-20") == (
+        "2024-02-01",
+        "2024-02-29",
+    )
+    assert _normalize_to_month_boundaries("2023-02-15", "2023-02-20") == (
+        "2023-02-01",
+        "2023-02-28",
+    )
+    assert _normalize_to_month_boundaries("2020-12-15", "2021-01-10") == (
+        "2020-12-01",
+        "2021-01-31",
+    )
+    assert _normalize_to_month_boundaries("2022-09-15", "2022-09-30") == (
+        "2022-09-01",
+        "2022-09-30",
+    )
 
 
 def test_lookup_api_pipeline_builds_extended_parquet_and_resolution_from_snapshot(tmp_path: Path) -> None:
@@ -734,6 +762,116 @@ def test_normalize_ownership_universe_batch_response_handles_sparse_late_text_va
     assert normalized.height == 101
     assert normalized.filter(pl.col("vendor_returned_name") == "Desktop Metal Inc").height == 1
     assert normalized.select(pl.col("returned_value").drop_nulls().unique()).to_series(0).to_list() == [55.0]
+
+
+def test_ownership_universe_api_pipeline_includes_month_start_rows_in_mid_month_window(tmp_path: Path) -> None:
+    handoff_path = tmp_path / "refinitiv_ownership_universe_handoff_common_stock.parquet"
+    pl.DataFrame(
+        [
+            _ownership_handoff_row(
+                lookup_row_id="hei-row|UNIVERSE_EFFECTIVE",
+                candidate_ric="HEI",
+                request_start_date="1998-04-24",
+                request_end_date="1998-04-29",
+                kypermno="10001",
+            ),
+        ]
+    ).write_parquet(handoff_path)
+
+    provider = FakeProvider(
+        [
+            pl.DataFrame(
+                {
+                    "Instrument": ["HEI", "HEI"],
+                    "Date": [date(1998, 4, 1), date(1998, 4, 1)],
+                    "Category Percent Of Traded Shares": [45.0, 12.0],
+                    "Investor Statistics Category Value": [
+                        "Holdings by Institutions",
+                        "Holdings by Insiders",
+                    ],
+                }
+            )
+        ]
+    )
+    out = run_refinitiv_step1_ownership_universe_api_pipeline(
+        handoff_parquet_path=handoff_path,
+        output_dir=tmp_path,
+        provider=provider,
+        min_seconds_between_requests=0.0,
+    )
+
+    results_df = pl.read_parquet(out["refinitiv_ownership_universe_results_parquet"]).sort(
+        ["ownership_lookup_row_id", "returned_category"]
+    )
+    assert results_df.height == 2
+    assert results_df.get_column("returned_date").to_list() == [
+        date(1998, 4, 1),
+        date(1998, 4, 1),
+    ]
+    assert len(provider.calls) == 1
+    assert provider.calls[0]["parameters"] == {
+        "StatType": 7,
+        "SDate": "1998-04-01",
+        "EDate": "1998-04-30",
+    }
+
+
+def test_ownership_universe_api_pipeline_normalizes_different_mid_month_windows_in_same_month(
+    tmp_path: Path,
+) -> None:
+    handoff_path = tmp_path / "refinitiv_ownership_universe_handoff_common_stock.parquet"
+    pl.DataFrame(
+        [
+            _ownership_handoff_row(
+                lookup_row_id="row-a|UNIVERSE_EFFECTIVE",
+                candidate_ric="TEST.N",
+                request_start_date="2022-09-05",
+                request_end_date="2022-09-15",
+                kypermno="1",
+            ),
+            _ownership_handoff_row(
+                lookup_row_id="row-b|UNIVERSE_EFFECTIVE",
+                candidate_ric="TEST.N",
+                request_start_date="2022-09-16",
+                request_end_date="2022-09-29",
+                kypermno="1",
+            ),
+        ]
+    ).write_parquet(handoff_path)
+
+    provider = FakeProvider(
+        [
+            pl.DataFrame(
+                {
+                    "Instrument": ["TEST.N"],
+                    "Date": [date(2022, 9, 1)],
+                    "Category Percent Of Traded Shares": [60.0],
+                    "Investor Statistics Category Value": ["Holdings by Institutions"],
+                }
+            )
+        ]
+    )
+    out = run_refinitiv_step1_ownership_universe_api_pipeline(
+        handoff_parquet_path=handoff_path,
+        output_dir=tmp_path,
+        provider=provider,
+        min_seconds_between_requests=0.0,
+    )
+
+    results_df = pl.read_parquet(out["refinitiv_ownership_universe_results_parquet"]).sort(
+        "ownership_lookup_row_id"
+    )
+    assert results_df.height == 2
+    assert results_df.get_column("ownership_lookup_row_id").to_list() == [
+        "row-a|UNIVERSE_EFFECTIVE",
+        "row-b|UNIVERSE_EFFECTIVE",
+    ]
+    assert len(provider.calls) == 1
+    assert provider.calls[0]["parameters"] == {
+        "StatType": 7,
+        "SDate": "2022-09-01",
+        "EDate": "2022-09-30",
+    }
 
 
 def test_doc_ownership_exact_and_fallback_api_pipelines_finalize_without_workbooks(tmp_path: Path) -> None:

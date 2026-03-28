@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +37,7 @@ from thesis_pkg.pipelines.refinitiv.lseg_batching import (
     stable_hash_id,
 )
 from thesis_pkg.pipelines.refinitiv.lseg_ledger import RequestLedger
+from thesis_pkg.pipelines.refinitiv.lseg_ledger import LsegResumeCompatibilityError
 from thesis_pkg.pipelines.refinitiv.lseg_stage_audit import (
     audit_api_stage,
     default_stage_manifest_path,
@@ -95,6 +97,63 @@ ANALYST_ESTIMATES_FIELD_ALIASES: dict[str, tuple[str, ...]] = {
 }
 
 
+def _analyst_resume_metadata(
+    *,
+    interval_plan: IntervalBatchPlan,
+) -> dict[str, str]:
+    return {
+        "batch_plan_fingerprint": interval_plan.fingerprint,
+        "batch_plan_planner_version": interval_plan.planner_version,
+        "batching_config_json": json.dumps(interval_plan.config.to_serializable_dict(), sort_keys=True),
+        "planned_batch_count": str(len(interval_plan.batches)),
+    }
+
+
+def _raise_analyst_resume_compatibility_error(
+    *,
+    stage: str,
+    output_dir: Path,
+    exc: LsegResumeCompatibilityError,
+) -> None:
+    if stage == ANALYST_ACTUALS_STAGE:
+        guidance = [
+            str(output_dir / "refinitiv_analyst_actuals_api_ledger.sqlite3"),
+            str(output_dir / "refinitiv_analyst_actuals_api_requests.jsonl"),
+            str(output_dir / "staging" / ANALYST_ACTUALS_STAGE),
+            str(output_dir / "refinitiv_analyst_actuals_stage_manifest.json"),
+            str(output_dir / "refinitiv_analyst_actuals_raw.parquet"),
+            "After rebuilding analyst actuals, rerun downstream analyst normalization.",
+        ]
+        stage_label = "analyst actuals"
+    elif stage == ANALYST_ESTIMATES_STAGE:
+        guidance = [
+            str(output_dir / "refinitiv_analyst_estimates_api_ledger.sqlite3"),
+            str(output_dir / "refinitiv_analyst_estimates_api_requests.jsonl"),
+            str(output_dir / "staging" / ANALYST_ESTIMATES_STAGE),
+            str(output_dir / "refinitiv_analyst_estimates_stage_manifest.json"),
+            str(output_dir / "refinitiv_analyst_estimates_monthly_raw.parquet"),
+            "After rebuilding analyst estimates, rerun downstream analyst normalization.",
+        ]
+        stage_label = "analyst estimates monthly"
+    else:
+        guidance = []
+        stage_label = stage
+    raise LsegResumeCompatibilityError(
+        stage=exc.stage,
+        meta_key=exc.meta_key,
+        existing_value=exc.existing_value,
+        current_value=exc.current_value,
+        ledger_path=exc.ledger_path,
+        existing_stage_meta=exc.existing_stage_meta,
+        current_stage_meta=exc.current_stage_meta,
+        explanation=(
+            f"The {stage_label} stage was requested for this run, but its existing resume state is incompatible "
+            "with the current request universe or batching configuration."
+        ),
+        guidance=guidance,
+    ) from exc
+
+
 def run_refinitiv_step1_analyst_actuals_api_pipeline(
     *,
     request_universe_parquet_path: Path | str,
@@ -143,31 +202,40 @@ def run_refinitiv_step1_analyst_actuals_api_pipeline(
         default_max_extra_rows_ratio=ANALYST_ACTUALS_DEFAULT_MAX_EXTRA_ROWS_RATIO,
     )
     interval_plan = _plan_analyst_actuals_batches(items, config=planner_config)
-    stage_run = run_api_batches(
-        stage=ANALYST_ACTUALS_STAGE,
-        items=items,
-        output_dir=output_dir,
-        ledger_path=ledger_path,
-        request_log_path=request_log_path,
-        provider=provider,
-        provider_session_name=provider_session_name,
-        provider_config_name=provider_config_name,
-        provider_timeout_seconds=provider_timeout_seconds,
-        preflight_probe=preflight_probe,
-        max_batch_size=max_batch_size,
-        min_seconds_between_requests=min_seconds_between_requests,
-        min_seconds_between_request_starts_total=min_seconds_between_request_starts_total,
-        max_attempts=max_attempts,
-        response_normalizer=_normalize_analyst_actuals_batch_response,
-        lookup_normalizer=str,
-        split_after_attempt=2,
-        retry_delay_seconds_fn=_retry_delay_seconds,
-        max_workers=max_workers,
-        planned_batches=list(interval_plan.batches),
-        batch_plan_fingerprint=interval_plan.fingerprint,
-        planned_batch_metrics=interval_plan.batch_metrics_by_id,
-    )
-    raw_df = _assemble_analyst_actuals_raw(stage_run.staging_dir, ledger_path=stage_run.ledger_path)
+    try:
+        stage_run = run_api_batches(
+            stage=ANALYST_ACTUALS_STAGE,
+            items=items,
+            output_dir=output_dir,
+            ledger_path=ledger_path,
+            request_log_path=request_log_path,
+            provider=provider,
+            provider_session_name=provider_session_name,
+            provider_config_name=provider_config_name,
+            provider_timeout_seconds=provider_timeout_seconds,
+            preflight_probe=preflight_probe,
+            max_batch_size=max_batch_size,
+            min_seconds_between_requests=min_seconds_between_requests,
+            min_seconds_between_request_starts_total=min_seconds_between_request_starts_total,
+            max_attempts=max_attempts,
+            response_normalizer=_normalize_analyst_actuals_batch_response,
+            lookup_normalizer=str,
+            split_after_attempt=2,
+            retry_delay_seconds_fn=_retry_delay_seconds,
+            max_workers=max_workers,
+            planned_batches=list(interval_plan.batches),
+            batch_plan_fingerprint=interval_plan.fingerprint,
+            planned_batch_metrics=interval_plan.batch_metrics_by_id,
+            resume_compatibility_metadata=_analyst_resume_metadata(interval_plan=interval_plan),
+        )
+    except LsegResumeCompatibilityError as exc:
+        _raise_analyst_resume_compatibility_error(
+            stage=ANALYST_ACTUALS_STAGE,
+            output_dir=output_dir,
+            exc=exc,
+        )
+    stage_run_ledger_path = getattr(stage_run, "ledger_path", ledger_path)
+    raw_df = _assemble_analyst_actuals_raw(stage_run.staging_dir, ledger_path=stage_run_ledger_path)
     raw_path = output_dir / "refinitiv_analyst_actuals_raw.parquet"
     raw_candidate_path = _candidate_output_path(raw_path)
     _write_parquet_atomic(raw_df, raw_candidate_path)
@@ -186,7 +254,7 @@ def run_refinitiv_step1_analyst_actuals_api_pipeline(
         rebuilders={
             "analyst_actuals_raw_parquet": lambda: _assemble_analyst_actuals_raw(
                 stage_run.staging_dir,
-                ledger_path=stage_run.ledger_path,
+                ledger_path=stage_run_ledger_path,
             )
         },
         expected_stage_manifest_path=manifest_path,
@@ -271,31 +339,40 @@ def run_refinitiv_step1_analyst_estimates_monthly_api_pipeline(
         default_max_extra_rows_ratio=ANALYST_ESTIMATES_DEFAULT_MAX_EXTRA_ROWS_RATIO,
     )
     interval_plan = _plan_analyst_estimate_batches(items, config=planner_config)
-    stage_run = run_api_batches(
-        stage=ANALYST_ESTIMATES_STAGE,
-        items=items,
-        output_dir=output_dir,
-        ledger_path=ledger_path,
-        request_log_path=request_log_path,
-        provider=provider,
-        provider_session_name=provider_session_name,
-        provider_config_name=provider_config_name,
-        provider_timeout_seconds=provider_timeout_seconds,
-        preflight_probe=preflight_probe,
-        max_batch_size=max_batch_size,
-        min_seconds_between_requests=min_seconds_between_requests,
-        min_seconds_between_request_starts_total=min_seconds_between_request_starts_total,
-        max_attempts=max_attempts,
-        response_normalizer=_normalize_analyst_estimates_batch_response,
-        lookup_normalizer=str,
-        split_after_attempt=2,
-        retry_delay_seconds_fn=_retry_delay_seconds,
-        max_workers=max_workers,
-        planned_batches=list(interval_plan.batches),
-        batch_plan_fingerprint=interval_plan.fingerprint,
-        planned_batch_metrics=interval_plan.batch_metrics_by_id,
-    )
-    raw_df = _assemble_analyst_estimates_raw(stage_run.staging_dir, ledger_path=stage_run.ledger_path)
+    try:
+        stage_run = run_api_batches(
+            stage=ANALYST_ESTIMATES_STAGE,
+            items=items,
+            output_dir=output_dir,
+            ledger_path=ledger_path,
+            request_log_path=request_log_path,
+            provider=provider,
+            provider_session_name=provider_session_name,
+            provider_config_name=provider_config_name,
+            provider_timeout_seconds=provider_timeout_seconds,
+            preflight_probe=preflight_probe,
+            max_batch_size=max_batch_size,
+            min_seconds_between_requests=min_seconds_between_requests,
+            min_seconds_between_request_starts_total=min_seconds_between_request_starts_total,
+            max_attempts=max_attempts,
+            response_normalizer=_normalize_analyst_estimates_batch_response,
+            lookup_normalizer=str,
+            split_after_attempt=2,
+            retry_delay_seconds_fn=_retry_delay_seconds,
+            max_workers=max_workers,
+            planned_batches=list(interval_plan.batches),
+            batch_plan_fingerprint=interval_plan.fingerprint,
+            planned_batch_metrics=interval_plan.batch_metrics_by_id,
+            resume_compatibility_metadata=_analyst_resume_metadata(interval_plan=interval_plan),
+        )
+    except LsegResumeCompatibilityError as exc:
+        _raise_analyst_resume_compatibility_error(
+            stage=ANALYST_ESTIMATES_STAGE,
+            output_dir=output_dir,
+            exc=exc,
+        )
+    stage_run_ledger_path = getattr(stage_run, "ledger_path", ledger_path)
+    raw_df = _assemble_analyst_estimates_raw(stage_run.staging_dir, ledger_path=stage_run_ledger_path)
     raw_path = output_dir / "refinitiv_analyst_estimates_monthly_raw.parquet"
     raw_candidate_path = _candidate_output_path(raw_path)
     _write_parquet_atomic(raw_df, raw_candidate_path)
@@ -314,7 +391,7 @@ def run_refinitiv_step1_analyst_estimates_monthly_api_pipeline(
         rebuilders={
             "analyst_estimates_raw_parquet": lambda: _assemble_analyst_estimates_raw(
                 stage_run.staging_dir,
-                ledger_path=stage_run.ledger_path,
+                ledger_path=stage_run_ledger_path,
             )
         },
         expected_stage_manifest_path=manifest_path,

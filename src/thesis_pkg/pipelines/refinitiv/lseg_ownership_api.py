@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import calendar
 import datetime as dt
 from pathlib import Path
 from typing import Any
@@ -627,6 +628,10 @@ def _build_ownership_universe_items(handoff_df: pl.DataFrame) -> list[RequestIte
         request_end_date = _normalize_lookup_text(row.get("request_end_date"))
         if ownership_lookup_row_id is None or candidate_ric is None or request_start_date is None or request_end_date is None:
             continue
+        request_start_date, request_end_date = _normalize_to_month_boundaries(
+            request_start_date,
+            request_end_date,
+        )
         items.append(
             RequestItem(
                 item_id=stable_hash_id(OWNERSHIP_UNIVERSE_STAGE, ownership_lookup_row_id, prefix="item"),
@@ -709,6 +714,15 @@ def _item_window(item: Any) -> tuple[dt.date, dt.date]:
     if not start_text or not end_text:
         raise ValueError(f"missing interval parameters for item_id={item.item_id}")
     return (dt.date.fromisoformat(str(start_text)), dt.date.fromisoformat(str(end_text)))
+
+
+def _normalize_to_month_boundaries(start_text: str, end_text: str) -> tuple[str, str]:
+    start_date = dt.date.fromisoformat(start_text)
+    end_date = dt.date.fromisoformat(end_text)
+    floored_start = start_date.replace(day=1)
+    _, last_day = calendar.monthrange(end_date.year, end_date.month)
+    ceiled_end = end_date.replace(day=last_day)
+    return floored_start.isoformat(), ceiled_end.isoformat()
 
 
 def _build_ownership_universe_interval_batch(

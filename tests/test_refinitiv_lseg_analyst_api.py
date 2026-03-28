@@ -5,11 +5,13 @@ from pathlib import Path
 from typing import Any, Callable
 
 import polars as pl
+import pytest
 
 from thesis_pkg.pipelines.refinitiv.lseg_analyst_api import (
     run_refinitiv_step1_analyst_actuals_api_pipeline,
     run_refinitiv_step1_analyst_estimates_monthly_api_pipeline,
 )
+from thesis_pkg.pipelines.refinitiv.lseg_ledger import LsegResumeCompatibilityError
 from thesis_pkg.pipelines.refinitiv.lseg_provider import LsegDataResponse, LsegResponseMetadata
 
 
@@ -340,3 +342,161 @@ def test_analyst_actuals_pipeline_filters_widened_batch_rows_per_item_window(tmp
     assert raw_df.filter(pl.col("request_group_id") == "group-feb").get_column("response_row_index").to_list() == [
         0
     ]
+
+
+def test_analyst_actuals_resume_mismatch_includes_cleanup_guidance(tmp_path: Path) -> None:
+    request_path = tmp_path / "requests.parquet"
+    _write_request_universe(
+        request_path,
+        [
+            {
+                "request_group_id": "group-1",
+                "gvkey_int": 1000,
+                "effective_collection_ric": "AAA.N",
+                "member_bridge_row_count": 1,
+                "bridge_start_date_min": date(2020, 1, 1),
+                "bridge_end_date_max": date(2020, 3, 31),
+                "actuals_request_start_date": date(2020, 1, 1),
+                "actuals_request_end_date": date(2020, 1, 31),
+                "estimates_request_start_date": date(2020, 1, 1),
+                "estimates_request_end_date": date(2020, 1, 31),
+                "retrieval_eligible": True,
+                "retrieval_exclusion_reason": None,
+            },
+            {
+                "request_group_id": "group-2",
+                "gvkey_int": 1001,
+                "effective_collection_ric": "BBB.N",
+                "member_bridge_row_count": 1,
+                "bridge_start_date_min": date(2020, 1, 1),
+                "bridge_end_date_max": date(2020, 3, 31),
+                "actuals_request_start_date": date(2020, 1, 15),
+                "actuals_request_end_date": date(2020, 2, 15),
+                "estimates_request_start_date": date(2020, 1, 15),
+                "estimates_request_end_date": date(2020, 2, 15),
+                "retrieval_eligible": True,
+                "retrieval_exclusion_reason": None,
+            },
+        ],
+    )
+    provider = FakeProvider(
+        response_factory=lambda universe, _fields, _parameters: pl.DataFrame(
+            {
+                "Instrument": list(universe),
+                "TR.EPSActValue": [1.0 for _ in universe],
+                "TR.EPSActValue.date": [date(2020, 1, 20) for _ in universe],
+                "TR.EPSActValue.periodenddate": [date(2019, 12, 31) for _ in universe],
+                "TR.EPSActValue.fperiod": ["FY2019Q4" for _ in universe],
+            }
+        )
+    )
+
+    run_refinitiv_step1_analyst_actuals_api_pipeline(
+        request_universe_parquet_path=request_path,
+        output_dir=tmp_path,
+        provider=provider,
+        min_seconds_between_requests=0.0,
+    )
+
+    with pytest.raises(LsegResumeCompatibilityError) as exc_info:
+        run_refinitiv_step1_analyst_actuals_api_pipeline(
+            request_universe_parquet_path=request_path,
+            output_dir=tmp_path,
+            provider=provider,
+            min_seconds_between_requests=0.0,
+            max_batch_items=1,
+        )
+
+    exc = exc_info.value
+    message = str(exc)
+    assert exc.stage == "analyst_actuals"
+    assert "batch_plan_fingerprint" in exc.meta_key
+    assert "refinitiv_analyst_actuals_api_ledger.sqlite3" in message
+    assert "refinitiv_analyst_actuals_api_requests.jsonl" in message
+    assert "refinitiv_analyst_actuals_stage_manifest.json" in message
+    assert "refinitiv_analyst_actuals_raw.parquet" in message
+    assert "After rebuilding analyst actuals, rerun downstream analyst normalization." in message
+    assert exc.existing_stage_meta["batch_plan_planner_version"]
+    assert exc.existing_stage_meta["batching_config_json"]
+    assert exc.current_stage_meta["batch_plan_planner_version"]
+    assert exc.current_stage_meta["batching_config_json"]
+
+
+def test_analyst_estimates_resume_mismatch_includes_cleanup_guidance(tmp_path: Path) -> None:
+    request_path = tmp_path / "requests.parquet"
+    _write_request_universe(
+        request_path,
+        [
+            {
+                "request_group_id": "group-1",
+                "gvkey_int": 1000,
+                "effective_collection_ric": "AAA.N",
+                "member_bridge_row_count": 1,
+                "bridge_start_date_min": date(2020, 1, 1),
+                "bridge_end_date_max": date(2020, 3, 31),
+                "actuals_request_start_date": date(2020, 1, 1),
+                "actuals_request_end_date": date(2020, 1, 31),
+                "estimates_request_start_date": date(2020, 1, 1),
+                "estimates_request_end_date": date(2020, 1, 31),
+                "retrieval_eligible": True,
+                "retrieval_exclusion_reason": None,
+            },
+            {
+                "request_group_id": "group-2",
+                "gvkey_int": 1001,
+                "effective_collection_ric": "BBB.N",
+                "member_bridge_row_count": 1,
+                "bridge_start_date_min": date(2020, 1, 1),
+                "bridge_end_date_max": date(2020, 3, 31),
+                "actuals_request_start_date": date(2020, 1, 15),
+                "actuals_request_end_date": date(2020, 2, 15),
+                "estimates_request_start_date": date(2020, 1, 15),
+                "estimates_request_end_date": date(2020, 2, 15),
+                "retrieval_eligible": True,
+                "retrieval_exclusion_reason": None,
+            },
+        ],
+    )
+    provider = FakeProvider(
+        response_factory=lambda universe, _fields, parameters: pl.DataFrame(
+            {
+                "Instrument": list(universe),
+                "TR.EPSMean": [1.0 for _ in universe],
+                "TR.EPSMean.calcdate": [date(2020, 1, 20) for _ in universe],
+                "TR.EPSMean.periodenddate": [date(2020, 3, 31) for _ in universe],
+                "TR.EPSMean.fperiod": [f"FY2020{parameters['Period']}" for _ in universe],
+                "TR.EPSStdDev": [0.1 for _ in universe],
+                "TR.EPSNumberofEstimates": [5 for _ in universe],
+            }
+        )
+    )
+
+    run_refinitiv_step1_analyst_estimates_monthly_api_pipeline(
+        request_universe_parquet_path=request_path,
+        output_dir=tmp_path,
+        provider=provider,
+        min_seconds_between_requests=0.0,
+    )
+
+    with pytest.raises(LsegResumeCompatibilityError) as exc_info:
+        run_refinitiv_step1_analyst_estimates_monthly_api_pipeline(
+            request_universe_parquet_path=request_path,
+            output_dir=tmp_path,
+            provider=provider,
+            min_seconds_between_requests=0.0,
+            max_batch_items=1,
+        )
+
+    exc = exc_info.value
+    message = str(exc)
+    assert exc.stage == "analyst_estimates_monthly"
+    assert "batch_plan_fingerprint" in exc.meta_key
+    assert "refinitiv_analyst_estimates_api_ledger.sqlite3" in message
+    assert "refinitiv_analyst_estimates_api_requests.jsonl" in message
+    assert "refinitiv_analyst_estimates_stage_manifest.json" in message
+    assert "refinitiv_analyst_estimates_monthly_raw.parquet" in message
+    assert "After rebuilding analyst estimates, rerun downstream analyst normalization." in message
+    assert exc.existing_stage_meta["batch_plan_planner_version"]
+    assert exc.existing_stage_meta["batching_config_json"]
+    assert exc.current_stage_meta["batch_plan_planner_version"]
+    assert exc.current_stage_meta["batching_config_json"]

@@ -456,6 +456,384 @@ def build_refinitiv_lm2011_doc_ownership_requests(
     return _build_explicit_schema_df(rows, _doc_ownership_request_schema()).select(DOC_OWNERSHIP_REQUEST_COLUMNS)
 
 
+def _doc_ownership_universe_detail_schema() -> dict[str, pl.DataType]:
+    return {
+        "doc_id": pl.Utf8,
+        "cik_10": pl.Utf8,
+        "filing_date": pl.Date,
+        "filing_year": pl.Int32,
+        "normalized_form": pl.Utf8,
+        "KYPERMNO": pl.Utf8,
+        "in_backbone": pl.Boolean,
+        "in_request": pl.Boolean,
+        "in_final": pl.Boolean,
+        "request_retrieval_eligible": pl.Boolean,
+        "request_retrieval_exclusion_reason": pl.Utf8,
+        "final_retrieval_status": pl.Utf8,
+        "final_has_nonnull_ownership": pl.Boolean,
+        "final_institutional_ownership_pct": pl.Float64,
+    }
+
+
+def _doc_ownership_universe_breakdown_schema() -> dict[str, pl.DataType]:
+    return {
+        "filing_year": pl.Int32,
+        "normalized_form": pl.Utf8,
+        "backbone_doc_count": pl.Int64,
+        "request_doc_count": pl.Int64,
+        "final_doc_count": pl.Int64,
+        "final_nonnull_ownership_doc_count": pl.Int64,
+        "backbone_only_doc_count": pl.Int64,
+        "request_only_doc_count": pl.Int64,
+        "final_only_doc_count": pl.Int64,
+    }
+
+
+def _assert_unique_doc_id_membership(df: pl.DataFrame, *, label: str) -> None:
+    if "doc_id" not in df.columns:
+        raise ValueError(f"{label} missing required column: doc_id")
+    duplicate_doc_ids = (
+        df.drop_nulls(subset=["doc_id"])
+        .group_by("doc_id")
+        .len()
+        .filter(pl.col("len") > 1)
+        .get_column("doc_id")
+        .to_list()
+    )
+    if duplicate_doc_ids:
+        raise ValueError(f"{label} must be unique on doc_id: {duplicate_doc_ids[:10]}")
+
+
+def _normalize_optional_text_expr(column_name: str, *, enabled: bool) -> pl.Expr:
+    if not enabled:
+        return pl.lit(None, dtype=pl.Utf8)
+    return pl.col(column_name).cast(pl.Utf8, strict=False).map_elements(_normalize_lookup_text, return_dtype=pl.Utf8)
+
+
+def _prepare_backbone_membership_df(backbone_df: pl.DataFrame) -> pl.DataFrame:
+    schema = backbone_df.schema
+    permno_column = "KYPERMNO" if "KYPERMNO" in schema else "kypermno" if "kypermno" in schema else None
+    form_column = "normalized_form" if "normalized_form" in schema else None
+    if form_column is None and "document_type_filename" in schema:
+        form_column = "document_type_filename"
+    prepared = (
+        backbone_df.select(
+            _normalize_optional_text_expr("doc_id", enabled=True).alias("doc_id"),
+            _normalize_optional_text_expr("cik_10", enabled="cik_10" in schema).alias("cik_10"),
+            (
+                pl.col("filing_date").cast(pl.Date, strict=False)
+                if "filing_date" in schema
+                else pl.lit(None, dtype=pl.Date)
+            ).alias("filing_date"),
+            _normalize_optional_text_expr(form_column, enabled=form_column is not None).alias("normalized_form"),
+            (
+                pl.col(permno_column)
+                .map_elements(_normalize_kypermno, return_dtype=pl.Utf8)
+                if permno_column is not None
+                else pl.lit(None, dtype=pl.Utf8)
+            ).alias("KYPERMNO"),
+        )
+        .drop_nulls(subset=["doc_id"])
+    )
+    _assert_unique_doc_id_membership(prepared, label="backbone_df")
+    return prepared.with_columns(
+        pl.col("filing_date").dt.year().cast(pl.Int32, strict=False).alias("filing_year"),
+        pl.lit(True).alias("in_backbone"),
+    )
+
+
+def _prepare_request_membership_df(request_df: pl.DataFrame) -> pl.DataFrame:
+    schema = request_df.schema
+    permno_column = "KYPERMNO" if "KYPERMNO" in schema else "kypermno" if "kypermno" in schema else None
+    prepared = (
+        request_df.select(
+            _normalize_optional_text_expr("doc_id", enabled=True).alias("doc_id"),
+            (
+                pl.col("filing_date").cast(pl.Date, strict=False)
+                if "filing_date" in schema
+                else pl.lit(None, dtype=pl.Date)
+            ).alias("request_filing_date"),
+            (
+                pl.col(permno_column)
+                .map_elements(_normalize_kypermno, return_dtype=pl.Utf8)
+                if permno_column is not None
+                else pl.lit(None, dtype=pl.Utf8)
+            ).alias("request_KYPERMNO"),
+            (
+                pl.col("retrieval_eligible").cast(pl.Boolean, strict=False)
+                if "retrieval_eligible" in schema
+                else pl.lit(None, dtype=pl.Boolean)
+            ).alias("request_retrieval_eligible"),
+            _normalize_optional_text_expr(
+                "retrieval_exclusion_reason",
+                enabled="retrieval_exclusion_reason" in schema,
+            ).alias("request_retrieval_exclusion_reason"),
+        )
+        .drop_nulls(subset=["doc_id"])
+    )
+    _assert_unique_doc_id_membership(prepared, label="request_df")
+    return prepared.with_columns(pl.lit(True).alias("in_request"))
+
+
+def _prepare_final_membership_df(final_df: pl.DataFrame) -> pl.DataFrame:
+    schema = final_df.schema
+    permno_column = "KYPERMNO" if "KYPERMNO" in schema else "kypermno" if "kypermno" in schema else None
+    ownership_value_col = (
+        "institutional_ownership_pct"
+        if "institutional_ownership_pct" in schema
+        else "institutional_ownership"
+        if "institutional_ownership" in schema
+        else None
+    )
+    prepared = (
+        final_df.select(
+            _normalize_optional_text_expr("doc_id", enabled=True).alias("doc_id"),
+            (
+                pl.col("filing_date").cast(pl.Date, strict=False)
+                if "filing_date" in schema
+                else pl.lit(None, dtype=pl.Date)
+            ).alias("final_filing_date"),
+            (
+                pl.col(permno_column)
+                .map_elements(_normalize_kypermno, return_dtype=pl.Utf8)
+                if permno_column is not None
+                else pl.lit(None, dtype=pl.Utf8)
+            ).alias("final_KYPERMNO"),
+            _normalize_optional_text_expr("retrieval_status", enabled="retrieval_status" in schema).alias(
+                "final_retrieval_status"
+            ),
+            (
+                pl.col(ownership_value_col).cast(pl.Float64, strict=False)
+                if ownership_value_col is not None
+                else pl.lit(None, dtype=pl.Float64)
+            ).alias("final_institutional_ownership_pct"),
+        )
+        .drop_nulls(subset=["doc_id"])
+    )
+    _assert_unique_doc_id_membership(prepared, label="final_df")
+    return prepared.with_columns(
+        pl.lit(True).alias("in_final"),
+        pl.col("final_institutional_ownership_pct").is_not_null().alias("final_has_nonnull_ownership"),
+    )
+
+
+def _safe_rate(numerator: int, denominator: int | None) -> float | None:
+    if denominator in (None, 0):
+        return None
+    return float(numerator) / float(denominator)
+
+
+def _top_doc_mismatch_cik_counts(
+    detail_df: pl.DataFrame,
+    *,
+    left_flag: str,
+    right_flag: str,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    if "cik_10" not in detail_df.columns:
+        return []
+    return (
+        detail_df.filter(
+            pl.col("cik_10").is_not_null() & (pl.col(left_flag).fill_null(False) != pl.col(right_flag).fill_null(False))
+        )
+        .group_by("cik_10")
+        .len()
+        .sort("len", descending=True)
+        .head(limit)
+        .rename({"len": "doc_count"})
+        .to_dicts()
+    )
+
+
+def _build_lm2011_doc_ownership_universe_diagnostics(
+    backbone_df: pl.DataFrame,
+    request_df: pl.DataFrame,
+    final_df: pl.DataFrame | None = None,
+) -> tuple[dict[str, pl.DataFrame], dict[str, Any]]:
+    backbone_docs = _prepare_backbone_membership_df(backbone_df)
+    request_docs = _prepare_request_membership_df(request_df)
+    final_docs = (
+        _prepare_final_membership_df(final_df)
+        if final_df is not None
+        else _empty_df(
+            (
+                "doc_id",
+                "final_filing_date",
+                "final_KYPERMNO",
+                "final_retrieval_status",
+                "final_institutional_ownership_pct",
+                "in_final",
+                "final_has_nonnull_ownership",
+            ),
+            {
+                "doc_id": pl.Utf8,
+                "final_filing_date": pl.Date,
+                "final_KYPERMNO": pl.Utf8,
+                "final_retrieval_status": pl.Utf8,
+                "final_institutional_ownership_pct": pl.Float64,
+                "in_final": pl.Boolean,
+                "final_has_nonnull_ownership": pl.Boolean,
+            },
+        )
+    )
+    doc_index = (
+        pl.concat(
+            [
+                backbone_docs.select("doc_id"),
+                request_docs.select("doc_id"),
+                final_docs.select("doc_id"),
+            ],
+            how="vertical_relaxed",
+        )
+        .drop_nulls(subset=["doc_id"])
+        .unique(subset=["doc_id"], keep="first", maintain_order=True)
+    )
+    detail_df = (
+        doc_index.join(backbone_docs, on="doc_id", how="left")
+        .join(request_docs, on="doc_id", how="left")
+        .join(final_docs, on="doc_id", how="left")
+        .with_columns(
+            pl.coalesce(
+                [
+                    pl.col("filing_date"),
+                    pl.col("request_filing_date"),
+                    pl.col("final_filing_date"),
+                ]
+            ).alias("filing_date"),
+            pl.coalesce([pl.col("KYPERMNO"), pl.col("request_KYPERMNO"), pl.col("final_KYPERMNO")]).alias("KYPERMNO"),
+            pl.coalesce([pl.col("in_backbone"), pl.lit(False)]).alias("in_backbone"),
+            pl.coalesce([pl.col("in_request"), pl.lit(False)]).alias("in_request"),
+            pl.coalesce([pl.col("in_final"), pl.lit(False)]).alias("in_final"),
+            pl.coalesce([pl.col("final_has_nonnull_ownership"), pl.lit(False)]).alias("final_has_nonnull_ownership"),
+        )
+        .with_columns(pl.col("filing_date").dt.year().cast(pl.Int32, strict=False).alias("filing_year"))
+        .select(
+            "doc_id",
+            "cik_10",
+            "filing_date",
+            "filing_year",
+            "normalized_form",
+            "KYPERMNO",
+            "in_backbone",
+            "in_request",
+            "in_final",
+            "request_retrieval_eligible",
+            "request_retrieval_exclusion_reason",
+            "final_retrieval_status",
+            "final_has_nonnull_ownership",
+            "final_institutional_ownership_pct",
+        )
+        .sort("filing_year", "normalized_form", "doc_id")
+    )
+    detail_df = _build_explicit_schema_df(detail_df.to_dicts(), _doc_ownership_universe_detail_schema()).select(
+        tuple(_doc_ownership_universe_detail_schema())
+    )
+
+    breakdown_df = (
+        detail_df.group_by("filing_year", "normalized_form")
+        .agg(
+            pl.col("in_backbone").cast(pl.Int64).sum().alias("backbone_doc_count"),
+            pl.col("in_request").cast(pl.Int64).sum().alias("request_doc_count"),
+            pl.col("in_final").cast(pl.Int64).sum().alias("final_doc_count"),
+            pl.col("final_has_nonnull_ownership").cast(pl.Int64).sum().alias("final_nonnull_ownership_doc_count"),
+            (pl.col("in_backbone") & pl.col("in_request").not_()).cast(pl.Int64).sum().alias("backbone_only_doc_count"),
+            (pl.col("in_request") & pl.col("in_backbone").not_()).cast(pl.Int64).sum().alias("request_only_doc_count"),
+            (pl.col("in_final") & pl.col("in_request").not_()).cast(pl.Int64).sum().alias("final_only_doc_count"),
+        )
+        .sort("filing_year", "normalized_form")
+    )
+    if final_df is None:
+        breakdown_df = breakdown_df.with_columns(
+            pl.lit(None, dtype=pl.Int64).alias("final_doc_count"),
+            pl.lit(None, dtype=pl.Int64).alias("final_nonnull_ownership_doc_count"),
+            pl.lit(None, dtype=pl.Int64).alias("final_only_doc_count"),
+        )
+    breakdown_df = _build_explicit_schema_df(
+        breakdown_df.to_dicts(),
+        _doc_ownership_universe_breakdown_schema(),
+    ).select(tuple(_doc_ownership_universe_breakdown_schema()))
+
+    backbone_doc_count = int(backbone_docs.height)
+    request_doc_count = int(request_docs.height)
+    final_doc_count = int(final_docs.height) if final_df is not None else None
+    backbone_request_overlap = int(detail_df.filter(pl.col("in_backbone") & pl.col("in_request")).height)
+    backbone_only_doc_count = int(detail_df.filter(pl.col("in_backbone") & pl.col("in_request").not_()).height)
+    request_only_doc_count = int(detail_df.filter(pl.col("in_request") & pl.col("in_backbone").not_()).height)
+    backbone_request_doc_sets_equal = backbone_only_doc_count == 0 and request_only_doc_count == 0
+
+    final_backbone_overlap = None
+    final_request_overlap = None
+    backbone_final_doc_sets_equal = None
+    request_final_doc_sets_equal = None
+    final_only_doc_count = None
+    request_missing_from_final_doc_count = None
+    backbone_missing_from_final_doc_count = None
+    final_missing_from_backbone_doc_count = None
+    final_nonnull_ownership_doc_count = None
+    all_doc_sets_equal = None
+    retrieval_status_counts: dict[str, int] | None = None
+    if final_df is not None:
+        final_backbone_overlap = int(detail_df.filter(pl.col("in_backbone") & pl.col("in_final")).height)
+        final_request_overlap = int(detail_df.filter(pl.col("in_request") & pl.col("in_final")).height)
+        request_missing_from_final_doc_count = int(
+            detail_df.filter(pl.col("in_request") & pl.col("in_final").not_()).height
+        )
+        final_only_doc_count = int(detail_df.filter(pl.col("in_final") & pl.col("in_request").not_()).height)
+        backbone_missing_from_final_doc_count = int(
+            detail_df.filter(pl.col("in_backbone") & pl.col("in_final").not_()).height
+        )
+        final_missing_from_backbone_doc_count = int(
+            detail_df.filter(pl.col("in_final") & pl.col("in_backbone").not_()).height
+        )
+        final_nonnull_ownership_doc_count = int(detail_df.filter(pl.col("final_has_nonnull_ownership")).height)
+        backbone_final_doc_sets_equal = (
+            backbone_missing_from_final_doc_count == 0 and final_missing_from_backbone_doc_count == 0
+        )
+        request_final_doc_sets_equal = request_missing_from_final_doc_count == 0 and final_only_doc_count == 0
+        all_doc_sets_equal = bool(backbone_request_doc_sets_equal and backbone_final_doc_sets_equal and request_final_doc_sets_equal)
+        retrieval_status_counts = {
+            str(row["final_retrieval_status"]): int(row["len"])
+            for row in detail_df.filter(pl.col("final_retrieval_status").is_not_null())
+            .group_by("final_retrieval_status")
+            .len()
+            .to_dicts()
+        }
+
+    summary = {
+        "backbone_doc_count": backbone_doc_count,
+        "request_doc_count": request_doc_count,
+        "final_doc_count": final_doc_count,
+        "backbone_request_overlap_doc_count": backbone_request_overlap,
+        "backbone_request_overlap_rate_of_backbone": _safe_rate(backbone_request_overlap, backbone_doc_count),
+        "backbone_request_overlap_rate_of_request": _safe_rate(backbone_request_overlap, request_doc_count),
+        "backbone_only_doc_count": backbone_only_doc_count,
+        "request_only_doc_count": request_only_doc_count,
+        "backbone_request_doc_sets_equal": backbone_request_doc_sets_equal,
+        "final_backbone_overlap_doc_count": final_backbone_overlap,
+        "final_request_overlap_doc_count": final_request_overlap,
+        "request_missing_from_final_doc_count": request_missing_from_final_doc_count,
+        "final_only_doc_count": final_only_doc_count,
+        "backbone_missing_from_final_doc_count": backbone_missing_from_final_doc_count,
+        "final_missing_from_backbone_doc_count": final_missing_from_backbone_doc_count,
+        "final_nonnull_ownership_doc_count": final_nonnull_ownership_doc_count,
+        "backbone_final_doc_sets_equal": backbone_final_doc_sets_equal,
+        "request_final_doc_sets_equal": request_final_doc_sets_equal,
+        "all_doc_sets_equal": all_doc_sets_equal,
+        "retrieval_status_counts": retrieval_status_counts,
+        "backbone_request_mismatch_cik_counts_top": _top_doc_mismatch_cik_counts(
+            detail_df,
+            left_flag="in_backbone",
+            right_flag="in_request",
+        ),
+        "request_final_mismatch_cik_counts_top": (
+            _top_doc_mismatch_cik_counts(detail_df, left_flag="in_request", right_flag="in_final")
+            if final_df is not None
+            else []
+        ),
+    }
+    return {"detail": detail_df, "breakdown": breakdown_df}, summary
+
+
 def _request_readme_payload(request_df: pl.DataFrame, *, request_stage: str) -> dict[str, Any]:
     return {
         "pipeline_name": f"refinitiv_lm2011_doc_ownership_{request_stage.lower()}",

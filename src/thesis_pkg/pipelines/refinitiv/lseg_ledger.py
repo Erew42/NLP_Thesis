@@ -114,6 +114,51 @@ class RequestStartReservation:
     wait_seconds: float
 
 
+class LsegResumeCompatibilityError(RuntimeError):
+    def __init__(
+        self,
+        *,
+        stage: str,
+        meta_key: str,
+        existing_value: str | None,
+        current_value: str | None,
+        ledger_path: Path | str,
+        existing_stage_meta: dict[str, str] | None = None,
+        current_stage_meta: dict[str, str] | None = None,
+        explanation: str | None = None,
+        guidance: list[str] | None = None,
+    ) -> None:
+        self.stage = stage
+        self.meta_key = meta_key
+        self.existing_value = existing_value
+        self.current_value = current_value
+        self.ledger_path = Path(ledger_path)
+        self.existing_stage_meta = dict(existing_stage_meta or {})
+        self.current_stage_meta = dict(current_stage_meta or {})
+        self.explanation = explanation
+        self.guidance = list(guidance or [])
+        super().__init__(self._build_message())
+
+    def _build_message(self) -> str:
+        lines = [
+            f"Resume compatibility check failed for stage={self.stage!r}.",
+            f"Ledger: {self.ledger_path}",
+            f"Meta key: {self.meta_key!r}",
+            f"Stored value: {self.existing_value!r}",
+            f"Current value: {self.current_value!r}",
+        ]
+        if self.explanation:
+            lines.append(self.explanation)
+        if self.existing_stage_meta:
+            lines.append(f"Stored stage metadata: {json.dumps(self.existing_stage_meta, sort_keys=True)}")
+        if self.current_stage_meta:
+            lines.append(f"Current stage metadata: {json.dumps(self.current_stage_meta, sort_keys=True)}")
+        if self.guidance:
+            lines.append("Suggested cleanup:")
+            lines.extend(f"- {entry}" for entry in self.guidance)
+        return "\n".join(lines)
+
+
 class RequestLedger:
     def __init__(
         self,
@@ -218,21 +263,56 @@ class RequestLedger:
             ).fetchone()
         return 0 if row is None else int(row["batch_count"] or 0)
 
+    def stage_meta(self, *, stage: str) -> dict[str, str]:
+        prefix = f"stage:{stage}:"
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT key, value
+                FROM ledger_meta
+                WHERE key LIKE ?
+                ORDER BY key
+                """,
+                (f"{prefix}%",),
+            ).fetchall()
+        return {
+            str(row["key"])[len(prefix) :]: str(row["value"])
+            for row in rows
+        }
+
     def ensure_stage_meta_value(self, *, stage: str, key: str, value: str) -> None:
         meta_key = f"stage:{stage}:{key}"
         existing = self.get_meta(meta_key)
         if existing is None:
             if self.stage_batch_count(stage=stage) > 0:
-                raise RuntimeError(
-                    f"ledger already contains stage={stage!r} batches but is missing compatibility metadata "
-                    f"for {meta_key!r}; remove the stage ledger/staging artifacts before resuming"
+                raise LsegResumeCompatibilityError(
+                    stage=stage,
+                    meta_key=meta_key,
+                    existing_value=None,
+                    current_value=value,
+                    ledger_path=self.db_path,
+                    existing_stage_meta=self.stage_meta(stage=stage),
+                    current_stage_meta={key: value},
+                    explanation=(
+                        "The ledger already contains stage batches but is missing the compatibility metadata "
+                        "required to verify resume safety."
+                    ),
                 )
             self.set_meta(meta_key, value)
             return
         if existing != value:
-            raise RuntimeError(
-                f"incompatible resume state for stage={stage!r}: {meta_key!r} changed "
-                f"from {existing!r} to {value!r}"
+            raise LsegResumeCompatibilityError(
+                stage=stage,
+                meta_key=meta_key,
+                existing_value=existing,
+                current_value=value,
+                ledger_path=self.db_path,
+                existing_stage_meta=self.stage_meta(stage=stage),
+                current_stage_meta={key: value},
+                explanation=(
+                    "This stage already has persisted resume state from a different request/batching plan. "
+                    "Reusing it would mix incompatible stage artifacts."
+                ),
             )
 
     def requeue_stale_running(self, *, older_than_seconds: int = 900) -> int:

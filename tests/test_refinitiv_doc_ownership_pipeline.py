@@ -17,6 +17,7 @@ from thesis_pkg.pipelines.refinitiv.doc_ownership import (
     DOC_OWNERSHIP_INPUT_FIELDS,
     DOC_OWNERSHIP_EXACT_STAGE,
     DOC_OWNERSHIP_FALLBACK_STAGE,
+    _build_lm2011_doc_ownership_universe_diagnostics,
     _clean_institutional_value,
     _most_recent_quarter_end_before,
     _target_effective_date_for_quarter_end,
@@ -234,6 +235,114 @@ def test_build_refinitiv_lm2011_doc_ownership_requests_marks_post_max_docs_ineli
 
     assert rows["doc_post_max"]["retrieval_eligible"] is False
     assert rows["doc_post_max"]["retrieval_exclusion_reason"] == "target_effective_date_after_request_max_date"
+
+
+def test_doc_ownership_universe_diagnostics_flags_backbone_request_mismatch() -> None:
+    backbone_df = pl.DataFrame(
+        {
+            "doc_id": ["doc_overlap", "doc_backbone_only"],
+            "cik_10": ["0000000001", "0000000002"],
+            "filing_date": [date(1998, 3, 31), date(1999, 3, 31)],
+            "normalized_form": ["10-K", "10-K"],
+            "KYPERMNO": ["100", "200"],
+        }
+    )
+    request_df = pl.DataFrame(
+        {
+            "doc_id": ["doc_overlap", "doc_request_only"],
+            "filing_date": [date(1998, 3, 31), date(2000, 3, 31)],
+            "KYPERMNO": ["100", "300"],
+            "retrieval_eligible": [True, True],
+            "retrieval_exclusion_reason": [None, None],
+        }
+    )
+    final_df = pl.DataFrame(
+        {
+            "doc_id": ["doc_overlap", "doc_request_only"],
+            "filing_date": [date(1998, 3, 31), date(2000, 3, 31)],
+            "KYPERMNO": ["100", "300"],
+            "retrieval_status": ["EXACT_TARGET_HIT", "EXACT_TARGET_HIT"],
+            "institutional_ownership_pct": [55.0, 25.0],
+        }
+    )
+
+    tables, summary = _build_lm2011_doc_ownership_universe_diagnostics(backbone_df, request_df, final_df)
+
+    assert summary["backbone_doc_count"] == 2
+    assert summary["request_doc_count"] == 2
+    assert summary["final_doc_count"] == 2
+    assert summary["backbone_request_overlap_doc_count"] == 1
+    assert summary["backbone_only_doc_count"] == 1
+    assert summary["request_only_doc_count"] == 1
+    assert summary["backbone_request_doc_sets_equal"] is False
+    assert summary["request_final_doc_sets_equal"] is True
+    assert summary["all_doc_sets_equal"] is False
+
+    detail = tables["detail"].sort("doc_id")
+    rows = {row["doc_id"]: row for row in detail.to_dicts()}
+    assert rows["doc_backbone_only"]["in_backbone"] is True
+    assert rows["doc_backbone_only"]["in_request"] is False
+    assert rows["doc_request_only"]["in_request"] is True
+    assert rows["doc_request_only"]["in_final"] is True
+
+    breakdown = tables["breakdown"].sort("filing_year", "normalized_form")
+    assert breakdown.filter(pl.col("filing_year") == 1998).get_column("backbone_doc_count").item() == 1
+    assert breakdown.filter(pl.col("filing_year") == 2000).get_column("request_doc_count").item() == 1
+
+
+def test_doc_ownership_universe_diagnostics_reports_exact_doc_set_equality() -> None:
+    backbone_df = pl.DataFrame(
+        {
+            "doc_id": ["doc_a", "doc_b"],
+            "cik_10": ["0000000001", "0000000002"],
+            "filing_date": [date(2024, 4, 15), date(2024, 5, 20)],
+            "normalized_form": ["10-K", "10-K"],
+            "KYPERMNO": ["100", "200"],
+        }
+    )
+    authority_decisions_df = pl.DataFrame(
+        {
+            "KYPERMNO": ["100", "200"],
+            "authoritative_ric": ["AAA.N", "BBB.N"],
+            "authoritative_source_family": ["CONVENTIONAL", "CONVENTIONAL"],
+            "authority_decision_status": ["STATIC_CONVENTIONAL", "STATIC_CONVENTIONAL"],
+            "requires_review": [False, False],
+        }
+    )
+    authority_exceptions_df = pl.DataFrame(
+        schema={
+            "KYPERMNO": pl.Utf8,
+            "authoritative_ric": pl.Utf8,
+            "authoritative_source_family": pl.Utf8,
+            "authority_window_start_date": pl.Date,
+            "authority_window_end_date": pl.Date,
+            "authority_exception_status": pl.Utf8,
+        }
+    )
+    request_df = build_refinitiv_lm2011_doc_ownership_requests(
+        backbone_df.select("doc_id", "filing_date", "KYPERMNO"),
+        authority_decisions_df,
+        authority_exceptions_df,
+    )
+    final_df = pl.DataFrame(
+        {
+            "doc_id": ["doc_a", "doc_b"],
+            "filing_date": [date(2024, 4, 15), date(2024, 5, 20)],
+            "KYPERMNO": ["100", "200"],
+            "retrieval_status": ["EXACT_TARGET_HIT", "EXACT_TARGET_HIT"],
+            "institutional_ownership_pct": [61.0, 42.0],
+        }
+    )
+
+    _, summary = _build_lm2011_doc_ownership_universe_diagnostics(backbone_df, request_df, final_df)
+
+    assert summary["backbone_request_doc_sets_equal"] is True
+    assert summary["backbone_final_doc_sets_equal"] is True
+    assert summary["request_final_doc_sets_equal"] is True
+    assert summary["all_doc_sets_equal"] is True
+    assert summary["final_nonnull_ownership_doc_count"] == 2
+    assert summary["final_only_doc_count"] == 0
+    assert summary["request_missing_from_final_doc_count"] == 0
 
 
 def test_doc_ownership_exact_handoff_pipeline_threads_request_bounds(tmp_path: Path) -> None:
