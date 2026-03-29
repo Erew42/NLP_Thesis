@@ -25,6 +25,7 @@ from thesis_pkg.pipelines.refinitiv.lseg_batching import (
     BatchDefinition,
     RequestItem,
     batch_items,
+    build_batch_definition,
     split_batch,
 )
 from thesis_pkg.pipelines.refinitiv.lseg_ledger import (
@@ -38,6 +39,7 @@ from thesis_pkg.pipelines.refinitiv.lseg_provider import LsegDataProvider
 
 
 ProviderFactory = Callable[[], Any]
+OWNERSHIP_UNIVERSE_STAGE_NAME = "ownership_universe"
 
 
 @dataclass(frozen=True)
@@ -411,9 +413,47 @@ def _execute_claimed_batch(
         ledger.record_request_started(batch_id=batch.batch_id)
         request_started_recorded = True
         normalized_batch_df = worker_config.response_normalizer(batch_items_rows, response.frame)
+        row_count_by_item_id = _row_count_by_item_id(normalized_batch_df)
+        item_results = _item_result_details(
+            batch_items_rows,
+            row_count_by_item_id,
+            lookup_normalizer=worker_config.lookup_normalizer,
+        )
+        if _should_requeue_mixed_zero_positive_success(worker_config.stage, item_results):
+            child_batches = _build_singleton_child_batches(batch_items_rows)
+            ledger.split_batch(
+                parent_batch_id=batch.batch_id,
+                child_batches=child_batches,
+                reason="mixed_zero_success",
+            )
+            _append_log(
+                worker_config.request_log_path,
+                ledger,
+                {
+                    "event": "request_succeeded_mixed_zero_items_requeued",
+                    "stage": worker_config.stage,
+                    "batch_id": batch.batch_id,
+                    "attempt_no": batch.attempt_count,
+                    "item_count": len(batch_items_rows),
+                    "unique_instrument_count": len(universe),
+                    "fields": list(batch.fields),
+                    "parameters": batch.parameters,
+                    "status_code": response.metadata.status_code,
+                    "latency_ms": response.metadata.latency_ms,
+                    "rows_returned": int(normalized_batch_df.height),
+                    "response_bytes": response.metadata.response_bytes,
+                    "headers": response.metadata.headers,
+                    "item_results": item_results,
+                    "mixed_zero_positive_success": True,
+                    "child_batch_ids": [child.batch_id for child in child_batches],
+                    "scheduled_start_utc": _format_utc_timestamp(scheduled_start_utc),
+                    "actual_request_started_utc": _format_utc_timestamp(actual_request_started_utc),
+                    **_planned_metrics_payload(worker_config, batch.batch_id),
+                },
+            )
+            return
         staging_path = worker_config.staging_dir / f"{batch.batch_id}.parquet"
         write_parquet_atomic(normalized_batch_df, staging_path)
-        row_count_by_item_id = _row_count_by_item_id(normalized_batch_df)
         ledger.record_success(
             batch_id=batch.batch_id,
             row_count_by_item_id=row_count_by_item_id,
@@ -442,6 +482,8 @@ def _execute_claimed_batch(
                 "rows_returned": int(normalized_batch_df.height),
                 "response_bytes": response.metadata.response_bytes,
                 "headers": response.metadata.headers,
+                "item_results": item_results,
+                "mixed_zero_positive_success": False,
                 "scheduled_start_utc": _format_utc_timestamp(scheduled_start_utc),
                 "actual_request_started_utc": _format_utc_timestamp(actual_request_started_utc),
                 **_planned_metrics_payload(worker_config, batch.batch_id),
@@ -486,6 +528,11 @@ def _execute_claimed_batch(
             staging_path = worker_config.staging_dir / f"{batch.batch_id}.parquet"
             write_parquet_atomic(normalized_batch_df, staging_path)
             row_count_by_item_id = _row_count_by_item_id(normalized_batch_df)
+            item_results = _item_result_details(
+                batch_items_rows,
+                row_count_by_item_id,
+                lookup_normalizer=worker_config.lookup_normalizer,
+            )
             ledger.record_success(
                 batch_id=batch.batch_id,
                 row_count_by_item_id=row_count_by_item_id,
@@ -517,6 +564,8 @@ def _execute_claimed_batch(
                     "exception_message": str(exc),
                     "error_kind": error_details["error_kind"],
                     "unresolved_identifiers": error_details["unresolved_identifiers"],
+                    "item_results": item_results,
+                    "mixed_zero_positive_success": False,
                     "scheduled_start_utc": _format_utc_timestamp(scheduled_start_utc),
                     "actual_request_started_utc": _format_utc_timestamp(actual_request_started_utc),
                     **_planned_metrics_payload(worker_config, batch.batch_id),
@@ -782,6 +831,52 @@ def _row_count_by_item_id(frame: pl.DataFrame) -> dict[str, int]:
         row["item_id"]: int(row["len"])
         for row in frame.group_by("item_id").len().to_dicts()
     }
+
+
+def _item_result_details(
+    batch_items_rows: list[Any],
+    row_count_by_item_id: dict[str, int],
+    *,
+    lookup_normalizer: Callable[[Any], str | None],
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "item_id": item.item_id,
+            "instrument": lookup_normalizer(item.instrument),
+            "row_count": int(row_count_by_item_id.get(item.item_id, 0)),
+        }
+        for item in batch_items_rows
+    ]
+
+
+def _should_requeue_mixed_zero_positive_success(stage: str, item_results: list[dict[str, Any]]) -> bool:
+    if stage != OWNERSHIP_UNIVERSE_STAGE_NAME or len(item_results) <= 1:
+        return False
+    has_positive = any(int(result.get("row_count") or 0) > 0 for result in item_results)
+    has_zero = any(int(result.get("row_count") or 0) == 0 for result in item_results)
+    return has_positive and has_zero
+
+
+def _build_singleton_child_batches(batch_items_rows: list[Any]) -> list[BatchDefinition]:
+    child_batches: list[BatchDefinition] = []
+    for item in batch_items_rows:
+        request_item = RequestItem(
+            item_id=item.item_id,
+            stage=item.stage,
+            instrument=item.instrument,
+            batch_key=item.batch_key,
+            fields=tuple(item.fields),
+            parameters=dict(item.parameters),
+            payload=dict(item.payload),
+        )
+        child_batches.append(
+            build_batch_definition(
+                [request_item],
+                batch_key=request_item.batch_key,
+                parameters=dict(request_item.parameters),
+            )
+        )
+    return child_batches
 
 
 def _build_child_batches(batch: Any, batch_items_rows: list[Any]) -> list[BatchDefinition]:

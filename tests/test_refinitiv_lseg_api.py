@@ -22,6 +22,8 @@ from thesis_pkg.pipelines.refinitiv.doc_ownership import _normalize_date_value
 from thesis_pkg.pipelines.refinitiv import lseg_ownership_api
 from thesis_pkg.pipelines.refinitiv.lseg_batching import RequestItem
 from thesis_pkg.pipelines.refinitiv.lseg_ownership_api import (
+    _normalize_doc_exact_batch_response,
+    _normalize_doc_fallback_batch_response,
     _assemble_doc_raw,
     _normalize_to_month_boundaries,
     _normalize_ownership_universe_batch_response,
@@ -111,6 +113,48 @@ class ErrorProvider:
         if not self._errors:
             raise AssertionError("error provider exhausted")
         raise self._errors.pop(0)
+
+
+class RoutingProvider:
+    def __init__(self, response_by_universe: dict[tuple[str, ...], pl.DataFrame]) -> None:
+        self._response_by_universe = {
+            tuple(universe): frame for universe, frame in response_by_universe.items()
+        }
+        self.calls: list[dict[str, Any]] = []
+
+    def open(self) -> None:
+        return None
+
+    def close(self) -> None:
+        return None
+
+    def get_data(
+        self,
+        *,
+        universe: list[str],
+        fields: list[str],
+        parameters: dict[str, Any] | None = None,
+    ) -> LsegDataResponse:
+        universe_key = tuple(universe)
+        self.calls.append(
+            {
+                "universe": list(universe),
+                "fields": list(fields),
+                "parameters": dict(parameters or {}),
+            }
+        )
+        if universe_key not in self._response_by_universe:
+            raise AssertionError(f"unexpected universe requested: {universe_key}")
+        return LsegDataResponse(
+            frame=self._response_by_universe[universe_key],
+            metadata=LsegResponseMetadata(
+                status_code=200,
+                headers={"X-Request-Limit-Remaining": "100"},
+                latency_ms=25,
+                response_bytes=256,
+                fingerprint="fake",
+            ),
+        )
 
 
 class SelectiveOwnershipErrorProvider:
@@ -764,6 +808,72 @@ def test_normalize_ownership_universe_batch_response_handles_sparse_late_text_va
     assert normalized.select(pl.col("returned_value").drop_nulls().unique()).to_series(0).to_list() == [55.0]
 
 
+def test_ownership_normalizers_match_request_instruments_after_whitespace_normalization() -> None:
+    ownership_item = RequestItem(
+        item_id="own-1",
+        stage="ownership_universe",
+        instrument=" TEST.N ",
+        batch_key="2024-01-01|2024-01-31",
+        fields=("TR.CategoryOwnershipPct.Date", "TR.CategoryOwnershipPct", "TR.InstrStatTypeValue"),
+        parameters={"StatType": 7, "SDate": "2024-01-01", "EDate": "2024-01-31"},
+        payload={
+            "handoff_row": _ownership_handoff_row(
+                lookup_row_id="own-1|UNIVERSE_EFFECTIVE",
+                candidate_ric="TEST.N",
+                request_start_date="2024-01-01",
+                request_end_date="2024-01-31",
+            )
+        },
+    )
+    doc_request_row = {name: None for name in DOC_OWNERSHIP_REQUEST_COLUMNS}
+    doc_request_row.update(
+        {
+            "doc_id": "0000000001:000000000100000001",
+            "authoritative_ric": "TEST.N",
+            "request_start_date": date(2024, 1, 1),
+            "request_end_date": date(2024, 1, 31),
+            "retrieval_eligible": True,
+        }
+    )
+    doc_exact_item = RequestItem(
+        item_id="doc-exact-1",
+        stage="doc_exact",
+        instrument=" TEST.N ",
+        batch_key="2024-01-01|2024-01-31",
+        fields=("TR.CategoryOwnershipPct.Date", "TR.CategoryOwnershipPct", "TR.InstrStatTypeValue"),
+        parameters={"StatType": 7, "SDate": "2024-01-01", "EDate": "2024-01-31"},
+        payload={"request_row": dict(doc_request_row)},
+    )
+    doc_fallback_item = RequestItem(
+        item_id="doc-fallback-1",
+        stage="doc_fallback",
+        instrument=" TEST.N ",
+        batch_key="2024-01-01|2024-01-31",
+        fields=("TR.CategoryOwnershipPct.Date", "TR.CategoryOwnershipPct", "TR.InstrStatTypeValue"),
+        parameters={"StatType": 7, "SDate": "2024-01-01", "EDate": "2024-01-31"},
+        payload={"request_row": dict(doc_request_row)},
+    )
+    response_frame = pl.DataFrame(
+        {
+            "Instrument": ["TEST.N"],
+            "Date": [date(2024, 1, 31)],
+            "Category Percent Of Traded Shares": [55.0],
+            "Investor Statistics Category Value": ["Holdings by Institutions"],
+        }
+    )
+
+    ownership_df = _normalize_ownership_universe_batch_response([ownership_item], response_frame)
+    exact_df = _normalize_doc_exact_batch_response([doc_exact_item], response_frame)
+    fallback_df = _normalize_doc_fallback_batch_response([doc_fallback_item], response_frame)
+
+    assert ownership_df.height == 1
+    assert ownership_df.item(0, "returned_ric") == "TEST.N"
+    assert exact_df.height == 1
+    assert exact_df.item(0, "response_date") == date(2024, 1, 31)
+    assert fallback_df.height == 1
+    assert fallback_df.item(0, "response_date") == date(2024, 1, 31)
+
+
 def test_ownership_universe_api_pipeline_includes_month_start_rows_in_mid_month_window(tmp_path: Path) -> None:
     handoff_path = tmp_path / "refinitiv_ownership_universe_handoff_common_stock.parquet"
     pl.DataFrame(
@@ -872,6 +982,131 @@ def test_ownership_universe_api_pipeline_normalizes_different_mid_month_windows_
         "SDate": "2022-09-01",
         "EDate": "2022-09-30",
     }
+
+
+def test_ownership_universe_api_pipeline_requeues_mixed_zero_positive_success_batches(tmp_path: Path) -> None:
+    handoff_path = tmp_path / "refinitiv_ownership_universe_handoff_common_stock.parquet"
+    pl.DataFrame(
+        [
+            _ownership_handoff_row(
+                lookup_row_id="row-a|UNIVERSE_EFFECTIVE",
+                candidate_ric="AAA.N",
+                request_start_date="2024-01-01",
+                request_end_date="2024-01-31",
+                kypermno="1",
+            ),
+            _ownership_handoff_row(
+                lookup_row_id="row-b|UNIVERSE_EFFECTIVE",
+                candidate_ric="BBB.N",
+                request_start_date="2024-01-01",
+                request_end_date="2024-01-31",
+                kypermno="2",
+            ),
+        ]
+    ).write_parquet(handoff_path)
+    provider = RoutingProvider(
+        {
+            ("AAA.N", "BBB.N"): pl.DataFrame(
+                {
+                    "Instrument": ["AAA.N"],
+                    "Date": [date(2024, 1, 31)],
+                    "Category Percent Of Traded Shares": [50.0],
+                    "Investor Statistics Category Value": ["Holdings by Institutions"],
+                }
+            ),
+            ("AAA.N",): pl.DataFrame(
+                {
+                    "Instrument": ["AAA.N"],
+                    "Date": [date(2024, 1, 31)],
+                    "Category Percent Of Traded Shares": [50.0],
+                    "Investor Statistics Category Value": ["Holdings by Institutions"],
+                }
+            ),
+            ("BBB.N",): pl.DataFrame(
+                {
+                    "Instrument": ["BBB.N"],
+                    "Date": [date(2024, 1, 31)],
+                    "Category Percent Of Traded Shares": [40.0],
+                    "Investor Statistics Category Value": ["Holdings by Institutions"],
+                }
+            ),
+        }
+    )
+
+    out = run_refinitiv_step1_ownership_universe_api_pipeline(
+        handoff_parquet_path=handoff_path,
+        output_dir=tmp_path,
+        provider=provider,
+        min_seconds_between_requests=0.0,
+        max_batch_size=2,
+    )
+
+    results_df = pl.read_parquet(out["refinitiv_ownership_universe_results_parquet"]).sort("ownership_lookup_row_id")
+    request_log = [
+        json.loads(line)
+        for line in Path(out["refinitiv_ownership_universe_api_requests_jsonl"]).read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    mixed_event = next(
+        payload
+        for payload in request_log
+        if payload.get("event") == "request_succeeded_mixed_zero_items_requeued"
+    )
+
+    assert provider.calls[0]["universe"] == ["AAA.N", "BBB.N"]
+    assert sorted(call["universe"][0] for call in provider.calls[1:]) == ["AAA.N", "BBB.N"]
+    assert results_df.get_column("ownership_lookup_row_id").to_list() == [
+        "row-a|UNIVERSE_EFFECTIVE",
+        "row-b|UNIVERSE_EFFECTIVE",
+    ]
+    assert mixed_event["mixed_zero_positive_success"] is True
+    assert sorted(
+        (row["instrument"], row["row_count"]) for row in mixed_event["item_results"]
+    ) == [("AAA.N", 1), ("BBB.N", 0)]
+    parent_stage_path = tmp_path / "staging" / "ownership_universe" / f"{mixed_event['batch_id']}.parquet"
+    assert not parent_stage_path.exists()
+    manifest = json.loads(Path(out["refinitiv_ownership_universe_stage_manifest_json"]).read_text(encoding="utf-8"))
+    assert manifest["summary"]["mixed_zero_positive_success_requeued_count"] == 1
+
+
+def test_ownership_universe_api_pipeline_keeps_all_zero_multi_item_success_batches(tmp_path: Path) -> None:
+    handoff_path = tmp_path / "refinitiv_ownership_universe_handoff_common_stock.parquet"
+    pl.DataFrame(
+        [
+            _ownership_handoff_row(
+                lookup_row_id="row-a|UNIVERSE_EFFECTIVE",
+                candidate_ric="AAA.N",
+                request_start_date="2024-01-01",
+                request_end_date="2024-01-31",
+                kypermno="1",
+            ),
+            _ownership_handoff_row(
+                lookup_row_id="row-b|UNIVERSE_EFFECTIVE",
+                candidate_ric="BBB.N",
+                request_start_date="2024-01-01",
+                request_end_date="2024-01-31",
+                kypermno="2",
+            ),
+        ]
+    ).write_parquet(handoff_path)
+    provider = FakeProvider([pl.DataFrame()])
+
+    out = run_refinitiv_step1_ownership_universe_api_pipeline(
+        handoff_parquet_path=handoff_path,
+        output_dir=tmp_path,
+        provider=provider,
+        min_seconds_between_requests=0.0,
+        max_batch_size=2,
+    )
+
+    request_log = Path(out["refinitiv_ownership_universe_api_requests_jsonl"]).read_text(encoding="utf-8")
+    row_summary_df = pl.read_parquet(out["refinitiv_ownership_universe_row_summary_parquet"]).sort(
+        "ownership_lookup_row_id"
+    )
+
+    assert len(provider.calls) == 1
+    assert "request_succeeded_mixed_zero_items_requeued" not in request_log
+    assert row_summary_df.get_column("ownership_rows_returned").to_list() == [0, 0]
 
 
 def test_doc_ownership_exact_and_fallback_api_pipelines_finalize_without_workbooks(tmp_path: Path) -> None:

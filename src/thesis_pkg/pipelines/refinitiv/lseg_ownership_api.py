@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import calendar
 import datetime as dt
+import json
 from pathlib import Path
 from typing import Any
 
@@ -241,6 +242,15 @@ def run_refinitiv_step1_ownership_universe_api_pipeline(
             "results_row_count": int(results_df.height),
             "rows_with_results": int(
                 row_summary_df.filter(pl.col("ownership_rows_returned").fill_null(0) > 0).height
+            ),
+            "request_succeeded_count": _count_request_log_events(request_log_path, "request_succeeded"),
+            "mixed_zero_positive_success_requeued_count": _count_request_log_events(
+                request_log_path,
+                "request_succeeded_mixed_zero_items_requeued",
+            ),
+            "request_unresolved_identifiers_treated_as_empty_count": _count_request_log_events(
+                request_log_path,
+                "request_unresolved_identifiers_treated_as_empty",
             ),
             "run_session_id": stage_run.run_session_id,
         },
@@ -619,6 +629,19 @@ def _assemble_doc_raw(
     )
 
 
+def _count_request_log_events(request_log_path: Path, event_name: str) -> int:
+    if not request_log_path.exists():
+        return 0
+    count = 0
+    for line in request_log_path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        payload = json.loads(line)
+        if payload.get("event") == event_name:
+            count += 1
+    return count
+
+
 def _build_ownership_universe_items(handoff_df: pl.DataFrame) -> list[RequestItem]:
     items: list[RequestItem] = []
     for row in handoff_df.filter(pl.col("retrieval_eligible").fill_null(False)).to_dicts():
@@ -804,7 +827,7 @@ def _normalize_ownership_universe_batch_response(items: list[Any], frame: pl.Dat
     for item in items:
         handoff_row = dict(item.payload["handoff_row"])
         item_start_date, item_end_date = _item_window(item)
-        matched_rows = rows_by_instrument.get(item.instrument, [])
+        matched_rows = rows_by_instrument.get(_normalize_lookup_text(item.instrument) or "", [])
         for matched_row in matched_rows:
             returned_ric = _normalize_lookup_text(matched_row.get("instrument"))
             returned_date = _normalize_date_value(matched_row.get("TR.CategoryOwnershipPct.Date"))
@@ -847,7 +870,7 @@ def _normalize_doc_exact_batch_response(items: list[Any], frame: pl.DataFrame) -
     rows: list[dict[str, Any]] = []
     for item in items:
         request_row = dict(item.payload["request_row"])
-        matched_rows = rows_by_instrument.get(item.instrument, [])
+        matched_rows = rows_by_instrument.get(_normalize_lookup_text(item.instrument) or "", [])
         for matched_row in matched_rows:
             response_date = _normalize_date_value(matched_row.get("TR.CategoryOwnershipPct.Date"))
             returned_value = _normalize_float_value(matched_row.get("TR.CategoryOwnershipPct"))
@@ -888,7 +911,7 @@ def _normalize_doc_fallback_batch_response(items: list[Any], frame: pl.DataFrame
     rows: list[dict[str, Any]] = []
     for item in items:
         request_row = dict(item.payload["request_row"])
-        matched_rows = rows_by_instrument.get(item.instrument, [])
+        matched_rows = rows_by_instrument.get(_normalize_lookup_text(item.instrument) or "", [])
         for matched_row in matched_rows:
             response_date = _normalize_date_value(matched_row.get("TR.CategoryOwnershipPct.Date"))
             returned_value = _normalize_float_value(matched_row.get("TR.CategoryOwnershipPct"))

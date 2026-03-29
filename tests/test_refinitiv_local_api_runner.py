@@ -45,6 +45,7 @@ def test_parse_args_defaults() -> None:
     assert args.ownership_max_extra_rows_ratio is None
     assert args.ownership_max_union_span_days is None
     assert args.ownership_row_density_rows_per_day is None
+    assert args.include_ticker_fallback is True
     assert args.analyst_actuals_batch_size == 10
     assert args.analyst_estimates_batch_size == 10
     assert args.analyst_actuals_max_batch_items is None
@@ -198,6 +199,7 @@ def test_main_passes_ownership_interval_batching_args_and_records_manifest(
     assert manifest["batching"]["ownership_max_batch_items"] == 13
     assert manifest["batching"]["ownership_max_extra_rows_abs"] == 11.5
     assert manifest["batching"]["ownership_row_density_rows_per_day"] == 0.03
+    assert manifest["batching"]["include_ticker_fallback"] is True
 
 
 def test_parse_args_rejects_invalid_stage_range() -> None:
@@ -401,6 +403,7 @@ def test_main_full_chain_uses_canonical_stage_paths(
     assert [stage for stage, _ in calls] == list(runner.STAGE_ORDER)
     assert calls[1][1]["filled_lookup_workbook_path"] == run_root / "refinitiv_step1" / "refinitiv_ric_lookup_handoff_common_stock_extended.parquet"
     assert calls[2][1]["bridge_artifact_path"] == run_root / "refinitiv_step1" / "refinitiv_bridge_universe.parquet"
+    assert calls[3][1]["include_ticker_fallback"] is True
     assert calls[4][1]["handoff_parquet_path"] == run_root / "refinitiv_step1" / "ownership_universe_common_stock" / "refinitiv_ownership_universe_handoff_common_stock.parquet"
     assert calls[5][1]["resolution_artifact_path"] == run_root / "refinitiv_step1" / "refinitiv_ric_resolution_common_stock.parquet"
     assert calls[5][1]["ownership_results_artifact_path"] == run_root / "refinitiv_step1" / "ownership_universe_common_stock" / "refinitiv_ownership_universe_results.parquet"
@@ -410,6 +413,41 @@ def test_main_full_chain_uses_canonical_stage_paths(
     assert calls[10][1]["doc_filing_artifact_path"] == run_root / "sec_ccm_premerge" / "sec_ccm_matched_clean_filtered.parquet"
     assert calls[10][1]["authority_decisions_artifact_path"] == run_root / "refinitiv_step1" / "ownership_authority_common_stock" / "refinitiv_permno_ownership_authority_decisions.parquet"
     assert calls[11][1]["output_dir"] == run_root / "refinitiv_doc_ownership_lm2011"
+
+
+def test_main_passes_no_ticker_fallback_to_ownership_handoff_stage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_root = _build_run_root(tmp_path)
+    _write_parquet(run_root / "refinitiv_step1" / "refinitiv_ric_resolution_common_stock.parquet")
+
+    monkeypatch.setattr(runner, "is_lseg_available", lambda: True)
+    captured: dict[str, object] = {}
+
+    def ownership_handoff_stub(**kwargs: Path | bool) -> dict[str, Path]:
+        captured.update(kwargs)
+        output_path = kwargs["output_dir"] / "refinitiv_ownership_universe_handoff_common_stock.parquet"
+        _write_parquet(output_path)
+        return {"refinitiv_ownership_universe_handoff_common_stock_parquet": output_path}
+
+    monkeypatch.setattr(runner, "run_refinitiv_step1_ownership_universe_handoff_pipeline", ownership_handoff_stub)
+
+    exit_code = runner.main(
+        [
+            "--run-root",
+            str(run_root),
+            "--stage-start",
+            "ownership_handoff",
+            "--stage-stop",
+            "ownership_handoff",
+            "--no-stage-manifest-required",
+            "--no-ticker-fallback",
+        ]
+    )
+
+    assert exit_code == 0
+    assert captured["include_ticker_fallback"] is False
 
 
 def test_main_stage_range_skips_earlier_stages_and_stops_at_stage_stop(

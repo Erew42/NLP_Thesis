@@ -646,19 +646,19 @@ def main() -> None:
     )
     RUN_REFINITIV_ANALYST_REQUEST_GROUPS = _env_bool(
         "SEC_CCM_RUN_REFINITIV_ANALYST_REQUEST_GROUPS",
-        False,
+        True,
     )
     RUN_REFINITIV_ANALYST_ACTUALS = _env_bool(
         "SEC_CCM_RUN_REFINITIV_ANALYST_ACTUALS",
-        False,
+        True,
     )
     RUN_REFINITIV_ANALYST_ESTIMATES_MONTHLY = _env_bool(
         "SEC_CCM_RUN_REFINITIV_ANALYST_ESTIMATES_MONTHLY",
-        False,
+        True,
     )
     RUN_REFINITIV_ANALYST_NORMALIZE = _env_bool(
         "SEC_CCM_RUN_REFINITIV_ANALYST_NORMALIZE",
-        False,
+        True,
     )
     REFINITIV_PROVIDER_SESSION_NAME = _env_str(
         "SEC_CCM_REFINITIV_PROVIDER_SESSION_NAME",
@@ -703,6 +703,10 @@ def main() -> None:
     REFINITIV_OWNERSHIP_ROW_DENSITY_ROWS_PER_DAY = _env_optional_float(
         "SEC_CCM_REFINITIV_OWNERSHIP_ROW_DENSITY_ROWS_PER_DAY",
         None,
+    )
+    REFINITIV_OWNERSHIP_INCLUDE_TICKER_FALLBACK = _env_bool(
+        "SEC_CCM_REFINITIV_OWNERSHIP_INCLUDE_TICKER_FALLBACK",
+        False,
     )
     REFINITIV_ANALYST_ACTUALS_BATCH_SIZE = _env_int(
         "SEC_CCM_REFINITIV_ANALYST_ACTUALS_BATCH_SIZE",
@@ -959,6 +963,7 @@ def main() -> None:
             "REFINITIV_OWNERSHIP_MAX_EXTRA_ROWS_RATIO": REFINITIV_OWNERSHIP_MAX_EXTRA_ROWS_RATIO,
             "REFINITIV_OWNERSHIP_MAX_UNION_SPAN_DAYS": REFINITIV_OWNERSHIP_MAX_UNION_SPAN_DAYS,
             "REFINITIV_OWNERSHIP_ROW_DENSITY_ROWS_PER_DAY": REFINITIV_OWNERSHIP_ROW_DENSITY_ROWS_PER_DAY,
+            "REFINITIV_OWNERSHIP_INCLUDE_TICKER_FALLBACK": REFINITIV_OWNERSHIP_INCLUDE_TICKER_FALLBACK,
             "REFINITIV_ANALYST_ACTUALS_BATCH_SIZE": REFINITIV_ANALYST_ACTUALS_BATCH_SIZE,
             "REFINITIV_ANALYST_ACTUALS_MAX_BATCH_ITEMS": REFINITIV_ANALYST_ACTUALS_MAX_BATCH_ITEMS,
             "REFINITIV_ANALYST_ACTUALS_MAX_EXTRA_ROWS_ABS": REFINITIV_ANALYST_ACTUALS_MAX_EXTRA_ROWS_ABS,
@@ -1266,6 +1271,7 @@ def main() -> None:
             refinitiv_ownership_universe_handoff_paths = run_refinitiv_step1_ownership_universe_handoff_pipeline(
                 resolution_artifact_path=resolution_artifact_path,
                 output_dir=REFINITIV_OWNERSHIP_UNIVERSE_DIR,
+                include_ticker_fallback=REFINITIV_OWNERSHIP_INCLUDE_TICKER_FALLBACK,
             )
             _record_refinitiv_stage(
                 "refinitiv_ownership_universe_handoff",

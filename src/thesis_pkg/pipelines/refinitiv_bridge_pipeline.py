@@ -248,6 +248,11 @@ RESOLUTION_DIAGNOSTIC_TARGET_COLUMNS: tuple[str, ...] = (
     "diagnostic_case_id",
     "case_target_bridge_row_id",
     "target_class",
+    "extension_support_scope",
+    "extension_block_reason",
+    "permno_effective_support_available",
+    "same_liid_effective_support_available",
+    "cross_liid_effective_support_available",
     "group_sequence_index",
     "group_row_count",
     "case_previous_row_available",
@@ -290,6 +295,11 @@ RESOLUTION_DIAGNOSTIC_CONTEXT_COLUMNS: tuple[str, ...] = (
     "diagnostic_case_id",
     "case_target_bridge_row_id",
     "target_class",
+    "extension_support_scope",
+    "extension_block_reason",
+    "permno_effective_support_available",
+    "same_liid_effective_support_available",
+    "cross_liid_effective_support_available",
     "diagnostic_role",
     "context_offset",
     "group_sequence_index",
@@ -630,6 +640,9 @@ RESOLUTION_DIAGNOSTIC_BOOLEAN_COLUMNS: frozenset[str] = frozenset(
         "conventional_identity_conflict",
         "ticker_candidate_available",
         "ticker_candidate_conflicts_with_conventional",
+        "permno_effective_support_available",
+        "same_liid_effective_support_available",
+        "cross_liid_effective_support_available",
         "case_previous_row_available",
         "case_next_row_available",
         "case_any_adjacent_row_available",
@@ -2297,6 +2310,11 @@ def _resolution_diagnostic_target_schema() -> dict[str, pl.DataType]:
             "diagnostic_case_id": pl.Utf8,
             "case_target_bridge_row_id": pl.Utf8,
             "target_class": pl.Utf8,
+            "extension_support_scope": pl.Utf8,
+            "extension_block_reason": pl.Utf8,
+            "permno_effective_support_available": pl.Boolean,
+            "same_liid_effective_support_available": pl.Boolean,
+            "cross_liid_effective_support_available": pl.Boolean,
             "group_sequence_index": pl.Int64,
             "group_row_count": pl.Int64,
             "case_previous_row_available": pl.Boolean,
@@ -2393,11 +2411,10 @@ def _empty_resolution_diagnostic_handoff_df() -> pl.DataFrame:
 def _resolution_diagnostic_target_class(record: dict[str, Any]) -> str | None:
     if bool(record.get("conventional_identity_conflict")):
         return "conventional_conflict"
-    if (
-        bool(record.get("ticker_candidate_available"))
-        and _normalized_lookup_result_value(record.get("effective_collection_ric")) is None
-    ):
-        return "unresolved_ticker_only_candidate"
+    if _normalized_lookup_result_value(record.get("effective_collection_ric")) is None:
+        if bool(record.get("ticker_candidate_available")):
+            return "unresolved_ticker_only_candidate"
+        return "unresolved_no_effective_collection_ric"
     return None
 
 
@@ -2416,6 +2433,44 @@ def _match_with_normalizer(
 
 def _count_true_records(records: list[dict[str, Any]], field_name: str) -> int:
     return int(sum(1 for record in records if record.get(field_name) is True))
+
+
+def _has_conventional_source(record: dict[str, Any]) -> bool:
+    return any(
+        _normalize_lookup_text(record.get(field_name)) is not None
+        for field_name in ("ISIN", "CUSIP", "ISIN_returned_ric", "CUSIP_returned_ric")
+    )
+
+
+def _resolution_diagnostic_support_scope(
+    *,
+    same_liid_effective_support_available: bool,
+    cross_liid_effective_support_available: bool,
+) -> str:
+    if same_liid_effective_support_available:
+        return "same_liid_support"
+    if cross_liid_effective_support_available:
+        return "cross_liid_only_support"
+    return "no_support"
+
+
+def _resolution_diagnostic_block_reason(
+    record: dict[str, Any],
+    *,
+    extension_support_scope: str,
+    case_any_adjacent_effective_available: bool,
+) -> str:
+    if bool(record.get("conventional_identity_conflict")):
+        return "conflicting_neighbors"
+    if extension_support_scope == "cross_liid_only_support":
+        return "cross_liid_only"
+    if not _has_conventional_source(record):
+        return "missing_conventional_source"
+    if extension_support_scope == "same_liid_support" and not case_any_adjacent_effective_available:
+        return "no_adjacent_same_liid_support"
+    if extension_support_scope == "no_support":
+        return "no_effective_support_on_permno"
+    return "same_liid_support_but_not_extended"
 
 
 def _resolution_diagnostic_class_summary(target_records: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
@@ -2443,6 +2498,8 @@ def _resolution_diagnostic_class_summary(target_records: list[dict[str, Any]]) -
             "targets_with_both_adjacent_effective": int(
                 sum(1 for record in records if bool(record.get("case_both_adjacent_effective_available")))
             ),
+            "extension_support_scope_counts": _value_counts(records, "extension_support_scope"),
+            "extension_block_reason_counts": _value_counts(records, "extension_block_reason"),
         }
     return summary
 
@@ -2500,6 +2557,20 @@ def _summarize_refinitiv_step1_resolution_diagnostic_artifacts(
             target_records,
             "case_both_adjacent_effective_available",
         ),
+        "targets_with_same_liid_effective_support": _count_true_records(
+            target_records,
+            "same_liid_effective_support_available",
+        ),
+        "targets_with_cross_liid_effective_support": _count_true_records(
+            target_records,
+            "cross_liid_effective_support_available",
+        ),
+        "targets_with_any_permno_effective_support": _count_true_records(
+            target_records,
+            "permno_effective_support_available",
+        ),
+        "extension_support_scope_counts": _value_counts(target_records, "extension_support_scope"),
+        "extension_block_reason_counts": _value_counts(target_records, "extension_block_reason"),
         "candidate_vs_adjacent_match_counts": {
             field_name: _count_true_records(target_records, field_name) for field_name in candidate_match_fields
         },
@@ -2585,11 +2656,14 @@ def build_refinitiv_step1_resolution_diagnostic_artifacts(
 
     records = resolution_df.to_dicts()
     grouped_records: dict[tuple[str | None, str | None], list[dict[str, Any]]] = {}
+    records_by_permno: dict[str | None, list[dict[str, Any]]] = {}
     for record in records:
+        kypermno = _normalize_lookup_text(record.get("KYPERMNO"))
         liid_inferred = _parse_bridge_row_id_liid(_normalize_lookup_text(record.get("bridge_row_id")))
+        records_by_permno.setdefault(kypermno, []).append(record)
         grouped_records.setdefault(
             (
-                _normalize_lookup_text(record.get("KYPERMNO")),
+                kypermno,
                 liid_inferred,
             ),
             [],
@@ -2624,12 +2698,41 @@ def build_refinitiv_step1_resolution_diagnostic_artifacts(
             case_next_effective_ric = None if next_record is None else _normalized_lookup_result_value(
                 next_record.get("effective_collection_ric")
             )
+            same_liid_effective_support_available = any(
+                _normalized_lookup_result_value(candidate.get("effective_collection_ric")) is not None
+                for candidate in ordered_records
+                if candidate is not record
+            )
+            cross_liid_effective_support_available = any(
+                _normalized_lookup_result_value(candidate.get("effective_collection_ric")) is not None
+                and _parse_bridge_row_id_liid(_normalize_lookup_text(candidate.get("bridge_row_id"))) != liid_inferred
+                for candidate in records_by_permno.get(kypermno, [])
+            )
+            permno_effective_support_available = (
+                same_liid_effective_support_available or cross_liid_effective_support_available
+            )
+            extension_support_scope = _resolution_diagnostic_support_scope(
+                same_liid_effective_support_available=same_liid_effective_support_available,
+                cross_liid_effective_support_available=cross_liid_effective_support_available,
+            )
+            case_any_adjacent_effective_available = (
+                case_previous_effective_ric is not None or case_next_effective_ric is not None
+            )
             case_record_shared = {
                 "LIID_inferred": liid_inferred,
                 "logical_bridge_group_id": logical_bridge_group_id,
                 "diagnostic_case_id": f"{target_class}:{_normalize_lookup_text(record.get('bridge_row_id')) or idx}",
                 "case_target_bridge_row_id": _normalize_lookup_text(record.get("bridge_row_id")),
                 "target_class": target_class,
+                "extension_support_scope": extension_support_scope,
+                "extension_block_reason": _resolution_diagnostic_block_reason(
+                    record,
+                    extension_support_scope=extension_support_scope,
+                    case_any_adjacent_effective_available=case_any_adjacent_effective_available,
+                ),
+                "permno_effective_support_available": permno_effective_support_available,
+                "same_liid_effective_support_available": same_liid_effective_support_available,
+                "cross_liid_effective_support_available": cross_liid_effective_support_available,
                 "group_row_count": len(ordered_records),
                 "case_previous_row_available": prior_record is not None,
                 "case_next_row_available": next_record is not None,
@@ -2642,9 +2745,7 @@ def build_refinitiv_step1_resolution_diagnostic_artifacts(
                 ),
                 "case_previous_effective_available": case_previous_effective_ric is not None,
                 "case_next_effective_available": case_next_effective_ric is not None,
-                "case_any_adjacent_effective_available": (
-                    case_previous_effective_ric is not None or case_next_effective_ric is not None
-                ),
+                "case_any_adjacent_effective_available": case_any_adjacent_effective_available,
                 "case_both_adjacent_effective_available": (
                     case_previous_effective_ric is not None and case_next_effective_ric is not None
                 ),
@@ -3983,6 +4084,7 @@ def _summarize_refinitiv_step1_ownership_universe_handoff(
     handoff_df: pl.DataFrame,
     *,
     source_resolution_row_count: int,
+    include_ticker_fallback: bool,
 ) -> dict[str, Any]:
     eligible_df = handoff_df.filter(pl.col("retrieval_eligible").fill_null(False))
     noneligible_df = handoff_df.filter(~pl.col("retrieval_eligible").fill_null(False))
@@ -4005,6 +4107,7 @@ def _summarize_refinitiv_step1_ownership_universe_handoff(
         "non_retrieval_row_count": int(noneligible_df.height),
         "retrieval_role_counts": _value_counts(eligible_records, "ownership_lookup_role"),
         "retrieval_exclusion_reason_counts": _value_counts(noneligible_records, "retrieval_exclusion_reason"),
+        "include_ticker_fallback": include_ticker_fallback,
         "retrieval_sheet_name": OWNERSHIP_UNIVERSE_RETRIEVAL_SHEET_NAME,
         "request_block_headers": list(OWNERSHIP_UNIVERSE_BLOCK_HEADERS),
         "visible_input_field_order": list(OWNERSHIP_UNIVERSE_VISIBLE_INPUT_FIELDS),
@@ -4013,6 +4116,8 @@ def _summarize_refinitiv_step1_ownership_universe_handoff(
 
 def build_refinitiv_step1_ownership_universe_handoff(
     resolution_df: pl.DataFrame,
+    *,
+    include_ticker_fallback: bool = True,
 ) -> tuple[pl.DataFrame, dict[str, Any]]:
     missing = [name for name in RIC_LOOKUP_RESOLUTION_OUTPUT_COLUMNS if name not in resolution_df.columns]
     if missing:
@@ -4034,6 +4139,7 @@ def build_refinitiv_step1_ownership_universe_handoff(
         return empty_df, _summarize_refinitiv_step1_ownership_universe_handoff(
             empty_df,
             source_resolution_row_count=0,
+            include_ticker_fallback=include_ticker_fallback,
         )
 
     rows: list[dict[str, Any]] = []
@@ -4094,8 +4200,8 @@ def build_refinitiv_step1_ownership_universe_handoff(
                     ownership_lookup_role="UNIVERSE_TARGET_TICKER_CANDIDATE",
                     lookup_input=ticker_candidate_ric,
                     lookup_input_source="ticker_candidate_ric",
-                    retrieval_eligible=True,
-                    retrieval_exclusion_reason=None,
+                    retrieval_eligible=include_ticker_fallback,
+                    retrieval_exclusion_reason=None if include_ticker_fallback else "ticker_fallback_disabled",
                 )
             )
             continue
@@ -4118,6 +4224,7 @@ def build_refinitiv_step1_ownership_universe_handoff(
     return handoff_df, _summarize_refinitiv_step1_ownership_universe_handoff(
         handoff_df,
         source_resolution_row_count=normalized_df.height,
+        include_ticker_fallback=include_ticker_fallback,
     )
 
 
@@ -4299,13 +4406,18 @@ def build_refinitiv_ownership_universe_row_summary(
 def run_refinitiv_step1_ownership_universe_handoff_pipeline(
     resolution_artifact_path: Path | str,
     output_dir: Path | str,
+    *,
+    include_ticker_fallback: bool = True,
 ) -> dict[str, Path]:
     resolution_artifact_path = Path(resolution_artifact_path)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     resolution_df = _read_resolution_artifact_parquet(resolution_artifact_path)
-    handoff_df, summary = build_refinitiv_step1_ownership_universe_handoff(resolution_df)
+    handoff_df, summary = build_refinitiv_step1_ownership_universe_handoff(
+        resolution_df,
+        include_ticker_fallback=include_ticker_fallback,
+    )
 
     handoff_parquet_path = output_dir / "refinitiv_ownership_universe_handoff_common_stock.parquet"
     handoff_xlsx_path = output_dir / "refinitiv_ownership_universe_handoff_common_stock.xlsx"

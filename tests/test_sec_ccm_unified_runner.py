@@ -98,6 +98,15 @@ def test_runner_references_expected_analyst_output_artifacts() -> None:
         assert artifact in source
 
 
+def test_sec_ccm_unified_runner_exposes_and_threads_ownership_ticker_fallback_flag() -> None:
+    runner_path = Path("src/thesis_pkg/notebooks_and_scripts/sec_ccm_unified_runner.py")
+    source = runner_path.read_text(encoding="utf-8")
+
+    assert 'SEC_CCM_REFINITIV_OWNERSHIP_INCLUDE_TICKER_FALLBACK' in source
+    assert 'REFINITIV_OWNERSHIP_INCLUDE_TICKER_FALLBACK = _env_bool(' in source
+    assert 'include_ticker_fallback=REFINITIV_OWNERSHIP_INCLUDE_TICKER_FALLBACK' in source
+
+
 def test_first_existing_path_prefers_existing_candidate(tmp_path: Path) -> None:
     missing = tmp_path / "missing"
     existing = tmp_path / "existing"

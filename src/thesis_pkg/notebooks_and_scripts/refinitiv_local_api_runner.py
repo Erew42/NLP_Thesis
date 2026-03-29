@@ -204,6 +204,13 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ownership-max-extra-rows-ratio", type=float, default=None)
     parser.add_argument("--ownership-max-union-span-days", type=int, default=None)
     parser.add_argument("--ownership-row-density-rows-per-day", type=float, default=None)
+    parser.add_argument(
+        "--ticker-fallback",
+        dest="include_ticker_fallback",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Allow ticker-derived fallback rows in the ownership-universe handoff.",
+    )
     parser.add_argument("--analyst-actuals-batch-size", type=int, default=10)
     parser.add_argument("--analyst-estimates-batch-size", type=int, default=10)
     parser.add_argument("--analyst-actuals-max-batch-items", type=int, default=None)
@@ -617,6 +624,7 @@ def _run_stage(stage: str, args: argparse.Namespace, paths: RunPaths) -> dict[st
             run_refinitiv_step1_ownership_universe_handoff_pipeline(
                 resolution_artifact_path=paths.resolution_parquet,
                 output_dir=paths.ownership_universe_dir,
+                include_ticker_fallback=args.include_ticker_fallback,
             )
         )
     if stage == "ownership_api":
@@ -802,6 +810,7 @@ def _write_manifest(
             "ownership_max_extra_rows_ratio": args.ownership_max_extra_rows_ratio,
             "ownership_max_union_span_days": args.ownership_max_union_span_days,
             "ownership_row_density_rows_per_day": args.ownership_row_density_rows_per_day,
+            "include_ticker_fallback": args.include_ticker_fallback,
             "analyst_actuals_batch_size": args.analyst_actuals_batch_size,
             "analyst_actuals_max_batch_items": args.analyst_actuals_max_batch_items,
             "analyst_actuals_max_extra_rows_abs": args.analyst_actuals_max_extra_rows_abs,

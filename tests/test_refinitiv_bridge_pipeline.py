@@ -27,6 +27,7 @@ from thesis_pkg.pipelines.refinitiv_bridge_pipeline import (
     _build_ric_lookup_handoff_frames,
     build_refinitiv_ownership_universe_row_summary,
     build_refinitiv_step1_ownership_universe_handoff,
+    build_refinitiv_step1_resolution_diagnostic_artifacts,
     build_refinitiv_step1_resolution_frame,
     build_refinitiv_lookup_extended_diagnostic_artifact,
     build_refinitiv_step1_bridge_universe,
@@ -1131,6 +1132,93 @@ def test_run_refinitiv_step1_resolution_pipeline_writes_resolved_artifacts(tmp_p
     assert by_id[_bridge_row_id("4002", cusip=None, isin=None, ticker="TKRO")][
         "effective_collection_ric"
     ] is None
+
+
+def test_resolution_diagnostics_classify_cross_liid_only_support() -> None:
+    resolution_df = build_refinitiv_step1_resolution_frame(
+        _resolution_input_df(
+            [
+                _extended_resolution_row(
+                    kypermno="7001",
+                    liid="01",
+                    cusip="111111111",
+                    isin="US1111111111",
+                    ticker="AAA",
+                    first_seen_caldt=date(2024, 1, 1),
+                    last_seen_caldt=date(2024, 1, 31),
+                    ISIN_returned_ric="AAA.N",
+                    ISIN_returned_isin="US1111111111",
+                    ISIN_returned_cusip="111111111",
+                ),
+                _extended_resolution_row(
+                    kypermno="7001",
+                    liid="02",
+                    cusip="222222222",
+                    isin="US2222222222",
+                    ticker="BBB",
+                    first_seen_caldt=date(2024, 2, 1),
+                    last_seen_caldt=date(2024, 2, 29),
+                ),
+            ]
+        )
+    )
+
+    targets_df, context_df, _handoff_df, summary = build_refinitiv_step1_resolution_diagnostic_artifacts(
+        resolution_df
+    )
+    target_row = targets_df.filter(pl.col("bridge_row_id") == _bridge_row_id("7001", liid="02", cusip="222222222", isin="US2222222222", ticker="BBB")).to_dicts()[0]
+
+    assert context_df.height >= targets_df.height
+    assert target_row["target_class"] == "unresolved_no_effective_collection_ric"
+    assert target_row["extension_support_scope"] == "cross_liid_only_support"
+    assert target_row["extension_block_reason"] == "cross_liid_only"
+    assert target_row["same_liid_effective_support_available"] is False
+    assert target_row["cross_liid_effective_support_available"] is True
+    assert summary["extension_support_scope_counts"]["cross_liid_only_support"] >= 1
+    assert summary["extension_block_reason_counts"]["cross_liid_only"] >= 1
+
+
+def test_build_refinitiv_step1_ownership_universe_handoff_respects_ticker_fallback_flag() -> None:
+    resolution_df = build_refinitiv_step1_resolution_frame(
+        _resolution_input_df(
+            [
+                _extended_resolution_row(
+                    kypermno="9011",
+                    liid="01",
+                    cusip=None,
+                    isin=None,
+                    ticker="TKR",
+                    first_seen_caldt=date(2024, 2, 1),
+                    last_seen_caldt=date(2024, 2, 29),
+                    TICKER_returned_ric="TKR.O",
+                    TICKER_returned_isin="USTICKER9011",
+                    TICKER_returned_cusip="TICK9011",
+                ),
+            ]
+        )
+    )
+
+    enabled_df, enabled_summary = build_refinitiv_step1_ownership_universe_handoff(
+        resolution_df,
+        include_ticker_fallback=True,
+    )
+    disabled_df, disabled_summary = build_refinitiv_step1_ownership_universe_handoff(
+        resolution_df,
+        include_ticker_fallback=False,
+    )
+
+    enabled_row = enabled_df.to_dicts()[0]
+    disabled_row = disabled_df.to_dicts()[0]
+    assert enabled_row["ownership_lookup_role"] == "UNIVERSE_TARGET_TICKER_CANDIDATE"
+    assert enabled_row["retrieval_eligible"] is True
+    assert enabled_row["retrieval_exclusion_reason"] is None
+    assert enabled_summary["include_ticker_fallback"] is True
+
+    assert disabled_row["ownership_lookup_role"] == "UNIVERSE_TARGET_TICKER_CANDIDATE"
+    assert disabled_row["lookup_input"] == "TKR.O"
+    assert disabled_row["retrieval_eligible"] is False
+    assert disabled_row["retrieval_exclusion_reason"] == "ticker_fallback_disabled"
+    assert disabled_summary["include_ticker_fallback"] is False
 
 
 def test_run_refinitiv_step1_ownership_universe_handoff_pipeline_writes_formula_workbook(
