@@ -59,7 +59,9 @@ from thesis_pkg.pipelines.refinitiv.lseg_stage_audit import (
     AuditIssue,
     StageAuditResult,
     audit_api_stage,
+    default_stage_fetch_manifest_path,
     default_stage_manifest_path,
+    write_stage_completion_manifest,
 )
 from thesis_pkg.pipelines.refinitiv_bridge_pipeline import build_refinitiv_ownership_universe_row_summary
 
@@ -79,6 +81,97 @@ STAGE_ORDER: tuple[str, ...] = (
     "doc_fallback_api",
     "doc_finalize",
 )
+
+STAGE_MANIFEST_RECOVERY_MODES: dict[str, str] = {
+    "lookup_stage_manifest_only": "lookup_api",
+    "ownership_stage_manifest_only": "ownership_api",
+    "analyst_actuals_stage_manifest_only": "analyst_actuals_api",
+    "analyst_estimates_stage_manifest_only": "analyst_estimates_api",
+    "doc_exact_stage_manifest_only": "doc_exact_api",
+    "doc_fallback_stage_manifest_only": "doc_fallback_api",
+}
+API_STAGES: frozenset[str] = frozenset(
+    {
+        "lookup_api",
+        "ownership_api",
+        "analyst_actuals_api",
+        "analyst_estimates_api",
+        "doc_exact_api",
+        "doc_fallback_api",
+    }
+)
+
+# Editable local-run defaults. CLI flags still override these values.
+LOCAL_LOOKUP_BATCH_SIZE_DEFAULT = 50
+LOCAL_OWNERSHIP_BATCH_SIZE_DEFAULT = 50
+LOCAL_OWNERSHIP_MAX_BATCH_ITEMS_DEFAULT: int | None = 50
+LOCAL_OWNERSHIP_MAX_EXTRA_ROWS_ABS_DEFAULT: float | None = 120.0
+LOCAL_OWNERSHIP_MAX_EXTRA_ROWS_RATIO_DEFAULT: float | None = 1
+LOCAL_OWNERSHIP_MAX_UNION_SPAN_DAYS_DEFAULT: int | None = None
+LOCAL_OWNERSHIP_ROW_DENSITY_ROWS_PER_DAY_DEFAULT: float | None = 1
+LOCAL_INCLUDE_TICKER_FALLBACK_DEFAULT = False
+LOCAL_ANALYST_ACTUALS_BATCH_SIZE_DEFAULT = 50
+LOCAL_ANALYST_ACTUALS_MAX_BATCH_ITEMS_DEFAULT: int | None = 50
+LOCAL_ANALYST_ACTUALS_MAX_EXTRA_ROWS_ABS_DEFAULT: float | None = 120.0
+LOCAL_ANALYST_ACTUALS_MAX_EXTRA_ROWS_RATIO_DEFAULT: float | None = 1
+LOCAL_ANALYST_ACTUALS_MAX_UNION_SPAN_DAYS_DEFAULT: int | None = None
+LOCAL_ANALYST_ACTUALS_ROW_DENSITY_ROWS_PER_DAY_DEFAULT: float | None = None
+LOCAL_ANALYST_ESTIMATES_BATCH_SIZE_DEFAULT = 50
+LOCAL_ANALYST_ESTIMATES_MAX_BATCH_ITEMS_DEFAULT: int | None = 50
+LOCAL_ANALYST_ESTIMATES_MAX_EXTRA_ROWS_ABS_DEFAULT: float | None = 240.0
+LOCAL_ANALYST_ESTIMATES_MAX_EXTRA_ROWS_RATIO_DEFAULT: float | None = 1
+LOCAL_ANALYST_ESTIMATES_MAX_UNION_SPAN_DAYS_DEFAULT: int | None = None
+LOCAL_ANALYST_ESTIMATES_ROW_DENSITY_ROWS_PER_DAY_DEFAULT: float | None = None
+LOCAL_SAFE_BATCH_PROFILE_DEFAULTS: dict[str, int | float | None] = {
+    "lookup_batch_size": 25,
+    "ownership_batch_size": 10,
+    "ownership_max_batch_items": 10,
+    "ownership_max_extra_rows_abs": 120.0,
+    "ownership_max_extra_rows_ratio": 0.25,
+    "ownership_max_union_span_days": 3650,
+    "ownership_row_density_rows_per_day": 1.0 / 91.0,
+    "analyst_actuals_batch_size": 25,
+    "analyst_actuals_max_batch_items": 25,
+    "analyst_actuals_max_extra_rows_abs": 120.0,
+    "analyst_actuals_max_extra_rows_ratio": 0.25,
+    "analyst_actuals_max_union_span_days": None,
+    "analyst_actuals_row_density_rows_per_day": 1.0 / 91.0,
+    "analyst_estimates_batch_size": 10,
+    "analyst_estimates_max_batch_items": 10,
+    "analyst_estimates_max_extra_rows_abs": 240.0,
+    "analyst_estimates_max_extra_rows_ratio": 0.15,
+    "analyst_estimates_max_union_span_days": None,
+    "analyst_estimates_row_density_rows_per_day": 1.0 / 30.5,
+    "doc_exact_batch_size": 15,
+    "doc_fallback_batch_size": 5,
+}
+CURRENT_BATCH_PROFILE_DEFAULTS: dict[str, int | float | None] = {
+    "lookup_batch_size": LOCAL_LOOKUP_BATCH_SIZE_DEFAULT,
+    "ownership_batch_size": LOCAL_OWNERSHIP_BATCH_SIZE_DEFAULT,
+    "ownership_max_batch_items": LOCAL_OWNERSHIP_MAX_BATCH_ITEMS_DEFAULT,
+    "ownership_max_extra_rows_abs": LOCAL_OWNERSHIP_MAX_EXTRA_ROWS_ABS_DEFAULT,
+    "ownership_max_extra_rows_ratio": LOCAL_OWNERSHIP_MAX_EXTRA_ROWS_RATIO_DEFAULT,
+    "ownership_max_union_span_days": LOCAL_OWNERSHIP_MAX_UNION_SPAN_DAYS_DEFAULT,
+    "ownership_row_density_rows_per_day": LOCAL_OWNERSHIP_ROW_DENSITY_ROWS_PER_DAY_DEFAULT,
+    "analyst_actuals_batch_size": LOCAL_ANALYST_ACTUALS_BATCH_SIZE_DEFAULT,
+    "analyst_actuals_max_batch_items": LOCAL_ANALYST_ACTUALS_MAX_BATCH_ITEMS_DEFAULT,
+    "analyst_actuals_max_extra_rows_abs": LOCAL_ANALYST_ACTUALS_MAX_EXTRA_ROWS_ABS_DEFAULT,
+    "analyst_actuals_max_extra_rows_ratio": LOCAL_ANALYST_ACTUALS_MAX_EXTRA_ROWS_RATIO_DEFAULT,
+    "analyst_actuals_max_union_span_days": LOCAL_ANALYST_ACTUALS_MAX_UNION_SPAN_DAYS_DEFAULT,
+    "analyst_actuals_row_density_rows_per_day": LOCAL_ANALYST_ACTUALS_ROW_DENSITY_ROWS_PER_DAY_DEFAULT,
+    "analyst_estimates_batch_size": LOCAL_ANALYST_ESTIMATES_BATCH_SIZE_DEFAULT,
+    "analyst_estimates_max_batch_items": LOCAL_ANALYST_ESTIMATES_MAX_BATCH_ITEMS_DEFAULT,
+    "analyst_estimates_max_extra_rows_abs": LOCAL_ANALYST_ESTIMATES_MAX_EXTRA_ROWS_ABS_DEFAULT,
+    "analyst_estimates_max_extra_rows_ratio": LOCAL_ANALYST_ESTIMATES_MAX_EXTRA_ROWS_RATIO_DEFAULT,
+    "analyst_estimates_max_union_span_days": LOCAL_ANALYST_ESTIMATES_MAX_UNION_SPAN_DAYS_DEFAULT,
+    "analyst_estimates_row_density_rows_per_day": LOCAL_ANALYST_ESTIMATES_ROW_DENSITY_ROWS_PER_DAY_DEFAULT,
+    "doc_exact_batch_size": 15,
+    "doc_fallback_batch_size": 5,
+}
+BATCH_PROFILES: dict[str, dict[str, int | float | None]] = {
+    "current": CURRENT_BATCH_PROFILE_DEFAULTS,
+    "local_safe": LOCAL_SAFE_BATCH_PROFILE_DEFAULTS,
+}
 
 
 @dataclass(frozen=True)
@@ -110,11 +203,17 @@ class RunPaths:
     authority_exceptions_parquet: Path
     reviewed_ticker_allowlist_path: Path
     lookup_stage_manifest_path: Path
+    lookup_fetch_manifest_path: Path
     ownership_stage_manifest_path: Path
+    ownership_fetch_manifest_path: Path
     analyst_actuals_stage_manifest_path: Path
+    analyst_actuals_fetch_manifest_path: Path
     analyst_estimates_stage_manifest_path: Path
+    analyst_estimates_fetch_manifest_path: Path
     doc_exact_stage_manifest_path: Path
+    doc_exact_fetch_manifest_path: Path
     doc_fallback_stage_manifest_path: Path
+    doc_fallback_fetch_manifest_path: Path
     exact_requests_parquet: Path
     exact_raw_parquet: Path
     fallback_requests_parquet: Path
@@ -141,14 +240,20 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--stage-start",
         choices=STAGE_ORDER,
-        default=STAGE_ORDER[0],
+        default=None,
         help="First stage to execute.",
     )
     parser.add_argument(
         "--stage-stop",
         choices=STAGE_ORDER,
-        default=STAGE_ORDER[-1],
+        default=None,
         help="Last stage to execute.",
+    )
+    parser.add_argument(
+        "--stage-list",
+        type=str,
+        default=None,
+        help="Comma-separated explicit stage selection. Mutually exclusive with --stage-start/--stage-stop.",
     )
     parser.add_argument(
         "--resume",
@@ -173,6 +278,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
             "doc_fallback_unresolved",
             "resolution_only",
             "doc_finalize_only",
+            *STAGE_MANIFEST_RECOVERY_MODES.keys(),
         ),
         default=None,
         help="Run an explicit recovery workflow instead of the normal stage range.",
@@ -194,37 +300,109 @@ def build_argument_parser() -> argparse.ArgumentParser:
         default=True,
         help="Require canonical upstream stage manifests before consuming prior API outputs.",
     )
+    parser.add_argument(
+        "--api-stage-mode",
+        choices=("full", "fetch_only", "finalize_only"),
+        default="full",
+        help="Execution mode for API-backed stages.",
+    )
+    parser.add_argument(
+        "--batch-profile",
+        choices=("current", "local_safe"),
+        default="current",
+        help="Batching preset applied to any stage batch settings you do not set explicitly.",
+    )
     parser.add_argument("--provider-session-name", type=str, default="desktop.workspace")
     parser.add_argument("--provider-config-name", type=str, default=None)
     parser.add_argument("--provider-timeout-seconds", type=float, default=None)
-    parser.add_argument("--lookup-batch-size", type=int, default=25)
-    parser.add_argument("--ownership-batch-size", type=int, default=10)
+    parser.add_argument("--lookup-batch-size", type=int, default=None)
+    parser.add_argument("--ownership-batch-size", type=int, default=None)
     parser.add_argument("--ownership-max-batch-items", type=int, default=None)
-    parser.add_argument("--ownership-max-extra-rows-abs", type=float, default=None)
-    parser.add_argument("--ownership-max-extra-rows-ratio", type=float, default=None)
-    parser.add_argument("--ownership-max-union-span-days", type=int, default=None)
-    parser.add_argument("--ownership-row-density-rows-per-day", type=float, default=None)
+    parser.add_argument(
+        "--ownership-max-extra-rows-abs",
+        type=float,
+        default=None,
+    )
+    parser.add_argument(
+        "--ownership-max-extra-rows-ratio",
+        type=float,
+        default=None,
+    )
+    parser.add_argument(
+        "--ownership-max-union-span-days",
+        type=int,
+        default=None,
+    )
+    parser.add_argument(
+        "--ownership-row-density-rows-per-day",
+        type=float,
+        default=None,
+    )
     parser.add_argument(
         "--ticker-fallback",
         dest="include_ticker_fallback",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=LOCAL_INCLUDE_TICKER_FALLBACK_DEFAULT,
         help="Allow ticker-derived fallback rows in the ownership-universe handoff.",
     )
-    parser.add_argument("--analyst-actuals-batch-size", type=int, default=10)
-    parser.add_argument("--analyst-estimates-batch-size", type=int, default=10)
-    parser.add_argument("--analyst-actuals-max-batch-items", type=int, default=None)
-    parser.add_argument("--analyst-actuals-max-extra-rows-abs", type=float, default=None)
-    parser.add_argument("--analyst-actuals-max-extra-rows-ratio", type=float, default=None)
-    parser.add_argument("--analyst-actuals-max-union-span-days", type=int, default=None)
-    parser.add_argument("--analyst-actuals-row-density-rows-per-day", type=float, default=None)
-    parser.add_argument("--analyst-estimates-max-batch-items", type=int, default=None)
-    parser.add_argument("--analyst-estimates-max-extra-rows-abs", type=float, default=None)
-    parser.add_argument("--analyst-estimates-max-extra-rows-ratio", type=float, default=None)
-    parser.add_argument("--analyst-estimates-max-union-span-days", type=int, default=None)
-    parser.add_argument("--analyst-estimates-row-density-rows-per-day", type=float, default=None)
-    parser.add_argument("--doc-exact-batch-size", type=int, default=15)
-    parser.add_argument("--doc-fallback-batch-size", type=int, default=5)
+    parser.add_argument("--analyst-actuals-batch-size", type=int, default=None)
+    parser.add_argument(
+        "--analyst-estimates-batch-size",
+        type=int,
+        default=None,
+    )
+    parser.add_argument(
+        "--analyst-actuals-max-batch-items",
+        type=int,
+        default=None,
+    )
+    parser.add_argument(
+        "--analyst-actuals-max-extra-rows-abs",
+        type=float,
+        default=None,
+    )
+    parser.add_argument(
+        "--analyst-actuals-max-extra-rows-ratio",
+        type=float,
+        default=None,
+    )
+    parser.add_argument(
+        "--analyst-actuals-max-union-span-days",
+        type=int,
+        default=None,
+    )
+    parser.add_argument(
+        "--analyst-actuals-row-density-rows-per-day",
+        type=float,
+        default=None,
+    )
+    parser.add_argument(
+        "--analyst-estimates-max-batch-items",
+        type=int,
+        default=None,
+    )
+    parser.add_argument(
+        "--analyst-estimates-max-extra-rows-abs",
+        type=float,
+        default=None,
+    )
+    parser.add_argument(
+        "--analyst-estimates-max-extra-rows-ratio",
+        type=float,
+        default=None,
+    )
+    parser.add_argument(
+        "--analyst-estimates-max-union-span-days",
+        type=int,
+        default=None,
+    )
+    parser.add_argument(
+        "--analyst-estimates-row-density-rows-per-day",
+        type=float,
+        default=None,
+    )
+    parser.add_argument("--doc-exact-batch-size", type=int, default=None)
+    parser.add_argument("--doc-fallback-batch-size", type=int, default=None)
     parser.add_argument("--min-seconds-between-requests", type=float, default=2.0)
     parser.add_argument(
         "--min-seconds-between-request-starts-total",
@@ -236,12 +414,14 @@ def build_argument_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("--max-attempts", type=int, default=4)
+    #The concurrent multi worker approach does currently not work well with the Refinitiv APIs, so I default to 1 worker to preserve the expected behavior. Adjust with caution.
     parser.add_argument(
         "--max-workers",
         type=int,
         default=1,
         help="Number of worker processes for API-backed stages. Use 1 to preserve sequential execution.",
     )
+    # Useful when also having implemented a ticker filtering approach, as ticker data is messy (Not done currently).
     parser.add_argument(
         "--reviewed-ticker-allowlist-path",
         type=Path,
@@ -254,8 +434,22 @@ def build_argument_parser() -> argparse.ArgumentParser:
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = build_argument_parser()
     args = parser.parse_args(argv)
-    if args.recover_mode is None and STAGE_ORDER.index(args.stage_start) > STAGE_ORDER.index(args.stage_stop):
-        parser.error("--stage-start must be earlier than or equal to --stage-stop")
+    explicit_stage_list = _parse_stage_list(args.stage_list, parser=parser)
+    if explicit_stage_list:
+        if args.stage_start is not None or args.stage_stop is not None:
+            parser.error("--stage-list is mutually exclusive with --stage-start/--stage-stop")
+        args.selected_stages = explicit_stage_list
+        args.stage_start = explicit_stage_list[0]
+        args.stage_stop = explicit_stage_list[-1]
+    else:
+        args.stage_start = STAGE_ORDER[0] if args.stage_start is None else args.stage_start
+        args.stage_stop = STAGE_ORDER[-1] if args.stage_stop is None else args.stage_stop
+        if args.recover_mode is None and STAGE_ORDER.index(args.stage_start) > STAGE_ORDER.index(args.stage_stop):
+            parser.error("--stage-start must be earlier than or equal to --stage-stop")
+        args.selected_stages = _selected_stages(args.stage_start, args.stage_stop)
+    if args.recover_mode is None and args.api_stage_mode != "full":
+        if len(args.selected_stages) != 1 or args.selected_stages[0] not in API_STAGES:
+            parser.error("--api-stage-mode fetch_only/finalize_only requires selecting exactly one API stage")
     args.run_root = args.run_root.expanduser().resolve()
     if args.reviewed_ticker_allowlist_path is not None:
         args.reviewed_ticker_allowlist_path = args.reviewed_ticker_allowlist_path.expanduser().resolve()
@@ -265,7 +459,32 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error(
             "--min-seconds-between-request-starts-total is required when --max-workers is greater than 1"
         )
+    _apply_batch_profile_defaults(args)
     return args
+
+
+def _parse_stage_list(stage_list_text: str | None, *, parser: argparse.ArgumentParser) -> tuple[str, ...] | None:
+    if stage_list_text is None:
+        return None
+    stages = tuple(part.strip() for part in stage_list_text.split(",") if part.strip())
+    if not stages:
+        parser.error("--stage-list must contain at least one stage")
+    invalid = [stage for stage in stages if stage not in STAGE_ORDER]
+    if invalid:
+        parser.error(f"unknown stages in --stage-list: {', '.join(invalid)}")
+    if len(set(stages)) != len(stages):
+        parser.error("--stage-list must not contain duplicate stages")
+    stage_indexes = [STAGE_ORDER.index(stage) for stage in stages]
+    if stage_indexes != sorted(stage_indexes):
+        parser.error("--stage-list must follow the pipeline stage order")
+    return stages
+
+
+def _apply_batch_profile_defaults(args: argparse.Namespace) -> None:
+    profile_defaults = BATCH_PROFILES[args.batch_profile]
+    for attribute, value in profile_defaults.items():
+        if getattr(args, attribute) is None:
+            setattr(args, attribute, value)
 
 
 def _resolve_run_paths(
@@ -311,11 +530,17 @@ def _resolve_run_paths(
             else ownership_authority_dir / "refinitiv_permno_ownership_ticker_allowlist.parquet"
         ),
         lookup_stage_manifest_path=default_stage_manifest_path(refinitiv_step1_dir, LOOKUP_STAGE),
+        lookup_fetch_manifest_path=default_stage_fetch_manifest_path(refinitiv_step1_dir, LOOKUP_STAGE),
         ownership_stage_manifest_path=default_stage_manifest_path(ownership_universe_dir, OWNERSHIP_UNIVERSE_STAGE),
+        ownership_fetch_manifest_path=default_stage_fetch_manifest_path(ownership_universe_dir, OWNERSHIP_UNIVERSE_STAGE),
         analyst_actuals_stage_manifest_path=default_stage_manifest_path(analyst_dir, ANALYST_ACTUALS_STAGE),
+        analyst_actuals_fetch_manifest_path=default_stage_fetch_manifest_path(analyst_dir, ANALYST_ACTUALS_STAGE),
         analyst_estimates_stage_manifest_path=default_stage_manifest_path(analyst_dir, ANALYST_ESTIMATES_STAGE),
+        analyst_estimates_fetch_manifest_path=default_stage_fetch_manifest_path(analyst_dir, ANALYST_ESTIMATES_STAGE),
         doc_exact_stage_manifest_path=default_stage_manifest_path(doc_ownership_dir, DOC_EXACT_STAGE),
+        doc_exact_fetch_manifest_path=default_stage_fetch_manifest_path(doc_ownership_dir, DOC_EXACT_STAGE),
         doc_fallback_stage_manifest_path=default_stage_manifest_path(doc_ownership_dir, DOC_FALLBACK_STAGE),
+        doc_fallback_fetch_manifest_path=default_stage_fetch_manifest_path(doc_ownership_dir, DOC_FALLBACK_STAGE),
         exact_requests_parquet=doc_ownership_dir / "refinitiv_lm2011_doc_ownership_exact_requests.parquet",
         exact_raw_parquet=doc_ownership_dir / "refinitiv_lm2011_doc_ownership_exact_raw.parquet",
         fallback_requests_parquet=doc_ownership_dir / "refinitiv_lm2011_doc_ownership_fallback_requests.parquet",
@@ -490,6 +715,22 @@ def _stage_manifest_outputs(paths: RunPaths, stage: str) -> tuple[Path, ...]:
     return ()
 
 
+def _stage_fetch_manifest_outputs(paths: RunPaths, stage: str) -> tuple[Path, ...]:
+    if stage == "lookup_api":
+        return (paths.lookup_fetch_manifest_path,)
+    if stage == "ownership_api":
+        return (paths.ownership_fetch_manifest_path,)
+    if stage == "analyst_actuals_api":
+        return (paths.analyst_actuals_fetch_manifest_path,)
+    if stage == "analyst_estimates_api":
+        return (paths.analyst_estimates_fetch_manifest_path,)
+    if stage == "doc_exact_api":
+        return (paths.doc_exact_fetch_manifest_path,)
+    if stage == "doc_fallback_api":
+        return (paths.doc_fallback_fetch_manifest_path,)
+    return ()
+
+
 def _required_stage_manifests(paths: RunPaths, stage: str) -> tuple[Path, ...]:
     if stage in {"resolution", "instrument_authority", "ownership_handoff", "analyst_request_groups"}:
         return (paths.lookup_stage_manifest_path,)
@@ -574,6 +815,7 @@ def _ensure_clean_start(paths: RunPaths, selected_stages: Sequence[str]) -> None
         existing_paths.extend(path for path in _stage_output_paths(paths, stage).values() if path.exists())
         existing_paths.extend(path for path in _stage_resume_sentinels(paths, stage) if path.exists())
         existing_paths.extend(path for path in _stage_manifest_outputs(paths, stage) if path.exists())
+        existing_paths.extend(path for path in _stage_fetch_manifest_outputs(paths, stage) if path.exists())
     if existing_paths:
         formatted = ", ".join(str(path) for path in sorted(existing_paths))
         raise FileExistsError(
@@ -602,6 +844,8 @@ def _run_stage(stage: str, args: argparse.Namespace, paths: RunPaths) -> dict[st
                 provider_timeout_seconds=args.provider_timeout_seconds,
                 preflight_probe=args.preflight_probe,
                 stage_manifest_path=paths.lookup_stage_manifest_path,
+                fetch_manifest_path=paths.lookup_fetch_manifest_path,
+                api_stage_mode=args.api_stage_mode,
             )
         )
     if stage == "resolution":
@@ -647,6 +891,8 @@ def _run_stage(stage: str, args: argparse.Namespace, paths: RunPaths) -> dict[st
                 provider_timeout_seconds=args.provider_timeout_seconds,
                 preflight_probe=args.preflight_probe,
                 stage_manifest_path=paths.ownership_stage_manifest_path,
+                fetch_manifest_path=paths.ownership_fetch_manifest_path,
+                api_stage_mode=args.api_stage_mode,
             )
         )
     if stage == "authority":
@@ -686,6 +932,8 @@ def _run_stage(stage: str, args: argparse.Namespace, paths: RunPaths) -> dict[st
                 provider_timeout_seconds=args.provider_timeout_seconds,
                 preflight_probe=args.preflight_probe,
                 stage_manifest_path=paths.analyst_actuals_stage_manifest_path,
+                fetch_manifest_path=paths.analyst_actuals_fetch_manifest_path,
+                api_stage_mode=args.api_stage_mode,
             )
         )
     if stage == "analyst_estimates_api":
@@ -708,6 +956,8 @@ def _run_stage(stage: str, args: argparse.Namespace, paths: RunPaths) -> dict[st
                 provider_timeout_seconds=args.provider_timeout_seconds,
                 preflight_probe=args.preflight_probe,
                 stage_manifest_path=paths.analyst_estimates_stage_manifest_path,
+                fetch_manifest_path=paths.analyst_estimates_fetch_manifest_path,
+                api_stage_mode=args.api_stage_mode,
             )
         )
     if stage == "analyst_normalize":
@@ -735,6 +985,8 @@ def _run_stage(stage: str, args: argparse.Namespace, paths: RunPaths) -> dict[st
                 provider_timeout_seconds=args.provider_timeout_seconds,
                 preflight_probe=args.preflight_probe,
                 stage_manifest_path=paths.doc_exact_stage_manifest_path,
+                fetch_manifest_path=paths.doc_exact_fetch_manifest_path,
+                api_stage_mode=args.api_stage_mode,
             )
         )
     if stage == "doc_fallback_api":
@@ -751,6 +1003,8 @@ def _run_stage(stage: str, args: argparse.Namespace, paths: RunPaths) -> dict[st
                 provider_timeout_seconds=args.provider_timeout_seconds,
                 preflight_probe=args.preflight_probe,
                 stage_manifest_path=paths.doc_fallback_stage_manifest_path,
+                fetch_manifest_path=paths.doc_fallback_fetch_manifest_path,
+                api_stage_mode=args.api_stage_mode,
             )
         )
     if stage == "doc_finalize":
@@ -794,9 +1048,12 @@ def _write_manifest(
         "selected_stage_start": args.stage_start,
         "selected_stage_stop": args.stage_stop,
         "selected_stages": list(selected_stages),
+        "selected_stage_list_explicit": None if args.stage_list is None else list(selected_stages),
         "resume": args.resume,
         "audit_only": args.audit_only,
         "recover_mode": args.recover_mode,
+        "api_stage_mode": args.api_stage_mode,
+        "batch_profile": args.batch_profile,
         "run_root": str(paths.run_root),
         "reviewed_ticker_allowlist_path": str(paths.reviewed_ticker_allowlist_path),
         "provider_session_name": args.provider_session_name,
@@ -850,6 +1107,7 @@ def _audit_stage(stage: str, paths: RunPaths) -> StageAuditResult:
                 "lookup_extended_parquet": lambda: _assemble_lookup_output(
                     snapshot_df,
                     paths.refinitiv_step1_dir / "staging" / LOOKUP_STAGE,
+                    ledger_path=paths.refinitiv_step1_dir / "refinitiv_lookup_api_ledger.sqlite3",
                 )
             },
             expected_stage_manifest_path=paths.lookup_stage_manifest_path,
@@ -963,6 +1221,72 @@ def _audit_stage(stage: str, paths: RunPaths) -> StageAuditResult:
     )
 
 
+def _stage_manifest_stage_name(stage: str) -> str:
+    mapping = {
+        "lookup_api": LOOKUP_STAGE,
+        "ownership_api": OWNERSHIP_UNIVERSE_STAGE,
+        "analyst_actuals_api": ANALYST_ACTUALS_STAGE,
+        "analyst_estimates_api": ANALYST_ESTIMATES_STAGE,
+        "doc_exact_api": DOC_EXACT_STAGE,
+        "doc_fallback_api": DOC_FALLBACK_STAGE,
+    }
+    try:
+        return mapping[stage]
+    except KeyError as exc:
+        raise ValueError(f"Stage does not have a canonical API stage manifest: {stage}") from exc
+
+
+def _write_stage_manifest_from_existing_artifacts(
+    stage: str,
+    paths: RunPaths,
+    *,
+    recover_mode: str,
+) -> dict[str, Any]:
+    _ensure_required_inputs(paths, stage)
+    audit_result = _audit_stage(stage, paths)
+    if not audit_result.passed:
+        raise RuntimeError(
+            "stage manifest recovery audit failed for "
+            f"{stage}: {audit_result.to_dict()}"
+        )
+
+    sentinels = _stage_resume_sentinels(paths, stage)
+    if len(sentinels) != 3:
+        raise ValueError(f"Stage does not define API sentinels for manifest recovery: {stage}")
+    staging_dir, ledger_path, request_log_path = sentinels
+    if not request_log_path.exists():
+        raise FileNotFoundError(f"request_log_path not found: {request_log_path}")
+
+    manifest_outputs = _stage_manifest_outputs(paths, stage)
+    if len(manifest_outputs) != 1:
+        raise ValueError(f"Stage does not define exactly one manifest output path: {stage}")
+    manifest_path = manifest_outputs[0]
+
+    write_stage_completion_manifest(
+        stage_name=_stage_manifest_stage_name(stage),
+        manifest_path=manifest_path,
+        input_artifacts=_stage_input_paths(paths, stage),
+        output_artifacts=_stage_output_paths(paths, stage),
+        ledger_path=ledger_path,
+        request_log_path=request_log_path,
+        staging_dir=staging_dir,
+        audit_result=audit_result,
+        summary={
+            "recovered_from_existing_artifacts": True,
+            "recovered_via": "recover_mode_stage_manifest_only",
+            "source_stage": stage,
+            "run_session_ids": audit_result.metrics.get("run_session_ids", []),
+            "rebuild_row_counts": audit_result.metrics.get("rebuild_row_counts", {}),
+        },
+    )
+    return {
+        "mode": recover_mode,
+        "stage": stage,
+        "stage_manifest_path": str(manifest_path),
+        "audit": audit_result.to_dict(),
+    }
+
+
 def _run_recovery(args: argparse.Namespace, paths: RunPaths) -> dict[str, Any]:
     paths.recovery_dir.mkdir(parents=True, exist_ok=True)
     if args.recover_mode == "lookup_unresolved":
@@ -1005,6 +1329,12 @@ def _run_recovery(args: argparse.Namespace, paths: RunPaths) -> dict[str, Any]:
             _ensure_required_stage_manifests(paths, "doc_finalize")
         artifacts = _run_stage("doc_finalize", args, paths)
         return {"mode": "doc_finalize_only", "artifacts": {key: str(value) for key, value in artifacts.items()}}
+    elif args.recover_mode in STAGE_MANIFEST_RECOVERY_MODES:
+        return _write_stage_manifest_from_existing_artifacts(
+            STAGE_MANIFEST_RECOVERY_MODES[args.recover_mode],
+            paths,
+            recover_mode=args.recover_mode,
+        )
     else:
         raise ValueError(f"Unsupported recover mode: {args.recover_mode}")
 
@@ -1023,7 +1353,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.run_root,
         reviewed_ticker_allowlist_path=args.reviewed_ticker_allowlist_path,
     )
-    selected_stages = _selected_stages(args.stage_start, args.stage_stop)
+    selected_stages = tuple(args.selected_stages)
 
     if args.recover_mode is not None:
         recovery_result = _run_recovery(args, paths)
@@ -1038,10 +1368,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"manifest_path: {manifest_path}")
         return 0
 
-    if not args.audit_only:
+    if not args.audit_only and args.api_stage_mode != "finalize_only":
         _ensure_lseg_available()
     _ensure_required_inputs(paths, args.stage_start)
-    if not args.resume and not args.audit_only:
+    if not args.resume and not args.audit_only and args.api_stage_mode != "finalize_only":
         _ensure_clean_start(paths, selected_stages)
 
     print(json.dumps(_artifact_map(paths, selected_stages), indent=2))

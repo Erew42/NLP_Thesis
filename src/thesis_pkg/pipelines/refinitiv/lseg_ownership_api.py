@@ -4,7 +4,7 @@ import calendar
 import datetime as dt
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import polars as pl
 
@@ -20,16 +20,21 @@ from thesis_pkg.pipelines.refinitiv.lseg_batching import (
     IntervalBatchPlan,
     IntervalBatchPlannerConfig,
     RequestItem,
+    batch_items,
+    batch_plan_fingerprint,
     build_batch_definition,
     plan_interval_batches,
     request_signature,
     stable_hash_id,
 )
-from thesis_pkg.pipelines.refinitiv.lseg_ledger import RequestLedger
+from thesis_pkg.pipelines.refinitiv.lseg_ledger import LsegResumeCompatibilityError, RequestLedger
 from thesis_pkg.pipelines.refinitiv.lseg_stage_audit import (
     audit_api_stage,
+    default_stage_fetch_manifest_path,
     default_stage_manifest_path,
+    resolve_stage_fetch_metadata,
     write_stage_completion_manifest,
+    write_stage_fetch_manifest,
 )
 from thesis_pkg.pipelines.refinitiv.doc_ownership import (
     DOC_OWNERSHIP_EXACT_STAGE,
@@ -50,10 +55,12 @@ from thesis_pkg.pipelines.refinitiv.doc_ownership import (
 from thesis_pkg.pipelines.refinitiv_bridge_pipeline import (
     OWNERSHIP_UNIVERSE_HANDOFF_COLUMNS,
     OWNERSHIP_UNIVERSE_RESULTS_COLUMNS,
+    OWNERSHIP_UNIVERSE_ROW_SUMMARY_COLUMNS,
     _cast_df_to_schema,
     _normalize_lookup_text,
     _ownership_universe_handoff_schema,
     _ownership_universe_results_schema,
+    _ownership_universe_row_summary_schema,
     build_refinitiv_ownership_universe_row_summary,
 )
 
@@ -89,6 +96,9 @@ OWNERSHIP_FIELD_ALIASES: dict[str, tuple[str, ...]] = {
     "TR.CategoryOwnershipPct": ("Category Percent Of Tr", "Category Percent Of Traded Shares"),
     "TR.InstrStatTypeValue": ("Investor Statistics Category Value",),
 }
+API_STAGE_MODES: frozenset[str] = frozenset({"full", "fetch_only", "finalize_only"})
+DOC_EXACT_BATCH_PLANNER_VERSION = "doc_ownership_exact_batching_v1"
+DOC_FALLBACK_BATCH_PLANNER_VERSION = "doc_ownership_fallback_batching_v1"
 
 
 def run_refinitiv_step1_ownership_universe_api_pipeline(
@@ -113,7 +123,10 @@ def run_refinitiv_step1_ownership_universe_api_pipeline(
     provider_timeout_seconds: float | None = None,
     preflight_probe: bool = False,
     stage_manifest_path: Path | str | None = None,
+    fetch_manifest_path: Path | str | None = None,
+    api_stage_mode: str = "full",
 ) -> dict[str, Path]:
+    api_stage_mode = _normalize_api_stage_mode(api_stage_mode)
     handoff_parquet_path = Path(handoff_parquet_path)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -126,6 +139,16 @@ def run_refinitiv_step1_ownership_universe_api_pipeline(
         Path(request_log_path)
         if request_log_path is not None
         else output_dir / "refinitiv_ownership_universe_api_requests.jsonl"
+    )
+    manifest_path = (
+        Path(stage_manifest_path)
+        if stage_manifest_path is not None
+        else default_stage_manifest_path(output_dir, OWNERSHIP_UNIVERSE_STAGE)
+    )
+    fetch_manifest_path = (
+        Path(fetch_manifest_path)
+        if fetch_manifest_path is not None
+        else default_stage_fetch_manifest_path(output_dir, OWNERSHIP_UNIVERSE_STAGE)
     )
     handoff_df = _cast_df_to_schema(
         pl.read_parquet(handoff_parquet_path).select(OWNERSHIP_UNIVERSE_HANDOFF_COLUMNS),
@@ -145,123 +168,109 @@ def run_refinitiv_step1_ownership_universe_api_pipeline(
         default_max_extra_rows_ratio=OWNERSHIP_UNIVERSE_DEFAULT_MAX_EXTRA_ROWS_RATIO,
     )
     interval_plan = _plan_ownership_universe_batches(items, config=planner_config)
-    stage_run = run_api_batches(
-        stage=OWNERSHIP_UNIVERSE_STAGE,
-        items=items,
-        output_dir=output_dir,
+    result = {
+        "refinitiv_ownership_universe_api_ledger_sqlite3": ledger_path,
+        "refinitiv_ownership_universe_api_requests_jsonl": request_log_path,
+        "refinitiv_ownership_universe_fetch_manifest_json": fetch_manifest_path,
+    }
+    stage_run = None
+    if api_stage_mode != "finalize_only":
+        try:
+            stage_run = run_api_batches(
+                stage=OWNERSHIP_UNIVERSE_STAGE,
+                items=items,
+                output_dir=output_dir,
+                ledger_path=ledger_path,
+                request_log_path=request_log_path,
+                provider=provider,
+                provider_session_name=provider_session_name,
+                provider_config_name=provider_config_name,
+                provider_timeout_seconds=provider_timeout_seconds,
+                preflight_probe=preflight_probe,
+                max_batch_size=max_batch_size,
+                min_seconds_between_requests=min_seconds_between_requests,
+                min_seconds_between_request_starts_total=min_seconds_between_request_starts_total,
+                max_attempts=max_attempts,
+                response_normalizer=_normalize_ownership_universe_batch_response,
+                lookup_normalizer=_normalize_lookup_text,
+                split_after_attempt=2,
+                retry_delay_seconds_fn=_retry_delay_seconds,
+                max_workers=max_workers,
+                planned_batches=list(interval_plan.batches),
+                batch_plan_fingerprint=interval_plan.fingerprint,
+                planned_batch_metrics=interval_plan.batch_metrics_by_id,
+                resume_compatibility_metadata=_interval_resume_metadata(
+                    planner_version=OWNERSHIP_UNIVERSE_INTERVAL_BATCH_PLANNER_VERSION,
+                    interval_plan=interval_plan,
+                ),
+            )
+        except LsegResumeCompatibilityError as exc:
+            _raise_stage_resume_compatibility_error(
+                stage_name=OWNERSHIP_UNIVERSE_STAGE,
+                output_dir=output_dir,
+                fetch_manifest_path=fetch_manifest_path,
+                manifest_path=manifest_path,
+                exc=exc,
+            )
+    else:
+        _ensure_finalize_state(
+            ledger_path=ledger_path,
+            request_log_path=request_log_path,
+            stage_name=OWNERSHIP_UNIVERSE_STAGE,
+        )
+
+    staging_dir = output_dir / "staging" / OWNERSHIP_UNIVERSE_STAGE if stage_run is None else stage_run.staging_dir
+    metadata = (
+        resolve_stage_fetch_metadata(
+            stage_name=OWNERSHIP_UNIVERSE_STAGE,
+            ledger_path=ledger_path,
+            fetch_manifest_path=fetch_manifest_path,
+            stage_manifest_path=manifest_path,
+            current_batching_config=planner_config.to_serializable_dict(),
+            current_batch_plan_fingerprint=interval_plan.fingerprint,
+        )
+        if api_stage_mode == "finalize_only"
+        else None
+    )
+    _write_api_fetch_manifest(
+        stage_name=OWNERSHIP_UNIVERSE_STAGE,
+        manifest_path=fetch_manifest_path,
+        staging_dir=staging_dir,
         ledger_path=ledger_path,
         request_log_path=request_log_path,
-        provider=provider,
-        provider_session_name=provider_session_name,
-        provider_config_name=provider_config_name,
-        provider_timeout_seconds=provider_timeout_seconds,
-        preflight_probe=preflight_probe,
-        max_batch_size=max_batch_size,
-        min_seconds_between_requests=min_seconds_between_requests,
-        min_seconds_between_request_starts_total=min_seconds_between_request_starts_total,
-        max_attempts=max_attempts,
-        response_normalizer=_normalize_ownership_universe_batch_response,
-        lookup_normalizer=_normalize_lookup_text,
-        split_after_attempt=2,
-        retry_delay_seconds_fn=_retry_delay_seconds,
-        max_workers=max_workers,
-        planned_batches=list(interval_plan.batches),
-        batch_plan_fingerprint=interval_plan.fingerprint,
-        planned_batch_metrics=interval_plan.batch_metrics_by_id,
+        request_item_count=len(items) if metadata is None else metadata.request_item_count,
+        batch_count=len(interval_plan.batches) if metadata is None else metadata.batch_count,
+        batch_plan_fingerprint=interval_plan.fingerprint if metadata is None else metadata.batch_plan_fingerprint,
+        batching_config=planner_config.to_serializable_dict() if metadata is None else metadata.batching_config,
+        metadata_source="current_run" if metadata is None else metadata.metadata_source,
+        cli_batching_args_ignored=False if metadata is None else metadata.cli_batching_args_ignored,
+        run_session_ids=_stage_run_session_ids(ledger_path) if metadata is None else metadata.run_session_ids,
     )
-    stage_run_ledger_path = getattr(stage_run, "ledger_path", ledger_path)
-
-    results_df = _assemble_ownership_universe_results(
-        stage_run.staging_dir,
-        ledger_path=stage_run_ledger_path,
-    )
-    row_summary_df = build_refinitiv_ownership_universe_row_summary(handoff_df, results_df)
+    if api_stage_mode == "fetch_only":
+        return result
 
     results_path = output_dir / "refinitiv_ownership_universe_results.parquet"
     row_summary_path = output_dir / "refinitiv_ownership_universe_row_summary.parquet"
-    results_candidate_path = _candidate_output_path(results_path)
-    row_summary_candidate_path = _candidate_output_path(row_summary_path)
-    _write_parquet_atomic(results_df, results_candidate_path)
-    _write_parquet_atomic(row_summary_df, row_summary_candidate_path)
-
-    manifest_path = (
-        Path(stage_manifest_path)
-        if stage_manifest_path is not None
-        else default_stage_manifest_path(output_dir, OWNERSHIP_UNIVERSE_STAGE)
+    result.update(
+        _finalize_ownership_universe_stage(
+            handoff_df=handoff_df,
+            handoff_parquet_path=handoff_parquet_path,
+            ledger_path=ledger_path,
+            request_log_path=request_log_path,
+            staging_dir=staging_dir,
+            results_path=results_path,
+            row_summary_path=row_summary_path,
+            manifest_path=manifest_path,
+            request_item_count=len(items) if metadata is None else _coalesce_count(metadata.request_item_count, len(items)),
+            planned_batch_count=len(interval_plan.batches) if metadata is None else metadata.batch_count,
+            batch_plan_fingerprint=interval_plan.fingerprint if metadata is None else metadata.batch_plan_fingerprint,
+            batching_config=planner_config.to_serializable_dict() if metadata is None else metadata.batching_config,
+            metadata_source="current_run" if metadata is None else metadata.metadata_source,
+            cli_batching_args_ignored=False if metadata is None else metadata.cli_batching_args_ignored,
+            run_session_id=None if stage_run is None else stage_run.run_session_id,
+            verify_rebuilders=False,
+        )
     )
-    audit_result = audit_api_stage(
-        stage_name=OWNERSHIP_UNIVERSE_STAGE,
-        ledger_path=ledger_path,
-        staging_dir=stage_run.staging_dir,
-        output_artifacts={
-            "ownership_results_parquet": results_candidate_path,
-            "ownership_row_summary_parquet": row_summary_candidate_path,
-        },
-        declared_output_artifacts={
-            "ownership_results_parquet": results_path,
-            "ownership_row_summary_parquet": row_summary_path,
-        },
-        rebuilders={
-                "ownership_results_parquet": lambda: _assemble_ownership_universe_results(
-                    stage_run.staging_dir,
-                    ledger_path=stage_run_ledger_path,
-                ),
-                "ownership_row_summary_parquet": lambda: build_refinitiv_ownership_universe_row_summary(
-                    handoff_df,
-                    _assemble_ownership_universe_results(
-                        stage_run.staging_dir,
-                        ledger_path=stage_run_ledger_path,
-                    ),
-                ),
-            },
-        expected_stage_manifest_path=manifest_path,
-    )
-    if not audit_result.passed:
-        raise RuntimeError(f"ownership universe stage audit failed: {audit_result.to_dict()}")
-    _promote_candidate_output(results_candidate_path, results_path)
-    _promote_candidate_output(row_summary_candidate_path, row_summary_path)
-
-    write_stage_completion_manifest(
-        stage_name=OWNERSHIP_UNIVERSE_STAGE,
-        manifest_path=manifest_path,
-        input_artifacts={"ownership_handoff_parquet": handoff_parquet_path},
-        output_artifacts={
-            "ownership_results_parquet": results_path,
-            "ownership_row_summary_parquet": row_summary_path,
-        },
-        ledger_path=ledger_path,
-        request_log_path=request_log_path,
-        staging_dir=stage_run.staging_dir,
-        audit_result=audit_result,
-        summary={
-            "handoff_row_count": int(handoff_df.height),
-            "request_item_count": len(items),
-            "planned_batch_count": len(interval_plan.batches),
-            "batch_plan_fingerprint": interval_plan.fingerprint,
-            "batching_config": planner_config.to_serializable_dict(),
-            "results_row_count": int(results_df.height),
-            "rows_with_results": int(
-                row_summary_df.filter(pl.col("ownership_rows_returned").fill_null(0) > 0).height
-            ),
-            "request_succeeded_count": _count_request_log_events(request_log_path, "request_succeeded"),
-            "mixed_zero_positive_success_requeued_count": _count_request_log_events(
-                request_log_path,
-                "request_succeeded_mixed_zero_items_requeued",
-            ),
-            "request_unresolved_identifiers_treated_as_empty_count": _count_request_log_events(
-                request_log_path,
-                "request_unresolved_identifiers_treated_as_empty",
-            ),
-            "run_session_id": stage_run.run_session_id,
-        },
-    )
-    result = {
-        "refinitiv_ownership_universe_results_parquet": results_path,
-        "refinitiv_ownership_universe_row_summary_parquet": row_summary_path,
-        "refinitiv_ownership_universe_api_ledger_sqlite3": ledger_path,
-        "refinitiv_ownership_universe_api_requests_jsonl": request_log_path,
-        "refinitiv_ownership_universe_stage_manifest_json": manifest_path,
-    }
     return result
 
 
@@ -286,7 +295,10 @@ def run_refinitiv_lm2011_doc_ownership_exact_api_pipeline(
     provider_timeout_seconds: float | None = None,
     preflight_probe: bool = False,
     stage_manifest_path: Path | str | None = None,
+    fetch_manifest_path: Path | str | None = None,
+    api_stage_mode: str = "full",
 ) -> dict[str, Path]:
+    api_stage_mode = _normalize_api_stage_mode(api_stage_mode)
     from thesis_pkg.pipelines.refinitiv.doc_ownership import (
         _read_authority_decisions_artifact,
         _read_authority_exceptions_artifact,
@@ -303,6 +315,16 @@ def run_refinitiv_lm2011_doc_ownership_exact_api_pipeline(
         if request_log_path is not None
         else output_dir / "refinitiv_doc_ownership_exact_api_requests.jsonl"
     )
+    manifest_path = (
+        Path(stage_manifest_path)
+        if stage_manifest_path is not None
+        else default_stage_manifest_path(output_dir, DOC_EXACT_STAGE)
+    )
+    fetch_manifest_path = (
+        Path(fetch_manifest_path)
+        if fetch_manifest_path is not None
+        else default_stage_fetch_manifest_path(output_dir, DOC_EXACT_STAGE)
+    )
 
     request_df = build_refinitiv_lm2011_doc_ownership_requests(
         _read_doc_filing_artifact(doc_filing_artifact_path),
@@ -311,109 +333,137 @@ def run_refinitiv_lm2011_doc_ownership_exact_api_pipeline(
         request_min_date=request_min_date,
         request_max_date=request_max_date,
     )
-    requests_path = output_dir / "refinitiv_lm2011_doc_ownership_exact_requests.parquet"
-    requests_candidate_path = _candidate_output_path(requests_path)
-    _write_parquet_atomic(request_df, requests_candidate_path)
-
     items = _build_doc_ownership_exact_items(request_df)
-    stage_run = run_api_batches(
-        stage=DOC_EXACT_STAGE,
-        items=items,
-        output_dir=output_dir,
-        ledger_path=ledger_path,
-        request_log_path=request_log_path,
-        provider=provider,
-        provider_session_name=provider_session_name,
-        provider_config_name=provider_config_name,
-        provider_timeout_seconds=provider_timeout_seconds,
-        preflight_probe=preflight_probe,
-        max_batch_size=max_batch_size,
-        min_seconds_between_requests=min_seconds_between_requests,
-        min_seconds_between_request_starts_total=min_seconds_between_request_starts_total,
-        max_attempts=max_attempts,
-        response_normalizer=_normalize_doc_exact_batch_response,
-        lookup_normalizer=_normalize_lookup_text,
-        split_after_attempt=2,
-        retry_delay_seconds_fn=_retry_delay_seconds,
-        max_workers=max_workers,
-    )
-    stage_run_ledger_path = getattr(stage_run, "ledger_path", ledger_path)
-
-    exact_raw_df = _assemble_doc_raw(
-        stage_run.staging_dir,
-        ledger_path=stage_run_ledger_path,
-        stage=DOC_EXACT_STAGE,
-    )
-    exact_raw_path = output_dir / "refinitiv_lm2011_doc_ownership_exact_raw.parquet"
-    exact_raw_candidate_path = _candidate_output_path(exact_raw_path)
-    _write_parquet_atomic(exact_raw_df, exact_raw_candidate_path)
-
-    manifest_path = (
-        Path(stage_manifest_path)
-        if stage_manifest_path is not None
-        else default_stage_manifest_path(output_dir, DOC_EXACT_STAGE)
-    )
-    audit_result = audit_api_stage(
-        stage_name=DOC_EXACT_STAGE,
-        ledger_path=ledger_path,
-        staging_dir=stage_run.staging_dir,
-        output_artifacts={
-            "exact_requests_parquet": requests_candidate_path,
-            "exact_raw_parquet": exact_raw_candidate_path,
-        },
-        declared_output_artifacts={
-            "exact_requests_parquet": requests_path,
-            "exact_raw_parquet": exact_raw_path,
-        },
-        rebuilders={
-            "exact_raw_parquet": lambda: _assemble_doc_raw(
-                stage_run.staging_dir,
-                ledger_path=stage_run_ledger_path,
-                stage=DOC_EXACT_STAGE,
-            )
-        },
-        expected_stage_manifest_path=manifest_path,
-    )
-    if not audit_result.passed:
-        raise RuntimeError(f"doc exact stage audit failed: {audit_result.to_dict()}")
-    _promote_candidate_output(requests_candidate_path, requests_path)
-    _promote_candidate_output(exact_raw_candidate_path, exact_raw_path)
-
-    write_stage_completion_manifest(
-        stage_name=DOC_EXACT_STAGE,
-        manifest_path=manifest_path,
-        input_artifacts={
-            "doc_filing_artifact_parquet": Path(doc_filing_artifact_path),
-            "authority_decisions_parquet": Path(authority_decisions_artifact_path),
-            "authority_exceptions_parquet": Path(authority_exceptions_artifact_path),
-        },
-        output_artifacts={
-            "exact_requests_parquet": requests_path,
-            "exact_raw_parquet": exact_raw_path,
-        },
-        ledger_path=ledger_path,
-        request_log_path=request_log_path,
-        staging_dir=stage_run.staging_dir,
-        audit_result=audit_result,
-        summary={
-            "request_row_count": int(request_df.height),
-            "eligible_request_row_count": int(
-                request_df.filter(pl.col("retrieval_eligible").fill_null(False)).height
-            ),
-            "raw_row_count": int(exact_raw_df.height),
-            "docs_with_raw_rows": int(exact_raw_df.select(pl.col("doc_id").drop_nulls().n_unique()).item())
-            if exact_raw_df.height
-            else 0,
-            "run_session_id": stage_run.run_session_id,
-        },
+    batching_config = {"max_batch_size": max_batch_size}
+    planned_batches = batch_items(items, max_batch_size=max_batch_size, unique_instrument_limit=True)
+    current_batch_plan_fingerprint = batch_plan_fingerprint(
+        planner_version=DOC_EXACT_BATCH_PLANNER_VERSION,
+        batching_config=batching_config,
+        planned_batches=planned_batches,
     )
     result = {
-        "refinitiv_lm2011_doc_ownership_exact_requests_parquet": requests_path,
-        "refinitiv_lm2011_doc_ownership_exact_raw_parquet": exact_raw_path,
         "refinitiv_doc_ownership_exact_api_ledger_sqlite3": ledger_path,
         "refinitiv_doc_ownership_exact_api_requests_jsonl": request_log_path,
-        "refinitiv_doc_ownership_exact_stage_manifest_json": manifest_path,
+        "refinitiv_doc_ownership_exact_fetch_manifest_json": fetch_manifest_path,
     }
+    stage_run = None
+    if api_stage_mode != "finalize_only":
+        try:
+            stage_run = run_api_batches(
+                stage=DOC_EXACT_STAGE,
+                items=items,
+                output_dir=output_dir,
+                ledger_path=ledger_path,
+                request_log_path=request_log_path,
+                provider=provider,
+                provider_session_name=provider_session_name,
+                provider_config_name=provider_config_name,
+                provider_timeout_seconds=provider_timeout_seconds,
+                preflight_probe=preflight_probe,
+                max_batch_size=max_batch_size,
+                min_seconds_between_requests=min_seconds_between_requests,
+                min_seconds_between_request_starts_total=min_seconds_between_request_starts_total,
+                max_attempts=max_attempts,
+                response_normalizer=_normalize_doc_exact_batch_response,
+                lookup_normalizer=_normalize_lookup_text,
+                split_after_attempt=2,
+                retry_delay_seconds_fn=_retry_delay_seconds,
+                max_workers=max_workers,
+                planned_batches=planned_batches,
+                batch_plan_fingerprint=current_batch_plan_fingerprint,
+                resume_compatibility_metadata=_simple_resume_metadata(
+                    planner_version=DOC_EXACT_BATCH_PLANNER_VERSION,
+                    batching_config=batching_config,
+                    planned_batch_count=len(planned_batches),
+                ),
+            )
+        except LsegResumeCompatibilityError as exc:
+            _raise_stage_resume_compatibility_error(
+                stage_name=DOC_EXACT_STAGE,
+                output_dir=output_dir,
+                fetch_manifest_path=fetch_manifest_path,
+                manifest_path=manifest_path,
+                exc=exc,
+            )
+    else:
+        _ensure_finalize_state(
+            ledger_path=ledger_path,
+            request_log_path=request_log_path,
+            stage_name=DOC_EXACT_STAGE,
+        )
+
+    staging_dir = output_dir / "staging" / DOC_EXACT_STAGE if stage_run is None else stage_run.staging_dir
+    metadata = (
+        resolve_stage_fetch_metadata(
+            stage_name=DOC_EXACT_STAGE,
+            ledger_path=ledger_path,
+            fetch_manifest_path=fetch_manifest_path,
+            stage_manifest_path=manifest_path,
+            current_batching_config=batching_config,
+            current_batch_plan_fingerprint=current_batch_plan_fingerprint,
+        )
+        if api_stage_mode == "finalize_only"
+        else None
+    )
+    _write_api_fetch_manifest(
+        stage_name=DOC_EXACT_STAGE,
+        manifest_path=fetch_manifest_path,
+        staging_dir=staging_dir,
+        ledger_path=ledger_path,
+        request_log_path=request_log_path,
+        request_item_count=len(items) if metadata is None else metadata.request_item_count,
+        batch_count=len(planned_batches) if metadata is None else metadata.batch_count,
+        batch_plan_fingerprint=current_batch_plan_fingerprint if metadata is None else metadata.batch_plan_fingerprint,
+        batching_config=batching_config if metadata is None else metadata.batching_config,
+        metadata_source="current_run" if metadata is None else metadata.metadata_source,
+        cli_batching_args_ignored=False if metadata is None else metadata.cli_batching_args_ignored,
+        run_session_ids=_stage_run_session_ids(ledger_path) if metadata is None else metadata.run_session_ids,
+        summary={
+            "request_row_count": int(request_df.height),
+            "eligible_request_row_count": int(request_df.filter(pl.col("retrieval_eligible").fill_null(False)).height),
+        },
+    )
+    if api_stage_mode == "fetch_only":
+        return result
+
+    requests_path = output_dir / "refinitiv_lm2011_doc_ownership_exact_requests.parquet"
+    exact_raw_path = output_dir / "refinitiv_lm2011_doc_ownership_exact_raw.parquet"
+    result.update(
+        _finalize_doc_stage(
+            stage_name=DOC_EXACT_STAGE,
+            input_artifacts={
+                "doc_filing_artifact_parquet": Path(doc_filing_artifact_path),
+                "authority_decisions_parquet": Path(authority_decisions_artifact_path),
+                "authority_exceptions_parquet": Path(authority_exceptions_artifact_path),
+            },
+            request_df=request_df,
+            requests_path=requests_path,
+            raw_path=exact_raw_path,
+            ledger_path=ledger_path,
+            request_log_path=request_log_path,
+            staging_dir=staging_dir,
+            manifest_path=manifest_path,
+            raw_df=_assemble_doc_raw(
+                staging_dir,
+                ledger_path=ledger_path,
+                stage=DOC_EXACT_STAGE,
+            ),
+            raw_rebuilder=lambda: _assemble_doc_raw(
+                staging_dir,
+                ledger_path=ledger_path,
+                stage=DOC_EXACT_STAGE,
+            ),
+            request_row_label="request_row_count",
+            request_item_count=len(items) if metadata is None else _coalesce_count(metadata.request_item_count, len(items)),
+            planned_batch_count=len(planned_batches) if metadata is None else metadata.batch_count,
+            batch_plan_fingerprint=current_batch_plan_fingerprint if metadata is None else metadata.batch_plan_fingerprint,
+            batching_config=batching_config if metadata is None else metadata.batching_config,
+            metadata_source="current_run" if metadata is None else metadata.metadata_source,
+            cli_batching_args_ignored=False if metadata is None else metadata.cli_batching_args_ignored,
+            run_session_id=None if stage_run is None else stage_run.run_session_id,
+            verify_rebuilders=False,
+        )
+    )
     return result
 
 
@@ -433,7 +483,10 @@ def run_refinitiv_lm2011_doc_ownership_fallback_api_pipeline(
     provider_timeout_seconds: float | None = None,
     preflight_probe: bool = False,
     stage_manifest_path: Path | str | None = None,
+    fetch_manifest_path: Path | str | None = None,
+    api_stage_mode: str = "full",
 ) -> dict[str, Path]:
+    api_stage_mode = _normalize_api_stage_mode(api_stage_mode)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     ledger_path = (
@@ -445,6 +498,16 @@ def run_refinitiv_lm2011_doc_ownership_fallback_api_pipeline(
         Path(request_log_path)
         if request_log_path is not None
         else output_dir / "refinitiv_doc_ownership_fallback_api_requests.jsonl"
+    )
+    manifest_path = (
+        Path(stage_manifest_path)
+        if stage_manifest_path is not None
+        else default_stage_manifest_path(output_dir, DOC_FALLBACK_STAGE)
+    )
+    fetch_manifest_path = (
+        Path(fetch_manifest_path)
+        if fetch_manifest_path is not None
+        else default_stage_fetch_manifest_path(output_dir, DOC_FALLBACK_STAGE)
     )
 
     exact_requests_path = output_dir / "refinitiv_lm2011_doc_ownership_exact_requests.parquet"
@@ -463,108 +526,139 @@ def run_refinitiv_lm2011_doc_ownership_fallback_api_pipeline(
         _doc_ownership_raw_schema(),
     ).select(DOC_OWNERSHIP_RAW_COLUMNS)
     fallback_request_df = _build_fallback_request_df(request_df, exact_raw_df)
-    fallback_requests_path = output_dir / "refinitiv_lm2011_doc_ownership_fallback_requests.parquet"
-    fallback_requests_candidate_path = _candidate_output_path(fallback_requests_path)
-    _write_parquet_atomic(fallback_request_df, fallback_requests_candidate_path)
-
     items = _build_doc_ownership_fallback_items(fallback_request_df)
-    stage_run = run_api_batches(
-        stage=DOC_FALLBACK_STAGE,
-        items=items,
-        output_dir=output_dir,
-        ledger_path=ledger_path,
-        request_log_path=request_log_path,
-        provider=provider,
-        provider_session_name=provider_session_name,
-        provider_config_name=provider_config_name,
-        provider_timeout_seconds=provider_timeout_seconds,
-        preflight_probe=preflight_probe,
-        max_batch_size=max_batch_size,
-        min_seconds_between_requests=min_seconds_between_requests,
-        min_seconds_between_request_starts_total=min_seconds_between_request_starts_total,
-        max_attempts=max_attempts,
-        response_normalizer=_normalize_doc_fallback_batch_response,
-        lookup_normalizer=_normalize_lookup_text,
-        split_after_attempt=1,
-        retry_delay_seconds_fn=_retry_delay_seconds,
-        max_workers=max_workers,
+    batching_config = {"max_batch_size": max_batch_size}
+    planned_batches = batch_items(items, max_batch_size=max_batch_size, unique_instrument_limit=True)
+    current_batch_plan_fingerprint = batch_plan_fingerprint(
+        planner_version=DOC_FALLBACK_BATCH_PLANNER_VERSION,
+        batching_config=batching_config,
+        planned_batches=planned_batches,
     )
-    stage_run_ledger_path = getattr(stage_run, "ledger_path", ledger_path)
-    fallback_raw_df = _assemble_doc_raw(
-        stage_run.staging_dir,
-        ledger_path=stage_run_ledger_path,
-        stage=DOC_FALLBACK_STAGE,
-    )
-    fallback_raw_path = output_dir / "refinitiv_lm2011_doc_ownership_fallback_raw.parquet"
-    fallback_raw_candidate_path = _candidate_output_path(fallback_raw_path)
-    _write_parquet_atomic(fallback_raw_df, fallback_raw_candidate_path)
-
-    manifest_path = (
-        Path(stage_manifest_path)
-        if stage_manifest_path is not None
-        else default_stage_manifest_path(output_dir, DOC_FALLBACK_STAGE)
-    )
-    audit_result = audit_api_stage(
-        stage_name=DOC_FALLBACK_STAGE,
-        ledger_path=ledger_path,
-        staging_dir=stage_run.staging_dir,
-        output_artifacts={
-            "fallback_requests_parquet": fallback_requests_candidate_path,
-            "fallback_raw_parquet": fallback_raw_candidate_path,
-        },
-        declared_output_artifacts={
-            "fallback_requests_parquet": fallback_requests_path,
-            "fallback_raw_parquet": fallback_raw_path,
-        },
-        rebuilders={
-            "fallback_raw_parquet": lambda: _assemble_doc_raw(
-                stage_run.staging_dir,
-                ledger_path=stage_run_ledger_path,
+    result = {
+        "refinitiv_lm2011_doc_ownership_exact_raw_parquet": exact_raw_path,
+        "refinitiv_doc_ownership_fallback_api_ledger_sqlite3": ledger_path,
+        "refinitiv_doc_ownership_fallback_api_requests_jsonl": request_log_path,
+        "refinitiv_doc_ownership_fallback_fetch_manifest_json": fetch_manifest_path,
+    }
+    stage_run = None
+    if api_stage_mode != "finalize_only":
+        try:
+            stage_run = run_api_batches(
                 stage=DOC_FALLBACK_STAGE,
+                items=items,
+                output_dir=output_dir,
+                ledger_path=ledger_path,
+                request_log_path=request_log_path,
+                provider=provider,
+                provider_session_name=provider_session_name,
+                provider_config_name=provider_config_name,
+                provider_timeout_seconds=provider_timeout_seconds,
+                preflight_probe=preflight_probe,
+                max_batch_size=max_batch_size,
+                min_seconds_between_requests=min_seconds_between_requests,
+                min_seconds_between_request_starts_total=min_seconds_between_request_starts_total,
+                max_attempts=max_attempts,
+                response_normalizer=_normalize_doc_fallback_batch_response,
+                lookup_normalizer=_normalize_lookup_text,
+                split_after_attempt=1,
+                retry_delay_seconds_fn=_retry_delay_seconds,
+                max_workers=max_workers,
+                planned_batches=planned_batches,
+                batch_plan_fingerprint=current_batch_plan_fingerprint,
+                resume_compatibility_metadata=_simple_resume_metadata(
+                    planner_version=DOC_FALLBACK_BATCH_PLANNER_VERSION,
+                    batching_config=batching_config,
+                    planned_batch_count=len(planned_batches),
+                ),
             )
-        },
-        expected_stage_manifest_path=manifest_path,
-    )
-    if not audit_result.passed:
-        raise RuntimeError(f"doc fallback stage audit failed: {audit_result.to_dict()}")
-    _promote_candidate_output(fallback_requests_candidate_path, fallback_requests_path)
-    _promote_candidate_output(fallback_raw_candidate_path, fallback_raw_path)
+        except LsegResumeCompatibilityError as exc:
+            _raise_stage_resume_compatibility_error(
+                stage_name=DOC_FALLBACK_STAGE,
+                output_dir=output_dir,
+                fetch_manifest_path=fetch_manifest_path,
+                manifest_path=manifest_path,
+                exc=exc,
+            )
+    else:
+        _ensure_finalize_state(
+            ledger_path=ledger_path,
+            request_log_path=request_log_path,
+            stage_name=DOC_FALLBACK_STAGE,
+        )
 
-    write_stage_completion_manifest(
+    staging_dir = output_dir / "staging" / DOC_FALLBACK_STAGE if stage_run is None else stage_run.staging_dir
+    metadata = (
+        resolve_stage_fetch_metadata(
+            stage_name=DOC_FALLBACK_STAGE,
+            ledger_path=ledger_path,
+            fetch_manifest_path=fetch_manifest_path,
+            stage_manifest_path=manifest_path,
+            current_batching_config=batching_config,
+            current_batch_plan_fingerprint=current_batch_plan_fingerprint,
+        )
+        if api_stage_mode == "finalize_only"
+        else None
+    )
+    _write_api_fetch_manifest(
         stage_name=DOC_FALLBACK_STAGE,
-        manifest_path=manifest_path,
-        input_artifacts={
-            "exact_requests_parquet": exact_requests_path,
-            "exact_raw_parquet": exact_raw_path,
-        },
-        output_artifacts={
-            "fallback_requests_parquet": fallback_requests_path,
-            "fallback_raw_parquet": fallback_raw_path,
-        },
+        manifest_path=fetch_manifest_path,
+        staging_dir=staging_dir,
         ledger_path=ledger_path,
         request_log_path=request_log_path,
-        staging_dir=stage_run.staging_dir,
-        audit_result=audit_result,
+        request_item_count=len(items) if metadata is None else metadata.request_item_count,
+        batch_count=len(planned_batches) if metadata is None else metadata.batch_count,
+        batch_plan_fingerprint=current_batch_plan_fingerprint if metadata is None else metadata.batch_plan_fingerprint,
+        batching_config=batching_config if metadata is None else metadata.batching_config,
+        metadata_source="current_run" if metadata is None else metadata.metadata_source,
+        cli_batching_args_ignored=False if metadata is None else metadata.cli_batching_args_ignored,
+        run_session_ids=_stage_run_session_ids(ledger_path) if metadata is None else metadata.run_session_ids,
         summary={
             "fallback_request_row_count": int(fallback_request_df.height),
             "eligible_request_row_count": int(
                 fallback_request_df.filter(pl.col("retrieval_eligible").fill_null(False)).height
             ),
-            "raw_row_count": int(fallback_raw_df.height),
-            "docs_with_raw_rows": int(fallback_raw_df.select(pl.col("doc_id").drop_nulls().n_unique()).item())
-            if fallback_raw_df.height
-            else 0,
-            "run_session_id": stage_run.run_session_id,
         },
     )
-    result = {
-        "refinitiv_lm2011_doc_ownership_exact_raw_parquet": exact_raw_path,
-        "refinitiv_lm2011_doc_ownership_fallback_requests_parquet": fallback_requests_path,
-        "refinitiv_lm2011_doc_ownership_fallback_raw_parquet": fallback_raw_path,
-        "refinitiv_doc_ownership_fallback_api_ledger_sqlite3": ledger_path,
-        "refinitiv_doc_ownership_fallback_api_requests_jsonl": request_log_path,
-        "refinitiv_doc_ownership_fallback_stage_manifest_json": manifest_path,
-    }
+    if api_stage_mode == "fetch_only":
+        return result
+
+    fallback_requests_path = output_dir / "refinitiv_lm2011_doc_ownership_fallback_requests.parquet"
+    fallback_raw_path = output_dir / "refinitiv_lm2011_doc_ownership_fallback_raw.parquet"
+    result.update(
+        _finalize_doc_stage(
+            stage_name=DOC_FALLBACK_STAGE,
+            input_artifacts={
+                "exact_requests_parquet": exact_requests_path,
+                "exact_raw_parquet": exact_raw_path,
+            },
+            request_df=fallback_request_df,
+            requests_path=fallback_requests_path,
+            raw_path=fallback_raw_path,
+            ledger_path=ledger_path,
+            request_log_path=request_log_path,
+            staging_dir=staging_dir,
+            manifest_path=manifest_path,
+            raw_df=_assemble_doc_raw(
+                staging_dir,
+                ledger_path=ledger_path,
+                stage=DOC_FALLBACK_STAGE,
+            ),
+            raw_rebuilder=lambda: _assemble_doc_raw(
+                staging_dir,
+                ledger_path=ledger_path,
+                stage=DOC_FALLBACK_STAGE,
+            ),
+            request_row_label="fallback_request_row_count",
+            request_item_count=len(items) if metadata is None else _coalesce_count(metadata.request_item_count, len(items)),
+            planned_batch_count=len(planned_batches) if metadata is None else metadata.batch_count,
+            batch_plan_fingerprint=current_batch_plan_fingerprint if metadata is None else metadata.batch_plan_fingerprint,
+            batching_config=batching_config if metadata is None else metadata.batching_config,
+            metadata_source="current_run" if metadata is None else metadata.metadata_source,
+            cli_batching_args_ignored=False if metadata is None else metadata.cli_batching_args_ignored,
+            run_session_id=None if stage_run is None else stage_run.run_session_id,
+            verify_rebuilders=False,
+        )
+    )
     return result
 
 
@@ -573,16 +667,12 @@ def _assemble_ownership_universe_results(
     *,
     ledger_path: Path | str | None = None,
 ) -> pl.DataFrame:
-    staging_paths = _resolved_stage_output_paths(
+    results_df = _scan_stage_outputs(
         stage=OWNERSHIP_UNIVERSE_STAGE,
         staging_dir=staging_dir,
         ledger_path=ledger_path,
-    )
-    results_df = (
-        pl.concat([pl.read_parquet(path) for path in staging_paths], how="vertical_relaxed")
-        if staging_paths
-        else _empty_ownership_universe_results_df()
-    )
+        schema={name: dtype for name, dtype in _ownership_universe_results_schema().items()},
+    ).collect()
     return (
         _cast_df_to_schema(results_df.select(OWNERSHIP_UNIVERSE_RESULTS_COLUMNS), _ownership_universe_results_schema())
         .select(OWNERSHIP_UNIVERSE_RESULTS_COLUMNS)
@@ -615,7 +705,7 @@ def _assemble_doc_raw(
         else sorted(staging_dir.glob("*.parquet"))
     )
     raw_df = (
-        pl.concat([pl.read_parquet(path) for path in staging_paths], how="vertical_relaxed")
+        pl.concat([pl.scan_parquet(path) for path in staging_paths], how="vertical_relaxed").collect()
         if staging_paths
         else _empty_df(DOC_OWNERSHIP_RAW_COLUMNS, _doc_ownership_raw_schema())
     )
@@ -627,6 +717,374 @@ def _assemble_doc_raw(
             maintain_order=True,
         )
     )
+
+
+def _finalize_ownership_universe_stage(
+    *,
+    handoff_df: pl.DataFrame,
+    handoff_parquet_path: Path,
+    ledger_path: Path,
+    request_log_path: Path,
+    staging_dir: Path,
+    results_path: Path,
+    row_summary_path: Path,
+    manifest_path: Path,
+    request_item_count: int,
+    planned_batch_count: int | None,
+    batch_plan_fingerprint: str | None,
+    batching_config: dict[str, Any] | None,
+    metadata_source: str,
+    cli_batching_args_ignored: bool,
+    run_session_id: str | None,
+    verify_rebuilders: bool,
+) -> dict[str, Path]:
+    results_df = _assemble_ownership_universe_results(staging_dir, ledger_path=ledger_path)
+    row_summary_df = _build_ownership_row_summary_df(handoff_df, results_df)
+    results_candidate_path = _candidate_output_path(results_path)
+    row_summary_candidate_path = _candidate_output_path(row_summary_path)
+    _write_parquet_atomic(results_df, results_candidate_path)
+    _write_parquet_atomic(row_summary_df, row_summary_candidate_path)
+    audit_result = audit_api_stage(
+        stage_name=OWNERSHIP_UNIVERSE_STAGE,
+        ledger_path=ledger_path,
+        staging_dir=staging_dir,
+        output_artifacts={
+            "ownership_results_parquet": results_candidate_path,
+            "ownership_row_summary_parquet": row_summary_candidate_path,
+        },
+        declared_output_artifacts={
+            "ownership_results_parquet": results_path,
+            "ownership_row_summary_parquet": row_summary_path,
+        },
+        rebuilders={
+            "ownership_results_parquet": lambda: _assemble_ownership_universe_results(
+                staging_dir,
+                ledger_path=ledger_path,
+            ),
+            "ownership_row_summary_parquet": lambda: _build_ownership_row_summary_df(
+                handoff_df,
+                _assemble_ownership_universe_results(
+                    staging_dir,
+                    ledger_path=ledger_path,
+                ),
+            ),
+        },
+        expected_stage_manifest_path=manifest_path,
+        verify_rebuilders=verify_rebuilders,
+    )
+    if not audit_result.passed:
+        raise RuntimeError(f"ownership universe stage audit failed: {audit_result.to_dict()}")
+    _promote_candidate_output(results_candidate_path, results_path)
+    _promote_candidate_output(row_summary_candidate_path, row_summary_path)
+
+    write_stage_completion_manifest(
+        stage_name=OWNERSHIP_UNIVERSE_STAGE,
+        manifest_path=manifest_path,
+        input_artifacts={"ownership_handoff_parquet": handoff_parquet_path},
+        output_artifacts={
+            "ownership_results_parquet": results_path,
+            "ownership_row_summary_parquet": row_summary_path,
+        },
+        ledger_path=ledger_path,
+        request_log_path=request_log_path,
+        staging_dir=staging_dir,
+        audit_result=audit_result,
+        summary={
+            "handoff_row_count": int(handoff_df.height),
+            "request_item_count": request_item_count,
+            "planned_batch_count": planned_batch_count,
+            "batch_plan_fingerprint": batch_plan_fingerprint,
+            "batching_config": batching_config,
+            "results_row_count": int(results_df.height),
+            "rows_with_results": int(row_summary_df.filter(pl.col("ownership_rows_returned").fill_null(0) > 0).height),
+            "request_succeeded_count": _count_request_log_events(request_log_path, "request_succeeded"),
+            "mixed_zero_positive_success_requeued_count": _count_request_log_events(
+                request_log_path,
+                "request_succeeded_mixed_zero_items_requeued",
+            ),
+            "request_unresolved_identifiers_treated_as_empty_count": _count_request_log_events(
+                request_log_path,
+                "request_unresolved_identifiers_treated_as_empty",
+            ),
+            "run_session_id": run_session_id,
+            "run_session_ids": _stage_run_session_ids(ledger_path),
+        },
+        metadata_source=metadata_source,
+        cli_batching_args_ignored=cli_batching_args_ignored,
+    )
+    return {
+        "refinitiv_ownership_universe_results_parquet": results_path,
+        "refinitiv_ownership_universe_row_summary_parquet": row_summary_path,
+        "refinitiv_ownership_universe_stage_manifest_json": manifest_path,
+    }
+
+
+def _finalize_doc_stage(
+    *,
+    stage_name: str,
+    input_artifacts: dict[str, Path],
+    request_df: pl.DataFrame,
+    requests_path: Path,
+    raw_path: Path,
+    ledger_path: Path,
+    request_log_path: Path,
+    staging_dir: Path,
+    manifest_path: Path,
+    raw_df: pl.DataFrame,
+    raw_rebuilder: Callable[[], pl.DataFrame],
+    request_row_label: str,
+    request_item_count: int,
+    planned_batch_count: int | None,
+    batch_plan_fingerprint: str | None,
+    batching_config: dict[str, Any] | None,
+    metadata_source: str,
+    cli_batching_args_ignored: bool,
+    run_session_id: str | None,
+    verify_rebuilders: bool,
+) -> dict[str, Path]:
+    requests_candidate_path = _candidate_output_path(requests_path)
+    raw_candidate_path = _candidate_output_path(raw_path)
+    _write_parquet_atomic(request_df, requests_candidate_path)
+    _write_parquet_atomic(raw_df, raw_candidate_path)
+    output_artifacts = (
+        {"exact_requests_parquet": requests_candidate_path, "exact_raw_parquet": raw_candidate_path}
+        if stage_name == DOC_EXACT_STAGE
+        else {"fallback_requests_parquet": requests_candidate_path, "fallback_raw_parquet": raw_candidate_path}
+    )
+    declared_output_artifacts = (
+        {"exact_requests_parquet": requests_path, "exact_raw_parquet": raw_path}
+        if stage_name == DOC_EXACT_STAGE
+        else {"fallback_requests_parquet": requests_path, "fallback_raw_parquet": raw_path}
+    )
+    raw_label = "exact_raw_parquet" if stage_name == DOC_EXACT_STAGE else "fallback_raw_parquet"
+    audit_result = audit_api_stage(
+        stage_name=stage_name,
+        ledger_path=ledger_path,
+        staging_dir=staging_dir,
+        output_artifacts=output_artifacts,
+        declared_output_artifacts=declared_output_artifacts,
+        rebuilders={raw_label: raw_rebuilder},
+        expected_stage_manifest_path=manifest_path,
+        verify_rebuilders=verify_rebuilders,
+    )
+    if not audit_result.passed:
+        raise RuntimeError(f"{stage_name} stage audit failed: {audit_result.to_dict()}")
+    _promote_candidate_output(requests_candidate_path, requests_path)
+    _promote_candidate_output(raw_candidate_path, raw_path)
+
+    write_stage_completion_manifest(
+        stage_name=stage_name,
+        manifest_path=manifest_path,
+        input_artifacts=input_artifacts,
+        output_artifacts=declared_output_artifacts,
+        ledger_path=ledger_path,
+        request_log_path=request_log_path,
+        staging_dir=staging_dir,
+        audit_result=audit_result,
+        summary={
+            request_row_label: int(request_df.height),
+            "eligible_request_row_count": int(request_df.filter(pl.col("retrieval_eligible").fill_null(False)).height),
+            "request_item_count": request_item_count,
+            "planned_batch_count": planned_batch_count,
+            "batch_plan_fingerprint": batch_plan_fingerprint,
+            "batching_config": batching_config,
+            "raw_row_count": int(raw_df.height),
+            "docs_with_raw_rows": int(raw_df.select(pl.col("doc_id").drop_nulls().n_unique()).item())
+            if raw_df.height
+            else 0,
+            "run_session_id": run_session_id,
+            "run_session_ids": _stage_run_session_ids(ledger_path),
+        },
+        metadata_source=metadata_source,
+        cli_batching_args_ignored=cli_batching_args_ignored,
+    )
+    return (
+        {
+            "refinitiv_lm2011_doc_ownership_exact_requests_parquet": requests_path,
+            "refinitiv_lm2011_doc_ownership_exact_raw_parquet": raw_path,
+            "refinitiv_doc_ownership_exact_stage_manifest_json": manifest_path,
+        }
+        if stage_name == DOC_EXACT_STAGE
+        else {
+            "refinitiv_lm2011_doc_ownership_fallback_requests_parquet": requests_path,
+            "refinitiv_lm2011_doc_ownership_fallback_raw_parquet": raw_path,
+            "refinitiv_doc_ownership_fallback_stage_manifest_json": manifest_path,
+        }
+    )
+
+
+def _build_ownership_row_summary_df(
+    handoff_df: pl.DataFrame,
+    results_df: pl.DataFrame,
+) -> pl.DataFrame:
+    if handoff_df.height == 0:
+        return pl.DataFrame(schema=_ownership_universe_row_summary_schema()).select(
+            OWNERSHIP_UNIVERSE_ROW_SUMMARY_COLUMNS
+        )
+    if results_df.height == 0:
+        return build_refinitiv_ownership_universe_row_summary(handoff_df, results_df)
+    key_columns = list(OWNERSHIP_UNIVERSE_HANDOFF_COLUMNS)
+    base_lf = handoff_df.select(key_columns).lazy()
+    agg_lf = results_df.lazy().group_by(key_columns).agg(
+        pl.len().alias("ownership_rows_returned"),
+        pl.col("returned_date").drop_nulls().min().alias("ownership_first_date"),
+        pl.col("returned_date").drop_nulls().max().alias("ownership_last_date"),
+        pl.col("returned_category").drop_nulls().n_unique().cast(pl.Int64).alias("ownership_distinct_categories"),
+        pl.col("returned_value").drop_nulls().len().cast(pl.Int64).alias("ownership_nonnull_value_count"),
+        pl.col("returned_ric").drop_nulls().n_unique().cast(pl.Int64).alias("ownership_returned_ric_nunique"),
+    )
+    summary_df = (
+        base_lf.join(agg_lf, on=key_columns, how="left")
+        .with_columns(
+            pl.col("retrieval_eligible").fill_null(False).alias("retrieval_row_present"),
+            pl.col("ownership_rows_returned").fill_null(0).cast(pl.Int64),
+            pl.col("ownership_distinct_categories").fill_null(0).cast(pl.Int64),
+            pl.col("ownership_nonnull_value_count").fill_null(0).cast(pl.Int64),
+            pl.col("ownership_returned_ric_nunique").fill_null(0).cast(pl.Int64),
+        )
+        .with_columns(
+            (pl.col("ownership_returned_ric_nunique") == 1).fill_null(False).alias("ownership_single_returned_ric")
+        )
+        .select(OWNERSHIP_UNIVERSE_ROW_SUMMARY_COLUMNS)
+        .collect()
+    )
+    return _cast_df_to_schema(summary_df, _ownership_universe_row_summary_schema()).select(
+        OWNERSHIP_UNIVERSE_ROW_SUMMARY_COLUMNS
+    )
+
+
+def _write_api_fetch_manifest(
+    *,
+    stage_name: str,
+    manifest_path: Path,
+    staging_dir: Path,
+    ledger_path: Path,
+    request_log_path: Path,
+    request_item_count: int,
+    batch_count: int,
+    batch_plan_fingerprint: str | None,
+    batching_config: dict[str, Any] | None,
+    metadata_source: str,
+    cli_batching_args_ignored: bool,
+    run_session_ids: list[str],
+    summary: dict[str, Any] | None = None,
+) -> Path:
+    manifest_summary = dict(summary or {})
+    manifest_summary["batch_plan_fingerprint"] = batch_plan_fingerprint
+    return write_stage_fetch_manifest(
+        stage_name=stage_name,
+        manifest_path=manifest_path,
+        staging_dir=staging_dir,
+        ledger_path=ledger_path,
+        request_log_path=request_log_path,
+        batching_config=batching_config,
+        request_item_count=request_item_count,
+        batch_count=batch_count,
+        run_session_ids=run_session_ids,
+        summary=manifest_summary,
+        metadata_source=metadata_source,
+        cli_batching_args_ignored=cli_batching_args_ignored,
+    )
+
+
+def _interval_resume_metadata(
+    *,
+    planner_version: str,
+    interval_plan: IntervalBatchPlan,
+) -> dict[str, str]:
+    return {
+        "batch_plan_fingerprint": interval_plan.fingerprint,
+        "batch_plan_planner_version": planner_version,
+        "batching_config_json": json.dumps(interval_plan.config.to_serializable_dict(), sort_keys=True),
+        "planned_batch_count": str(len(interval_plan.batches)),
+    }
+
+
+def _simple_resume_metadata(
+    *,
+    planner_version: str,
+    batching_config: dict[str, Any],
+    planned_batch_count: int,
+) -> dict[str, str]:
+    return {
+        "batch_plan_planner_version": planner_version,
+        "batching_config_json": json.dumps(batching_config, sort_keys=True),
+        "planned_batch_count": str(planned_batch_count),
+    }
+
+
+def _raise_stage_resume_compatibility_error(
+    *,
+    stage_name: str,
+    output_dir: Path,
+    fetch_manifest_path: Path,
+    manifest_path: Path,
+    exc: LsegResumeCompatibilityError,
+) -> None:
+    output_map = {
+        OWNERSHIP_UNIVERSE_STAGE: [output_dir / "refinitiv_ownership_universe_results.parquet", output_dir / "refinitiv_ownership_universe_row_summary.parquet"],
+        DOC_EXACT_STAGE: [output_dir / "refinitiv_lm2011_doc_ownership_exact_requests.parquet", output_dir / "refinitiv_lm2011_doc_ownership_exact_raw.parquet"],
+        DOC_FALLBACK_STAGE: [output_dir / "refinitiv_lm2011_doc_ownership_fallback_requests.parquet", output_dir / "refinitiv_lm2011_doc_ownership_fallback_raw.parquet"],
+    }
+    guidance = [str(fetch_manifest_path), str(exc.ledger_path), str(output_dir / f"staging\\{stage_name}"), str(manifest_path)]
+    guidance.extend(str(path) for path in output_map.get(stage_name, []))
+    explanation = (
+        f"The {stage_name} stage already has persisted resume state from a different request universe or batching configuration."
+    )
+    if fetch_manifest_path.exists():
+        explanation += " Review the stored fetch manifest for the original batching metadata before rerunning."
+    else:
+        explanation += " No stored fetch manifest was found; the ledger metadata is the only available resume record."
+        if "batching_config_json" not in exc.existing_stage_meta:
+            explanation += " The full historical batching configuration is not available in the stored metadata."
+    raise LsegResumeCompatibilityError(
+        stage=exc.stage,
+        meta_key=exc.meta_key,
+        existing_value=exc.existing_value,
+        current_value=exc.current_value,
+        ledger_path=exc.ledger_path,
+        existing_stage_meta=exc.existing_stage_meta,
+        current_stage_meta=exc.current_stage_meta,
+        explanation=explanation,
+        guidance=guidance,
+    ) from exc
+
+
+def _ensure_finalize_state(
+    *,
+    ledger_path: Path,
+    request_log_path: Path,
+    stage_name: str,
+) -> None:
+    if not ledger_path.exists():
+        raise FileNotFoundError(f"{stage_name} ledger not found for finalize_only: {ledger_path}")
+    if not request_log_path.exists():
+        raise FileNotFoundError(f"{stage_name} request log not found for finalize_only: {request_log_path}")
+
+
+def _stage_run_session_ids(ledger_path: Path) -> list[str]:
+    return RequestLedger(ledger_path).run_session_ids()
+
+
+def _coalesce_count(value: int | None, fallback: int) -> int:
+    return fallback if value is None else value
+
+
+def _scan_stage_outputs(
+    *,
+    stage: str,
+    staging_dir: Path,
+    ledger_path: Path | str | None,
+    schema: dict[str, pl.DataType],
+) -> pl.LazyFrame:
+    staging_paths = _resolved_stage_output_paths(
+        stage=stage,
+        staging_dir=staging_dir,
+        ledger_path=ledger_path,
+    )
+    if not staging_paths:
+        return pl.DataFrame(schema=schema).lazy()
+    return pl.concat([pl.scan_parquet(path) for path in staging_paths], how="vertical_relaxed")
 
 
 def _count_request_log_events(request_log_path: Path, event_name: str) -> int:
@@ -977,3 +1435,9 @@ def _resolved_stage_output_paths(
         for path in ledger.succeeded_stage_output_paths(stage=stage)
         if path.exists()
     ]
+
+
+def _normalize_api_stage_mode(api_stage_mode: str) -> str:
+    if api_stage_mode not in API_STAGE_MODES:
+        raise ValueError(f"Unsupported api_stage_mode: {api_stage_mode}")
+    return api_stage_mode

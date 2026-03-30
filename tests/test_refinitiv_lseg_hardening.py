@@ -19,7 +19,10 @@ from thesis_pkg.pipelines.refinitiv.lseg_ownership_api import (
 )
 from thesis_pkg.pipelines.refinitiv.lseg_api_execution import run_api_batches
 from thesis_pkg.pipelines.refinitiv.lseg_batching import RequestItem, batch_items, build_batch_definition
-from thesis_pkg.pipelines.refinitiv.lseg_ledger import RequestLedger
+from thesis_pkg.pipelines.refinitiv.lseg_ledger import (
+    ATTEMPT_PHASE_LEGACY_FINISH_BACKFILL,
+    RequestLedger,
+)
 from thesis_pkg.pipelines.refinitiv.lseg_provider import (
     LsegDataResponse,
     LsegRequestError,
@@ -803,6 +806,111 @@ def test_audit_api_stage_flags_orphan_staging_files(tmp_path: Path) -> None:
 
     assert any(issue.code == "orphan_staging_files" for issue in audit_result.issues)
     assert audit_result.passed is True
+
+
+def test_audit_api_stage_tolerates_legacy_backfill_attempt_gap_when_stage_data_is_intact(
+    tmp_path: Path,
+) -> None:
+    item = RequestItem(
+        item_id="item-1",
+        stage="test_stage",
+        instrument="AAA.N",
+        batch_key="single",
+        fields=("TR.Field",),
+        parameters={},
+        payload={"row": 1},
+    )
+    batch = batch_items([item], max_batch_size=10, unique_instrument_limit=True)[0]
+    ledger_path = tmp_path / "ledger.sqlite3"
+    staging_dir = tmp_path / "staging"
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    output_path = tmp_path / "final.parquet"
+    ledger = RequestLedger(ledger_path, run_session_id="run-test", worker_id="worker-test")
+    ledger.enqueue([item], [batch])
+    claimed = ledger.claim_next_batch(stage="test_stage")
+    assert claimed is not None
+    stage_df = pl.DataFrame({"item_id": ["item-1"], "value": [1.0]})
+    stage_path = staging_dir / f"{claimed.batch_id}.parquet"
+    stage_df.write_parquet(stage_path)
+    ledger.record_success(
+        batch_id=claimed.batch_id,
+        row_count_by_item_id={"item-1": 1},
+        stage_output_path=stage_path,
+        response_fingerprint="ok",
+        headers={"X-Test": "1"},
+        status_code=200,
+        latency_ms=1,
+        rows_returned=1,
+        response_bytes=10,
+    )
+    stage_df.write_parquet(output_path)
+
+    conn = sqlite3.connect(ledger_path)
+    try:
+        conn.execute("UPDATE batches SET attempt_count = 2 WHERE batch_id = ?", (claimed.batch_id,))
+        conn.execute("UPDATE batch_attempts SET attempt_no = 2 WHERE batch_id = ?", (claimed.batch_id,))
+        conn.execute("DELETE FROM batch_attempt_events WHERE batch_id = ?", (claimed.batch_id,))
+        conn.execute(
+            """
+            INSERT INTO batch_attempt_events (
+                batch_id,
+                attempt_no,
+                phase,
+                run_session_id,
+                worker_id,
+                claim_token,
+                status_code,
+                latency_ms,
+                rows_returned,
+                response_bytes,
+                headers_json,
+                exception_class,
+                exception_message,
+                created_at_utc
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                claimed.batch_id,
+                2,
+                ATTEMPT_PHASE_LEGACY_FINISH_BACKFILL,
+                "run-test",
+                "worker-test",
+                None,
+                200,
+                1,
+                1,
+                10,
+                "{}",
+                None,
+                None,
+                "2026-03-29T12:00:00Z",
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    audit_result = audit_api_stage(
+        stage_name="test_stage",
+        ledger_path=ledger_path,
+        staging_dir=staging_dir,
+        output_artifacts={"final_parquet": output_path},
+        rebuilders={"final_parquet": lambda: stage_df},
+    )
+
+    assert audit_result.passed is True
+    assert not any(issue.code == "attempt_event_gap" for issue in audit_result.issues)
+    assert audit_result.metrics["tolerated_attempt_event_gaps"] == [
+        {
+            "batch_id": claimed.batch_id,
+            "attempt_count": 2,
+            "finished_attempt_count": 1,
+            "event_attempt_count": 1,
+            "tolerance_reason": "legacy_finish_backfill_final_attempt_only",
+            "stage_row_count": 1,
+            "event_phase": ATTEMPT_PHASE_LEGACY_FINISH_BACKFILL,
+        }
+    ]
 
 
 def test_audit_api_stage_fails_when_declared_output_artifact_is_missing(tmp_path: Path) -> None:

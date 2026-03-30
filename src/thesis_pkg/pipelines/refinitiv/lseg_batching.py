@@ -312,6 +312,31 @@ def plan_interval_batches(
     )
 
 
+def batch_plan_fingerprint(
+    *,
+    planner_version: str,
+    batching_config: dict[str, Any],
+    planned_batches: Iterable[BatchDefinition],
+) -> str:
+    return stable_hash_id(
+        "batch_plan",
+        planner_version,
+        batching_config,
+        [
+            {
+                "batch_id": batch.batch_id,
+                "stage": batch.stage,
+                "batch_key": batch.batch_key,
+                "parameters": batch.parameters,
+                "item_ids": batch.item_ids,
+                "instruments": batch.instruments,
+            }
+            for batch in planned_batches
+        ],
+        prefix="plan",
+    )
+
+
 @dataclass(frozen=True)
 class _PreparedIntervalItem:
     request_item: RequestItem
@@ -464,6 +489,7 @@ __all__ = [
     "IntervalBatchPlan",
     "IntervalBatchPlannerConfig",
     "RequestItem",
+    "batch_plan_fingerprint",
     "batch_items",
     "build_batch_definition",
     "plan_interval_batches",

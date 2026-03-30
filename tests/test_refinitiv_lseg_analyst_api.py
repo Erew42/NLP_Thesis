@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
+import json
 from pathlib import Path
 from typing import Any, Callable
 
@@ -148,6 +149,94 @@ def test_run_refinitiv_step1_analyst_actuals_api_pipeline_batches_close_request_
     assert raw_df.get_column("request_group_id").to_list() == ["group-1", "group-2"]
     assert raw_df.get_column("response_row_index").to_list() == [0, 0]
     assert raw_df.get_column("row_parse_status").to_list() == ["OK", "OK"]
+
+
+def test_analyst_actuals_api_pipeline_fetch_only_then_finalize_only_matches_full(tmp_path: Path) -> None:
+    request_path = tmp_path / "requests.parquet"
+    _write_request_universe(
+        request_path,
+        [
+            {
+                "request_group_id": "group-1",
+                "gvkey_int": 1000,
+                "effective_collection_ric": "AAA.N",
+                "member_bridge_row_count": 2,
+                "bridge_start_date_min": date(2020, 1, 1),
+                "bridge_end_date_max": date(2020, 12, 31),
+                "actuals_request_start_date": date(2020, 1, 1),
+                "actuals_request_end_date": date(2020, 3, 31),
+                "estimates_request_start_date": date(2020, 1, 1),
+                "estimates_request_end_date": date(2020, 3, 31),
+                "retrieval_eligible": True,
+                "retrieval_exclusion_reason": None,
+            },
+            {
+                "request_group_id": "group-2",
+                "gvkey_int": 1001,
+                "effective_collection_ric": "BBB.N",
+                "member_bridge_row_count": 1,
+                "bridge_start_date_min": date(2020, 1, 15),
+                "bridge_end_date_max": date(2020, 12, 31),
+                "actuals_request_start_date": date(2020, 1, 15),
+                "actuals_request_end_date": date(2020, 3, 31),
+                "estimates_request_start_date": date(2020, 1, 15),
+                "estimates_request_end_date": date(2020, 3, 31),
+                "retrieval_eligible": True,
+                "retrieval_exclusion_reason": None,
+            },
+        ],
+    )
+
+    def _response_factory(universe: list[str], _fields: list[str], _parameters: dict[str, Any]) -> pl.DataFrame:
+        return pl.DataFrame(
+            {
+                "Instrument": list(universe),
+                "TR.EPSActValue": [1.5 if instrument == "AAA.N" else 2.0 for instrument in universe],
+                "TR.EPSActValue.date": [
+                    date(2020, 3, 15) if instrument == "AAA.N" else date(2020, 3, 20)
+                    for instrument in universe
+                ],
+                "TR.EPSActValue.periodenddate": [date(2019, 12, 31) for _ in universe],
+                "TR.EPSActValue.fperiod": ["FY2019Q4" for _ in universe],
+            }
+        )
+
+    full_dir = tmp_path / "full"
+    full_out = run_refinitiv_step1_analyst_actuals_api_pipeline(
+        request_universe_parquet_path=request_path,
+        output_dir=full_dir,
+        provider=FakeProvider(response_factory=_response_factory),
+        min_seconds_between_requests=0.0,
+    )
+
+    staged_dir = tmp_path / "staged"
+    fetch_out = run_refinitiv_step1_analyst_actuals_api_pipeline(
+        request_universe_parquet_path=request_path,
+        output_dir=staged_dir,
+        provider=FakeProvider(response_factory=_response_factory),
+        min_seconds_between_requests=0.0,
+        api_stage_mode="fetch_only",
+    )
+
+    assert Path(fetch_out["refinitiv_analyst_actuals_fetch_manifest_json"]).exists()
+    assert not (staged_dir / "refinitiv_analyst_actuals_raw.parquet").exists()
+
+    finalized_out = run_refinitiv_step1_analyst_actuals_api_pipeline(
+        request_universe_parquet_path=request_path,
+        output_dir=staged_dir,
+        api_stage_mode="finalize_only",
+    )
+
+    assert pl.read_parquet(full_out["refinitiv_analyst_actuals_raw_parquet"]).equals(
+        pl.read_parquet(finalized_out["refinitiv_analyst_actuals_raw_parquet"]),
+        null_equal=True,
+    )
+    fetch_manifest = json.loads(Path(finalized_out["refinitiv_analyst_actuals_fetch_manifest_json"]).read_text(encoding="utf-8"))
+    stage_manifest = json.loads(Path(finalized_out["refinitiv_analyst_actuals_stage_manifest_json"]).read_text(encoding="utf-8"))
+    assert fetch_manifest["metadata_source"] == "fetch_manifest"
+    assert fetch_manifest["cli_batching_args_ignored"] is False
+    assert stage_manifest["metadata_source"] == "fetch_manifest"
+    assert stage_manifest["cli_batching_args_ignored"] is False
 
 
 def test_run_refinitiv_step1_analyst_estimates_monthly_api_pipeline_batches_by_period(tmp_path: Path) -> None:

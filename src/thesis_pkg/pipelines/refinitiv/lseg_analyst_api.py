@@ -40,8 +40,11 @@ from thesis_pkg.pipelines.refinitiv.lseg_ledger import RequestLedger
 from thesis_pkg.pipelines.refinitiv.lseg_ledger import LsegResumeCompatibilityError
 from thesis_pkg.pipelines.refinitiv.lseg_stage_audit import (
     audit_api_stage,
+    default_stage_fetch_manifest_path,
     default_stage_manifest_path,
+    resolve_stage_fetch_metadata,
     write_stage_completion_manifest,
+    write_stage_fetch_manifest,
 )
 from thesis_pkg.pipelines.refinitiv_bridge_pipeline import (
     _cast_df_to_schema,
@@ -95,6 +98,7 @@ ANALYST_ESTIMATES_FIELD_ALIASES: dict[str, tuple[str, ...]] = {
     "TR.EPSStdDev": ("EPS Standard Deviation", "Standard Deviation", "Earnings Per Share - Standard Deviation"),
     "TR.EPSNumberofEstimates": ("Number Of Estimates", "Earnings Per Share - Number of Estimates"),
 }
+API_STAGE_MODES: frozenset[str] = frozenset({"full", "fetch_only", "finalize_only"})
 
 
 def _analyst_resume_metadata(
@@ -113,10 +117,12 @@ def _raise_analyst_resume_compatibility_error(
     *,
     stage: str,
     output_dir: Path,
+    fetch_manifest_path: Path,
     exc: LsegResumeCompatibilityError,
 ) -> None:
     if stage == ANALYST_ACTUALS_STAGE:
         guidance = [
+            str(fetch_manifest_path),
             str(output_dir / "refinitiv_analyst_actuals_api_ledger.sqlite3"),
             str(output_dir / "refinitiv_analyst_actuals_api_requests.jsonl"),
             str(output_dir / "staging" / ANALYST_ACTUALS_STAGE),
@@ -127,6 +133,7 @@ def _raise_analyst_resume_compatibility_error(
         stage_label = "analyst actuals"
     elif stage == ANALYST_ESTIMATES_STAGE:
         guidance = [
+            str(fetch_manifest_path),
             str(output_dir / "refinitiv_analyst_estimates_api_ledger.sqlite3"),
             str(output_dir / "refinitiv_analyst_estimates_api_requests.jsonl"),
             str(output_dir / "staging" / ANALYST_ESTIMATES_STAGE),
@@ -149,6 +156,16 @@ def _raise_analyst_resume_compatibility_error(
         explanation=(
             f"The {stage_label} stage was requested for this run, but its existing resume state is incompatible "
             "with the current request universe or batching configuration."
+            + (
+                " Review the stored fetch manifest for the original batching metadata before rerunning."
+                if fetch_manifest_path.exists()
+                else " No stored fetch manifest was found; the ledger metadata is the only available resume record."
+            )
+            + (
+                ""
+                if "batching_config_json" in exc.existing_stage_meta
+                else " The full historical batching configuration is not available in the stored metadata."
+            )
         ),
         guidance=guidance,
     ) from exc
@@ -176,7 +193,10 @@ def run_refinitiv_step1_analyst_actuals_api_pipeline(
     provider_timeout_seconds: float | None = None,
     preflight_probe: bool = False,
     stage_manifest_path: Path | str | None = None,
+    fetch_manifest_path: Path | str | None = None,
+    api_stage_mode: str = "full",
 ) -> dict[str, Path]:
+    api_stage_mode = _normalize_api_stage_mode(api_stage_mode)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     ledger_path = Path(ledger_path) if ledger_path is not None else output_dir / "refinitiv_analyst_actuals_api_ledger.sqlite3"
@@ -184,6 +204,16 @@ def run_refinitiv_step1_analyst_actuals_api_pipeline(
         Path(request_log_path)
         if request_log_path is not None
         else output_dir / "refinitiv_analyst_actuals_api_requests.jsonl"
+    )
+    manifest_path = (
+        Path(stage_manifest_path)
+        if stage_manifest_path is not None
+        else default_stage_manifest_path(output_dir, ANALYST_ACTUALS_STAGE)
+    )
+    fetch_manifest_path = (
+        Path(fetch_manifest_path)
+        if fetch_manifest_path is not None
+        else default_stage_fetch_manifest_path(output_dir, ANALYST_ACTUALS_STAGE)
     )
     request_df = _cast_df_to_schema(
         pl.read_parquet(request_universe_parquet_path).select(ANALYST_REQUEST_GROUP_COLUMNS),
@@ -202,92 +232,106 @@ def run_refinitiv_step1_analyst_actuals_api_pipeline(
         default_max_extra_rows_ratio=ANALYST_ACTUALS_DEFAULT_MAX_EXTRA_ROWS_RATIO,
     )
     interval_plan = _plan_analyst_actuals_batches(items, config=planner_config)
-    try:
-        stage_run = run_api_batches(
-            stage=ANALYST_ACTUALS_STAGE,
-            items=items,
-            output_dir=output_dir,
-            ledger_path=ledger_path,
-            request_log_path=request_log_path,
-            provider=provider,
-            provider_session_name=provider_session_name,
-            provider_config_name=provider_config_name,
-            provider_timeout_seconds=provider_timeout_seconds,
-            preflight_probe=preflight_probe,
-            max_batch_size=max_batch_size,
-            min_seconds_between_requests=min_seconds_between_requests,
-            min_seconds_between_request_starts_total=min_seconds_between_request_starts_total,
-            max_attempts=max_attempts,
-            response_normalizer=_normalize_analyst_actuals_batch_response,
-            lookup_normalizer=str,
-            split_after_attempt=2,
-            retry_delay_seconds_fn=_retry_delay_seconds,
-            max_workers=max_workers,
-            planned_batches=list(interval_plan.batches),
-            batch_plan_fingerprint=interval_plan.fingerprint,
-            planned_batch_metrics=interval_plan.batch_metrics_by_id,
-            resume_compatibility_metadata=_analyst_resume_metadata(interval_plan=interval_plan),
-        )
-    except LsegResumeCompatibilityError as exc:
-        _raise_analyst_resume_compatibility_error(
-            stage=ANALYST_ACTUALS_STAGE,
-            output_dir=output_dir,
-            exc=exc,
-        )
-    stage_run_ledger_path = getattr(stage_run, "ledger_path", ledger_path)
-    raw_df = _assemble_analyst_actuals_raw(stage_run.staging_dir, ledger_path=stage_run_ledger_path)
-    raw_path = output_dir / "refinitiv_analyst_actuals_raw.parquet"
-    raw_candidate_path = _candidate_output_path(raw_path)
-    _write_parquet_atomic(raw_df, raw_candidate_path)
-
-    manifest_path = (
-        Path(stage_manifest_path)
-        if stage_manifest_path is not None
-        else default_stage_manifest_path(output_dir, ANALYST_ACTUALS_STAGE)
-    )
-    audit_result = audit_api_stage(
-        stage_name=ANALYST_ACTUALS_STAGE,
-        ledger_path=ledger_path,
-        staging_dir=stage_run.staging_dir,
-        output_artifacts={"analyst_actuals_raw_parquet": raw_candidate_path},
-        declared_output_artifacts={"analyst_actuals_raw_parquet": raw_path},
-        rebuilders={
-            "analyst_actuals_raw_parquet": lambda: _assemble_analyst_actuals_raw(
-                stage_run.staging_dir,
-                ledger_path=stage_run_ledger_path,
-            )
-        },
-        expected_stage_manifest_path=manifest_path,
-    )
-    if not audit_result.passed:
-        raise RuntimeError(f"analyst actuals stage audit failed: {audit_result.to_dict()}")
-    _promote_candidate_output(raw_candidate_path, raw_path)
-
-    write_stage_completion_manifest(
-        stage_name=ANALYST_ACTUALS_STAGE,
-        manifest_path=manifest_path,
-        input_artifacts={"analyst_request_universe_parquet": Path(request_universe_parquet_path)},
-        output_artifacts={"analyst_actuals_raw_parquet": raw_path},
-        ledger_path=ledger_path,
-        request_log_path=request_log_path,
-        staging_dir=stage_run.staging_dir,
-        audit_result=audit_result,
-        summary={
-            "request_group_row_count": int(request_df.height),
-            "request_item_count": len(items),
-            "planned_batch_count": len(interval_plan.batches),
-            "batch_plan_fingerprint": interval_plan.fingerprint,
-            "batching_config": planner_config.to_serializable_dict(),
-            "raw_row_count": int(raw_df.height),
-            "run_session_id": stage_run.run_session_id,
-        },
-    )
     result = {
-        "refinitiv_analyst_actuals_raw_parquet": raw_path,
         "refinitiv_analyst_actuals_api_ledger_sqlite3": ledger_path,
         "refinitiv_analyst_actuals_api_requests_jsonl": request_log_path,
-        "refinitiv_analyst_actuals_stage_manifest_json": manifest_path,
+        "refinitiv_analyst_actuals_fetch_manifest_json": fetch_manifest_path,
     }
+    stage_run = None
+    if api_stage_mode != "finalize_only":
+        try:
+            stage_run = run_api_batches(
+                stage=ANALYST_ACTUALS_STAGE,
+                items=items,
+                output_dir=output_dir,
+                ledger_path=ledger_path,
+                request_log_path=request_log_path,
+                provider=provider,
+                provider_session_name=provider_session_name,
+                provider_config_name=provider_config_name,
+                provider_timeout_seconds=provider_timeout_seconds,
+                preflight_probe=preflight_probe,
+                max_batch_size=max_batch_size,
+                min_seconds_between_requests=min_seconds_between_requests,
+                min_seconds_between_request_starts_total=min_seconds_between_request_starts_total,
+                max_attempts=max_attempts,
+                response_normalizer=_normalize_analyst_actuals_batch_response,
+                lookup_normalizer=str,
+                split_after_attempt=2,
+                retry_delay_seconds_fn=_retry_delay_seconds,
+                max_workers=max_workers,
+                planned_batches=list(interval_plan.batches),
+                batch_plan_fingerprint=interval_plan.fingerprint,
+                planned_batch_metrics=interval_plan.batch_metrics_by_id,
+                resume_compatibility_metadata=_analyst_resume_metadata(interval_plan=interval_plan),
+            )
+        except LsegResumeCompatibilityError as exc:
+            _raise_analyst_resume_compatibility_error(
+                stage=ANALYST_ACTUALS_STAGE,
+                output_dir=output_dir,
+                fetch_manifest_path=fetch_manifest_path,
+                exc=exc,
+            )
+    else:
+        _ensure_finalize_state(
+            ledger_path=ledger_path,
+            request_log_path=request_log_path,
+            stage_name=ANALYST_ACTUALS_STAGE,
+        )
+
+    staging_dir = output_dir / "staging" / ANALYST_ACTUALS_STAGE if stage_run is None else stage_run.staging_dir
+    metadata = (
+        resolve_stage_fetch_metadata(
+            stage_name=ANALYST_ACTUALS_STAGE,
+            ledger_path=ledger_path,
+            fetch_manifest_path=fetch_manifest_path,
+            stage_manifest_path=manifest_path,
+            current_batching_config=planner_config.to_serializable_dict(),
+            current_batch_plan_fingerprint=interval_plan.fingerprint,
+        )
+        if api_stage_mode == "finalize_only"
+        else None
+    )
+    _write_analyst_fetch_manifest(
+        stage_name=ANALYST_ACTUALS_STAGE,
+        manifest_path=fetch_manifest_path,
+        staging_dir=staging_dir,
+        ledger_path=ledger_path,
+        request_log_path=request_log_path,
+        request_item_count=len(items) if metadata is None else metadata.request_item_count,
+        batch_count=len(interval_plan.batches) if metadata is None else metadata.batch_count,
+        batch_plan_fingerprint=interval_plan.fingerprint if metadata is None else metadata.batch_plan_fingerprint,
+        batching_config=planner_config.to_serializable_dict() if metadata is None else metadata.batching_config,
+        metadata_source="current_run" if metadata is None else metadata.metadata_source,
+        cli_batching_args_ignored=False if metadata is None else metadata.cli_batching_args_ignored,
+        run_session_ids=_stage_run_session_ids(ledger_path) if metadata is None else metadata.run_session_ids,
+    )
+    if api_stage_mode == "fetch_only":
+        return result
+
+    raw_path = output_dir / "refinitiv_analyst_actuals_raw.parquet"
+    result.update(
+        _finalize_analyst_stage(
+            stage_name=ANALYST_ACTUALS_STAGE,
+            request_universe_parquet_path=Path(request_universe_parquet_path),
+            ledger_path=ledger_path,
+            request_log_path=request_log_path,
+            staging_dir=staging_dir,
+            raw_path=raw_path,
+            manifest_path=manifest_path,
+            raw_df=_assemble_analyst_actuals_raw(staging_dir, ledger_path=ledger_path),
+            raw_rebuilder=lambda: _assemble_analyst_actuals_raw(staging_dir, ledger_path=ledger_path),
+            request_group_row_count=int(request_df.height),
+            request_item_count=len(items) if metadata is None else _coalesce_count(metadata.request_item_count, len(items)),
+            planned_batch_count=len(interval_plan.batches) if metadata is None else metadata.batch_count,
+            batch_plan_fingerprint=interval_plan.fingerprint if metadata is None else metadata.batch_plan_fingerprint,
+            batching_config=planner_config.to_serializable_dict() if metadata is None else metadata.batching_config,
+            metadata_source="current_run" if metadata is None else metadata.metadata_source,
+            cli_batching_args_ignored=False if metadata is None else metadata.cli_batching_args_ignored,
+            run_session_id=None if stage_run is None else stage_run.run_session_id,
+            verify_rebuilders=False,
+        )
+    )
     return result
 
 
@@ -313,7 +357,10 @@ def run_refinitiv_step1_analyst_estimates_monthly_api_pipeline(
     provider_timeout_seconds: float | None = None,
     preflight_probe: bool = False,
     stage_manifest_path: Path | str | None = None,
+    fetch_manifest_path: Path | str | None = None,
+    api_stage_mode: str = "full",
 ) -> dict[str, Path]:
+    api_stage_mode = _normalize_api_stage_mode(api_stage_mode)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     ledger_path = Path(ledger_path) if ledger_path is not None else output_dir / "refinitiv_analyst_estimates_api_ledger.sqlite3"
@@ -321,6 +368,16 @@ def run_refinitiv_step1_analyst_estimates_monthly_api_pipeline(
         Path(request_log_path)
         if request_log_path is not None
         else output_dir / "refinitiv_analyst_estimates_api_requests.jsonl"
+    )
+    manifest_path = (
+        Path(stage_manifest_path)
+        if stage_manifest_path is not None
+        else default_stage_manifest_path(output_dir, ANALYST_ESTIMATES_STAGE)
+    )
+    fetch_manifest_path = (
+        Path(fetch_manifest_path)
+        if fetch_manifest_path is not None
+        else default_stage_fetch_manifest_path(output_dir, ANALYST_ESTIMATES_STAGE)
     )
     request_df = _cast_df_to_schema(
         pl.read_parquet(request_universe_parquet_path).select(ANALYST_REQUEST_GROUP_COLUMNS),
@@ -339,92 +396,106 @@ def run_refinitiv_step1_analyst_estimates_monthly_api_pipeline(
         default_max_extra_rows_ratio=ANALYST_ESTIMATES_DEFAULT_MAX_EXTRA_ROWS_RATIO,
     )
     interval_plan = _plan_analyst_estimate_batches(items, config=planner_config)
-    try:
-        stage_run = run_api_batches(
-            stage=ANALYST_ESTIMATES_STAGE,
-            items=items,
-            output_dir=output_dir,
-            ledger_path=ledger_path,
-            request_log_path=request_log_path,
-            provider=provider,
-            provider_session_name=provider_session_name,
-            provider_config_name=provider_config_name,
-            provider_timeout_seconds=provider_timeout_seconds,
-            preflight_probe=preflight_probe,
-            max_batch_size=max_batch_size,
-            min_seconds_between_requests=min_seconds_between_requests,
-            min_seconds_between_request_starts_total=min_seconds_between_request_starts_total,
-            max_attempts=max_attempts,
-            response_normalizer=_normalize_analyst_estimates_batch_response,
-            lookup_normalizer=str,
-            split_after_attempt=2,
-            retry_delay_seconds_fn=_retry_delay_seconds,
-            max_workers=max_workers,
-            planned_batches=list(interval_plan.batches),
-            batch_plan_fingerprint=interval_plan.fingerprint,
-            planned_batch_metrics=interval_plan.batch_metrics_by_id,
-            resume_compatibility_metadata=_analyst_resume_metadata(interval_plan=interval_plan),
-        )
-    except LsegResumeCompatibilityError as exc:
-        _raise_analyst_resume_compatibility_error(
-            stage=ANALYST_ESTIMATES_STAGE,
-            output_dir=output_dir,
-            exc=exc,
-        )
-    stage_run_ledger_path = getattr(stage_run, "ledger_path", ledger_path)
-    raw_df = _assemble_analyst_estimates_raw(stage_run.staging_dir, ledger_path=stage_run_ledger_path)
-    raw_path = output_dir / "refinitiv_analyst_estimates_monthly_raw.parquet"
-    raw_candidate_path = _candidate_output_path(raw_path)
-    _write_parquet_atomic(raw_df, raw_candidate_path)
-
-    manifest_path = (
-        Path(stage_manifest_path)
-        if stage_manifest_path is not None
-        else default_stage_manifest_path(output_dir, ANALYST_ESTIMATES_STAGE)
-    )
-    audit_result = audit_api_stage(
-        stage_name=ANALYST_ESTIMATES_STAGE,
-        ledger_path=ledger_path,
-        staging_dir=stage_run.staging_dir,
-        output_artifacts={"analyst_estimates_raw_parquet": raw_candidate_path},
-        declared_output_artifacts={"analyst_estimates_raw_parquet": raw_path},
-        rebuilders={
-            "analyst_estimates_raw_parquet": lambda: _assemble_analyst_estimates_raw(
-                stage_run.staging_dir,
-                ledger_path=stage_run_ledger_path,
-            )
-        },
-        expected_stage_manifest_path=manifest_path,
-    )
-    if not audit_result.passed:
-        raise RuntimeError(f"analyst estimates stage audit failed: {audit_result.to_dict()}")
-    _promote_candidate_output(raw_candidate_path, raw_path)
-
-    write_stage_completion_manifest(
-        stage_name=ANALYST_ESTIMATES_STAGE,
-        manifest_path=manifest_path,
-        input_artifacts={"analyst_request_universe_parquet": Path(request_universe_parquet_path)},
-        output_artifacts={"analyst_estimates_raw_parquet": raw_path},
-        ledger_path=ledger_path,
-        request_log_path=request_log_path,
-        staging_dir=stage_run.staging_dir,
-        audit_result=audit_result,
-        summary={
-            "request_group_row_count": int(request_df.height),
-            "request_item_count": len(items),
-            "planned_batch_count": len(interval_plan.batches),
-            "batch_plan_fingerprint": interval_plan.fingerprint,
-            "batching_config": planner_config.to_serializable_dict(),
-            "raw_row_count": int(raw_df.height),
-            "run_session_id": stage_run.run_session_id,
-        },
-    )
     result = {
-        "refinitiv_analyst_estimates_monthly_raw_parquet": raw_path,
         "refinitiv_analyst_estimates_api_ledger_sqlite3": ledger_path,
         "refinitiv_analyst_estimates_api_requests_jsonl": request_log_path,
-        "refinitiv_analyst_estimates_stage_manifest_json": manifest_path,
+        "refinitiv_analyst_estimates_fetch_manifest_json": fetch_manifest_path,
     }
+    stage_run = None
+    if api_stage_mode != "finalize_only":
+        try:
+            stage_run = run_api_batches(
+                stage=ANALYST_ESTIMATES_STAGE,
+                items=items,
+                output_dir=output_dir,
+                ledger_path=ledger_path,
+                request_log_path=request_log_path,
+                provider=provider,
+                provider_session_name=provider_session_name,
+                provider_config_name=provider_config_name,
+                provider_timeout_seconds=provider_timeout_seconds,
+                preflight_probe=preflight_probe,
+                max_batch_size=max_batch_size,
+                min_seconds_between_requests=min_seconds_between_requests,
+                min_seconds_between_request_starts_total=min_seconds_between_request_starts_total,
+                max_attempts=max_attempts,
+                response_normalizer=_normalize_analyst_estimates_batch_response,
+                lookup_normalizer=str,
+                split_after_attempt=2,
+                retry_delay_seconds_fn=_retry_delay_seconds,
+                max_workers=max_workers,
+                planned_batches=list(interval_plan.batches),
+                batch_plan_fingerprint=interval_plan.fingerprint,
+                planned_batch_metrics=interval_plan.batch_metrics_by_id,
+                resume_compatibility_metadata=_analyst_resume_metadata(interval_plan=interval_plan),
+            )
+        except LsegResumeCompatibilityError as exc:
+            _raise_analyst_resume_compatibility_error(
+                stage=ANALYST_ESTIMATES_STAGE,
+                output_dir=output_dir,
+                fetch_manifest_path=fetch_manifest_path,
+                exc=exc,
+            )
+    else:
+        _ensure_finalize_state(
+            ledger_path=ledger_path,
+            request_log_path=request_log_path,
+            stage_name=ANALYST_ESTIMATES_STAGE,
+        )
+
+    staging_dir = output_dir / "staging" / ANALYST_ESTIMATES_STAGE if stage_run is None else stage_run.staging_dir
+    metadata = (
+        resolve_stage_fetch_metadata(
+            stage_name=ANALYST_ESTIMATES_STAGE,
+            ledger_path=ledger_path,
+            fetch_manifest_path=fetch_manifest_path,
+            stage_manifest_path=manifest_path,
+            current_batching_config=planner_config.to_serializable_dict(),
+            current_batch_plan_fingerprint=interval_plan.fingerprint,
+        )
+        if api_stage_mode == "finalize_only"
+        else None
+    )
+    _write_analyst_fetch_manifest(
+        stage_name=ANALYST_ESTIMATES_STAGE,
+        manifest_path=fetch_manifest_path,
+        staging_dir=staging_dir,
+        ledger_path=ledger_path,
+        request_log_path=request_log_path,
+        request_item_count=len(items) if metadata is None else metadata.request_item_count,
+        batch_count=len(interval_plan.batches) if metadata is None else metadata.batch_count,
+        batch_plan_fingerprint=interval_plan.fingerprint if metadata is None else metadata.batch_plan_fingerprint,
+        batching_config=planner_config.to_serializable_dict() if metadata is None else metadata.batching_config,
+        metadata_source="current_run" if metadata is None else metadata.metadata_source,
+        cli_batching_args_ignored=False if metadata is None else metadata.cli_batching_args_ignored,
+        run_session_ids=_stage_run_session_ids(ledger_path) if metadata is None else metadata.run_session_ids,
+    )
+    if api_stage_mode == "fetch_only":
+        return result
+
+    raw_path = output_dir / "refinitiv_analyst_estimates_monthly_raw.parquet"
+    result.update(
+        _finalize_analyst_stage(
+            stage_name=ANALYST_ESTIMATES_STAGE,
+            request_universe_parquet_path=Path(request_universe_parquet_path),
+            ledger_path=ledger_path,
+            request_log_path=request_log_path,
+            staging_dir=staging_dir,
+            raw_path=raw_path,
+            manifest_path=manifest_path,
+            raw_df=_assemble_analyst_estimates_raw(staging_dir, ledger_path=ledger_path),
+            raw_rebuilder=lambda: _assemble_analyst_estimates_raw(staging_dir, ledger_path=ledger_path),
+            request_group_row_count=int(request_df.height),
+            request_item_count=len(items) if metadata is None else _coalesce_count(metadata.request_item_count, len(items)),
+            planned_batch_count=len(interval_plan.batches) if metadata is None else metadata.batch_count,
+            batch_plan_fingerprint=interval_plan.fingerprint if metadata is None else metadata.batch_plan_fingerprint,
+            batching_config=planner_config.to_serializable_dict() if metadata is None else metadata.batching_config,
+            metadata_source="current_run" if metadata is None else metadata.metadata_source,
+            cli_batching_args_ignored=False if metadata is None else metadata.cli_batching_args_ignored,
+            run_session_id=None if stage_run is None else stage_run.run_session_id,
+            verify_rebuilders=False,
+        )
+    )
     return result
 
 
@@ -433,16 +504,12 @@ def _assemble_analyst_actuals_raw(
     *,
     ledger_path: Path | str | None = None,
 ) -> pl.DataFrame:
-    staging_paths = _resolved_stage_output_paths(
+    raw_df = _scan_analyst_stage_outputs(
         stage=ANALYST_ACTUALS_STAGE,
         staging_dir=staging_dir,
         ledger_path=ledger_path,
-    )
-    raw_df = (
-        pl.concat([pl.read_parquet(path) for path in staging_paths], how="vertical_relaxed")
-        if staging_paths
-        else pl.DataFrame(schema=_actuals_raw_schema())
-    )
+        schema=_actuals_raw_schema(),
+    ).collect()
     return (
         _cast_df_to_schema(raw_df.select(ANALYST_ACTUALS_RAW_COLUMNS), _actuals_raw_schema())
         .select(ANALYST_ACTUALS_RAW_COLUMNS)
@@ -455,21 +522,164 @@ def _assemble_analyst_estimates_raw(
     *,
     ledger_path: Path | str | None = None,
 ) -> pl.DataFrame:
-    staging_paths = _resolved_stage_output_paths(
+    raw_df = _scan_analyst_stage_outputs(
         stage=ANALYST_ESTIMATES_STAGE,
         staging_dir=staging_dir,
         ledger_path=ledger_path,
-    )
-    raw_df = (
-        pl.concat([pl.read_parquet(path) for path in staging_paths], how="vertical_relaxed")
-        if staging_paths
-        else pl.DataFrame(schema=_estimates_raw_schema())
-    )
+        schema=_estimates_raw_schema(),
+    ).collect()
     return (
         _cast_df_to_schema(raw_df.select(ANALYST_ESTIMATES_MONTHLY_RAW_COLUMNS), _estimates_raw_schema())
         .select(ANALYST_ESTIMATES_MONTHLY_RAW_COLUMNS)
         .unique(subset=["item_id", "response_row_index"], maintain_order=True)
     )
+
+
+def _finalize_analyst_stage(
+    *,
+    stage_name: str,
+    request_universe_parquet_path: Path,
+    ledger_path: Path,
+    request_log_path: Path,
+    staging_dir: Path,
+    raw_path: Path,
+    manifest_path: Path,
+    raw_df: pl.DataFrame,
+    raw_rebuilder: Callable[[], pl.DataFrame],
+    request_group_row_count: int,
+    request_item_count: int,
+    planned_batch_count: int | None,
+    batch_plan_fingerprint: str | None,
+    batching_config: dict[str, Any] | None,
+    metadata_source: str,
+    cli_batching_args_ignored: bool,
+    run_session_id: str | None,
+    verify_rebuilders: bool,
+) -> dict[str, Path]:
+    raw_candidate_path = _candidate_output_path(raw_path)
+    _write_parquet_atomic(raw_df, raw_candidate_path)
+    output_label = _analyst_output_label(stage_name)
+    audit_result = audit_api_stage(
+        stage_name=stage_name,
+        ledger_path=ledger_path,
+        staging_dir=staging_dir,
+        output_artifacts={output_label: raw_candidate_path},
+        declared_output_artifacts={output_label: raw_path},
+        rebuilders={output_label: raw_rebuilder},
+        expected_stage_manifest_path=manifest_path,
+        verify_rebuilders=verify_rebuilders,
+    )
+    if not audit_result.passed:
+        raise RuntimeError(f"{stage_name} stage audit failed: {audit_result.to_dict()}")
+    _promote_candidate_output(raw_candidate_path, raw_path)
+    write_stage_completion_manifest(
+        stage_name=stage_name,
+        manifest_path=manifest_path,
+        input_artifacts={"analyst_request_universe_parquet": request_universe_parquet_path},
+        output_artifacts={output_label: raw_path},
+        ledger_path=ledger_path,
+        request_log_path=request_log_path,
+        staging_dir=staging_dir,
+        audit_result=audit_result,
+        summary={
+            "request_group_row_count": request_group_row_count,
+            "request_item_count": request_item_count,
+            "planned_batch_count": planned_batch_count,
+            "batch_plan_fingerprint": batch_plan_fingerprint,
+            "batching_config": batching_config,
+            "raw_row_count": int(raw_df.height),
+            "run_session_id": run_session_id,
+            "run_session_ids": _stage_run_session_ids(ledger_path),
+        },
+        metadata_source=metadata_source,
+        cli_batching_args_ignored=cli_batching_args_ignored,
+    )
+    result_key = (
+        "refinitiv_analyst_actuals_raw_parquet"
+        if stage_name == ANALYST_ACTUALS_STAGE
+        else "refinitiv_analyst_estimates_monthly_raw_parquet"
+    )
+    manifest_key = (
+        "refinitiv_analyst_actuals_stage_manifest_json"
+        if stage_name == ANALYST_ACTUALS_STAGE
+        else "refinitiv_analyst_estimates_stage_manifest_json"
+    )
+    return {
+        result_key: raw_path,
+        manifest_key: manifest_path,
+    }
+
+
+def _write_analyst_fetch_manifest(
+    *,
+    stage_name: str,
+    manifest_path: Path,
+    staging_dir: Path,
+    ledger_path: Path,
+    request_log_path: Path,
+    request_item_count: int,
+    batch_count: int,
+    batch_plan_fingerprint: str | None,
+    batching_config: dict[str, Any] | None,
+    metadata_source: str,
+    cli_batching_args_ignored: bool,
+    run_session_ids: list[str],
+) -> Path:
+    return write_stage_fetch_manifest(
+        stage_name=stage_name,
+        manifest_path=manifest_path,
+        staging_dir=staging_dir,
+        ledger_path=ledger_path,
+        request_log_path=request_log_path,
+        batching_config=batching_config,
+        request_item_count=request_item_count,
+        batch_count=batch_count,
+        run_session_ids=run_session_ids,
+        summary={"batch_plan_fingerprint": batch_plan_fingerprint},
+        metadata_source=metadata_source,
+        cli_batching_args_ignored=cli_batching_args_ignored,
+    )
+
+
+def _ensure_finalize_state(
+    *,
+    ledger_path: Path,
+    request_log_path: Path,
+    stage_name: str,
+) -> None:
+    if not ledger_path.exists():
+        raise FileNotFoundError(f"{stage_name} ledger not found for finalize_only: {ledger_path}")
+    if not request_log_path.exists():
+        raise FileNotFoundError(f"{stage_name} request log not found for finalize_only: {request_log_path}")
+
+
+def _coalesce_count(value: int | None, fallback: int) -> int:
+    return fallback if value is None else value
+
+
+def _scan_analyst_stage_outputs(
+    *,
+    stage: str,
+    staging_dir: Path,
+    ledger_path: Path | str | None,
+    schema: dict[str, pl.DataType],
+) -> pl.LazyFrame:
+    staging_paths = _resolved_stage_output_paths(
+        stage=stage,
+        staging_dir=staging_dir,
+        ledger_path=ledger_path,
+    )
+    if not staging_paths:
+        return pl.DataFrame(schema=schema).lazy()
+    return pl.concat([pl.scan_parquet(path) for path in staging_paths], how="vertical_relaxed")
+
+
+def _analyst_output_label(stage_name: str) -> str:
+    if stage_name == ANALYST_ACTUALS_STAGE:
+        return "analyst_actuals_raw_parquet"
+    if stage_name == ANALYST_ESTIMATES_STAGE:
+        return "analyst_estimates_raw_parquet"
+    raise ValueError(f"Unsupported analyst stage: {stage_name}")
 
 
 def _build_analyst_actuals_items(request_df: pl.DataFrame) -> list[RequestItem]:
@@ -791,6 +1001,16 @@ def _resolved_stage_output_paths(
         if path.exists():
             paths.append(path)
     return paths
+
+
+def _stage_run_session_ids(ledger_path: Path) -> list[str]:
+    return RequestLedger(ledger_path).run_session_ids()
+
+
+def _normalize_api_stage_mode(api_stage_mode: str) -> str:
+    if api_stage_mode not in API_STAGE_MODES:
+        raise ValueError(f"Unsupported api_stage_mode: {api_stage_mode}")
+    return api_stage_mode
 
 
 __all__ = [

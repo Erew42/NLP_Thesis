@@ -263,6 +263,18 @@ class RequestLedger:
             ).fetchone()
         return 0 if row is None else int(row["batch_count"] or 0)
 
+    def stage_item_count(self, *, stage: str) -> int:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS item_count
+                FROM request_items
+                WHERE stage = ?
+                """,
+                (stage,),
+            ).fetchone()
+        return 0 if row is None else int(row["item_count"] or 0)
+
     def stage_meta(self, *, stage: str) -> dict[str, str]:
         prefix = f"stage:{stage}:"
         with self._connect() as conn:

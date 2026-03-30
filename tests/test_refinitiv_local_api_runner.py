@@ -30,38 +30,115 @@ def test_parse_args_defaults() -> None:
 
     assert args.stage_start == "lookup_api"
     assert args.stage_stop == "doc_finalize"
+    assert args.selected_stages == runner.STAGE_ORDER
     assert args.resume is True
     assert args.audit_only is False
     assert args.recover_mode is None
+    assert args.api_stage_mode == "full"
+    assert args.batch_profile == "current"
     assert args.preflight_probe is False
     assert args.stage_manifest_required is True
     assert args.provider_session_name == "desktop.workspace"
     assert args.provider_config_name is None
     assert args.provider_timeout_seconds is None
-    assert args.lookup_batch_size == 25
-    assert args.ownership_batch_size == 10
-    assert args.ownership_max_batch_items is None
-    assert args.ownership_max_extra_rows_abs is None
-    assert args.ownership_max_extra_rows_ratio is None
-    assert args.ownership_max_union_span_days is None
-    assert args.ownership_row_density_rows_per_day is None
-    assert args.include_ticker_fallback is True
-    assert args.analyst_actuals_batch_size == 10
-    assert args.analyst_estimates_batch_size == 10
-    assert args.analyst_actuals_max_batch_items is None
-    assert args.analyst_actuals_max_extra_rows_abs is None
-    assert args.analyst_actuals_max_extra_rows_ratio is None
-    assert args.analyst_actuals_max_union_span_days is None
-    assert args.analyst_actuals_row_density_rows_per_day is None
-    assert args.analyst_estimates_max_batch_items is None
-    assert args.analyst_estimates_max_extra_rows_abs is None
-    assert args.analyst_estimates_max_extra_rows_ratio is None
-    assert args.analyst_estimates_max_union_span_days is None
-    assert args.analyst_estimates_row_density_rows_per_day is None
+    assert args.lookup_batch_size == runner.LOCAL_LOOKUP_BATCH_SIZE_DEFAULT
+    assert args.ownership_batch_size == runner.LOCAL_OWNERSHIP_BATCH_SIZE_DEFAULT
+    assert args.ownership_max_batch_items == runner.LOCAL_OWNERSHIP_MAX_BATCH_ITEMS_DEFAULT
+    assert args.ownership_max_extra_rows_abs == runner.LOCAL_OWNERSHIP_MAX_EXTRA_ROWS_ABS_DEFAULT
+    assert args.ownership_max_extra_rows_ratio == runner.LOCAL_OWNERSHIP_MAX_EXTRA_ROWS_RATIO_DEFAULT
+    assert args.ownership_max_union_span_days == runner.LOCAL_OWNERSHIP_MAX_UNION_SPAN_DAYS_DEFAULT
+    assert args.ownership_row_density_rows_per_day == runner.LOCAL_OWNERSHIP_ROW_DENSITY_ROWS_PER_DAY_DEFAULT
+    assert args.include_ticker_fallback is runner.LOCAL_INCLUDE_TICKER_FALLBACK_DEFAULT
+    assert args.analyst_actuals_batch_size == runner.LOCAL_ANALYST_ACTUALS_BATCH_SIZE_DEFAULT
+    assert args.analyst_estimates_batch_size == runner.LOCAL_ANALYST_ESTIMATES_BATCH_SIZE_DEFAULT
+    assert args.analyst_actuals_max_batch_items == runner.LOCAL_ANALYST_ACTUALS_MAX_BATCH_ITEMS_DEFAULT
+    assert args.analyst_actuals_max_extra_rows_abs == runner.LOCAL_ANALYST_ACTUALS_MAX_EXTRA_ROWS_ABS_DEFAULT
+    assert args.analyst_actuals_max_extra_rows_ratio == runner.LOCAL_ANALYST_ACTUALS_MAX_EXTRA_ROWS_RATIO_DEFAULT
+    assert args.analyst_actuals_max_union_span_days == runner.LOCAL_ANALYST_ACTUALS_MAX_UNION_SPAN_DAYS_DEFAULT
+    assert args.analyst_actuals_row_density_rows_per_day == runner.LOCAL_ANALYST_ACTUALS_ROW_DENSITY_ROWS_PER_DAY_DEFAULT
+    assert args.analyst_estimates_max_batch_items == runner.LOCAL_ANALYST_ESTIMATES_MAX_BATCH_ITEMS_DEFAULT
+    assert (
+        args.analyst_estimates_max_extra_rows_abs
+        == runner.LOCAL_ANALYST_ESTIMATES_MAX_EXTRA_ROWS_ABS_DEFAULT
+    )
+    assert (
+        args.analyst_estimates_max_extra_rows_ratio
+        == runner.LOCAL_ANALYST_ESTIMATES_MAX_EXTRA_ROWS_RATIO_DEFAULT
+    )
+    assert (
+        args.analyst_estimates_max_union_span_days
+        == runner.LOCAL_ANALYST_ESTIMATES_MAX_UNION_SPAN_DAYS_DEFAULT
+    )
+    assert (
+        args.analyst_estimates_row_density_rows_per_day
+        == runner.LOCAL_ANALYST_ESTIMATES_ROW_DENSITY_ROWS_PER_DAY_DEFAULT
+    )
     assert args.doc_exact_batch_size == 15
     assert args.doc_fallback_batch_size == 5
     assert args.min_seconds_between_requests == 2.0
     assert args.max_attempts == 4
+
+
+def test_parse_args_rejects_stage_list_with_stage_range() -> None:
+    with pytest.raises(SystemExit):
+        runner.parse_args(
+            [
+                "--run-root",
+                "C:/tmp/run",
+                "--stage-list",
+                "lookup_api,resolution",
+                "--stage-start",
+                "lookup_api",
+            ]
+        )
+
+
+def test_parse_args_stage_list_can_skip_analyst_normalize() -> None:
+    args = runner.parse_args(
+        [
+            "--run-root",
+            "C:/tmp/run",
+            "--stage-list",
+            (
+                "lookup_api,resolution,instrument_authority,ownership_handoff,ownership_api,"
+                "authority,analyst_request_groups,analyst_actuals_api,analyst_estimates_api,"
+                "doc_exact_api,doc_fallback_api"
+            ),
+        ]
+    )
+
+    assert args.selected_stages == (
+        "lookup_api",
+        "resolution",
+        "instrument_authority",
+        "ownership_handoff",
+        "ownership_api",
+        "authority",
+        "analyst_request_groups",
+        "analyst_actuals_api",
+        "analyst_estimates_api",
+        "doc_exact_api",
+        "doc_fallback_api",
+    )
+    assert "analyst_normalize" not in args.selected_stages
+    assert args.stage_start == "lookup_api"
+    assert args.stage_stop == "doc_fallback_api"
+
+
+def test_parse_args_local_safe_batch_profile_applies_defaults() -> None:
+    args = runner.parse_args(["--run-root", "C:/tmp/run", "--batch-profile", "local_safe"])
+
+    assert args.lookup_batch_size == 25
+    assert args.ownership_batch_size == 10
+    assert args.ownership_max_batch_items == 10
+    assert args.ownership_max_extra_rows_ratio == 0.25
+    assert args.ownership_max_union_span_days == 3650
+    assert args.analyst_actuals_batch_size == 25
+    assert args.analyst_actuals_row_density_rows_per_day == pytest.approx(1.0 / 91.0)
+    assert args.analyst_estimates_batch_size == 10
+    assert args.analyst_estimates_row_density_rows_per_day == pytest.approx(1.0 / 30.5)
+    assert args.doc_exact_batch_size == 15
+    assert args.doc_fallback_batch_size == 5
 
 
 def test_main_passes_analyst_interval_batching_args_and_records_manifest(
@@ -199,7 +276,7 @@ def test_main_passes_ownership_interval_batching_args_and_records_manifest(
     assert manifest["batching"]["ownership_max_batch_items"] == 13
     assert manifest["batching"]["ownership_max_extra_rows_abs"] == 11.5
     assert manifest["batching"]["ownership_row_density_rows_per_day"] == 0.03
-    assert manifest["batching"]["include_ticker_fallback"] is True
+    assert manifest["batching"]["include_ticker_fallback"] is runner.LOCAL_INCLUDE_TICKER_FALLBACK_DEFAULT
 
 
 def test_parse_args_rejects_invalid_stage_range() -> None:
@@ -403,7 +480,7 @@ def test_main_full_chain_uses_canonical_stage_paths(
     assert [stage for stage, _ in calls] == list(runner.STAGE_ORDER)
     assert calls[1][1]["filled_lookup_workbook_path"] == run_root / "refinitiv_step1" / "refinitiv_ric_lookup_handoff_common_stock_extended.parquet"
     assert calls[2][1]["bridge_artifact_path"] == run_root / "refinitiv_step1" / "refinitiv_bridge_universe.parquet"
-    assert calls[3][1]["include_ticker_fallback"] is True
+    assert calls[3][1]["include_ticker_fallback"] is runner.LOCAL_INCLUDE_TICKER_FALLBACK_DEFAULT
     assert calls[4][1]["handoff_parquet_path"] == run_root / "refinitiv_step1" / "ownership_universe_common_stock" / "refinitiv_ownership_universe_handoff_common_stock.parquet"
     assert calls[5][1]["resolution_artifact_path"] == run_root / "refinitiv_step1" / "refinitiv_ric_resolution_common_stock.parquet"
     assert calls[5][1]["ownership_results_artifact_path"] == run_root / "refinitiv_step1" / "ownership_universe_common_stock" / "refinitiv_ownership_universe_results.parquet"
@@ -499,6 +576,220 @@ def test_main_stage_range_skips_earlier_stages_and_stops_at_stage_stop(
 
     assert exit_code == 0
     assert called_stages == ["ownership_api", "authority"]
+
+
+def test_main_stage_list_can_skip_analyst_normalize_and_continue_to_doc_api(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_root = _build_run_root(tmp_path)
+    _write_parquet(run_root / "refinitiv_step1" / "refinitiv_ric_lookup_handoff_common_stock_extended_snapshot.parquet")
+    _write_parquet(run_root / "refinitiv_step1" / "refinitiv_bridge_universe.parquet")
+    _write_parquet(run_root / "sec_ccm_premerge" / "sec_ccm_matched_clean_filtered.parquet")
+
+    monkeypatch.setattr(runner, "is_lseg_available", lambda: True)
+    called_stages: list[str] = []
+
+    def _record(stage_name: str, output_names: list[str]):
+        def _stub(**kwargs: Path | int | float | str | None) -> dict[str, Path]:
+            called_stages.append(stage_name)
+            artifacts: dict[str, Path] = {}
+            for output_name in output_names:
+                output_path = kwargs["output_dir"] / output_name
+                _write_parquet(output_path)
+                artifacts[output_name.replace(".parquet", "_parquet")] = output_path
+            return artifacts
+
+        return _stub
+
+    monkeypatch.setattr(
+        runner,
+        "run_refinitiv_step1_lookup_api_pipeline",
+        lambda **kwargs: (
+            called_stages.append("lookup_api") or {
+                "refinitiv_ric_lookup_handoff_common_stock_extended_parquet": (
+                    _write_parquet(kwargs["output_dir"] / "refinitiv_ric_lookup_handoff_common_stock_extended.parquet")
+                    or kwargs["output_dir"] / "refinitiv_ric_lookup_handoff_common_stock_extended.parquet"
+                )
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        runner,
+        "run_refinitiv_step1_resolution_pipeline",
+        lambda **kwargs: (
+            called_stages.append("resolution") or {
+                "refinitiv_ric_resolution_common_stock_parquet": (
+                    _write_parquet(kwargs["output_dir"] / "refinitiv_ric_resolution_common_stock.parquet")
+                    or kwargs["output_dir"] / "refinitiv_ric_resolution_common_stock.parquet"
+                )
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        runner,
+        "run_refinitiv_step1_instrument_authority_pipeline",
+        lambda **kwargs: (
+            called_stages.append("instrument_authority") or {
+                "refinitiv_instrument_authority_common_stock_parquet": (
+                    _write_parquet(kwargs["output_dir"] / "refinitiv_instrument_authority_common_stock.parquet")
+                    or kwargs["output_dir"] / "refinitiv_instrument_authority_common_stock.parquet"
+                )
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        runner,
+        "run_refinitiv_step1_ownership_universe_handoff_pipeline",
+        lambda **kwargs: (
+            called_stages.append("ownership_handoff") or {
+                "refinitiv_ownership_universe_handoff_common_stock_parquet": (
+                    _write_parquet(
+                        kwargs["output_dir"] / "refinitiv_ownership_universe_handoff_common_stock.parquet"
+                    )
+                    or kwargs["output_dir"] / "refinitiv_ownership_universe_handoff_common_stock.parquet"
+                )
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        runner,
+        "run_refinitiv_step1_ownership_universe_api_pipeline",
+        lambda **kwargs: (
+            called_stages.append("ownership_api") or {
+                "refinitiv_ownership_universe_results_parquet": (
+                    _write_parquet(kwargs["output_dir"] / "refinitiv_ownership_universe_results.parquet")
+                    or kwargs["output_dir"] / "refinitiv_ownership_universe_results.parquet"
+                ),
+                "refinitiv_ownership_universe_row_summary_parquet": (
+                    _write_parquet(kwargs["output_dir"] / "refinitiv_ownership_universe_row_summary.parquet")
+                    or kwargs["output_dir"] / "refinitiv_ownership_universe_row_summary.parquet"
+                ),
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        runner,
+        "run_refinitiv_step1_ownership_authority_pipeline",
+        lambda **kwargs: (
+            called_stages.append("authority") or {
+                "refinitiv_permno_ownership_authority_decisions_parquet": (
+                    _write_parquet(kwargs["output_dir"] / "refinitiv_permno_ownership_authority_decisions.parquet")
+                    or kwargs["output_dir"] / "refinitiv_permno_ownership_authority_decisions.parquet"
+                ),
+                "refinitiv_permno_ownership_authority_exceptions_parquet": (
+                    _write_parquet(kwargs["output_dir"] / "refinitiv_permno_ownership_authority_exceptions.parquet")
+                    or kwargs["output_dir"] / "refinitiv_permno_ownership_authority_exceptions.parquet"
+                ),
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        runner,
+        "run_refinitiv_step1_analyst_request_groups_pipeline",
+        lambda **kwargs: (
+            called_stages.append("analyst_request_groups") or {
+                "refinitiv_analyst_request_group_membership_common_stock_parquet": (
+                    _write_parquet(
+                        kwargs["output_dir"] / "refinitiv_analyst_request_group_membership_common_stock.parquet"
+                    )
+                    or kwargs["output_dir"] / "refinitiv_analyst_request_group_membership_common_stock.parquet"
+                ),
+                "refinitiv_analyst_request_universe_common_stock_parquet": (
+                    _write_parquet(kwargs["output_dir"] / "refinitiv_analyst_request_universe_common_stock.parquet")
+                    or kwargs["output_dir"] / "refinitiv_analyst_request_universe_common_stock.parquet"
+                ),
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        runner,
+        "run_refinitiv_step1_analyst_actuals_api_pipeline",
+        lambda **kwargs: (
+            called_stages.append("analyst_actuals_api") or {
+                "refinitiv_analyst_actuals_raw_parquet": (
+                    _write_parquet(kwargs["output_dir"] / "refinitiv_analyst_actuals_raw.parquet")
+                    or kwargs["output_dir"] / "refinitiv_analyst_actuals_raw.parquet"
+                )
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        runner,
+        "run_refinitiv_step1_analyst_estimates_monthly_api_pipeline",
+        lambda **kwargs: (
+            called_stages.append("analyst_estimates_api") or {
+                "refinitiv_analyst_estimates_monthly_raw_parquet": (
+                    _write_parquet(kwargs["output_dir"] / "refinitiv_analyst_estimates_monthly_raw.parquet")
+                    or kwargs["output_dir"] / "refinitiv_analyst_estimates_monthly_raw.parquet"
+                )
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        runner,
+        "run_refinitiv_lm2011_doc_ownership_exact_api_pipeline",
+        lambda **kwargs: (
+            called_stages.append("doc_exact_api") or {
+                "refinitiv_lm2011_doc_ownership_exact_requests_parquet": (
+                    _write_parquet(
+                        kwargs["output_dir"] / "refinitiv_lm2011_doc_ownership_exact_requests.parquet"
+                    )
+                    or kwargs["output_dir"] / "refinitiv_lm2011_doc_ownership_exact_requests.parquet"
+                ),
+                "refinitiv_lm2011_doc_ownership_exact_raw_parquet": (
+                    _write_parquet(kwargs["output_dir"] / "refinitiv_lm2011_doc_ownership_exact_raw.parquet")
+                    or kwargs["output_dir"] / "refinitiv_lm2011_doc_ownership_exact_raw.parquet"
+                ),
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        runner,
+        "run_refinitiv_lm2011_doc_ownership_fallback_api_pipeline",
+        lambda **kwargs: (
+            called_stages.append("doc_fallback_api") or {
+                "refinitiv_lm2011_doc_ownership_fallback_requests_parquet": (
+                    _write_parquet(
+                        kwargs["output_dir"] / "refinitiv_lm2011_doc_ownership_fallback_requests.parquet"
+                    )
+                    or kwargs["output_dir"] / "refinitiv_lm2011_doc_ownership_fallback_requests.parquet"
+                ),
+                "refinitiv_lm2011_doc_ownership_fallback_raw_parquet": (
+                    _write_parquet(kwargs["output_dir"] / "refinitiv_lm2011_doc_ownership_fallback_raw.parquet")
+                    or kwargs["output_dir"] / "refinitiv_lm2011_doc_ownership_fallback_raw.parquet"
+                ),
+            }
+        ),
+    )
+
+    exit_code = runner.main(
+        [
+            "--run-root",
+            str(run_root),
+            "--stage-list",
+            (
+                "lookup_api,resolution,instrument_authority,ownership_handoff,ownership_api,"
+                "authority,analyst_request_groups,analyst_actuals_api,analyst_estimates_api,"
+                "doc_exact_api,doc_fallback_api"
+            ),
+        ]
+    )
+
+    assert exit_code == 0
+    assert called_stages == [
+        "lookup_api",
+        "resolution",
+        "instrument_authority",
+        "ownership_handoff",
+        "ownership_api",
+        "authority",
+        "analyst_request_groups",
+        "analyst_actuals_api",
+        "analyst_estimates_api",
+        "doc_exact_api",
+        "doc_fallback_api",
+    ]
 
 
 def test_main_missing_lookup_snapshot_fails_fast(
@@ -626,6 +917,64 @@ def test_main_recover_mode_writes_lookup_unresolved_artifact(tmp_path: Path) -> 
     manifest = json.loads((run_root / "refinitiv_local_api_runner_manifest.json").read_text(encoding="utf-8"))
     assert manifest["mode"] == "recover"
     assert manifest["recovery_result"]["mode"] == "lookup_unresolved"
+
+
+def test_main_recover_mode_writes_lookup_stage_manifest_from_existing_artifacts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_root = _build_run_root(tmp_path)
+    refinitiv_step1_dir = run_root / "refinitiv_step1"
+    _write_parquet(refinitiv_step1_dir / "refinitiv_ric_lookup_handoff_common_stock_extended_snapshot.parquet")
+    _write_parquet(refinitiv_step1_dir / "refinitiv_ric_lookup_handoff_common_stock_extended.parquet")
+    staging_dir = refinitiv_step1_dir / "staging" / runner.LOOKUP_STAGE
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    _write_parquet(staging_dir / "batch_example.parquet")
+    (refinitiv_step1_dir / "refinitiv_lookup_api_ledger.sqlite3").write_text("", encoding="utf-8")
+    (refinitiv_step1_dir / "refinitiv_lookup_api_requests.jsonl").write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(
+        runner,
+        "_audit_stage",
+        lambda stage, paths: StageAuditResult(
+            stage_name=runner.LOOKUP_STAGE,
+            passed=True,
+            issues=(),
+            metrics={
+                "run_session_ids": ["run_test_lookup"],
+                "rebuild_row_counts": {"lookup_extended_parquet": 1},
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        runner,
+        "_run_stage",
+        lambda *args, **kwargs: pytest.fail("recover_mode should not call _run_stage"),
+    )
+
+    exit_code = runner.main(
+        [
+            "--run-root",
+            str(run_root),
+            "--recover-mode",
+            "lookup_stage_manifest_only",
+        ]
+    )
+
+    assert exit_code == 0
+    stage_manifest_path = refinitiv_step1_dir / "refinitiv_lookup_stage_manifest.json"
+    assert stage_manifest_path.exists()
+    stage_manifest = json.loads(stage_manifest_path.read_text(encoding="utf-8"))
+    assert stage_manifest["manifest_role"] == "stage_completion"
+    assert stage_manifest["stage_name"] == runner.LOOKUP_STAGE
+    assert stage_manifest["summary"]["recovered_from_existing_artifacts"] is True
+    assert stage_manifest["summary"]["source_stage"] == "lookup_api"
+    assert stage_manifest["summary"]["run_session_ids"] == ["run_test_lookup"]
+
+    manifest = json.loads((run_root / "refinitiv_local_api_runner_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["mode"] == "recover"
+    assert manifest["recovery_result"]["mode"] == "lookup_stage_manifest_only"
+    assert manifest["recovery_result"]["stage"] == "lookup_api"
 
 
 def test_main_can_resume_from_ownership_api_without_rerunning_previous_stages(
