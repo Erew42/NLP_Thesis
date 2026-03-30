@@ -88,6 +88,27 @@ class FakeProvider:
         )
 
 
+def _rewrite_succeeded_result_paths_to_foreign_root(ledger_path: Path, foreign_root: Path) -> None:
+    conn = sqlite3.connect(ledger_path)
+    try:
+        rows = conn.execute(
+            """
+            SELECT batch_id, result_file_path
+            FROM batches
+            WHERE state = 'succeeded' AND result_file_path IS NOT NULL
+            """
+        ).fetchall()
+        for batch_id, result_file_path in rows:
+            updated_path = foreign_root / Path(str(result_file_path)).name
+            conn.execute(
+                "UPDATE batches SET result_file_path = ? WHERE batch_id = ?",
+                (str(updated_path), str(batch_id)),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 class ErrorProvider:
     def __init__(self, errors: list[Exception]) -> None:
         self._errors = list(errors)
@@ -488,6 +509,92 @@ def test_lookup_api_pipeline_fetch_only_then_finalize_only_matches_full(tmp_path
     assert stage_manifest["cli_batching_args_ignored"] is False
 
 
+def test_lookup_finalize_only_resolves_foreign_staging_paths(tmp_path: Path) -> None:
+    lookup_df = pl.DataFrame(
+        {
+            "bridge_row_id": ["1:A:111111111:US1111111111:ALFA-1"],
+            "KYPERMNO": ["1"],
+            "CUSIP": ["111111111"],
+            "ISIN": ["US1111111111"],
+            "TICKER": ["ALFA"],
+            "first_seen_caldt": [date(2024, 1, 1)],
+            "last_seen_caldt": [date(2024, 1, 10)],
+            "preferred_lookup_id": ["US1111111111"],
+            "preferred_lookup_type": ["ISIN"],
+            "vendor_primary_ric": [None],
+            "vendor_returned_name": [None],
+            "vendor_returned_cusip": [None],
+            "vendor_returned_isin": [None],
+            "vendor_match_status": [None],
+            "vendor_notes": [None],
+        }
+    ).select(RIC_LOOKUP_COLUMNS)
+    snapshot_df, _, _ = build_refinitiv_lookup_extended_diagnostic_artifact(lookup_df)
+    snapshot_path = tmp_path / "lookup_snapshot.parquet"
+    snapshot_df.write_parquet(snapshot_path)
+
+    response_frames = [
+        pl.DataFrame(
+            {
+                "Instrument": ["111111111"],
+                "RIC": ["AAA.N"],
+                "Company Common Name": ["Alpha Inc"],
+                "ISIN": ["US1111111111"],
+                "CUSIP": ["111111111"],
+            }
+        ),
+        pl.DataFrame(
+            {
+                "Instrument": ["ALFA"],
+                "RIC": ["AAA.N"],
+                "Company Common Name": ["Alpha Inc"],
+                "ISIN": ["US1111111111"],
+                "CUSIP": ["111111111"],
+            }
+        ),
+        pl.DataFrame(
+            {
+                "Instrument": ["US1111111111"],
+                "RIC": ["AAA.N"],
+                "Company Common Name": ["Alpha Inc"],
+                "ISIN": ["US1111111111"],
+                "CUSIP": ["111111111"],
+            }
+        ),
+    ]
+    full_dir = tmp_path / "full"
+    full_out = run_refinitiv_step1_lookup_api_pipeline(
+        snapshot_parquet_path=snapshot_path,
+        output_dir=full_dir,
+        provider=FakeProvider(list(response_frames)),
+        min_seconds_between_requests=0.0,
+    )
+
+    staged_dir = tmp_path / "staged"
+    fetch_out = run_refinitiv_step1_lookup_api_pipeline(
+        snapshot_parquet_path=snapshot_path,
+        output_dir=staged_dir,
+        provider=FakeProvider(list(response_frames)),
+        min_seconds_between_requests=0.0,
+        api_stage_mode="fetch_only",
+    )
+    _rewrite_succeeded_result_paths_to_foreign_root(
+        Path(fetch_out["refinitiv_lookup_api_ledger_sqlite3"]),
+        Path("/mnt/original-machine/staging/lookup"),
+    )
+
+    finalized_out = run_refinitiv_step1_lookup_api_pipeline(
+        snapshot_parquet_path=snapshot_path,
+        output_dir=staged_dir,
+        api_stage_mode="finalize_only",
+    )
+
+    assert pl.read_parquet(full_out["refinitiv_ric_lookup_handoff_common_stock_extended_parquet"]).equals(
+        pl.read_parquet(finalized_out["refinitiv_ric_lookup_handoff_common_stock_extended_parquet"]),
+        null_equal=True,
+    )
+
+
 def test_lookup_api_pipeline_resume_mismatch_references_fetch_manifest(tmp_path: Path) -> None:
     lookup_df = pl.DataFrame(
         {
@@ -776,6 +883,79 @@ def test_ownership_universe_api_pipeline_fetch_only_then_finalize_only_matches_f
     assert stage_manifest["metadata_source"] == "fetch_manifest"
     assert stage_manifest["cli_batching_args_ignored"] is True
     assert stage_manifest["summary"]["batch_plan_fingerprint"] == fetch_manifest["summary"]["batch_plan_fingerprint"]
+
+
+def test_ownership_finalize_only_resolves_foreign_staging_paths(tmp_path: Path) -> None:
+    handoff_row = {name: None for name in OWNERSHIP_UNIVERSE_HANDOFF_COLUMNS}
+    handoff_row.update(
+        {
+            "bridge_row_id": "1:A:111111111:US1111111111:ALFA",
+            "KYPERMNO": "1",
+            "CUSIP": "111111111",
+            "ISIN": "US1111111111",
+            "TICKER": "ALFA",
+            "first_seen_caldt": date(2024, 1, 1),
+            "last_seen_caldt": date(2024, 1, 31),
+            "accepted_ric": "AAA.N",
+            "accepted_ric_source": "ISIN",
+            "accepted_resolution_status": "resolved_from_isin",
+            "conventional_identity_conflict": False,
+            "ticker_candidate_available": False,
+            "effective_collection_ric": "AAA.N",
+            "effective_collection_ric_source": "ISIN",
+            "effective_resolution_status": "effective_from_accepted_ric",
+            "diagnostic_case_id": "1:A:111111111:US1111111111:ALFA",
+            "candidate_slot": "UNIVERSE_EFFECTIVE",
+            "candidate_ric": "AAA.N",
+            "ownership_lookup_row_id": "1:A:111111111:US1111111111:ALFA|UNIVERSE_EFFECTIVE",
+            "ownership_lookup_role": "UNIVERSE_EFFECTIVE",
+            "lookup_input": "AAA.N",
+            "lookup_input_source": "effective_collection_ric",
+            "request_start_date": "2024-01-01",
+            "request_end_date": "2024-01-31",
+            "retrieval_eligible": True,
+        }
+    )
+    handoff_path = tmp_path / "handoff.parquet"
+    pl.DataFrame([handoff_row]).write_parquet(handoff_path)
+
+    staged_dir = tmp_path / "staged"
+    fetch_out = run_refinitiv_step1_ownership_universe_api_pipeline(
+        handoff_parquet_path=handoff_path,
+        output_dir=staged_dir,
+        provider=FakeProvider(
+            [
+                pl.DataFrame(
+                    {
+                        "Instrument": ["AAA.N", "AAA.N"],
+                        "Date": [date(2024, 1, 31), date(2024, 1, 15)],
+                        "Category Percent Of Traded Shares": [55.0, 52.0],
+                        "Investor Statistics Category Value": [
+                            "Holdings by Institutions",
+                            "Holdings by Institutions",
+                        ],
+                    }
+                )
+            ]
+        ),
+        min_seconds_between_requests=0.0,
+        api_stage_mode="fetch_only",
+    )
+    _rewrite_succeeded_result_paths_to_foreign_root(
+        Path(fetch_out["refinitiv_ownership_universe_api_ledger_sqlite3"]),
+        Path("/mnt/original-machine/staging/ownership_universe"),
+    )
+
+    finalized_out = run_refinitiv_step1_ownership_universe_api_pipeline(
+        handoff_parquet_path=handoff_path,
+        output_dir=staged_dir,
+        api_stage_mode="finalize_only",
+    )
+
+    results_df = pl.read_parquet(finalized_out["refinitiv_ownership_universe_results_parquet"]).sort("returned_date")
+    row_summary_df = pl.read_parquet(finalized_out["refinitiv_ownership_universe_row_summary_parquet"])
+    assert results_df.height == 2
+    assert row_summary_df.item(0, "ownership_rows_returned") == 2
 
 
 def test_ownership_finalize_only_legacy_ledger_meta_writes_best_effort_provenance(tmp_path: Path) -> None:

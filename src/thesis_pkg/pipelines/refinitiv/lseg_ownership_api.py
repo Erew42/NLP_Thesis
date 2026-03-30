@@ -32,6 +32,7 @@ from thesis_pkg.pipelines.refinitiv.lseg_stage_audit import (
     audit_api_stage,
     default_stage_fetch_manifest_path,
     default_stage_manifest_path,
+    resolve_stage_output_path,
     resolve_stage_fetch_metadata,
     write_stage_completion_manifest,
     write_stage_fetch_manifest,
@@ -1431,9 +1432,9 @@ def _resolved_stage_output_paths(
         return sorted(staging_dir.glob("*.parquet"))
     ledger = RequestLedger(ledger_path)
     return [
-        path
+        resolved_path
         for path in ledger.succeeded_stage_output_paths(stage=stage)
-        if path.exists()
+        if (resolved_path := resolve_stage_output_path(path, staging_dir)).exists()
     ]
 
 

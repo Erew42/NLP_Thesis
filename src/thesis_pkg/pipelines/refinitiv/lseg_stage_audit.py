@@ -71,6 +71,17 @@ def default_stage_fetch_manifest_path(output_dir: Path | str, stage_name: str) -
     return Path(output_dir) / f"refinitiv_{stage_name}_fetch_manifest.json"
 
 
+def resolve_stage_output_path(stage_output_path: Path | str, staging_dir: Path | str) -> Path:
+    path = Path(stage_output_path)
+    if path.exists():
+        return path
+    staging_dir = Path(staging_dir)
+    fallback_path = staging_dir / path.name
+    if fallback_path.exists():
+        return fallback_path
+    return path
+
+
 def audit_api_stage(
     *,
     stage_name: str,
@@ -146,6 +157,7 @@ def audit_api_stage(
             continue
         tolerated, details = _is_tolerable_legacy_finish_backfill_attempt_gap(
             ledger_path=ledger_path,
+            staging_dir=staging_dir,
             batch_id=str(row["batch_id"]),
             attempt_count=int(row["attempt_count"]),
         )
@@ -187,8 +199,19 @@ def audit_api_stage(
         ORDER BY batch_id
         """,
     )
+    resolved_succeeded_batch_rows = [
+        {
+            **row,
+            "resolved_result_file_path": str(resolve_stage_output_path(row["result_file_path"], staging_dir)),
+        }
+        for row in succeeded_batch_rows
+        if row["result_file_path"] is not None
+    ]
     missing_stage_files = [
-        row for row in succeeded_batch_rows if not row["result_file_path"] or not Path(row["result_file_path"]).exists()
+        row
+        for row in succeeded_batch_rows
+        if not row["result_file_path"]
+        or not resolve_stage_output_path(row["result_file_path"], staging_dir).exists()
     ]
     if missing_stage_files:
         issues.append(
@@ -202,9 +225,8 @@ def audit_api_stage(
 
     staging_paths = sorted(staging_dir.glob("*.parquet")) if staging_dir.exists() else []
     referenced_paths = {
-        str(Path(row["result_file_path"]).resolve())
-        for row in succeeded_batch_rows
-        if row["result_file_path"] is not None
+        str(Path(row["resolved_result_file_path"]).resolve())
+        for row in resolved_succeeded_batch_rows
     }
     orphan_staging_paths = [
         str(path)
@@ -545,6 +567,7 @@ def _frames_equal(left: pl.DataFrame, right: pl.DataFrame) -> bool:
 def _is_tolerable_legacy_finish_backfill_attempt_gap(
     *,
     ledger_path: Path,
+    staging_dir: Path,
     batch_id: str,
     attempt_count: int,
 ) -> tuple[bool, dict[str, Any]]:
@@ -589,7 +612,7 @@ def _is_tolerable_legacy_finish_backfill_attempt_gap(
         if str(event_rows[0]["phase"]) != ATTEMPT_PHASE_LEGACY_FINISH_BACKFILL:
             return False, {}
 
-        stage_path = Path(str(batch_row["result_file_path"] or ""))
+        stage_path = resolve_stage_output_path(str(batch_row["result_file_path"] or ""), staging_dir)
         if not stage_path.exists():
             return False, {}
         stage_row_count = int(pl.scan_parquet(stage_path).select(pl.len()).collect().item())
