@@ -33,7 +33,7 @@ from thesis_pkg.pipelines.refinitiv.lseg_ownership_api import (
 from thesis_pkg.pipelines.refinitiv import lseg_provider
 from thesis_pkg.pipelines.refinitiv.lseg_ledger import LsegResumeCompatibilityError, RequestLedger
 from thesis_pkg.pipelines.refinitiv.lseg_lookup_api import _classify_error
-from thesis_pkg.pipelines.refinitiv.lseg_stage_audit import StageAuditResult
+from thesis_pkg.pipelines.refinitiv.lseg_stage_audit import StageAuditResult, resolve_stage_output_path
 from thesis_pkg.pipelines.refinitiv.lseg_provider import (
     LsegDataProvider,
     LsegDataResponse,
@@ -107,6 +107,20 @@ def _rewrite_succeeded_result_paths_to_foreign_root(ledger_path: Path, foreign_r
         conn.commit()
     finally:
         conn.close()
+
+
+def test_resolve_stage_output_path_recovers_windows_ledger_paths(tmp_path: Path) -> None:
+    staging_dir = tmp_path / "staging"
+    staging_dir.mkdir()
+    staged_file = staging_dir / "batch_123.parquet"
+    staged_file.write_text("ok", encoding="utf-8")
+
+    resolved = resolve_stage_output_path(
+        r"C:\Users\erik9\Documents\SEC_Data\code\NLP_Thesis\full_data_run\refinitiv_step1\ownership_universe_common_stock\staging\ownership_universe\batch_123.parquet",
+        staging_dir,
+    )
+
+    assert resolved == staged_file
 
 
 class ErrorProvider:

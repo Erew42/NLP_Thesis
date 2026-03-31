@@ -3,7 +3,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import sqlite3
 from typing import Any, Callable, Literal
 
@@ -72,11 +72,17 @@ def default_stage_fetch_manifest_path(output_dir: Path | str, stage_name: str) -
 
 
 def resolve_stage_output_path(stage_output_path: Path | str, staging_dir: Path | str) -> Path:
-    path = Path(stage_output_path)
+    raw_path = str(stage_output_path)
+    path = Path(raw_path)
     if path.exists():
         return path
     staging_dir = Path(staging_dir)
-    fallback_path = staging_dir / path.name
+    file_name = (
+        PureWindowsPath(raw_path).name
+        if "\\" in raw_path or (len(raw_path) >= 3 and raw_path[1:3] == ":\\")
+        else path.name
+    )
+    fallback_path = staging_dir / file_name
     if fallback_path.exists():
         return fallback_path
     return path
