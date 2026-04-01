@@ -37,6 +37,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--compression", type=str, default="zstd")
     parser.add_argument(
+        "--write-full-universe-token-audit",
+        action="store_true",
+        help="Run the optional full-universe FinBERT token audit after sample selection.",
+    )
+    parser.add_argument(
         "--enable-sentences",
         action="store_true",
         help="Materialize an additional derived sentence-level artifact.",
@@ -55,6 +60,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         ),
         seed=args.seed,
         compression=args.compression,
+        write_full_universe_token_audit=args.write_full_universe_token_audit,
         sentence_dataset=SentenceDatasetConfig(enabled=args.enable_sentences),
     )
     artifacts = build_finbert_benchmark_suite(cfg)

@@ -23,6 +23,7 @@ dev = [
 ]
 benchmark = [
   "spacy",
+  "torch",
   "transformers",
 ]
 docs = [

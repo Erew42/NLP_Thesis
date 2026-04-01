@@ -1,0 +1,77 @@
+from __future__ import annotations
+
+import json
+from dataclasses import replace
+from pathlib import Path
+from typing import Any
+
+import polars as pl
+
+from thesis_pkg.benchmarking.contracts import DEFAULT_FINBERT_AUTHORITY
+from thesis_pkg.benchmarking.contracts import FinbertAuthoritySpec
+from thesis_pkg.benchmarking.contracts import FinbertBenchmarkSweepConfig
+from thesis_pkg.benchmarking.contracts import FinbertRuntimeConfig
+from thesis_pkg.benchmarking.finbert_benchmark import run_finbert_benchmark
+from thesis_pkg.benchmarking.run_logging import append_jsonl_record
+from thesis_pkg.benchmarking.run_logging import utc_timestamp
+from thesis_pkg.benchmarking.run_logging import write_frame
+from thesis_pkg.benchmarking.run_logging import write_json
+
+
+def run_finbert_benchmark_sweep(
+    cfg: FinbertBenchmarkSweepConfig,
+    *,
+    authority: FinbertAuthoritySpec = DEFAULT_FINBERT_AUTHORITY,
+    runtime: FinbertRuntimeConfig = FinbertRuntimeConfig(),
+) -> pl.DataFrame:
+    sweep_name = f"sweep_{utc_timestamp().replace(':', '')}"
+    sweep_dir = cfg.base_run.out_root / sweep_name
+    records_path = sweep_dir / "benchmark_sweep_records.jsonl"
+    rows: list[dict[str, Any]] = []
+
+    for batch_config in cfg.batch_configs:
+        run_cfg = replace(
+            cfg.base_run,
+            batch_config=batch_config,
+            run_name=f"{cfg.base_run.run_name or 'finbert'}_{batch_config.name}",
+        )
+        artifacts = run_finbert_benchmark(run_cfg, authority=authority, runtime=runtime)
+        summary = json.loads(artifacts.summary_path.read_text(encoding="utf-8"))
+        row = {
+            "run_name": summary["run_name"],
+            "batch_config_name": batch_config.name,
+            "dataset_tag": summary["dataset_tag"],
+            "sentence_rows": summary["sentence_rows"],
+            "sentence_source": summary["sentence_source"],
+            "tokenizer_seconds": summary["tokenizer"]["seconds"],
+            "tokenizer_rows_per_second": summary["tokenizer"]["rows_per_second"],
+            "model_seconds": summary["model"]["seconds"],
+            "model_rows_per_second": summary["model"]["rows_per_second"],
+            "model_peak_vram_gb": summary["model"]["peak_vram_gb"],
+            "full_pipeline_seconds": summary["full_pipeline"]["seconds"],
+            "full_pipeline_rows_per_second": summary["full_pipeline"]["rows_per_second"],
+            "full_pipeline_peak_vram_gb": summary["full_pipeline"]["peak_vram_gb"],
+            "run_dir": str(artifacts.run_dir.resolve()),
+        }
+        rows.append(row)
+        append_jsonl_record(records_path, {"created_at_utc": utc_timestamp(), **row})
+
+    summary_df = pl.DataFrame(rows).sort("batch_config_name")
+    write_frame(summary_df, sweep_dir / "sweep_summary.parquet")
+    summary_df.write_csv(sweep_dir / "sweep_summary.csv")
+    write_json(
+        sweep_dir / "sweep_manifest.json",
+        {
+            "created_at_utc": utc_timestamp(),
+            "dataset_manifest_path": str(cfg.base_run.dataset_manifest_path.resolve()),
+            "authority": authority.__dict__,
+            "runtime": runtime.__dict__,
+            "batch_configs": [batch_config.__dict__ for batch_config in cfg.batch_configs],
+            "artifacts": {
+                "records_path": str(records_path.resolve()),
+                "summary_parquet_path": str((sweep_dir / "sweep_summary.parquet").resolve()),
+                "summary_csv_path": str((sweep_dir / "sweep_summary.csv").resolve()),
+            },
+        },
+    )
+    return summary_df

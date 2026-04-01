@@ -5,54 +5,74 @@ from typing import Sequence
 
 import polars as pl
 
-from thesis_pkg.benchmarking.contracts import TokenLengthConfig
+from thesis_pkg.benchmarking.contracts import FinbertAuthoritySpec
+
+
+FINBERT_TOKEN_COUNT_COLUMN = "finbert_token_count_512"
+FINBERT_TOKEN_BUCKET_COLUMN = "finbert_token_bucket_512"
+
+
+def _import_bert_tokenizer():
+    try:
+        from transformers import BertTokenizer
+    except ImportError as exc:  # pragma: no cover
+        raise ImportError(
+            "transformers is required for FinBERT token-count annotation. "
+            "Install thesis_pkg[benchmark] before running benchmark tooling."
+        ) from exc
+    return BertTokenizer
 
 
 @lru_cache(maxsize=None)
-def _load_tokenizer(tokenizer_name: str):
-    try:
-        from transformers import AutoTokenizer
-    except ImportError as exc:  # pragma: no cover
-        raise ImportError(
-            "transformers is required to compute FinBERT token lengths. "
-            "Install it before building benchmark datasets."
-        ) from exc
-    return AutoTokenizer.from_pretrained(tokenizer_name)
+def load_finbert_tokenizer(authority: FinbertAuthoritySpec):
+    bert_tokenizer = _import_bert_tokenizer()
+    return bert_tokenizer.from_pretrained(
+        authority.model_name,
+        do_lower_case=authority.do_lower_case,
+    )
 
 
-def assign_token_bucket(token_count: int, cfg: TokenLengthConfig) -> str:
-    short_edge, medium_edge, long_edge = cfg.bucket_edges
+def assign_finbert_token_bucket(token_count: int, authority: FinbertAuthoritySpec) -> str:
+    short_edge, medium_edge = authority.token_bucket_edges
     if token_count <= short_edge:
         return "short"
     if token_count <= medium_edge:
         return "medium"
-    if token_count <= long_edge:
+    if token_count <= authority.token_count_max_length:
         return "long"
     raise ValueError(
-        f"Token count {token_count} exceeds configured max bucket edge {long_edge}. "
-        "Token counts should already be truncated to max_length."
+        f"Token count {token_count} exceeds the fixed FinBERT authority max length "
+        f"{authority.token_count_max_length}."
     )
 
 
-def compute_token_lengths(texts: Sequence[str], cfg: TokenLengthConfig) -> list[int]:
+def compute_finbert_token_lengths(
+    texts: Sequence[str],
+    authority: FinbertAuthoritySpec,
+) -> list[int]:
     if not texts:
         return []
-    tokenizer = _load_tokenizer(cfg.tokenizer_name)
+    tokenizer = load_finbert_tokenizer(authority)
     encoded = tokenizer(
         list(texts),
-        add_special_tokens=cfg.add_special_tokens,
-        truncation=cfg.truncation,
-        max_length=cfg.max_length,
+        add_special_tokens=True,
+        truncation=True,
+        max_length=authority.token_count_max_length,
     )
     return [len(input_ids) for input_ids in encoded["input_ids"]]
 
 
-def annotate_token_lengths(df: pl.DataFrame, cfg: TokenLengthConfig) -> pl.DataFrame:
-    token_counts = compute_token_lengths(df["full_text"].to_list(), cfg)
-    token_buckets = [assign_token_bucket(count, cfg) for count in token_counts]
+def annotate_finbert_token_lengths(
+    df: pl.DataFrame,
+    authority: FinbertAuthoritySpec,
+    *,
+    text_col: str = "full_text",
+) -> pl.DataFrame:
+    token_counts = compute_finbert_token_lengths(df[text_col].to_list(), authority)
+    token_buckets = [assign_finbert_token_bucket(count, authority) for count in token_counts]
     return df.with_columns(
         [
-            pl.Series("finbert_token_count_512", token_counts, dtype=pl.Int32),
-            pl.Series("finbert_token_bucket_512", token_buckets, dtype=pl.Utf8),
+            pl.Series(FINBERT_TOKEN_COUNT_COLUMN, token_counts, dtype=pl.Int32),
+            pl.Series(FINBERT_TOKEN_BUCKET_COLUMN, token_buckets, dtype=pl.Utf8),
         ]
     )
