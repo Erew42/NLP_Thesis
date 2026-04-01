@@ -21,6 +21,10 @@ dev = [
   "pytest",
   "PyYAML",
 ]
+benchmark = [
+  "spacy",
+  "transformers",
+]
 docs = [
   "mkdocs>=1.6,<2.0",
   "mkdocs-material>=9.7,<10.0",
