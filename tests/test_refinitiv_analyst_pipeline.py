@@ -412,6 +412,62 @@ def test_build_refinitiv_analyst_normalized_outputs_uses_month_end_revision_cuto
     assert row["forecast_revision_4m"] == pytest.approx(0.4)
 
 
+def test_build_refinitiv_analyst_normalized_outputs_selects_latest_snapshot_and_one_month_base() -> None:
+    actuals = pl.DataFrame(
+        {
+            "item_id": ["actual-item-1"],
+            "response_row_index": [0],
+            "request_group_id": ["group-1"],
+            "gvkey_int": [1000],
+            "effective_collection_ric": ["AAA.N"],
+            "announcement_date": [dt.date(2024, 10, 5)],
+            "fiscal_period_end": [dt.date(2024, 9, 30)],
+            "actual_eps": [2.5],
+            "raw_fperiod": ["FY2024Q4"],
+            "row_parse_status": ["OK"],
+        }
+    )
+    estimates = pl.DataFrame(
+        {
+            "item_id": [
+                "estimate-item-1",
+                "estimate-item-2",
+                "estimate-item-3",
+                "estimate-item-4",
+                "estimate-item-5",
+            ],
+            "response_row_index": [0, 1, 2, 3, 4],
+            "request_group_id": ["group-1"] * 5,
+            "request_period": ["FQ1", "FQ2", "FQ3", "FQ4", "FQ5"],
+            "gvkey_int": [1000] * 5,
+            "effective_collection_ric": ["AAA.N"] * 5,
+            "calc_date": [
+                dt.date(2024, 8, 15),
+                dt.date(2024, 5, 31),
+                dt.date(2024, 9, 29),
+                dt.date(2024, 7, 1),
+                dt.date(2024, 10, 10),
+            ],
+            "fiscal_period_end": [dt.date(2024, 9, 30)] * 5,
+            "raw_fperiod": ["FY2024Q4"] * 5,
+            "forecast_consensus_mean": [1.9, 1.7, 2.1, 1.8, 2.3],
+            "forecast_dispersion": [0.2, 0.15, 0.25, 0.18, 0.3],
+            "estimate_count": [8, 8, 8, 8, 8],
+            "row_parse_status": ["OK"] * 5,
+        }
+    )
+
+    normalized, rejections = build_refinitiv_analyst_normalized_outputs(actuals, estimates)
+
+    assert rejections.height == 0
+    row = normalized.row(0, named=True)
+    assert row["selected_forecast_calc_date"] == dt.date(2024, 9, 29)
+    assert row["revision_base_calc_date_1m"] == dt.date(2024, 8, 15)
+    assert row["revision_base_calc_date_4m"] == dt.date(2024, 5, 31)
+    assert row["forecast_revision_1m"] == pytest.approx(0.2)
+    assert row["forecast_revision_4m"] == pytest.approx(0.4)
+
+
 def test_select_refinitiv_lm2011_doc_analyst_inputs_supports_exact_and_safe_fallback() -> None:
     docs = pl.DataFrame(
         {

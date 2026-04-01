@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+from bisect import bisect_right
 from calendar import monthrange
 from pathlib import Path
 from typing import Any
@@ -275,6 +276,24 @@ def _shift_months(value: dt.date, months: int) -> dt.date:
     year = month_index // 12
     month = month_index % 12 + 1
     return dt.date(year, month, monthrange(year, month)[1])
+
+
+def _freeze_sorted_date_index(
+    index: dict[Any, set[dt.date]],
+) -> dict[Any, list[dt.date]]:
+    return {key: sorted(values) for key, values in index.items() if values}
+
+
+def _latest_date_on_or_before(
+    sorted_dates: list[dt.date] | None,
+    cutoff: dt.date,
+) -> dt.date | None:
+    if not sorted_dates:
+        return None
+    position = bisect_right(sorted_dates, cutoff)
+    if position == 0:
+        return None
+    return sorted_dates[position - 1]
 
 
 def _normalize_request_group_id(gvkey_int: int, effective_collection_ric: str) -> str:
@@ -788,9 +807,10 @@ def build_refinitiv_analyst_normalized_outputs(
     ).select(ANALYST_ESTIMATES_MONTHLY_RAW_COLUMNS)
 
     actual_groups: dict[tuple[Any, Any, Any], list[dict[str, Any]]] = {}
-    for row in actuals.to_dicts():
-        if row.get("announcement_date") is None or row.get("actual_eps") is None:
-            continue
+    filtered_actuals = actuals.filter(
+        pl.col("announcement_date").is_not_null() & pl.col("actual_eps").is_not_null()
+    )
+    for row in filtered_actuals.to_dicts():
         key = (row.get("gvkey_int"), row.get("announcement_date"), row.get("fiscal_period_end"))
         actual_groups.setdefault(key, []).append(row)
 
@@ -805,15 +825,24 @@ def build_refinitiv_analyst_normalized_outputs(
             canonical_actuals.append(canonical)
 
     estimate_group_map: dict[tuple[int, dt.date, dt.date], list[dict[str, Any]]] = {}
-    estimate_rows_by_gvkey_calc_date: dict[tuple[int, dt.date], list[dict[str, Any]]] = {}
-    for row in estimates.to_dicts():
+    estimate_calc_dates_by_snapshot_key_raw: dict[tuple[int, dt.date], set[dt.date]] = {}
+    estimate_calc_dates_by_gvkey_raw: dict[int, set[dt.date]] = {}
+    estimate_fiscal_period_ends_by_gvkey_calc_date_raw: dict[tuple[int, dt.date], set[dt.date]] = {}
+    filtered_estimates = estimates.filter(
+        pl.col("gvkey_int").is_not_null()
+        & pl.col("calc_date").is_not_null()
+        & pl.col("fiscal_period_end").is_not_null()
+    )
+    for row in filtered_estimates.to_dicts():
         gvkey_int = row.get("gvkey_int")
         calc_date = row.get("calc_date")
         fiscal_period_end = row.get("fiscal_period_end")
-        if gvkey_int is None or calc_date is None or fiscal_period_end is None:
-            continue
         estimate_group_map.setdefault((gvkey_int, fiscal_period_end, calc_date), []).append(row)
-        estimate_rows_by_gvkey_calc_date.setdefault((gvkey_int, calc_date), []).append(row)
+        estimate_calc_dates_by_snapshot_key_raw.setdefault((gvkey_int, fiscal_period_end), set()).add(calc_date)
+        estimate_calc_dates_by_gvkey_raw.setdefault(gvkey_int, set()).add(calc_date)
+        estimate_fiscal_period_ends_by_gvkey_calc_date_raw.setdefault((gvkey_int, calc_date), set()).add(
+            fiscal_period_end
+        )
 
     canonical_estimates: dict[tuple[int, dt.date, dt.date], dict[str, Any]] = {}
     conflicting_estimate_keys: set[tuple[int, dt.date, dt.date]] = set()
@@ -825,6 +854,14 @@ def build_refinitiv_analyst_normalized_outputs(
         if canonical is not None:
             canonical_estimates[key] = canonical
 
+    estimate_calc_dates_by_snapshot_key = _freeze_sorted_date_index(estimate_calc_dates_by_snapshot_key_raw)
+    estimate_calc_dates_by_gvkey = _freeze_sorted_date_index(estimate_calc_dates_by_gvkey_raw)
+    estimate_fiscal_period_ends_by_gvkey_calc_date = {
+        key: sorted(values)
+        for key, values in estimate_fiscal_period_ends_by_gvkey_calc_date_raw.items()
+        if values
+    }
+
     provisional_rows: list[dict[str, Any]] = []
     for event in canonical_actuals:
         gvkey_int = int(event["gvkey_int"])
@@ -834,14 +871,11 @@ def build_refinitiv_analyst_normalized_outputs(
         actual_fiscal_period_end_origin = "API_DIRECT"
 
         if fiscal_period_end is None:
-            eligible_calc_dates = sorted(
-                {
-                    calc_date
-                    for (estimate_gvkey, calc_date), rows in estimate_rows_by_gvkey_calc_date.items()
-                    if estimate_gvkey == gvkey_int and calc_date <= announcement_date
-                }
+            selected_calc_date = _latest_date_on_or_before(
+                estimate_calc_dates_by_gvkey.get(gvkey_int),
+                announcement_date,
             )
-            if not eligible_calc_dates:
+            if selected_calc_date is None:
                 rejection_rows.append(
                     {
                         "rejection_case_id": stable_hash_id(
@@ -861,9 +895,7 @@ def build_refinitiv_analyst_normalized_outputs(
                     }
                 )
                 continue
-            selected_calc_date = eligible_calc_dates[-1]
-            derived_rows = estimate_rows_by_gvkey_calc_date.get((gvkey_int, selected_calc_date), [])
-            derived_fiscal_period_ends = sorted({row["fiscal_period_end"] for row in derived_rows if row.get("fiscal_period_end")})
+            derived_fiscal_period_ends = estimate_fiscal_period_ends_by_gvkey_calc_date.get((gvkey_int, selected_calc_date), [])
             if not derived_fiscal_period_ends:
                 rejection_rows.append(
                     {
@@ -909,14 +941,11 @@ def build_refinitiv_analyst_normalized_outputs(
             fiscal_period_end = derived_fiscal_period_ends[0]
             actual_fiscal_period_end_origin = "ESTIMATE_FALLBACK"
         else:
-            selected_calc_dates = sorted(
-                {
-                    calc_date
-                    for (estimate_gvkey, estimate_fpe, calc_date) in estimate_group_map
-                    if estimate_gvkey == gvkey_int and estimate_fpe == fiscal_period_end and calc_date <= announcement_date
-                }
+            selected_calc_date = _latest_date_on_or_before(
+                estimate_calc_dates_by_snapshot_key.get((gvkey_int, fiscal_period_end)),
+                announcement_date,
             )
-            if not selected_calc_dates:
+            if selected_calc_date is None:
                 rejection_rows.append(
                     {
                         "rejection_case_id": stable_hash_id(
@@ -937,7 +966,8 @@ def build_refinitiv_analyst_normalized_outputs(
                     }
                 )
                 continue
-            selected_calc_date = selected_calc_dates[-1]
+
+        snapshot_calc_dates = estimate_calc_dates_by_snapshot_key.get((gvkey_int, fiscal_period_end))
 
         selected_snapshot_key = (gvkey_int, fiscal_period_end, selected_calc_date)
         if selected_snapshot_key in conflicting_estimate_keys:
@@ -991,14 +1021,7 @@ def build_refinitiv_analyst_normalized_outputs(
             continue
 
         revision_4m_cutoff = _shift_months(selected_calc_date, -4)
-        revision_4m_dates = sorted(
-            {
-                calc_date
-                for (estimate_gvkey, estimate_fpe, calc_date) in estimate_group_map
-                if estimate_gvkey == gvkey_int and estimate_fpe == fiscal_period_end and calc_date <= revision_4m_cutoff
-            }
-        )
-        revision_base_calc_date_4m = revision_4m_dates[-1] if revision_4m_dates else None
+        revision_base_calc_date_4m = _latest_date_on_or_before(snapshot_calc_dates, revision_4m_cutoff)
         forecast_revision_4m = None
         forecast_revision_4m_status = "OK"
         if revision_base_calc_date_4m is None:
@@ -1036,14 +1059,7 @@ def build_refinitiv_analyst_normalized_outputs(
                 )
 
         revision_1m_cutoff = _shift_months(selected_calc_date, -1)
-        revision_1m_dates = sorted(
-            {
-                calc_date
-                for (estimate_gvkey, estimate_fpe, calc_date) in estimate_group_map
-                if estimate_gvkey == gvkey_int and estimate_fpe == fiscal_period_end and calc_date <= revision_1m_cutoff
-            }
-        )
-        revision_base_calc_date_1m = revision_1m_dates[-1] if revision_1m_dates else None
+        revision_base_calc_date_1m = _latest_date_on_or_before(snapshot_calc_dates, revision_1m_cutoff)
         revision_1m = None
         if revision_base_calc_date_1m is not None:
             revision_base_key_1m = (gvkey_int, fiscal_period_end, revision_base_calc_date_1m)
