@@ -115,6 +115,27 @@ def _attach_ff48_industries(
     )
 
 
+def _nullify_infinite_float_columns(panel_lf: pl.LazyFrame) -> pl.LazyFrame:
+    # Regression outputs should not carry non-finite float values into exported panels.
+    schema = panel_lf.collect_schema()
+    float_columns = [
+        (name, dtype)
+        for name, dtype in schema.items()
+        if dtype in (pl.Float32, pl.Float64)
+    ]
+    if not float_columns:
+        return panel_lf
+    return panel_lf.with_columns(
+        [
+            pl.when(pl.col(name).is_infinite().fill_null(False))
+            .then(pl.lit(None, dtype=dtype))
+            .otherwise(pl.col(name))
+            .alias(name)
+            for name, dtype in float_columns
+        ]
+    )
+
+
 def build_lm2011_return_regression_panel(
     event_panel_lf: pl.LazyFrame,
     text_features_lf: pl.LazyFrame,
@@ -147,13 +168,15 @@ def build_lm2011_return_regression_panel(
         company_description_lf,
         ff48_siccodes_path=ff48_siccodes_path,
     )
-    return _apply_lm2011_regression_transforms(
-        event_panel_lf.join(text_signal_lf, on="doc_id", how="left").join(
-            industries_lf,
-            on="doc_id",
-            how="left",
-        )
-    ).with_columns(pl.lit(text_scope).alias("text_scope"))
+    return _nullify_infinite_float_columns(
+        _apply_lm2011_regression_transforms(
+            event_panel_lf.join(text_signal_lf, on="doc_id", how="left").join(
+                industries_lf,
+                on="doc_id",
+                how="left",
+            )
+        ).with_columns(pl.lit(text_scope).alias("text_scope"))
+    )
 
 
 def build_lm2011_sue_regression_panel(
@@ -189,13 +212,15 @@ def build_lm2011_sue_regression_panel(
         company_description_lf,
         ff48_siccodes_path=ff48_siccodes_path,
     )
-    return _apply_lm2011_regression_transforms(
-        sue_panel_lf.join(text_signal_lf, on="doc_id", how="left").join(
-            industries_lf,
-            on="doc_id",
-            how="left",
-        )
-    ).with_columns(pl.lit("full_10k").alias("text_scope"))
+    return _nullify_infinite_float_columns(
+        _apply_lm2011_regression_transforms(
+            sue_panel_lf.join(text_signal_lf, on="doc_id", how="left").join(
+                industries_lf,
+                on="doc_id",
+                how="left",
+            )
+        ).with_columns(pl.lit("full_10k").alias("text_scope"))
+    )
 
 
 def build_lm2011_normalized_difference_panel(

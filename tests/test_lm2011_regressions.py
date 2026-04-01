@@ -487,6 +487,53 @@ def test_build_lm2011_sue_regression_panel_is_self_sufficient_for_table_viii(tmp
     assert panel.get_column("text_scope").unique().to_list() == ["full_10k"]
 
 
+@pytest.mark.parametrize(
+    ("builder_name", "input_key"),
+    (
+        ("return", "event_panel"),
+        ("sue", "sue_panel"),
+    ),
+)
+def test_lm2011_regression_builders_nullify_infinite_float_outputs(tmp_path, builder_name: str, input_key: str) -> None:
+    inputs = _regression_test_inputs(tmp_path)
+    doc_id = "doc_1"
+    if builder_name == "return":
+        inputs[input_key] = inputs[input_key].with_columns(
+            pl.when(pl.col("doc_id") == doc_id).then(pl.lit(float("inf"))).otherwise(pl.col("size_event")).alias(
+                "size_event"
+            )
+        )
+        panel = build_lm2011_return_regression_panel(
+            inputs["event_panel"].lazy(),
+            inputs["full_text_features"].lazy(),
+            inputs["company_history"].lazy(),
+            inputs["company_description"].lazy(),
+            ff48_siccodes_path=inputs["ff48_path"],
+            text_scope="full_10k",
+        ).collect()
+    else:
+        inputs[input_key] = inputs[input_key].with_columns(
+            pl.when(pl.col("doc_id") == doc_id)
+            .then(pl.lit(float("-inf")))
+            .otherwise(pl.col("analyst_dispersion"))
+            .alias("analyst_dispersion")
+        )
+        panel = build_lm2011_sue_regression_panel(
+            inputs["sue_panel"].lazy(),
+            inputs["full_text_features"].lazy(),
+            inputs["company_history"].lazy(),
+            inputs["company_description"].lazy(),
+            ff48_siccodes_path=inputs["ff48_path"],
+        ).collect()
+
+    row = panel.filter(pl.col("doc_id") == doc_id).row(0, named=True)
+    if builder_name == "return":
+        assert row["size_event"] is None
+        assert row["log_size"] is None
+    else:
+        assert row["analyst_dispersion"] is None
+
+
 def test_table_wrappers_follow_revised_spec_signal_scopes(tmp_path) -> None:
     inputs = _regression_test_inputs(tmp_path)
 
