@@ -4,13 +4,17 @@ import json
 from pathlib import Path
 
 import polars as pl
+import pytest
 
 from thesis_pkg.benchmarking.contracts import BenchmarkSampleSpec
 from thesis_pkg.benchmarking.contracts import FinbertBenchmarkSuiteConfig
 from thesis_pkg.benchmarking.finbert_dataset import _constrained_hamilton_apportion
+from thesis_pkg.benchmarking.finbert_dataset import _tmp_build_root
 from thesis_pkg.benchmarking.finbert_dataset import build_finbert_benchmark_suite
+from thesis_pkg.benchmarking.finbert_dataset import compute_year_allocations
 from thesis_pkg.benchmarking.finbert_dataset import compute_year_item_allocations
 from thesis_pkg.benchmarking.finbert_dataset import load_eligible_section_universe
+from thesis_pkg.benchmarking.finbert_dataset import select_ranked_section_sample
 
 
 def _write_parquet(path: Path, rows: list[dict[str, object]]) -> None:
@@ -22,7 +26,14 @@ def _long_text(token: str, repeats: int = 80) -> str:
     return (f"{token} " * repeats).strip()
 
 
-def _fake_annotate_finbert_token_lengths(df: pl.DataFrame, _authority, *, text_col: str = "full_text") -> pl.DataFrame:
+def _fake_annotate_finbert_token_lengths(
+    df: pl.DataFrame,
+    _authority,
+    *,
+    text_col: str = "full_text",
+    batch_size: int | None = None,
+) -> pl.DataFrame:
+    del batch_size
     counts = []
     buckets = []
     for text in df[text_col].to_list():
@@ -210,12 +221,18 @@ def test_build_finbert_benchmark_suite_stages_tokenization_and_keeps_strict_nest
 
     tokenized_row_counts: list[int] = []
 
-    def _tracking_annotate(df: pl.DataFrame, authority, *, text_col: str = "full_text") -> pl.DataFrame:
-        del authority, text_col
+    def _tracking_annotate(
+        df: pl.DataFrame,
+        authority,
+        *,
+        text_col: str = "full_text",
+        batch_size: int | None = None,
+    ) -> pl.DataFrame:
+        del authority, text_col, batch_size
         tokenized_row_counts.append(df.height)
         return _fake_annotate_finbert_token_lengths(df, None, text_col="full_text")
 
-    monkeypatch.setattr(finbert_dataset, "annotate_finbert_token_lengths", _tracking_annotate)
+    monkeypatch.setattr(finbert_dataset, "annotate_finbert_token_lengths_in_batches", _tracking_annotate)
 
     cfg = FinbertBenchmarkSuiteConfig(
         source_items_dir=source_dir,
@@ -237,7 +254,7 @@ def test_build_finbert_benchmark_suite_stages_tokenization_and_keeps_strict_nest
     assert sample_5.filter(
         (pl.col("filing_year").is_in([1995, 1996])) & (pl.col("benchmark_item_code") == "item_1a")
     ).height == 0
-    assert tokenized_row_counts == [10, 2]
+    assert tokenized_row_counts == [10]
 
     manifest = json.loads(artifacts["1pct"].manifest_path.read_text(encoding="utf-8"))
     assert manifest["selection"]["nested_policy"] == "strict_nested_constrained_year_then_within_year_item_hamilton"
@@ -248,3 +265,123 @@ def test_build_finbert_benchmark_suite_stages_tokenization_and_keeps_strict_nest
 
     assert (artifacts["5pct"].dataset_dir / "reports" / "sample_token_length_summary.csv").exists()
     assert not (artifacts["5pct"].dataset_dir / "reports" / "token_length_audit_overall.csv").exists()
+
+
+def test_build_finbert_benchmark_suite_matches_control_selection_for_parent_sample(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source_dir = tmp_path / "items_analysis"
+    _write_parquet(source_dir / "1995.parquet", _sample_rows(1995, 20, include_item_1a=False))
+    _write_parquet(source_dir / "1996.parquet", _sample_rows(1996, 20, include_item_1a=False))
+    _write_parquet(source_dir / "2000.parquet", _sample_rows(2000, 40, include_item_1a=True, include_10k405=True))
+
+    from thesis_pkg.benchmarking import finbert_dataset
+
+    monkeypatch.setattr(
+        finbert_dataset,
+        "annotate_finbert_token_lengths_in_batches",
+        _fake_annotate_finbert_token_lengths,
+    )
+
+    cfg = FinbertBenchmarkSuiteConfig(
+        source_items_dir=source_dir,
+        out_root=tmp_path / "out",
+        sample_specs=(
+            BenchmarkSampleSpec(sample_name="1pct", sample_fraction=0.01),
+            BenchmarkSampleSpec(sample_name="5pct", sample_fraction=0.05),
+        ),
+        seed=42,
+    )
+    artifacts = build_finbert_benchmark_suite(cfg)
+
+    control_universe = load_eligible_section_universe(cfg)
+    control_df = control_universe.collect()
+    year_counts = control_df.group_by("filing_year").agg(pl.len().alias("eligible_rows")).sort("filing_year")
+    year_item_counts = (
+        control_df.group_by(["filing_year", "benchmark_item_code"])
+        .agg(pl.len().alias("eligible_rows"))
+        .sort(["filing_year", "benchmark_item_code"])
+    )
+    year_alloc = compute_year_allocations(
+        year_counts,
+        BenchmarkSampleSpec(sample_name="5pct", sample_fraction=0.05),
+        ensure_all_years_present=True,
+    )
+    year_item_alloc = compute_year_item_allocations(year_item_counts, year_alloc)
+    control_selected = (
+        select_ranked_section_sample(control_universe, year_item_alloc, seed=42)
+        .with_columns(
+            pl.concat_str([pl.col("doc_id"), pl.lit(":"), pl.col("benchmark_item_code")]).alias(
+                "benchmark_row_id"
+            )
+        )
+        .sort("selection_order")
+    )
+    built_selected = pl.read_parquet(artifacts["5pct"].sections_path).sort("selection_order")
+
+    assert built_selected["benchmark_row_id"].to_list() == control_selected["benchmark_row_id"].to_list()
+    assert built_selected["selection_order"].to_list() == control_selected["selection_order"].to_list()
+
+
+def test_build_finbert_benchmark_suite_removes_temp_dir_on_success(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source_dir = tmp_path / "items_analysis"
+    _write_parquet(source_dir / "2000.parquet", _sample_rows(2000, 20, include_item_1a=True, include_10k405=True))
+
+    from thesis_pkg.benchmarking import finbert_dataset
+
+    monkeypatch.setattr(
+        finbert_dataset,
+        "annotate_finbert_token_lengths_in_batches",
+        _fake_annotate_finbert_token_lengths,
+    )
+
+    cfg = FinbertBenchmarkSuiteConfig(
+        source_items_dir=source_dir,
+        out_root=tmp_path / "out",
+        sample_specs=(BenchmarkSampleSpec(sample_name="5pct", sample_fraction=0.05),),
+        seed=42,
+    )
+    build_finbert_benchmark_suite(cfg)
+
+    assert not _tmp_build_root(cfg).exists()
+
+
+def test_build_finbert_benchmark_suite_keeps_temp_dir_on_failure_with_skinny_planning_parquet(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source_dir = tmp_path / "items_analysis"
+    _write_parquet(source_dir / "2000.parquet", _sample_rows(2000, 20, include_item_1a=True, include_10k405=True))
+
+    from thesis_pkg.benchmarking import finbert_dataset
+
+    monkeypatch.setattr(
+        finbert_dataset,
+        "annotate_finbert_token_lengths_in_batches",
+        _fake_annotate_finbert_token_lengths,
+    )
+    monkeypatch.setattr(
+        finbert_dataset,
+        "_annotate_selected_metadata",
+        lambda df, authority: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+
+    cfg = FinbertBenchmarkSuiteConfig(
+        source_items_dir=source_dir,
+        out_root=tmp_path / "out",
+        sample_specs=(BenchmarkSampleSpec(sample_name="5pct", sample_fraction=0.05),),
+        seed=42,
+    )
+
+    with pytest.raises(RuntimeError, match="boom"):
+        build_finbert_benchmark_suite(cfg)
+
+    temp_root = _tmp_build_root(cfg)
+    planning_path = temp_root / "planning_universe.parquet"
+    assert temp_root.exists()
+    assert planning_path.exists()
+    assert "full_text" not in pl.read_parquet_schema(planning_path).names()

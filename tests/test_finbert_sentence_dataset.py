@@ -48,7 +48,14 @@ def test_materialize_sentence_benchmark_dataset_honors_authority_and_compression
 
     captured: dict[str, object] = {}
 
-    def _fake_annotate(df: pl.DataFrame, authority, *, text_col: str = "full_text") -> pl.DataFrame:
+    def _fake_annotate(
+        df: pl.DataFrame,
+        authority,
+        *,
+        text_col: str = "full_text",
+        batch_size: int | None = None,
+    ) -> pl.DataFrame:
+        del batch_size
         captured["authority"] = authority
         captured["text_col"] = text_col
         return df.with_columns(
@@ -66,7 +73,7 @@ def test_materialize_sentence_benchmark_dataset_honors_authority_and_compression
     original_write_parquet = pl.DataFrame.write_parquet
     monkeypatch.setattr(sentences, "_build_sentencizer", lambda cfg: _FakeNLP())
     monkeypatch.setattr(sentences, "_sentencizer_version", lambda: "test")
-    monkeypatch.setattr(sentences, "annotate_finbert_token_lengths", _fake_annotate)
+    monkeypatch.setattr(sentences, "annotate_finbert_token_lengths_in_batches", _fake_annotate)
     monkeypatch.setattr(pl.DataFrame, "write_parquet", _fake_write_parquet)
 
     out_path = tmp_path / "sentences.parquet"

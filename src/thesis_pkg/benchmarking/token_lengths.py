@@ -76,3 +76,22 @@ def annotate_finbert_token_lengths(
             pl.Series(FINBERT_TOKEN_BUCKET_COLUMN, token_buckets, dtype=pl.Utf8),
         ]
     )
+
+
+def annotate_finbert_token_lengths_in_batches(
+    df: pl.DataFrame,
+    authority: FinbertAuthoritySpec,
+    *,
+    text_col: str = "full_text",
+    batch_size: int = 1024,
+) -> pl.DataFrame:
+    if batch_size <= 0:
+        raise ValueError("batch_size must be a positive integer.")
+    if df.is_empty():
+        return annotate_finbert_token_lengths(df, authority, text_col=text_col)
+
+    chunks: list[pl.DataFrame] = []
+    for offset in range(0, df.height, batch_size):
+        chunk = df.slice(offset, batch_size)
+        chunks.append(annotate_finbert_token_lengths(chunk, authority, text_col=text_col))
+    return pl.concat(chunks, how="vertical_relaxed")

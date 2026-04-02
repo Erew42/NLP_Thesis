@@ -6,6 +6,7 @@ import polars as pl
 
 from thesis_pkg.benchmarking.contracts import DEFAULT_FINBERT_AUTHORITY
 from thesis_pkg.benchmarking.token_lengths import annotate_finbert_token_lengths
+from thesis_pkg.benchmarking.token_lengths import annotate_finbert_token_lengths_in_batches
 from thesis_pkg.benchmarking.token_lengths import load_finbert_tokenizer
 
 
@@ -47,6 +48,26 @@ def test_annotate_finbert_token_lengths_uses_fixed_512_schema(monkeypatch) -> No
 
     assert result.columns == ["full_text", "finbert_token_count_512", "finbert_token_bucket_512"]
     assert result["finbert_token_bucket_512"].to_list() == ["short", "long"]
+
+
+def test_annotate_finbert_token_lengths_in_batches_preserves_row_order(monkeypatch) -> None:
+    from thesis_pkg.benchmarking import token_lengths
+
+    monkeypatch.setattr(
+        token_lengths,
+        "compute_finbert_token_lengths",
+        lambda texts, authority: [len(text) for text in texts],
+    )
+    df = pl.DataFrame({"full_text": ["a", "bb", "ccc", "dddd"]})
+
+    result = annotate_finbert_token_lengths_in_batches(
+        df,
+        DEFAULT_FINBERT_AUTHORITY,
+        batch_size=2,
+    )
+
+    assert result["full_text"].to_list() == ["a", "bb", "ccc", "dddd"]
+    assert result["finbert_token_count_512"].to_list() == [1, 2, 3, 4]
 
 
 def test_pyproject_benchmark_extra_declares_runtime_dependencies() -> None:

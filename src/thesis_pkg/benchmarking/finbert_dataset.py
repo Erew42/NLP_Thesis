@@ -4,6 +4,7 @@ import csv
 import datetime as dt
 import hashlib
 import json
+import shutil
 from dataclasses import asdict
 from decimal import Decimal
 from decimal import ROUND_HALF_UP
@@ -20,6 +21,7 @@ from thesis_pkg.benchmarking.contracts import FinbertBenchmarkSuiteConfig
 from thesis_pkg.benchmarking.sentences import materialize_sentence_benchmark_dataset
 from thesis_pkg.benchmarking.token_lengths import FINBERT_TOKEN_BUCKET_COLUMN
 from thesis_pkg.benchmarking.token_lengths import annotate_finbert_token_lengths
+from thesis_pkg.benchmarking.token_lengths import annotate_finbert_token_lengths_in_batches
 from thesis_pkg.core.ccm.lm2011 import _normalize_sec_raw_form_value
 from thesis_pkg.core.ccm.lm2011 import normalize_lm2011_form_value
 
@@ -107,12 +109,28 @@ def _resolve_year_paths(source_items_dir: Path) -> list[Path]:
     return year_paths
 
 
-def _scan_items_with_year_source(source_items_dir: Path) -> pl.LazyFrame:
+def _scan_items_with_year_source_from_paths(year_paths: list[Path]) -> pl.LazyFrame:
     scans = [
-        pl.scan_parquet(path).with_columns(pl.lit(int(path.stem)).cast(pl.Int32).alias("source_year_file"))
-        for path in _resolve_year_paths(source_items_dir)
+        pl.scan_parquet(path)
+        .with_row_index("source_file_row_nr")
+        .with_columns(
+            [
+                pl.lit(int(path.stem)).cast(pl.Int32).alias("source_year_file"),
+                pl.concat_str(
+                    [
+                        pl.lit(f"{int(path.stem):04d}:"),
+                        pl.col("source_file_row_nr").cast(pl.Utf8),
+                    ]
+                ).alias("source_record_id"),
+            ]
+        )
+        for path in year_paths
     ]
     return pl.concat(scans, how="diagonal_relaxed")
+
+
+def _scan_items_with_year_source(source_items_dir: Path) -> pl.LazyFrame:
+    return _scan_items_with_year_source_from_paths(_resolve_year_paths(source_items_dir))
 
 
 def _normalize_cik_expr(schema_names: set[str]) -> pl.Expr:
@@ -176,9 +194,17 @@ def _document_type_exprs(schema_names: set[str]) -> list[pl.Expr]:
     ]
 
 
-def load_eligible_section_universe(cfg: FinbertBenchmarkSuiteConfig) -> pl.LazyFrame:
+def _load_filtered_section_rows(
+    cfg: FinbertBenchmarkSuiteConfig,
+    *,
+    year_paths: list[Path] | None = None,
+) -> pl.LazyFrame:
     _validate_sample_specs(cfg.sample_specs)
-    raw_lf = _scan_items_with_year_source(cfg.source_items_dir)
+    raw_lf = (
+        _scan_items_with_year_source(cfg.source_items_dir)
+        if year_paths is None
+        else _scan_items_with_year_source_from_paths(year_paths)
+    )
     schema_names = set(raw_lf.collect_schema().names())
     required_columns = {"doc_id", "item_id", "full_text"}
     missing = sorted(required_columns - schema_names)
@@ -234,21 +260,10 @@ def load_eligible_section_universe(cfg: FinbertBenchmarkSuiteConfig) -> pl.LazyF
                 pl.col("full_text").str.len_chars().cast(pl.Int32).alias("char_count"),
             ]
         )
-        .sort(
-            by=[
-                "doc_id",
-                "benchmark_item_code",
-                "char_count",
-                "canonical_item",
-                "filename",
-                "accession_nodash",
-            ],
-            descending=[False, False, True, False, False, False],
-            nulls_last=True,
-        )
-        .unique(subset=["doc_id", "benchmark_item_code"], keep="first", maintain_order=True)
         .select(
             [
+                "source_record_id",
+                "source_file_row_nr",
                 "doc_id",
                 "cik_10",
                 "accession_nodash",
@@ -266,9 +281,108 @@ def load_eligible_section_universe(cfg: FinbertBenchmarkSuiteConfig) -> pl.LazyF
                 "exists_by_regime",
                 "full_text",
                 "char_count",
+                "filename",
                 "source_year_file",
             ]
         )
+    )
+
+
+def _dedupe_section_rows(
+    rows_lf: pl.LazyFrame,
+    *,
+    include_full_text: bool,
+    include_internal_locator: bool,
+) -> pl.LazyFrame:
+    selected_columns = [
+        "doc_id",
+        "cik_10",
+        "accession_nodash",
+        "filing_date",
+        "filing_year",
+        "document_type",
+        "document_type_raw",
+        "document_type_normalized",
+        "benchmark_item_code",
+        "benchmark_item_label",
+        "item_id",
+        "canonical_item",
+        "item_part",
+        "item_status",
+        "exists_by_regime",
+        "char_count",
+        "source_year_file",
+    ]
+    if include_internal_locator:
+        selected_columns = [
+            "source_record_id",
+            "source_file_row_nr",
+            *selected_columns,
+        ]
+    if include_full_text:
+        selected_columns.append("full_text")
+
+    return (
+        rows_lf.select(
+            [
+                "source_record_id",
+                "source_file_row_nr",
+                "doc_id",
+                "cik_10",
+                "accession_nodash",
+                "filing_date",
+                "filing_year",
+                "document_type",
+                "document_type_raw",
+                "document_type_normalized",
+                "benchmark_item_code",
+                "benchmark_item_label",
+                "item_id",
+                "canonical_item",
+                "item_part",
+                "item_status",
+                "exists_by_regime",
+                "char_count",
+                "filename",
+                *(
+                    ["full_text"]
+                    if include_full_text
+                    else []
+                ),
+                "source_year_file",
+            ]
+        )
+        .sort(
+            by=[
+                "doc_id",
+                "benchmark_item_code",
+                "char_count",
+                "canonical_item",
+                "filename",
+                "accession_nodash",
+            ],
+            descending=[False, False, True, False, False, False],
+            nulls_last=True,
+        )
+        .unique(subset=["doc_id", "benchmark_item_code"], keep="first", maintain_order=True)
+        .select(selected_columns)
+    )
+
+
+def load_eligible_section_universe(cfg: FinbertBenchmarkSuiteConfig) -> pl.LazyFrame:
+    filtered_rows = _load_filtered_section_rows(cfg)
+    return _dedupe_section_rows(
+        filtered_rows,
+        include_full_text=True,
+        include_internal_locator=False,
+    )
+
+
+def _load_skinny_planning_universe(cfg: FinbertBenchmarkSuiteConfig) -> pl.LazyFrame:
+    return _dedupe_section_rows(
+        _load_filtered_section_rows(cfg),
+        include_full_text=False,
+        include_internal_locator=True,
     )
 
 
@@ -503,21 +617,32 @@ def _annotate_selected_metadata(
     df: pl.DataFrame,
     authority: FinbertAuthoritySpec,
 ) -> pl.DataFrame:
-    benchmark_row_ids = [
-        f"{doc_id}:{benchmark_item_code}"
-        for doc_id, benchmark_item_code in zip(
-            df["doc_id"].to_list(),
-            df["benchmark_item_code"].to_list(),
-        )
-    ]
-    text_hashes = [hashlib.sha256(text.encode("utf-8")).hexdigest() for text in df["full_text"].to_list()]
-    output = df.with_columns(
-        [
-            pl.Series("benchmark_row_id", benchmark_row_ids, dtype=pl.Utf8),
-            pl.Series("text_sha256", text_hashes, dtype=pl.Utf8),
+    if df.is_empty():
+        return annotate_finbert_token_lengths(df, authority, text_col="full_text")
+
+    chunks: list[pl.DataFrame] = []
+    for chunk in df.iter_slices(n_rows=1024):
+        text_hashes = [
+            hashlib.sha256(text.encode("utf-8")).hexdigest()
+            for text in chunk["full_text"].to_list()
         ]
-    )
-    return annotate_finbert_token_lengths(output, authority, text_col="full_text")
+        output = chunk.with_columns(
+            [
+                pl.concat_str(
+                    [pl.col("doc_id"), pl.lit(":"), pl.col("benchmark_item_code")]
+                ).alias("benchmark_row_id"),
+                pl.Series("text_sha256", text_hashes, dtype=pl.Utf8),
+            ]
+        )
+        chunks.append(
+            annotate_finbert_token_lengths_in_batches(
+                output,
+                authority,
+                text_col="full_text",
+                batch_size=1024,
+            )
+        )
+    return pl.concat(chunks, how="vertical_relaxed")
 
 
 def _select_ranked_from_df(source_df: pl.DataFrame, allocations_df: pl.DataFrame) -> pl.DataFrame:
@@ -560,6 +685,103 @@ def _select_ranked_from_df(source_df: pl.DataFrame, allocations_df: pl.DataFrame
         )
         .with_row_index(name="selection_order", offset=1)
     )
+
+
+def _allocation_targets(allocations_df: pl.DataFrame) -> list[dict[str, Any]]:
+    return [
+        {
+            "filing_year": int(row["filing_year"]),
+            "benchmark_item_code": str(row["benchmark_item_code"]),
+            "target_rows": int(row["target_rows"]),
+        }
+        for row in allocations_df.sort(["filing_year", "benchmark_item_code"]).to_dicts()
+        if int(row["target_rows"]) > 0
+    ]
+
+
+def _select_ranked_from_planning_path(
+    planning_path: Path,
+    allocations_df: pl.DataFrame,
+    *,
+    seed: int,
+) -> pl.DataFrame:
+    selected_frames: list[pl.DataFrame] = []
+    for target in _allocation_targets(allocations_df):
+        stratum_df = pl.scan_parquet(planning_path).filter(
+            (pl.col("filing_year") == pl.lit(target["filing_year"]))
+            & (pl.col("benchmark_item_code") == pl.lit(target["benchmark_item_code"]))
+        ).select(
+            [
+                "source_record_id",
+                "source_file_row_nr",
+                "source_year_file",
+                "doc_id",
+                "benchmark_item_code",
+                "filing_year",
+            ]
+        ).collect()
+        if target["target_rows"] > stratum_df.height:
+            raise ValueError(
+                f"Requested {target['target_rows']} rows for "
+                f"({target['filing_year']}, {target['benchmark_item_code']}), "
+                f"but only {stratum_df.height} rows are available."
+            )
+        ranked = _annotate_selection_keys(stratum_df, seed).sort(
+            by=["selection_key_hex", "doc_id"],
+            descending=[False, False],
+        )
+        selected_frames.append(
+            ranked.head(target["target_rows"]).with_row_index("stratum_rank", offset=1)
+        )
+
+    if not selected_frames:
+        return pl.DataFrame(
+            schema={
+                "source_record_id": pl.Utf8,
+                "source_file_row_nr": pl.UInt32,
+                "source_year_file": pl.Int32,
+                "doc_id": pl.Utf8,
+                "benchmark_item_code": pl.Utf8,
+                "filing_year": pl.Int32,
+                "selection_key_hex": pl.Utf8,
+                "stratum_rank": pl.UInt32,
+                "selection_order": pl.UInt32,
+            }
+        )
+
+    return (
+        pl.concat(selected_frames, how="vertical_relaxed")
+        .sort(
+            by=["filing_year", "benchmark_item_code", "selection_key_hex", "doc_id"],
+            descending=[False, False, False, False],
+        )
+        .with_row_index(name="selection_order", offset=1)
+    )
+
+
+def _derive_nested_selected_keys(
+    parent_selected_keys: pl.DataFrame,
+    child_allocations_df: pl.DataFrame,
+) -> pl.DataFrame:
+    child_targets = child_allocations_df.select(
+        ["filing_year", "benchmark_item_code", "target_rows"]
+    )
+    filtered = (
+        parent_selected_keys.join(
+            child_targets,
+            on=["filing_year", "benchmark_item_code"],
+            how="inner",
+        )
+        .filter(pl.col("stratum_rank") <= pl.col("target_rows"))
+        .drop("target_rows")
+        .sort(
+            by=["filing_year", "benchmark_item_code", "selection_key_hex", "doc_id"],
+            descending=[False, False, False, False],
+        )
+        .drop("selection_order")
+        .with_row_index(name="selection_order", offset=1)
+    )
+    return filtered
 
 
 def select_ranked_section_sample(
@@ -630,8 +852,16 @@ def _share_rows(
         selected_counts = selected_df.group_by(keys).agg(pl.len().alias("selected_rows"))
     merged = eligible_counts.join(selected_counts, on=keys, how="full").fill_null(0)
     if not total_keys:
-        eligible_total = int(eligible_df.height)
-        selected_total = int(selected_df.height)
+        eligible_total = (
+            int(eligible_counts["eligible_rows"].sum())
+            if "eligible_rows" in eligible_counts.columns
+            else int(eligible_df.height)
+        )
+        selected_total = (
+            int(selected_counts["selected_rows"].sum())
+            if "selected_rows" in selected_counts.columns
+            else int(selected_df.height)
+        )
         records: list[dict[str, Any]] = []
         for row in merged.sort(keys).to_dicts():
             eligible_share = (row["eligible_rows"] / eligible_total) if eligible_total else 0.0
@@ -666,28 +896,23 @@ def _share_rows(
 
 def _write_universe_summary(
     dataset_dir: Path,
-    universe_df: pl.DataFrame,
     *,
+    eligible_row_count: int,
+    eligible_doc_count: int,
+    year_counts: list[dict[str, Any]],
+    year_item_counts: list[dict[str, Any]],
+    item_counts: list[dict[str, Any]],
+    document_type_raw_counts: list[dict[str, Any]],
     universe_token_audit: dict[str, list[dict[str, Any]]] | None,
 ) -> None:
     payload = {
         "created_at_utc": _utc_timestamp(),
-        "eligible_rows": int(universe_df.height),
-        "eligible_docs": int(universe_df["doc_id"].n_unique()),
-        "year_counts": _counts_by_year(universe_df).to_dicts(),
-        "year_item_counts": _counts_by_year_item(universe_df).to_dicts(),
-        "item_counts": (
-            universe_df.group_by("benchmark_item_code")
-            .agg(pl.len().alias("eligible_rows"))
-            .sort("benchmark_item_code")
-            .to_dicts()
-        ),
-        "document_type_raw_counts": (
-            universe_df.group_by("document_type_raw")
-            .agg(pl.len().alias("eligible_rows"))
-            .sort("document_type_raw")
-            .to_dicts()
-        ),
+        "eligible_rows": eligible_row_count,
+        "eligible_docs": eligible_doc_count,
+        "year_counts": year_counts,
+        "year_item_counts": year_item_counts,
+        "item_counts": item_counts,
+        "document_type_raw_counts": document_type_raw_counts,
         "token_length_scope": "full_universe_audit" if universe_token_audit is not None else "selected_rows_only",
     }
     if universe_token_audit is not None:
@@ -698,11 +923,11 @@ def _write_universe_summary(
 def _write_sample_reports(
     dataset_dir: Path,
     sample_spec: BenchmarkSampleSpec,
-    universe_df: pl.DataFrame,
     sample_df: pl.DataFrame,
     year_allocations: pl.DataFrame,
     year_item_allocations: pl.DataFrame,
     *,
+    eligible_row_count: int,
     universe_token_audit: dict[str, list[dict[str, Any]]] | None,
 ) -> None:
     reports_dir = dataset_dir / "reports"
@@ -716,7 +941,7 @@ def _write_sample_reports(
         .with_columns(pl.lit(sample_spec.sample_name).alias("sample_name"))
         .with_columns(
             [
-                (pl.col("eligible_rows") / pl.lit(int(universe_df.height))).alias("eligible_share"),
+                (pl.col("eligible_rows") / pl.lit(eligible_row_count)).alias("eligible_share"),
                 (pl.col("selected_rows") / pl.lit(int(sample_df.height))).alias("selected_share"),
                 (pl.col("selected_rows") - pl.col("target_rows")).alias("selected_minus_target"),
             ]
@@ -896,225 +1121,565 @@ def _capacity_rows_by_year_item(year_item_allocations: pl.DataFrame) -> dict[tup
     }
 
 
+def _tmp_build_root(cfg: FinbertBenchmarkSuiteConfig) -> Path:
+    return cfg.out_root / f".tmp_finbert_build_seed{cfg.seed}"
+
+
+def _materialize_planning_universe(
+    cfg: FinbertBenchmarkSuiteConfig,
+    *,
+    tmp_root: Path,
+) -> Path:
+    planning_path = tmp_root / "planning_universe.parquet"
+    _load_skinny_planning_universe(cfg).sink_parquet(planning_path, compression=cfg.compression)
+    return planning_path
+
+
+def _collect_universe_summary_components(planning_path: Path) -> dict[str, Any]:
+    planning_lf = pl.scan_parquet(planning_path)
+    year_counts = (
+        planning_lf.group_by("filing_year")
+        .agg(pl.len().alias("eligible_rows"))
+        .sort("filing_year")
+        .collect()
+    )
+    year_item_counts = (
+        planning_lf.group_by(["filing_year", "benchmark_item_code"])
+        .agg(pl.len().alias("eligible_rows"))
+        .sort(["filing_year", "benchmark_item_code"])
+        .collect()
+    )
+    item_counts = (
+        planning_lf.group_by("benchmark_item_code")
+        .agg(pl.len().alias("eligible_rows"))
+        .sort("benchmark_item_code")
+        .collect()
+    )
+    document_type_raw_counts = (
+        planning_lf.group_by("document_type_raw")
+        .agg(pl.len().alias("eligible_rows"))
+        .sort("document_type_raw")
+        .collect()
+    )
+    eligible_doc_count = int(planning_lf.select(pl.col("doc_id").n_unique()).collect().item())
+    eligible_row_count = int(year_counts["eligible_rows"].sum()) if year_counts.height else 0
+    return {
+        "eligible_row_count": eligible_row_count,
+        "eligible_doc_count": eligible_doc_count,
+        "year_counts": year_counts,
+        "year_item_counts": year_item_counts,
+        "item_counts": item_counts,
+        "document_type_raw_counts": document_type_raw_counts,
+    }
+
+
+def _selected_key_columns() -> list[str]:
+    return [
+        "source_record_id",
+        "source_file_row_nr",
+        "source_year_file",
+        "doc_id",
+        "benchmark_item_code",
+        "filing_year",
+        "selection_key_hex",
+        "stratum_rank",
+        "selection_order",
+    ]
+
+
+def _empty_selected_sections_frame() -> pl.DataFrame:
+    return pl.DataFrame(
+        schema={
+            "source_record_id": pl.Utf8,
+            "source_file_row_nr": pl.UInt32,
+            "source_year_file": pl.Int32,
+            "selection_key_hex": pl.Utf8,
+            "stratum_rank": pl.UInt32,
+            "selection_order": pl.UInt32,
+            "doc_id": pl.Utf8,
+            "cik_10": pl.Utf8,
+            "accession_nodash": pl.Utf8,
+            "filing_date": pl.Date,
+            "filing_year": pl.Int32,
+            "document_type": pl.Utf8,
+            "document_type_raw": pl.Utf8,
+            "document_type_normalized": pl.Utf8,
+            "benchmark_item_code": pl.Utf8,
+            "benchmark_item_label": pl.Utf8,
+            "item_id": pl.Utf8,
+            "canonical_item": pl.Utf8,
+            "item_part": pl.Utf8,
+            "item_status": pl.Utf8,
+            "exists_by_regime": pl.Boolean,
+            "full_text": pl.Utf8,
+            "char_count": pl.Int32,
+        }
+    )
+
+
+def _empty_year_rows_frame() -> pl.DataFrame:
+    return pl.DataFrame(
+        schema={
+            "source_record_id": pl.Utf8,
+            "source_file_row_nr": pl.UInt32,
+            "source_year_file": pl.Int32,
+            "doc_id": pl.Utf8,
+            "cik_10": pl.Utf8,
+            "accession_nodash": pl.Utf8,
+            "filing_date": pl.Date,
+            "filing_year": pl.Int32,
+            "document_type": pl.Utf8,
+            "document_type_raw": pl.Utf8,
+            "document_type_normalized": pl.Utf8,
+            "benchmark_item_code": pl.Utf8,
+            "benchmark_item_label": pl.Utf8,
+            "item_id": pl.Utf8,
+            "canonical_item": pl.Utf8,
+            "item_part": pl.Utf8,
+            "item_status": pl.Utf8,
+            "exists_by_regime": pl.Boolean,
+            "full_text": pl.Utf8,
+            "char_count": pl.Int32,
+        }
+    )
+
+
+def _fetch_year_rows_for_row_numbers(
+    cfg: FinbertBenchmarkSuiteConfig,
+    *,
+    source_path: Path,
+    row_numbers: list[int],
+) -> pl.DataFrame:
+    if not row_numbers:
+        return _empty_year_rows_frame()
+
+    raw_lf = _scan_items_with_year_source_from_paths([source_path])
+    schema_names = set(raw_lf.collect_schema().names())
+    return (
+        raw_lf.filter(pl.col("source_file_row_nr").is_in(row_numbers))
+        .with_columns(
+            [
+                pl.col("doc_id").cast(pl.Utf8, strict=False).alias("doc_id"),
+                _normalize_cik_expr(schema_names),
+                _normalize_accession_expr(schema_names),
+                _normalize_filing_date_expr(schema_names),
+                _optional_utf8_expr("canonical_item", schema_names),
+                _optional_utf8_expr("item_part", schema_names),
+                _optional_utf8_expr("item_status", schema_names),
+                pl.col("item_id").cast(pl.Utf8, strict=False).str.to_uppercase().alias("item_id"),
+                pl.col("full_text").cast(pl.Utf8, strict=False).alias("full_text"),
+                (
+                    pl.col("exists_by_regime").cast(pl.Boolean, strict=False)
+                    if "exists_by_regime" in schema_names
+                    else pl.lit(True)
+                ).alias("exists_by_regime"),
+                _item_code_expr(cfg.target_items),
+                _item_label_expr(cfg.target_items),
+                *_document_type_exprs(schema_names),
+            ]
+        )
+        .with_columns(
+            [
+                pl.col("document_type_normalized").alias("document_type"),
+                pl.col("full_text").str.len_chars().cast(pl.Int32).alias("char_count"),
+                pl.col("filing_date").dt.year().cast(pl.Int32).alias("filing_year"),
+            ]
+        )
+        .select(
+            [
+                "source_record_id",
+                "source_file_row_nr",
+                "source_year_file",
+                "doc_id",
+                "cik_10",
+                "accession_nodash",
+                "filing_date",
+                "filing_year",
+                "document_type",
+                "document_type_raw",
+                "document_type_normalized",
+                "benchmark_item_code",
+                "benchmark_item_label",
+                "item_id",
+                "canonical_item",
+                "item_part",
+                "item_status",
+                "exists_by_regime",
+                "full_text",
+                "char_count",
+            ]
+        )
+        .collect()
+    )
+
+
+def _fetch_selected_sections(
+    cfg: FinbertBenchmarkSuiteConfig,
+    selected_keys: pl.DataFrame,
+) -> pl.DataFrame:
+    if selected_keys.is_empty():
+        return _empty_selected_sections_frame()
+
+    year_paths = {int(path.stem): path for path in _resolve_year_paths(cfg.source_items_dir)}
+    fetched_frames: list[pl.DataFrame] = []
+    for year_group in selected_keys.partition_by("source_year_file", maintain_order=True):
+        source_year = int(year_group["source_year_file"][0])
+        source_path = year_paths.get(source_year)
+        if source_path is None:
+            raise FileNotFoundError(f"Missing source parquet for year {source_year}")
+        row_numbers = [int(value) for value in year_group["source_file_row_nr"].to_list()]
+        year_rows = _fetch_year_rows_for_row_numbers(
+            cfg,
+            source_path=source_path,
+            row_numbers=row_numbers,
+        )
+        fetched_frames.append(
+            year_rows.join(
+                year_group.select(_selected_key_columns()),
+                on=["source_record_id", "source_file_row_nr", "source_year_file"],
+                how="inner",
+            )
+        )
+
+    return (
+        pl.concat(fetched_frames, how="vertical_relaxed")
+        .sort("selection_order")
+    )
+
+
 def _build_optional_universe_token_audit(
-    universe_lf: pl.LazyFrame,
-    authority: FinbertAuthoritySpec,
+    cfg: FinbertBenchmarkSuiteConfig,
+    planning_path: Path,
 ) -> dict[str, list[dict[str, Any]]]:
-    universe_token_df = annotate_finbert_token_lengths(
-        universe_lf.select(["filing_year", "benchmark_item_code", "full_text"]).collect(),
-        authority,
-        text_col="full_text",
-    )
-    overall = (
-        universe_token_df.group_by(FINBERT_TOKEN_BUCKET_COLUMN)
-        .agg(pl.len().alias("eligible_rows"))
-        .sort(FINBERT_TOKEN_BUCKET_COLUMN)
-        .to_dicts()
-    )
-    by_item = (
-        universe_token_df.group_by(["benchmark_item_code", FINBERT_TOKEN_BUCKET_COLUMN])
-        .agg(pl.len().alias("eligible_rows"))
-        .sort(["benchmark_item_code", FINBERT_TOKEN_BUCKET_COLUMN])
-        .to_dicts()
-    )
-    by_year = (
-        universe_token_df.group_by(["filing_year", FINBERT_TOKEN_BUCKET_COLUMN])
-        .agg(pl.len().alias("eligible_rows"))
-        .sort(["filing_year", FINBERT_TOKEN_BUCKET_COLUMN])
-        .to_dicts()
-    )
-    return {"overall": overall, "by_item": by_item, "by_year": by_year}
+    planning_lf = pl.scan_parquet(planning_path)
+    by_year_rows: list[dict[str, Any]] = []
+    by_item_rows: list[dict[str, Any]] = []
+    overall_rows: list[dict[str, Any]] = []
+    selected_by_year = planning_lf.select(
+        [
+            "source_year_file",
+            "source_record_id",
+            "source_file_row_nr",
+            "filing_year",
+            "benchmark_item_code",
+        ]
+    ).collect().partition_by("source_year_file", maintain_order=True)
+    year_paths = {int(path.stem): path for path in _resolve_year_paths(cfg.source_items_dir)}
+    for year_group in selected_by_year:
+        source_year = int(year_group["source_year_file"][0])
+        source_path = year_paths.get(source_year)
+        if source_path is None:
+            raise FileNotFoundError(f"Missing source parquet for year {source_year}")
+        fetched = _fetch_year_rows_for_row_numbers(
+            cfg,
+            source_path=source_path,
+            row_numbers=[int(value) for value in year_group["source_file_row_nr"].to_list()],
+        ).join(
+            year_group.select(
+                [
+                    "source_record_id",
+                    "source_file_row_nr",
+                    "source_year_file",
+                    "filing_year",
+                    "benchmark_item_code",
+                ]
+            ),
+            on=["source_record_id", "source_file_row_nr", "source_year_file", "filing_year", "benchmark_item_code"],
+            how="inner",
+        )
+        if fetched.is_empty():
+            continue
+        token_df = annotate_finbert_token_lengths_in_batches(
+            fetched.select(["filing_year", "benchmark_item_code", "full_text"]),
+            cfg.authority,
+            text_col="full_text",
+            batch_size=1024,
+        )
+        overall_rows.extend(
+            token_df.group_by(FINBERT_TOKEN_BUCKET_COLUMN)
+            .agg(pl.len().alias("eligible_rows"))
+            .sort(FINBERT_TOKEN_BUCKET_COLUMN)
+            .to_dicts()
+        )
+        by_item_rows.extend(
+            token_df.group_by(["benchmark_item_code", FINBERT_TOKEN_BUCKET_COLUMN])
+            .agg(pl.len().alias("eligible_rows"))
+            .sort(["benchmark_item_code", FINBERT_TOKEN_BUCKET_COLUMN])
+            .to_dicts()
+        )
+        by_year_rows.extend(
+            token_df.group_by(["filing_year", FINBERT_TOKEN_BUCKET_COLUMN])
+            .agg(pl.len().alias("eligible_rows"))
+            .sort(["filing_year", FINBERT_TOKEN_BUCKET_COLUMN])
+            .to_dicts()
+        )
+
+    def _aggregate(rows: list[dict[str, Any]], keys: list[str]) -> list[dict[str, Any]]:
+        if not rows:
+            return []
+        return (
+            pl.DataFrame(rows)
+            .group_by(keys)
+            .agg(pl.col("eligible_rows").sum())
+            .sort(keys)
+            .to_dicts()
+        )
+
+    return {
+        "overall": _aggregate(overall_rows, [FINBERT_TOKEN_BUCKET_COLUMN]),
+        "by_item": _aggregate(by_item_rows, ["benchmark_item_code", FINBERT_TOKEN_BUCKET_COLUMN]),
+        "by_year": _aggregate(by_year_rows, ["filing_year", FINBERT_TOKEN_BUCKET_COLUMN]),
+    }
 
 
 def build_finbert_benchmark_suite(
     cfg: FinbertBenchmarkSuiteConfig,
 ) -> dict[str, BenchmarkBuildArtifacts]:
     _validate_sample_specs(cfg.sample_specs)
-    universe_lf = load_eligible_section_universe(cfg)
-    candidate_df = _annotate_selection_keys(
-        universe_lf.select(["doc_id", "benchmark_item_code", "filing_year"]).collect(),
-        cfg.seed,
-    )
-    if candidate_df.is_empty():
-        raise ValueError("No eligible benchmark rows found after filtering.")
-
-    universe_df = universe_lf.drop("full_text").collect()
-    universe_counts_by_year = _counts_by_year(candidate_df)
-    universe_counts_by_year_item = _counts_by_year_item(candidate_df)
-    total_rows = int(candidate_df.height)
-
     sorted_specs = sorted(cfg.sample_specs, key=lambda spec: spec.sample_fraction, reverse=True)
-    selected_key_frames: dict[str, pl.DataFrame] = {}
-    selected_allocations: dict[str, tuple[pl.DataFrame, pl.DataFrame, str, BenchmarkSampleSpec | None]] = {}
-    parent_year_alloc: pl.DataFrame | None = None
-    parent_year_item_alloc: pl.DataFrame | None = None
-    parent_spec: BenchmarkSampleSpec | None = None
+    cfg.out_root.mkdir(parents=True, exist_ok=True)
+    tmp_root = _tmp_build_root(cfg)
+    if tmp_root.exists():
+        shutil.rmtree(tmp_root)
+    tmp_root.mkdir(parents=True, exist_ok=True)
 
-    for index, spec in enumerate(sorted_specs):
-        target_rows = _round_half_up_count(total_rows, spec.sample_fraction)
-        if index == 0 or not cfg.nested_samples:
-            nested_policy = "independent_year_then_within_year_item_hamilton"
-            year_alloc = _compute_year_allocations_for_target(
-                universe_counts_by_year,
-                target_rows,
-                ensure_all_years_present=cfg.ensure_all_years_present,
-            )
-            year_item_alloc = _compute_year_item_allocations_internal(
-                universe_counts_by_year_item,
+    build_succeeded = False
+    try:
+        planning_path = _materialize_planning_universe(cfg, tmp_root=tmp_root)
+        planning_summary = _collect_universe_summary_components(planning_path)
+        total_rows = int(planning_summary["eligible_row_count"])
+        if total_rows <= 0:
+            raise ValueError("No eligible benchmark rows found after filtering.")
+
+        universe_counts_by_year = planning_summary["year_counts"]
+        universe_counts_by_year_item = planning_summary["year_item_counts"]
+
+        selected_key_frames: dict[str, pl.DataFrame] = {}
+        selected_allocations: dict[str, tuple[pl.DataFrame, pl.DataFrame, str, BenchmarkSampleSpec | None]] = {}
+        parent_year_alloc: pl.DataFrame | None = None
+        parent_year_item_alloc: pl.DataFrame | None = None
+        parent_spec: BenchmarkSampleSpec | None = None
+        largest_selected_keys: pl.DataFrame | None = None
+
+        for index, spec in enumerate(sorted_specs):
+            target_rows = _round_half_up_count(total_rows, spec.sample_fraction)
+            if index == 0 or not cfg.nested_samples:
+                nested_policy = "independent_year_then_within_year_item_hamilton"
+                year_alloc = _compute_year_allocations_for_target(
+                    universe_counts_by_year,
+                    target_rows,
+                    ensure_all_years_present=cfg.ensure_all_years_present,
+                )
+                year_item_alloc = _compute_year_item_allocations_internal(
+                    universe_counts_by_year_item,
+                    year_alloc,
+                )
+                parent_for_spec = None
+                selected_keys = _select_ranked_from_planning_path(
+                    planning_path,
+                    year_item_alloc,
+                    seed=cfg.seed,
+                )
+                if index == 0:
+                    selected_keys.write_parquet(
+                        tmp_root / "selected_parent_keys.parquet",
+                        compression=cfg.compression,
+                    )
+            else:
+                nested_policy = "strict_nested_constrained_year_then_within_year_item_hamilton"
+                assert parent_year_alloc is not None
+                assert parent_year_item_alloc is not None
+                assert largest_selected_keys is not None
+                year_alloc = _compute_year_allocations_for_target(
+                    universe_counts_by_year,
+                    target_rows,
+                    ensure_all_years_present=cfg.ensure_all_years_present,
+                    capacity_rows_by_year=_capacity_rows_by_year(parent_year_alloc),
+                )
+                year_item_alloc = _compute_year_item_allocations_internal(
+                    universe_counts_by_year_item,
+                    year_alloc,
+                    capacity_rows_by_year_item=_capacity_rows_by_year_item(parent_year_item_alloc),
+                )
+                parent_for_spec = parent_spec
+                selected_keys = _derive_nested_selected_keys(
+                    largest_selected_keys,
+                    year_item_alloc,
+                )
+
+            selected_key_frames[spec.sample_name] = selected_keys
+            selected_allocations[spec.sample_name] = (
                 year_alloc,
+                year_item_alloc,
+                nested_policy,
+                parent_for_spec,
             )
-            parent_for_spec = None
-        else:
-            nested_policy = "strict_nested_constrained_year_then_within_year_item_hamilton"
-            assert parent_year_alloc is not None
-            assert parent_year_item_alloc is not None
-            year_alloc = _compute_year_allocations_for_target(
-                universe_counts_by_year,
-                target_rows,
-                ensure_all_years_present=cfg.ensure_all_years_present,
-                capacity_rows_by_year=_capacity_rows_by_year(parent_year_alloc),
-            )
-            year_item_alloc = _compute_year_item_allocations_internal(
-                universe_counts_by_year_item,
-                year_alloc,
-                capacity_rows_by_year_item=_capacity_rows_by_year_item(parent_year_item_alloc),
-            )
-            parent_for_spec = parent_spec
+            if index == 0:
+                largest_selected_keys = selected_keys
+            parent_year_alloc = year_alloc
+            parent_year_item_alloc = year_item_alloc
+            parent_spec = spec
 
-        selected_key_frames[spec.sample_name] = _select_ranked_from_df(candidate_df, year_item_alloc)
-        selected_allocations[spec.sample_name] = (
-            year_alloc,
-            year_item_alloc,
-            nested_policy,
-            parent_for_spec,
-        )
-        parent_year_alloc = year_alloc
-        parent_year_item_alloc = year_item_alloc
-        parent_spec = spec
-
-    universe_token_audit = (
-        _build_optional_universe_token_audit(universe_lf, cfg.authority)
-        if cfg.write_full_universe_token_audit
-        else None
-    )
-
-    artifacts: dict[str, BenchmarkBuildArtifacts] = {}
-    for spec in sorted_specs:
-        selected_keys = selected_key_frames[spec.sample_name].select(
-            ["doc_id", "benchmark_item_code", "selection_order"]
-        )
-        selected_sections = (
-            universe_lf.join(
-                selected_keys.lazy(),
-                on=["doc_id", "benchmark_item_code"],
-                how="inner",
-            )
-            .collect()
-            .sort("selection_order")
-        )
-        selected_sections = _annotate_selected_metadata(selected_sections, cfg.authority)
-        output_df = _coerce_output_columns(selected_sections)
-
-        year_alloc, year_item_alloc, nested_policy, parent_for_spec = selected_allocations[spec.sample_name]
-        dataset_tag = _sample_dataset_tag(spec, cfg.seed)
-        dataset_dir = cfg.out_root / dataset_tag
-        dataset_path = dataset_dir / "dataset" / SECTION_DATASET_FILENAME
-        manifest_path = dataset_dir / BENCHMARK_MANIFEST_FILENAME
-        sentences_path: Path | None = None
-
-        dataset_dir.mkdir(parents=True, exist_ok=True)
-        _write_inventory(dataset_dir, cfg)
-        _write_universe_summary(dataset_dir, universe_df, universe_token_audit=universe_token_audit)
-        _write_sample_reports(
-            dataset_dir,
-            spec,
-            universe_df,
-            output_df,
-            year_alloc,
-            year_item_alloc,
-            universe_token_audit=universe_token_audit,
+        universe_token_audit = (
+            _build_optional_universe_token_audit(cfg, planning_path)
+            if cfg.write_full_universe_token_audit
+            else None
         )
 
-        dataset_path.parent.mkdir(parents=True, exist_ok=True)
-        output_df.write_parquet(dataset_path, compression=cfg.compression)
+        parent_sample_name = sorted_specs[0].sample_name
+        parent_selected_keys = selected_key_frames[parent_sample_name]
+        parent_sections_annotated = _annotate_selected_metadata(
+            _fetch_selected_sections(cfg, parent_selected_keys),
+            cfg.authority,
+        )
 
-        if cfg.sentence_dataset.enabled:
-            sentences_path = dataset_dir / "derived" / SENTENCE_DATASET_FILENAME
-            materialize_sentence_benchmark_dataset(
-                dataset_path,
-                cfg.sentence_dataset,
-                authority=cfg.authority,
-                compression=cfg.sentence_dataset.compression,
-                out_path=sentences_path,
+        artifacts: dict[str, BenchmarkBuildArtifacts] = {}
+        for spec in sorted_specs:
+            year_alloc, year_item_alloc, nested_policy, parent_for_spec = selected_allocations[spec.sample_name]
+            if spec.sample_name == parent_sample_name:
+                selected_sections = parent_sections_annotated
+            elif cfg.nested_samples:
+                child_selection = selected_key_frames[spec.sample_name].select(
+                    [
+                        "source_record_id",
+                        pl.col("selection_order").alias("child_selection_order"),
+                    ]
+                )
+                selected_sections = (
+                    parent_sections_annotated.join(
+                        child_selection,
+                        on="source_record_id",
+                        how="inner",
+                    )
+                    .drop("selection_order")
+                    .rename({"child_selection_order": "selection_order"})
+                    .sort("selection_order")
+                )
+            else:
+                selected_sections = _annotate_selected_metadata(
+                    _fetch_selected_sections(cfg, selected_key_frames[spec.sample_name]),
+                    cfg.authority,
+                )
+
+            output_df = _coerce_output_columns(selected_sections)
+            dataset_tag = _sample_dataset_tag(spec, cfg.seed)
+            dataset_dir = cfg.out_root / dataset_tag
+            dataset_path = dataset_dir / "dataset" / SECTION_DATASET_FILENAME
+            manifest_path = dataset_dir / BENCHMARK_MANIFEST_FILENAME
+            sentences_path: Path | None = None
+
+            dataset_dir.mkdir(parents=True, exist_ok=True)
+            _write_inventory(dataset_dir, cfg)
+            _write_universe_summary(
+                dataset_dir,
+                eligible_row_count=int(planning_summary["eligible_row_count"]),
+                eligible_doc_count=int(planning_summary["eligible_doc_count"]),
+                year_counts=planning_summary["year_counts"].to_dicts(),
+                year_item_counts=planning_summary["year_item_counts"].to_dicts(),
+                item_counts=planning_summary["item_counts"].to_dicts(),
+                document_type_raw_counts=planning_summary["document_type_raw_counts"].to_dicts(),
+                universe_token_audit=universe_token_audit,
             )
-
-        manifest = {
-            "spec_version": "1.1",
-            "dataset_tag": dataset_tag,
-            "dataset_name": "finbert_10k_items",
-            "created_at_utc": _utc_timestamp(),
-            "config": _serializable_config(
-                cfg,
+            _write_sample_reports(
+                dataset_dir,
                 spec,
-                parent_spec=parent_for_spec,
-                nested_policy=nested_policy,
-            ),
-            "eligibility": {
-                "raw_form_allowlist": list(cfg.form_types),
-                "normalized_form_allowlist": ["10-K"],
-                "required_item_status": "active" if cfg.require_active_items else None,
-                "require_exists_by_regime": cfg.require_exists_by_regime,
-                "min_char_count": cfg.min_char_count,
-                "dedupe_key": ["doc_id", "benchmark_item_code"],
-                "dedupe_sort": [
-                    "doc_id",
-                    "benchmark_item_code",
-                    "char_count_desc",
-                    "canonical_item",
-                    "filename",
-                    "accession_nodash",
-                ],
-            },
-            "authority": asdict(cfg.authority),
-            "selection": {
-                "allocation_policy": "year_then_within_year_item_hamilton",
-                "nested_policy": nested_policy,
-                "selection_key_fields": ["doc_id", "benchmark_item_code"],
-                "selection_hash": "sha256",
-                "nested_samples": cfg.nested_samples,
-                "nested_from": (
-                    _sample_dataset_tag(parent_for_spec, cfg.seed)
-                    if parent_for_spec is not None
-                    else None
+                output_df,
+                year_alloc,
+                year_item_alloc,
+                eligible_row_count=int(planning_summary["eligible_row_count"]),
+                universe_token_audit=universe_token_audit,
+            )
+
+            dataset_path.parent.mkdir(parents=True, exist_ok=True)
+            output_df.write_parquet(dataset_path, compression=cfg.compression)
+
+            if cfg.sentence_dataset.enabled:
+                sentences_path = dataset_dir / "derived" / SENTENCE_DATASET_FILENAME
+                materialize_sentence_benchmark_dataset(
+                    dataset_path,
+                    cfg.sentence_dataset,
+                    authority=cfg.authority,
+                    compression=cfg.sentence_dataset.compression,
+                    out_path=sentences_path,
+                )
+
+            manifest = {
+                "spec_version": "1.1",
+                "dataset_tag": dataset_tag,
+                "dataset_name": "finbert_10k_items",
+                "created_at_utc": _utc_timestamp(),
+                "config": _serializable_config(
+                    cfg,
+                    spec,
+                    parent_spec=parent_for_spec,
+                    nested_policy=nested_policy,
                 ),
-                "strict_subset_of_parent": parent_for_spec is not None,
-            },
-            "counts": {
-                "eligible_rows": int(universe_df.height),
-                "eligible_docs": int(universe_df["doc_id"].n_unique()),
-                "selected_rows": int(output_df.height),
-                "selected_docs": int(output_df["doc_id"].n_unique()),
-            },
-            "token_length_scope": {
-                "selected_rows_tokenized": True,
-                "full_universe_token_audit_written": cfg.write_full_universe_token_audit,
-                "authority_max_length": cfg.authority.token_count_max_length,
-            },
-            "artifacts": {
-                "sections_path": str(dataset_path.resolve()),
-                "sentences_path": str(sentences_path.resolve()) if sentences_path is not None else None,
-            },
-        }
-        _write_json(manifest_path, manifest)
+                "eligibility": {
+                    "raw_form_allowlist": list(cfg.form_types),
+                    "normalized_form_allowlist": ["10-K"],
+                    "required_item_status": "active" if cfg.require_active_items else None,
+                    "require_exists_by_regime": cfg.require_exists_by_regime,
+                    "min_char_count": cfg.min_char_count,
+                    "dedupe_key": ["doc_id", "benchmark_item_code"],
+                    "dedupe_sort": [
+                        "doc_id",
+                        "benchmark_item_code",
+                        "char_count_desc",
+                        "canonical_item",
+                        "filename",
+                        "accession_nodash",
+                    ],
+                },
+                "authority": asdict(cfg.authority),
+                "selection": {
+                    "allocation_policy": "year_then_within_year_item_hamilton",
+                    "nested_policy": nested_policy,
+                    "selection_key_fields": ["doc_id", "benchmark_item_code"],
+                    "selection_hash": "sha256",
+                    "nested_samples": cfg.nested_samples,
+                    "nested_from": (
+                        _sample_dataset_tag(parent_for_spec, cfg.seed)
+                        if parent_for_spec is not None
+                        else None
+                    ),
+                    "strict_subset_of_parent": parent_for_spec is not None,
+                },
+                "counts": {
+                    "eligible_rows": int(planning_summary["eligible_row_count"]),
+                    "eligible_docs": int(planning_summary["eligible_doc_count"]),
+                    "selected_rows": int(output_df.height),
+                    "selected_docs": int(output_df["doc_id"].n_unique()),
+                },
+                "token_length_scope": {
+                    "selected_rows_tokenized": True,
+                    "full_universe_token_audit_written": cfg.write_full_universe_token_audit,
+                    "authority_max_length": cfg.authority.token_count_max_length,
+                },
+                "builder_execution": {
+                    "planning_strategy": "skinny_temp_universe_then_parent_materialization",
+                    "largest_sample_materialized_directly": parent_sample_name,
+                    "nested_child_samples_derived_from_parent": cfg.nested_samples,
+                    "temp_root": str(tmp_root.resolve()),
+                },
+                "artifacts": {
+                    "sections_path": str(dataset_path.resolve()),
+                    "sentences_path": str(sentences_path.resolve()) if sentences_path is not None else None,
+                },
+            }
+            _write_json(manifest_path, manifest)
 
-        artifacts[spec.sample_name] = BenchmarkBuildArtifacts(
-            dataset_tag=dataset_tag,
-            dataset_dir=dataset_dir,
-            sections_path=dataset_path,
-            sentences_path=sentences_path,
-            manifest_path=manifest_path,
-            selected_row_count=int(output_df.height),
-            selected_doc_count=int(output_df["doc_id"].n_unique()),
-        )
+            artifacts[spec.sample_name] = BenchmarkBuildArtifacts(
+                dataset_tag=dataset_tag,
+                dataset_dir=dataset_dir,
+                sections_path=dataset_path,
+                sentences_path=sentences_path,
+                manifest_path=manifest_path,
+                selected_row_count=int(output_df.height),
+                selected_doc_count=int(output_df["doc_id"].n_unique()),
+            )
 
-    return artifacts
+        build_succeeded = True
+        return artifacts
+    finally:
+        if build_succeeded and tmp_root.exists():
+            shutil.rmtree(tmp_root)
