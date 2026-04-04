@@ -41,8 +41,17 @@ def run_finbert_benchmark_sweep(
             "run_name": summary["run_name"],
             "batch_config_name": batch_config.name,
             "dataset_tag": summary["dataset_tag"],
+            "sections_rows": summary.get("sections_rows"),
             "sentence_rows": summary["sentence_rows"],
             "sentence_source": summary["sentence_source"],
+            "sentence_source_reason": summary.get("sentence_source_reason"),
+            "sentence_split_seconds": summary["sentence_split"]["median_seconds"],
+            "sentence_materialization_seconds": summary.get("sentence_materialization_seconds"),
+            "resolved_device": summary.get("runtime_environment", {}).get("resolved_device"),
+            "cuda_device_name": summary.get("runtime_environment", {}).get("cuda_device_name"),
+            "full_pipeline_includes_sentence_splitting": summary.get("benchmark_scope", {}).get(
+                "full_pipeline_includes_sentence_splitting"
+            ),
             "tokenizer_seconds": summary["tokenizer"]["seconds"],
             "tokenizer_rows_per_second": summary["tokenizer"]["rows_per_second"],
             "model_seconds": summary["model"]["seconds"],

@@ -1062,6 +1062,7 @@ def _serializable_config(
         "sample_fraction": sample_spec.sample_fraction,
         "seed": cfg.seed,
         "compression": cfg.compression,
+        "sentence_dataset": asdict(cfg.sentence_dataset),
         "form_types": list(cfg.form_types),
         "target_items": [asdict(item) for item in cfg.target_items],
         "require_active_items": cfg.require_active_items,

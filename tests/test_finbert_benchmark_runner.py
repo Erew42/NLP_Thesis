@@ -172,4 +172,101 @@ def test_run_finbert_benchmark_reads_manifest_and_writes_artifacts(tmp_path: Pat
     summary = json.loads(artifacts.summary_path.read_text(encoding="utf-8"))
     assert summary["dataset_tag"] == "finbert_10k_items_5pct_seed42"
     assert summary["sentence_source"] == "precomputed"
+    assert summary["sentence_source_reason"] == "registered_precomputed_sentence_artifact"
     assert summary["sentence_rows"] == 3
+    assert summary["sentence_materialization"]["registered_sentences_path"] == str(sentences_path.resolve())
+    assert summary["dataset_manifest_diagnostics"]["warnings"] == []
+    assert summary["runtime_environment"]["resolved_device"] == "cpu"
+    assert summary["runtime_environment"]["autocast_enabled"] is False
+    assert summary["benchmark_scope"]["full_pipeline_includes_sentence_splitting"] is False
+
+
+def test_run_finbert_benchmark_reports_unregistered_sentence_artifact(tmp_path: Path, monkeypatch) -> None:
+    sections_path = tmp_path / "dataset" / "finbert_10k_item_sections.parquet"
+    sentences_path = tmp_path / "derived" / "finbert_10k_item_sentences.parquet"
+    sections_path.parent.mkdir(parents=True, exist_ok=True)
+    sentences_path.parent.mkdir(parents=True, exist_ok=True)
+
+    pl.DataFrame(
+        {
+            "benchmark_row_id": ["doc1:item_1"],
+            "doc_id": ["doc1"],
+            "filing_date": [None],
+            "filing_year": [2000],
+            "benchmark_item_code": ["item_1"],
+            "full_text": ["First sentence. Second sentence."],
+        }
+    ).write_parquet(sections_path)
+    sentence_df = pl.DataFrame(
+        {
+            "benchmark_sentence_id": ["doc1:item_1:0", "doc1:item_1:1"],
+            "benchmark_row_id": ["doc1:item_1", "doc1:item_1"],
+            "doc_id": ["doc1", "doc1"],
+            "filing_date": [None, None],
+            "filing_year": [2000, 2000],
+            "benchmark_item_code": ["item_1", "item_1"],
+            "sentence_index": [0, 1],
+            "sentence_text": ["First sentence", "Second sentence"],
+            "sentence_char_count": [14, 15],
+            "sentencizer_backend": ["spacy_blank_en_sentencizer"] * 2,
+            "sentencizer_version": ["test"] * 2,
+            "finbert_token_count_512": [6, 6],
+            "finbert_token_bucket_512": ["short", "short"],
+        }
+    )
+    sentence_df.write_parquet(sentences_path)
+
+    manifest_path = tmp_path / "dataset_manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "dataset_tag": "finbert_10k_items_1pct_seed42",
+                "artifacts": {
+                    "sections_path": str(sections_path.resolve()),
+                    "sentences_path": None,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    from thesis_pkg.benchmarking import finbert_benchmark
+
+    monkeypatch.setattr(finbert_benchmark, "_import_torch", lambda: _FakeTorch())
+    monkeypatch.setattr(finbert_benchmark, "load_finbert_tokenizer", lambda authority: _FakeTokenizer())
+    monkeypatch.setattr(finbert_benchmark, "load_finbert_model", lambda authority, runtime: _FakeModel())
+    monkeypatch.setattr(finbert_benchmark, "derive_sentence_frame", lambda sections_df, sentence_cfg, *, authority: sentence_df)
+    monkeypatch.setattr(
+        finbert_benchmark,
+        "benchmark_sentence_splitting",
+        lambda sections_df, sentence_cfg, *, runs: {
+            "stage": "sentence_split",
+            "documents": int(sections_df.height),
+            "total_sentences": 2,
+            "median_seconds": 0.01,
+            "docs_per_second": 100.0,
+            "sentences_per_second": 200.0,
+            "sentencizer_backend": sentence_cfg.sentencizer_backend,
+            "sentencizer_version": "test",
+        },
+    )
+
+    artifacts = run_finbert_benchmark(
+        FinbertBenchmarkRunConfig(
+            dataset_manifest_path=manifest_path,
+            out_root=tmp_path / "runs",
+            batch_config=BucketBatchConfig(name="cpu_smoke", short_batch_size=2, medium_batch_size=2, long_batch_size=2),
+            run_name="warning_run",
+        )
+    )
+
+    summary = json.loads(artifacts.summary_path.read_text(encoding="utf-8"))
+    assert summary["sentence_source"] == "derived_runtime"
+    assert summary["sentence_source_reason"] == "no_registered_precomputed_sentence_artifact"
+    assert summary["dataset_manifest_diagnostics"]["registered_sentences_path"] is None
+    assert summary["dataset_manifest_diagnostics"]["unregistered_sentence_artifact_path"] == str(
+        sentences_path.resolve()
+    )
+    assert "unregistered_sentence_artifact_present_but_not_registered" in summary["dataset_manifest_diagnostics"][
+        "warnings"
+    ]

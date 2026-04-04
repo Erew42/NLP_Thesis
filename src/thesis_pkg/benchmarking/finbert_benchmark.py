@@ -24,6 +24,8 @@ from thesis_pkg.benchmarking.sentences import derive_sentence_frame
 from thesis_pkg.benchmarking.token_lengths import FINBERT_TOKEN_BUCKET_COLUMN
 from thesis_pkg.benchmarking.token_lengths import load_finbert_tokenizer
 
+SENTENCE_DATASET_FILENAME = "finbert_10k_item_sentences.parquet"
+
 
 def _import_bert_model_class():
     try:
@@ -49,6 +51,57 @@ def _import_torch():
 
 def _load_manifest(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _inspect_dataset_manifest(
+    dataset_manifest: dict[str, Any],
+    *,
+    manifest_path: Path,
+) -> dict[str, Any]:
+    artifacts = dataset_manifest.get("artifacts")
+    if not isinstance(artifacts, dict):
+        raise ValueError(f"Dataset manifest {manifest_path} is missing an 'artifacts' mapping.")
+
+    sections_raw = artifacts.get("sections_path")
+    if not sections_raw:
+        raise ValueError(f"Dataset manifest {manifest_path} is missing artifacts.sections_path.")
+
+    sections_path = Path(str(sections_raw))
+    if not sections_path.exists():
+        raise FileNotFoundError(
+            f"Dataset manifest {manifest_path} references missing sections parquet: {sections_path}"
+        )
+
+    registered_sentences_path: Path | None = None
+    registered_sentences_raw = artifacts.get("sentences_path")
+    if registered_sentences_raw:
+        registered_sentences_path = Path(str(registered_sentences_raw))
+
+    warnings: list[str] = []
+    if registered_sentences_path is not None and not registered_sentences_path.exists():
+        warnings.append("registered_sentences_path_missing")
+
+    unregistered_sentence_path: Path | None = None
+    if registered_sentences_path is None and sections_path.parent.name == "dataset":
+        candidate = sections_path.parent.parent / "derived" / SENTENCE_DATASET_FILENAME
+        if candidate.exists():
+            unregistered_sentence_path = candidate
+            warnings.append("unregistered_sentence_artifact_present_but_not_registered")
+
+    return {
+        "manifest_path": str(manifest_path.resolve()),
+        "sections_path": str(sections_path.resolve()),
+        "registered_sentences_path": (
+            str(registered_sentences_path.resolve()) if registered_sentences_path is not None else None
+        ),
+        "registered_sentences_available": (
+            registered_sentences_path is not None and registered_sentences_path.exists()
+        ),
+        "unregistered_sentence_artifact_path": (
+            str(unregistered_sentence_path.resolve()) if unregistered_sentence_path is not None else None
+        ),
+        "warnings": warnings,
+    }
 
 
 def _resolve_device(runtime: FinbertRuntimeConfig) -> str:
@@ -100,19 +153,87 @@ def _peak_vram_gb(torch_mod, device: str) -> float | None:
     return None
 
 
-def _autocast_context(torch_mod, runtime: FinbertRuntimeConfig, device: str):
+def _resolved_amp_dtype_name(torch_mod, runtime: FinbertRuntimeConfig, device: str) -> str | None:
     if not runtime.use_autocast or not device.startswith("cuda") or not torch_mod.cuda.is_available():
+        return None
+    if runtime.amp_dtype == "auto":
+        return "float16"
+    if runtime.amp_dtype in {"float16", "bfloat16"}:
+        return runtime.amp_dtype
+    raise ValueError(f"Unsupported amp_dtype: {runtime.amp_dtype!r}")
+
+
+def _autocast_context(torch_mod, runtime: FinbertRuntimeConfig, device: str):
+    resolved_dtype_name = _resolved_amp_dtype_name(torch_mod, runtime, device)
+    if resolved_dtype_name is None:
         return nullcontext()
-    dtype_name = runtime.amp_dtype
-    if dtype_name == "auto":
+    if resolved_dtype_name == "float16":
         dtype = torch_mod.float16
-    elif dtype_name == "float16":
-        dtype = torch_mod.float16
-    elif dtype_name == "bfloat16":
+    elif resolved_dtype_name == "bfloat16":
         dtype = torch_mod.bfloat16
     else:
-        raise ValueError(f"Unsupported amp_dtype: {dtype_name!r}")
+        raise ValueError(f"Unsupported amp dtype after resolution: {resolved_dtype_name!r}")
     return torch_mod.autocast(device_type="cuda", dtype=dtype)
+
+
+def _device_index(device: str) -> int:
+    if ":" not in device:
+        return 0
+    _, index = device.split(":", maxsplit=1)
+    try:
+        return int(index)
+    except ValueError:
+        return 0
+
+
+def _runtime_environment(runtime: FinbertRuntimeConfig, device: str) -> dict[str, Any]:
+    torch = _import_torch()
+    cuda_mod = getattr(torch, "cuda", None)
+    cuda_available = bool(cuda_mod is not None and cuda_mod.is_available())
+
+    environment: dict[str, Any] = {
+        "requested_device": runtime.device,
+        "resolved_device": device,
+        "torch_version": getattr(torch, "__version__", None),
+        "cuda_available": cuda_available,
+        "cuda_device_count": None,
+        "cuda_device_name": None,
+        "cuda_total_memory_gb": None,
+        "autocast_enabled": _resolved_amp_dtype_name(torch, runtime, device) is not None,
+        "resolved_amp_dtype": _resolved_amp_dtype_name(torch, runtime, device),
+    }
+    if not cuda_available:
+        return environment
+
+    device_count = getattr(cuda_mod, "device_count", None)
+    if callable(device_count):
+        environment["cuda_device_count"] = int(device_count())
+
+    if not device.startswith("cuda"):
+        return environment
+
+    device_index = _device_index(device)
+    get_device_name = getattr(cuda_mod, "get_device_name", None)
+    if callable(get_device_name):
+        environment["cuda_device_name"] = str(get_device_name(device_index))
+
+    get_device_properties = getattr(cuda_mod, "get_device_properties", None)
+    if callable(get_device_properties):
+        props = get_device_properties(device_index)
+        total_memory = getattr(props, "total_memory", None)
+        if total_memory is not None:
+            environment["cuda_total_memory_gb"] = float(total_memory / (1024**3))
+
+    return environment
+
+
+def _benchmark_scope() -> dict[str, Any]:
+    return {
+        "sentence_split_measured_separately": True,
+        "sentence_materialization_includes_token_length_annotation": True,
+        "full_pipeline_definition": "tokenizer_and_model_over_sentence_rows",
+        "full_pipeline_includes_sentence_splitting": False,
+    }
 
 
 def _tokenize_text_batches(
@@ -406,7 +527,11 @@ def run_finbert_benchmark(
     runtime: FinbertRuntimeConfig = FinbertRuntimeConfig(),
 ) -> FinbertBenchmarkRunArtifacts:
     dataset_manifest = _load_manifest(run_cfg.dataset_manifest_path)
-    sections_path = Path(dataset_manifest["artifacts"]["sections_path"])
+    manifest_diagnostics = _inspect_dataset_manifest(
+        dataset_manifest,
+        manifest_path=run_cfg.dataset_manifest_path,
+    )
+    sections_path = Path(manifest_diagnostics["sections_path"])
     sections_df = pl.read_parquet(sections_path)
 
     sentence_stats = benchmark_sentence_splitting(
@@ -415,15 +540,17 @@ def run_finbert_benchmark(
         runs=run_cfg.stage_runs.sentence_split_runs,
     )
 
-    precomputed_sentences = dataset_manifest["artifacts"].get("sentences_path")
+    precomputed_sentences = manifest_diagnostics["registered_sentences_path"]
     sentence_source = "derived_runtime"
     sentence_frame_path: Path | None = None
     sentence_materialization_seconds = 0.0
+    sentence_source_reason = "policy_forced_runtime_sentence_derivation"
     if run_cfg.sentence_policy == "prefer_precomputed" and precomputed_sentences:
         sentence_frame_path = Path(precomputed_sentences)
         if sentence_frame_path.exists():
             sentences_df = pl.read_parquet(sentence_frame_path)
             sentence_source = "precomputed"
+            sentence_source_reason = "registered_precomputed_sentence_artifact"
         else:
             start = time.perf_counter()
             sentences_df = derive_sentence_frame(
@@ -432,6 +559,17 @@ def run_finbert_benchmark(
                 authority=authority,
             )
             sentence_materialization_seconds = time.perf_counter() - start
+            sentence_source_reason = "registered_sentence_artifact_missing"
+            sentence_frame_path = None
+    elif run_cfg.sentence_policy == "prefer_precomputed":
+        start = time.perf_counter()
+        sentences_df = derive_sentence_frame(
+            sections_df,
+            run_cfg.sentence_dataset,
+            authority=authority,
+        )
+        sentence_materialization_seconds = time.perf_counter() - start
+        sentence_source_reason = "no_registered_precomputed_sentence_artifact"
     else:
         start = time.perf_counter()
         sentences_df = derive_sentence_frame(
@@ -440,7 +578,11 @@ def run_finbert_benchmark(
             authority=authority,
         )
         sentence_materialization_seconds = time.perf_counter() - start
+        sentence_source_reason = "policy_forced_runtime_sentence_derivation"
 
+    resolved_device = _resolve_device(runtime)
+    runtime_environment = _runtime_environment(runtime, resolved_device)
+    benchmark_scope = _benchmark_scope()
     tokenizer = load_finbert_tokenizer(authority)
     model = load_finbert_model(authority, runtime)
     tokenizer_df = benchmark_tokenizer_only(
@@ -506,8 +648,19 @@ def run_finbert_benchmark(
         "sections_rows": int(sections_df.height),
         "sentence_rows": int(sentences_df.height),
         "sentence_source": sentence_source,
+        "sentence_source_reason": sentence_source_reason,
         "sentence_split": sentence_stats,
         "sentence_materialization_seconds": sentence_materialization_seconds,
+        "sentence_materialization": {
+            "policy": run_cfg.sentence_policy,
+            "source": sentence_source,
+            "source_reason": sentence_source_reason,
+            "registered_sentences_path": manifest_diagnostics["registered_sentences_path"],
+            "seconds": sentence_materialization_seconds,
+        },
+        "dataset_manifest_diagnostics": manifest_diagnostics,
+        "runtime_environment": runtime_environment,
+        "benchmark_scope": benchmark_scope,
         "tokenizer": _stage_summary(tokenizer_df),
         "model": _stage_summary(model_df),
         "full_pipeline": _stage_summary(full_df),
@@ -527,6 +680,11 @@ def run_finbert_benchmark(
             "stage_runs": run_cfg.stage_runs.__dict__,
             "sentence_policy": run_cfg.sentence_policy,
             "sentence_source": sentence_source,
+            "sentence_source_reason": sentence_source_reason,
+            "sentence_materialization": summary["sentence_materialization"],
+            "dataset_manifest_diagnostics": manifest_diagnostics,
+            "runtime_environment": runtime_environment,
+            "benchmark_scope": benchmark_scope,
             "note": run_cfg.note,
             "artifacts": {
                 "records_path": str(records_path.resolve()),
@@ -534,6 +692,7 @@ def run_finbert_benchmark(
                 "model_results_path": str(model_results_path.resolve()),
                 "full_pipeline_results_path": str(full_pipeline_results_path.resolve()),
                 "summary_path": str(summary_path.resolve()),
+                "sentence_frame_path": str(sentence_frame_path.resolve()) if sentence_frame_path is not None else None,
             },
         },
     )

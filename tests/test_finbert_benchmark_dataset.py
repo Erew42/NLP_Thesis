@@ -8,6 +8,7 @@ import pytest
 
 from thesis_pkg.benchmarking.contracts import BenchmarkSampleSpec
 from thesis_pkg.benchmarking.contracts import FinbertBenchmarkSuiteConfig
+from thesis_pkg.benchmarking.contracts import SentenceDatasetConfig
 from thesis_pkg.benchmarking.finbert_dataset import _constrained_hamilton_apportion
 from thesis_pkg.benchmarking.finbert_dataset import _tmp_build_root
 from thesis_pkg.benchmarking.finbert_dataset import build_finbert_benchmark_suite
@@ -322,6 +323,83 @@ def test_build_finbert_benchmark_suite_matches_control_selection_for_parent_samp
 
     assert built_selected["benchmark_row_id"].to_list() == control_selected["benchmark_row_id"].to_list()
     assert built_selected["selection_order"].to_list() == control_selected["selection_order"].to_list()
+
+
+def test_build_finbert_benchmark_suite_records_sentence_dataset_artifact_when_enabled(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source_dir = tmp_path / "items_analysis"
+    _write_parquet(source_dir / "2000.parquet", _sample_rows(2000, 20, include_item_1a=True, include_10k405=True))
+
+    from thesis_pkg.benchmarking import finbert_dataset
+
+    monkeypatch.setattr(
+        finbert_dataset,
+        "annotate_finbert_token_lengths_in_batches",
+        _fake_annotate_finbert_token_lengths,
+    )
+
+    captured: dict[str, object] = {}
+
+    def _fake_materialize(
+        sections_path: Path,
+        sentence_cfg,
+        *,
+        authority,
+        compression: str | None,
+        out_path: Path,
+    ) -> Path:
+        del authority
+        captured["sections_path"] = sections_path
+        captured["sentence_cfg"] = sentence_cfg
+        captured["compression"] = compression
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        pl.DataFrame(
+            {
+                "benchmark_sentence_id": ["stub:0"],
+                "benchmark_row_id": ["stub"],
+                "doc_id": ["doc"],
+                "filing_date": [None],
+                "filing_year": [2000],
+                "benchmark_item_code": ["item_1"],
+                "sentence_index": [0],
+                "sentence_text": ["stub"],
+                "sentence_char_count": [4],
+                "sentencizer_backend": [sentence_cfg.sentencizer_backend],
+                "sentencizer_version": ["test"],
+                "finbert_token_count_512": [4],
+                "finbert_token_bucket_512": ["short"],
+            }
+        ).write_parquet(out_path)
+        return out_path
+
+    monkeypatch.setattr(finbert_dataset, "materialize_sentence_benchmark_dataset", _fake_materialize)
+
+    cfg = FinbertBenchmarkSuiteConfig(
+        source_items_dir=source_dir,
+        out_root=tmp_path / "out",
+        sample_specs=(BenchmarkSampleSpec(sample_name="5pct", sample_fraction=0.05),),
+        seed=42,
+        sentence_dataset=SentenceDatasetConfig(enabled=True, spacy_batch_size=8, compression="lz4"),
+    )
+    artifacts = build_finbert_benchmark_suite(cfg)
+
+    sentences_path = artifacts["5pct"].sentences_path
+    assert sentences_path is not None
+    assert sentences_path.exists()
+    assert captured["sections_path"] == artifacts["5pct"].sections_path
+    assert captured["compression"] == "lz4"
+
+    manifest = json.loads(artifacts["5pct"].manifest_path.read_text(encoding="utf-8"))
+    assert manifest["artifacts"]["sentences_path"] == str(sentences_path.resolve())
+    assert manifest["config"]["sentence_dataset"] == {
+        "enabled": True,
+        "sentencizer_backend": "spacy_blank_en_sentencizer",
+        "spacy_batch_size": 8,
+        "drop_blank_sentences": True,
+        "compression": "lz4",
+    }
 
 
 def test_build_finbert_benchmark_suite_removes_temp_dir_on_success(
