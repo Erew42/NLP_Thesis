@@ -61,8 +61,19 @@ class SentenceDatasetConfig:
     enabled: bool = False
     sentencizer_backend: str = "spacy_blank_en_sentencizer"
     spacy_batch_size: int = 32
+    token_length_batch_size: int = 1024
     drop_blank_sentences: bool = True
     compression: str = "zstd"
+
+
+@dataclass(frozen=True)
+class FinbertSectionUniverseConfig:
+    source_items_dir: Path
+    form_types: tuple[str, ...] = ("10-K", "10-K405")
+    target_items: tuple[BenchmarkItemSpec, ...] = DEFAULT_FINBERT_10K_ITEMS
+    require_active_items: bool = True
+    require_exists_by_regime: bool = True
+    min_char_count: int = 250
 
 
 @dataclass(frozen=True)
@@ -72,6 +83,7 @@ class FinbertBenchmarkSuiteConfig:
     sample_specs: tuple[BenchmarkSampleSpec, ...]
     seed: int = 42
     compression: str = "zstd"
+    section_universe: FinbertSectionUniverseConfig | None = None
     form_types: tuple[str, ...] = ("10-K", "10-K405")
     target_items: tuple[BenchmarkItemSpec, ...] = DEFAULT_FINBERT_10K_ITEMS
     require_active_items: bool = True
@@ -82,6 +94,25 @@ class FinbertBenchmarkSuiteConfig:
     write_full_universe_token_audit: bool = False
     authority: FinbertAuthoritySpec = field(default_factory=FinbertAuthoritySpec)
     sentence_dataset: SentenceDatasetConfig = field(default_factory=SentenceDatasetConfig)
+
+    def __post_init__(self) -> None:
+        universe = self.section_universe
+        if universe is None:
+            universe = FinbertSectionUniverseConfig(
+                source_items_dir=self.source_items_dir,
+                form_types=self.form_types,
+                target_items=self.target_items,
+                require_active_items=self.require_active_items,
+                require_exists_by_regime=self.require_exists_by_regime,
+                min_char_count=self.min_char_count,
+            )
+        object.__setattr__(self, "section_universe", universe)
+        object.__setattr__(self, "source_items_dir", universe.source_items_dir)
+        object.__setattr__(self, "form_types", universe.form_types)
+        object.__setattr__(self, "target_items", universe.target_items)
+        object.__setattr__(self, "require_active_items", universe.require_active_items)
+        object.__setattr__(self, "require_exists_by_regime", universe.require_exists_by_regime)
+        object.__setattr__(self, "min_char_count", universe.min_char_count)
 
 
 @dataclass(frozen=True)
@@ -188,3 +219,78 @@ class FinbertBenchmarkRunArtifacts:
     full_pipeline_results_path: Path
     summary_path: Path
     sentence_frame_path: Path | None
+
+
+@dataclass(frozen=True)
+class FinbertAnalysisRunConfig:
+    source_items_dir: Path
+    out_root: Path
+    batch_config: BucketBatchConfig
+    section_universe: FinbertSectionUniverseConfig | None = None
+    runtime: FinbertRuntimeConfig = field(default_factory=FinbertRuntimeConfig)
+    bucket_lengths: BucketLengthSpec = field(default_factory=BucketLengthSpec)
+    sentence_dataset: SentenceDatasetConfig = field(default_factory=SentenceDatasetConfig)
+    backbone_path: Path | None = None
+    year_filter: tuple[int, ...] | None = None
+    write_sentence_scores: bool = False
+    overwrite: bool = False
+    run_name: str | None = None
+    note: str = ""
+
+    def __post_init__(self) -> None:
+        universe = self.section_universe
+        if universe is None:
+            universe = FinbertSectionUniverseConfig(source_items_dir=self.source_items_dir)
+        object.__setattr__(self, "section_universe", universe)
+        object.__setattr__(self, "source_items_dir", universe.source_items_dir)
+
+        if self.year_filter is not None:
+            normalized_years = tuple(sorted({int(year) for year in self.year_filter}))
+            for year in normalized_years:
+                if year < 0:
+                    raise ValueError(f"year_filter values must be positive integers, got {year!r}.")
+            object.__setattr__(self, "year_filter", normalized_years)
+
+
+@dataclass(frozen=True)
+class FinbertAnalysisRunArtifacts:
+    run_dir: Path
+    run_manifest_path: Path
+    item_features_long_path: Path
+    doc_features_wide_path: Path
+    coverage_report_path: Path | None
+    sentence_scores_dir: Path | None
+
+
+@dataclass(frozen=True)
+class FinbertSentencePreprocessingRunConfig:
+    source_items_dir: Path
+    out_root: Path
+    section_universe: FinbertSectionUniverseConfig | None = None
+    sentence_dataset: SentenceDatasetConfig = field(default_factory=SentenceDatasetConfig)
+    year_filter: tuple[int, ...] | None = None
+    overwrite: bool = False
+    run_name: str | None = None
+    note: str = ""
+
+    def __post_init__(self) -> None:
+        universe = self.section_universe
+        if universe is None:
+            universe = FinbertSectionUniverseConfig(source_items_dir=self.source_items_dir)
+        object.__setattr__(self, "section_universe", universe)
+        object.__setattr__(self, "source_items_dir", universe.source_items_dir)
+
+        if self.year_filter is not None:
+            normalized_years = tuple(sorted({int(year) for year in self.year_filter}))
+            for year in normalized_years:
+                if year < 0:
+                    raise ValueError(f"year_filter values must be positive integers, got {year!r}.")
+            object.__setattr__(self, "year_filter", normalized_years)
+
+
+@dataclass(frozen=True)
+class FinbertSentencePreprocessingRunArtifacts:
+    run_dir: Path
+    run_manifest_path: Path
+    sentence_dataset_dir: Path
+    yearly_summary_path: Path

@@ -108,7 +108,7 @@ def _derive_sentence_batch(
         sentence_df,
         authority,
         text_col="full_text",
-        batch_size=max(cfg.spacy_batch_size, 1),
+        batch_size=max(cfg.token_length_batch_size, 1),
     )
     return sentence_df.rename({"full_text": "sentence_text"})
 

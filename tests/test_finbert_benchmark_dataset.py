@@ -397,6 +397,7 @@ def test_build_finbert_benchmark_suite_records_sentence_dataset_artifact_when_en
         "enabled": True,
         "sentencizer_backend": "spacy_blank_en_sentencizer",
         "spacy_batch_size": 8,
+        "token_length_batch_size": 1024,
         "drop_blank_sentences": True,
         "compression": "lz4",
     }

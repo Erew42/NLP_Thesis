@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 import json
+import math
 import statistics
+import re
 import time
 from contextlib import nullcontext
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
 import polars as pl
 
+from thesis_pkg.benchmarking.contracts import BucketBatchConfig
+from thesis_pkg.benchmarking.contracts import BucketLengthSpec
 from thesis_pkg.benchmarking.contracts import DEFAULT_FINBERT_AUTHORITY
 from thesis_pkg.benchmarking.contracts import FinbertAuthoritySpec
 from thesis_pkg.benchmarking.contracts import FinbertBenchmarkRunArtifacts
@@ -123,13 +128,21 @@ def load_finbert_model(
     return model.to(torch.device(device))
 
 
-def _bucket_max_length(bucket: str, run_cfg: FinbertBenchmarkRunConfig) -> int:
+def _bucket_max_length(
+    bucket: str,
+    run_cfg_or_bucket_lengths: FinbertBenchmarkRunConfig | BucketLengthSpec,
+) -> int:
+    bucket_lengths = (
+        run_cfg_or_bucket_lengths.bucket_lengths
+        if isinstance(run_cfg_or_bucket_lengths, FinbertBenchmarkRunConfig)
+        else run_cfg_or_bucket_lengths
+    )
     if bucket == "short":
-        return run_cfg.bucket_lengths.short_max_length
+        return bucket_lengths.short_max_length
     if bucket == "medium":
-        return run_cfg.bucket_lengths.medium_max_length
+        return bucket_lengths.medium_max_length
     if bucket == "long":
-        return run_cfg.bucket_lengths.long_max_length
+        return bucket_lengths.long_max_length
     raise ValueError(f"Unknown bucket: {bucket!r}")
 
 
@@ -270,6 +283,194 @@ def _move_batch_to_device(batch: Any, device: str) -> Any:
 
 def _median(values: list[float]) -> float:
     return float(statistics.median(values)) if values else 0.0
+
+
+def _normalize_finbert_label_name(label: str) -> str | None:
+    cleaned = re.sub(r"[^a-z0-9]+", "", str(label).strip().lower())
+    if cleaned in {"negative", "neg", "bearish"}:
+        return "negative"
+    if cleaned in {"neutral", "neu"}:
+        return "neutral"
+    if cleaned in {"positive", "pos", "bullish"}:
+        return "positive"
+    return None
+
+
+def resolve_finbert_label_mapping(model) -> dict[int, str]:
+    config = getattr(model, "config", None)
+    if config is None:
+        raise ValueError("Model does not expose a config object with FinBERT labels.")
+
+    raw_id2label = getattr(config, "id2label", None)
+    raw_label2id = getattr(config, "label2id", None)
+
+    pairs: list[tuple[int, str]] = []
+    if isinstance(raw_id2label, dict):
+        for key, value in raw_id2label.items():
+            try:
+                pairs.append((int(key), str(value)))
+            except (TypeError, ValueError):
+                continue
+    elif isinstance(raw_label2id, dict):
+        for key, value in raw_label2id.items():
+            try:
+                pairs.append((int(value), str(key)))
+            except (TypeError, ValueError):
+                continue
+
+    normalized: dict[int, str] = {}
+    seen_labels: set[str] = set()
+    for index, label in sorted(pairs):
+        normalized_label = _normalize_finbert_label_name(label)
+        if normalized_label is None:
+            continue
+        if normalized_label in seen_labels:
+            raise ValueError(f"Duplicate normalized FinBERT label in model config: {normalized_label!r}")
+        normalized[index] = normalized_label
+        seen_labels.add(normalized_label)
+
+    expected_labels = {"negative", "neutral", "positive"}
+    if set(normalized.values()) != expected_labels:
+        raise ValueError(
+            "Could not normalize FinBERT labels from model config. "
+            f"Observed labels: {sorted(set(normalized.values()))!r}"
+        )
+    return dict(sorted(normalized.items()))
+
+
+def _empty_sentence_score_frame() -> pl.DataFrame:
+    return pl.DataFrame(
+        schema={
+            "benchmark_sentence_id": pl.Utf8,
+            "benchmark_row_id": pl.Utf8,
+            "doc_id": pl.Utf8,
+            "filing_date": pl.Date,
+            "filing_year": pl.Int32,
+            "benchmark_item_code": pl.Utf8,
+            "sentence_index": pl.Int64,
+            "sentence_text": pl.Utf8,
+            "sentence_char_count": pl.Int64,
+            "sentencizer_backend": pl.Utf8,
+            "sentencizer_version": pl.Utf8,
+            "finbert_token_count_512": pl.Int32,
+            "finbert_token_bucket_512": pl.Utf8,
+            "negative_prob": pl.Float64,
+            "neutral_prob": pl.Float64,
+            "positive_prob": pl.Float64,
+            "predicted_label": pl.Utf8,
+        }
+    )
+
+
+def _softmax_row(values: list[float]) -> list[float]:
+    if not values:
+        return []
+    max_value = max(values)
+    exp_values = [math.exp(value - max_value) for value in values]
+    denom = sum(exp_values)
+    if denom == 0.0:
+        return [0.0 for _ in values]
+    return [value / denom for value in exp_values]
+
+
+def _to_nested_float_list(values: Any) -> list[list[float]]:
+    if hasattr(values, "detach"):
+        values = values.detach()
+    if hasattr(values, "cpu"):
+        values = values.cpu()
+    if hasattr(values, "tolist"):
+        values = values.tolist()
+    nested = list(values)
+    return [[float(value) for value in row] for row in nested]
+
+
+def _probability_rows_from_logits(logits: Any, torch_mod) -> list[list[float]]:
+    functional = getattr(getattr(torch_mod, "nn", None), "functional", None)
+    softmax = getattr(functional, "softmax", None)
+    if callable(softmax):
+        return _to_nested_float_list(softmax(logits, dim=-1))
+    return [_softmax_row(row) for row in _to_nested_float_list(logits)]
+
+
+def score_sentence_frame(
+    sentences_df: pl.DataFrame,
+    tokenizer,
+    model,
+    runtime: FinbertRuntimeConfig,
+    *,
+    batch_config: BucketBatchConfig,
+    bucket_lengths: BucketLengthSpec,
+) -> pl.DataFrame:
+    if sentences_df.is_empty():
+        return _empty_sentence_score_frame()
+
+    torch = _import_torch()
+    device = _resolve_device(runtime)
+    label_mapping = resolve_finbert_label_mapping(model)
+    indexed_sentences = sentences_df.with_row_index("_sentence_row_nr")
+    records: list[pl.DataFrame] = []
+
+    for bucket in ("short", "medium", "long"):
+        frame = _bucket_frame(indexed_sentences, bucket)
+        if frame.is_empty():
+            continue
+
+        texts = frame["sentence_text"].to_list()
+        batch_size = batch_config.batch_size_for_bucket(bucket)
+        max_length = _bucket_max_length(bucket, bucket_lengths)
+        probability_columns: dict[str, list[float]] = {
+            "negative_prob": [],
+            "neutral_prob": [],
+            "positive_prob": [],
+        }
+        predicted_labels: list[str] = []
+
+        with torch.no_grad():
+            with _autocast_context(torch, runtime, device):
+                for batch in _tokenize_text_batches(
+                    texts,
+                    tokenizer,
+                    batch_size=batch_size,
+                    max_length=max_length,
+                    return_tensors="pt",
+                ):
+                    outputs = model(**_move_batch_to_device(batch, device))
+                    logits = outputs.logits if hasattr(outputs, "logits") else outputs["logits"]
+                    probability_rows = _probability_rows_from_logits(logits, torch)
+                    for row in probability_rows:
+                        normalized_probs = {
+                            label_mapping[index]: float(probability)
+                            for index, probability in enumerate(row)
+                            if index in label_mapping
+                        }
+                        for label in ("negative", "neutral", "positive"):
+                            probability_columns[f"{label}_prob"].append(normalized_probs[label])
+                        predicted_labels.append(
+                            max(
+                                ("negative", "neutral", "positive"),
+                                key=lambda label: normalized_probs[label],
+                            )
+                        )
+
+        records.append(
+            frame.with_columns(
+                [
+                    pl.Series("negative_prob", probability_columns["negative_prob"], dtype=pl.Float64),
+                    pl.Series("neutral_prob", probability_columns["neutral_prob"], dtype=pl.Float64),
+                    pl.Series("positive_prob", probability_columns["positive_prob"], dtype=pl.Float64),
+                    pl.Series("predicted_label", predicted_labels, dtype=pl.Utf8),
+                ]
+            )
+        )
+
+    if not records:
+        return _empty_sentence_score_frame()
+
+    return (
+        pl.concat(records, how="vertical_relaxed")
+        .sort("_sentence_row_nr")
+        .drop("_sentence_row_nr")
+    )
 
 
 def benchmark_sentence_splitting(

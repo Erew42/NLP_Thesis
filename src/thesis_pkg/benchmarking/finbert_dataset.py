@@ -18,6 +18,7 @@ from thesis_pkg.benchmarking.contracts import BenchmarkItemSpec
 from thesis_pkg.benchmarking.contracts import BenchmarkSampleSpec
 from thesis_pkg.benchmarking.contracts import FinbertAuthoritySpec
 from thesis_pkg.benchmarking.contracts import FinbertBenchmarkSuiteConfig
+from thesis_pkg.benchmarking.contracts import FinbertSectionUniverseConfig
 from thesis_pkg.benchmarking.sentences import materialize_sentence_benchmark_dataset
 from thesis_pkg.benchmarking.token_lengths import FINBERT_TOKEN_BUCKET_COLUMN
 from thesis_pkg.benchmarking.token_lengths import annotate_finbert_token_lengths
@@ -30,6 +31,14 @@ BENCHMARK_MANIFEST_FILENAME = "benchmark_manifest.json"
 SECTION_DATASET_FILENAME = "finbert_10k_item_sections.parquet"
 SENTENCE_DATASET_FILENAME = "finbert_10k_item_sentences.parquet"
 UNIVERSE_SUMMARY_FILENAME = "universe_summary.json"
+
+
+def _resolve_section_universe(
+    cfg: FinbertSectionUniverseConfig | FinbertBenchmarkSuiteConfig,
+) -> FinbertSectionUniverseConfig:
+    if isinstance(cfg, FinbertSectionUniverseConfig):
+        return cfg
+    return cfg.section_universe
 
 
 def _utc_timestamp() -> str:
@@ -195,13 +204,13 @@ def _document_type_exprs(schema_names: set[str]) -> list[pl.Expr]:
 
 
 def _load_filtered_section_rows(
-    cfg: FinbertBenchmarkSuiteConfig,
+    cfg: FinbertSectionUniverseConfig | FinbertBenchmarkSuiteConfig,
     *,
     year_paths: list[Path] | None = None,
 ) -> pl.LazyFrame:
-    _validate_sample_specs(cfg.sample_specs)
+    universe = _resolve_section_universe(cfg)
     raw_lf = (
-        _scan_items_with_year_source(cfg.source_items_dir)
+        _scan_items_with_year_source(universe.source_items_dir)
         if year_paths is None
         else _scan_items_with_year_source_from_paths(year_paths)
     )
@@ -210,9 +219,9 @@ def _load_filtered_section_rows(
     missing = sorted(required_columns - schema_names)
     if missing:
         raise ValueError(f"items_analysis files missing required columns: {missing}")
-    if cfg.require_active_items and "item_status" not in schema_names:
+    if universe.require_active_items and "item_status" not in schema_names:
         raise ValueError("items_analysis files must contain item_status when require_active_items=True.")
-    if cfg.require_exists_by_regime and "exists_by_regime" not in schema_names:
+    if universe.require_exists_by_regime and "exists_by_regime" not in schema_names:
         raise ValueError(
             "items_analysis files must contain exists_by_regime when require_exists_by_regime=True."
         )
@@ -234,22 +243,22 @@ def _load_filtered_section_rows(
                 if "exists_by_regime" in schema_names
                 else pl.lit(True)
             ).alias("exists_by_regime"),
-            _item_code_expr(cfg.target_items),
-            _item_label_expr(cfg.target_items),
+            _item_code_expr(universe.target_items),
+            _item_label_expr(universe.target_items),
             *_document_type_exprs(schema_names),
         ]
     ).with_columns(pl.col("document_type_normalized").alias("document_type"))
 
     filters: list[pl.Expr] = [
         pl.col("benchmark_item_code").is_not_null(),
-        pl.col("document_type_raw").is_in(cfg.form_types),
+        pl.col("document_type_raw").is_in(universe.form_types),
         pl.col("full_text").is_not_null(),
-        pl.col("full_text").str.strip_chars().str.len_chars() >= cfg.min_char_count,
+        pl.col("full_text").str.strip_chars().str.len_chars() >= universe.min_char_count,
         pl.col("filing_date").is_not_null(),
     ]
-    if cfg.require_active_items:
+    if universe.require_active_items:
         filters.append(pl.col("item_status") == "active")
-    if cfg.require_exists_by_regime:
+    if universe.require_exists_by_regime:
         filters.append(pl.col("exists_by_regime"))
 
     return (
@@ -369,8 +378,12 @@ def _dedupe_section_rows(
     )
 
 
-def load_eligible_section_universe(cfg: FinbertBenchmarkSuiteConfig) -> pl.LazyFrame:
-    filtered_rows = _load_filtered_section_rows(cfg)
+def load_eligible_section_universe(
+    cfg: FinbertSectionUniverseConfig | FinbertBenchmarkSuiteConfig,
+    *,
+    year_paths: list[Path] | None = None,
+) -> pl.LazyFrame:
+    filtered_rows = _load_filtered_section_rows(cfg, year_paths=year_paths)
     return _dedupe_section_rows(
         filtered_rows,
         include_full_text=True,
@@ -380,7 +393,7 @@ def load_eligible_section_universe(cfg: FinbertBenchmarkSuiteConfig) -> pl.LazyF
 
 def _load_skinny_planning_universe(cfg: FinbertBenchmarkSuiteConfig) -> pl.LazyFrame:
     return _dedupe_section_rows(
-        _load_filtered_section_rows(cfg),
+        _load_filtered_section_rows(cfg.section_universe),
         include_full_text=False,
         include_internal_locator=True,
     )
@@ -1063,6 +1076,14 @@ def _serializable_config(
         "seed": cfg.seed,
         "compression": cfg.compression,
         "sentence_dataset": asdict(cfg.sentence_dataset),
+        "section_universe": {
+            "source_items_dir": str(cfg.section_universe.source_items_dir.resolve()),
+            "form_types": list(cfg.section_universe.form_types),
+            "target_items": [asdict(item) for item in cfg.section_universe.target_items],
+            "require_active_items": cfg.section_universe.require_active_items,
+            "require_exists_by_regime": cfg.section_universe.require_exists_by_regime,
+            "min_char_count": cfg.section_universe.min_char_count,
+        },
         "form_types": list(cfg.form_types),
         "target_items": [asdict(item) for item in cfg.target_items],
         "require_active_items": cfg.require_active_items,
@@ -1246,7 +1267,7 @@ def _empty_year_rows_frame() -> pl.DataFrame:
 
 
 def _fetch_year_rows_for_row_numbers(
-    cfg: FinbertBenchmarkSuiteConfig,
+    cfg: FinbertSectionUniverseConfig | FinbertBenchmarkSuiteConfig,
     *,
     source_path: Path,
     row_numbers: list[int],
@@ -1254,6 +1275,7 @@ def _fetch_year_rows_for_row_numbers(
     if not row_numbers:
         return _empty_year_rows_frame()
 
+    universe = _resolve_section_universe(cfg)
     raw_lf = _scan_items_with_year_source_from_paths([source_path])
     schema_names = set(raw_lf.collect_schema().names())
     return (
@@ -1274,8 +1296,8 @@ def _fetch_year_rows_for_row_numbers(
                     if "exists_by_regime" in schema_names
                     else pl.lit(True)
                 ).alias("exists_by_regime"),
-                _item_code_expr(cfg.target_items),
-                _item_label_expr(cfg.target_items),
+                _item_code_expr(universe.target_items),
+                _item_label_expr(universe.target_items),
                 *_document_type_exprs(schema_names),
             ]
         )
