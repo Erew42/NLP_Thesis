@@ -11,7 +11,7 @@ dependencies = [
   "pyarrow",
   "statsmodels",
   "xlsxwriter",
-  "refinitiv-data",
+  # Use lseg-data: it is the newer package and does not pin NumPy below 2.
   "lseg-data",
   # add others I actually use
 ]

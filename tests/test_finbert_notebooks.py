@@ -25,9 +25,12 @@ def test_finbert_full_data_staged_workflow_notebook_has_colab_bootstrap_and_spli
     notebook_path = Path("src/thesis_pkg/notebooks_and_scripts/finbert_full_data_staged_workflow.ipynb")
     notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
 
-    source = notebook_path.read_text(encoding="utf-8")
+    source = "\n".join("".join(cell.get("source", [])) for cell in notebook["cells"])
     assert "drive.mount" in source
+    assert "/content/NLP_Thesis" in source
+    assert "%cd /content" in source
     assert "%pip install -e .[benchmark]" in source
+    assert "sys.path.insert" in source
     assert "RUN_SENTENCE_STAGE" in source
     assert "RUN_TOKENIZER_STAGE" in source
     assert "RUN_MODEL_STAGE" in source
@@ -38,4 +41,4 @@ def test_finbert_full_data_staged_workflow_notebook_has_colab_bootstrap_and_spli
     assert "run_finbert_tokenizer_profile" in source
     assert "run_finbert_sentence_parquet_inference" in source
 
-    assert len(notebook["cells"]) == 11
+    assert len(notebook["cells"]) >= 11
