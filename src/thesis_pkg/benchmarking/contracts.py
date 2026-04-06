@@ -5,6 +5,19 @@ from dataclasses import field
 from pathlib import Path
 
 
+def _normalize_year_filter(
+    year_filter: tuple[int, ...] | None,
+) -> tuple[int, ...] | None:
+    if year_filter is None:
+        return None
+
+    normalized_years = tuple(sorted({int(year) for year in year_filter}))
+    for year in normalized_years:
+        if year < 0:
+            raise ValueError(f"year_filter values must be positive integers, got {year!r}.")
+    return normalized_years
+
+
 @dataclass(frozen=True)
 class BenchmarkItemSpec:
     benchmark_item_code: str
@@ -243,13 +256,7 @@ class FinbertAnalysisRunConfig:
             universe = FinbertSectionUniverseConfig(source_items_dir=self.source_items_dir)
         object.__setattr__(self, "section_universe", universe)
         object.__setattr__(self, "source_items_dir", universe.source_items_dir)
-
-        if self.year_filter is not None:
-            normalized_years = tuple(sorted({int(year) for year in self.year_filter}))
-            for year in normalized_years:
-                if year < 0:
-                    raise ValueError(f"year_filter values must be positive integers, got {year!r}.")
-            object.__setattr__(self, "year_filter", normalized_years)
+        object.__setattr__(self, "year_filter", _normalize_year_filter(self.year_filter))
 
 
 @dataclass(frozen=True)
@@ -268,6 +275,7 @@ class FinbertSentencePreprocessingRunConfig:
     out_root: Path
     section_universe: FinbertSectionUniverseConfig | None = None
     sentence_dataset: SentenceDatasetConfig = field(default_factory=SentenceDatasetConfig)
+    target_doc_universe_path: Path | None = None
     year_filter: tuple[int, ...] | None = None
     overwrite: bool = False
     run_name: str | None = None
@@ -279,13 +287,14 @@ class FinbertSentencePreprocessingRunConfig:
             universe = FinbertSectionUniverseConfig(source_items_dir=self.source_items_dir)
         object.__setattr__(self, "section_universe", universe)
         object.__setattr__(self, "source_items_dir", universe.source_items_dir)
+        object.__setattr__(self, "year_filter", _normalize_year_filter(self.year_filter))
 
-        if self.year_filter is not None:
-            normalized_years = tuple(sorted({int(year) for year in self.year_filter}))
-            for year in normalized_years:
-                if year < 0:
-                    raise ValueError(f"year_filter values must be positive integers, got {year!r}.")
-            object.__setattr__(self, "year_filter", normalized_years)
+        if self.target_doc_universe_path is not None:
+            object.__setattr__(
+                self,
+                "target_doc_universe_path",
+                Path(self.target_doc_universe_path).resolve(),
+            )
 
 
 @dataclass(frozen=True)
@@ -293,4 +302,69 @@ class FinbertSentencePreprocessingRunArtifacts:
     run_dir: Path
     run_manifest_path: Path
     sentence_dataset_dir: Path
+    yearly_summary_path: Path
+
+
+@dataclass(frozen=True)
+class FinbertTokenizerProfileRunConfig:
+    sentence_dataset_dir: Path
+    out_root: Path
+    batch_config: BucketBatchConfig
+    bucket_lengths: BucketLengthSpec = field(default_factory=BucketLengthSpec)
+    year_filter: tuple[int, ...] | None = None
+    profile_row_cap_per_bucket: int = 5000
+    sample_seed: int = 42
+    overwrite: bool = False
+    run_name: str | None = None
+    note: str = ""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "year_filter", _normalize_year_filter(self.year_filter))
+        object.__setattr__(self, "sentence_dataset_dir", Path(self.sentence_dataset_dir).resolve())
+        if self.profile_row_cap_per_bucket <= 0:
+            raise ValueError("profile_row_cap_per_bucket must be a positive integer.")
+        if self.sample_seed < 0:
+            raise ValueError("sample_seed must be non-negative.")
+
+
+@dataclass(frozen=True)
+class FinbertTokenizerProfileRunArtifacts:
+    run_dir: Path
+    run_manifest_path: Path
+    bucket_summary_path: Path
+    timing_summary_path: Path
+
+
+@dataclass(frozen=True)
+class FinbertSentenceParquetInferenceRunConfig:
+    sentence_dataset_dir: Path
+    out_root: Path
+    batch_config: BucketBatchConfig
+    runtime: FinbertRuntimeConfig = field(default_factory=FinbertRuntimeConfig)
+    bucket_lengths: BucketLengthSpec = field(default_factory=BucketLengthSpec)
+    backbone_path: Path | None = None
+    year_filter: tuple[int, ...] | None = None
+    sentence_slice_rows: int = 5000
+    write_sentence_scores: bool = False
+    overwrite: bool = False
+    run_name: str | None = None
+    note: str = ""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "year_filter", _normalize_year_filter(self.year_filter))
+        object.__setattr__(self, "sentence_dataset_dir", Path(self.sentence_dataset_dir).resolve())
+        if self.backbone_path is not None:
+            object.__setattr__(self, "backbone_path", Path(self.backbone_path).resolve())
+        if self.sentence_slice_rows <= 0:
+            raise ValueError("sentence_slice_rows must be a positive integer.")
+
+
+@dataclass(frozen=True)
+class FinbertSentenceParquetInferenceRunArtifacts:
+    run_dir: Path
+    run_manifest_path: Path
+    item_features_long_path: Path
+    doc_features_wide_path: Path
+    coverage_report_path: Path | None
+    sentence_scores_dir: Path | None
     yearly_summary_path: Path

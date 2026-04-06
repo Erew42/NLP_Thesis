@@ -142,6 +142,22 @@ def _scan_items_with_year_source(source_items_dir: Path) -> pl.LazyFrame:
     return _scan_items_with_year_source_from_paths(_resolve_year_paths(source_items_dir))
 
 
+def _scan_target_doc_universe(path: Path) -> pl.LazyFrame:
+    if not path.exists():
+        raise FileNotFoundError(f"Target doc universe parquet was not found: {path}")
+
+    target_lf = pl.scan_parquet(path)
+    schema_names = set(target_lf.collect_schema().names())
+    if "doc_id" not in schema_names:
+        raise ValueError(f"Target doc universe parquet must contain doc_id: {path}")
+
+    return (
+        target_lf.select(pl.col("doc_id").cast(pl.Utf8, strict=False).alias("doc_id"))
+        .filter(pl.col("doc_id").is_not_null())
+        .unique()
+    )
+
+
 def _normalize_cik_expr(schema_names: set[str]) -> pl.Expr:
     if "cik_10" in schema_names:
         return pl.col("cik_10").cast(pl.Utf8, strict=False).str.zfill(10).alias("cik_10")
@@ -207,6 +223,7 @@ def _load_filtered_section_rows(
     cfg: FinbertSectionUniverseConfig | FinbertBenchmarkSuiteConfig,
     *,
     year_paths: list[Path] | None = None,
+    target_doc_universe_path: Path | None = None,
 ) -> pl.LazyFrame:
     universe = _resolve_section_universe(cfg)
     raw_lf = (
@@ -248,6 +265,13 @@ def _load_filtered_section_rows(
             *_document_type_exprs(schema_names),
         ]
     ).with_columns(pl.col("document_type_normalized").alias("document_type"))
+
+    if target_doc_universe_path is not None:
+        lf = lf.join(
+            _scan_target_doc_universe(target_doc_universe_path),
+            on="doc_id",
+            how="inner",
+        )
 
     filters: list[pl.Expr] = [
         pl.col("benchmark_item_code").is_not_null(),
@@ -382,8 +406,13 @@ def load_eligible_section_universe(
     cfg: FinbertSectionUniverseConfig | FinbertBenchmarkSuiteConfig,
     *,
     year_paths: list[Path] | None = None,
+    target_doc_universe_path: Path | None = None,
 ) -> pl.LazyFrame:
-    filtered_rows = _load_filtered_section_rows(cfg, year_paths=year_paths)
+    filtered_rows = _load_filtered_section_rows(
+        cfg,
+        year_paths=year_paths,
+        target_doc_universe_path=target_doc_universe_path,
+    )
     return _dedupe_section_rows(
         filtered_rows,
         include_full_text=True,

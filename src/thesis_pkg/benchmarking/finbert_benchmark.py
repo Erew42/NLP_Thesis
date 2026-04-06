@@ -23,6 +23,7 @@ from thesis_pkg.benchmarking.run_logging import append_jsonl_record
 from thesis_pkg.benchmarking.run_logging import utc_timestamp
 from thesis_pkg.benchmarking.run_logging import write_frame
 from thesis_pkg.benchmarking.run_logging import write_json
+from thesis_pkg.benchmarking.sentences import SENTENCE_FRAME_SCHEMA
 from thesis_pkg.benchmarking.sentences import _build_sentencizer
 from thesis_pkg.benchmarking.sentences import _sentencizer_version
 from thesis_pkg.benchmarking.sentences import derive_sentence_frame
@@ -341,19 +342,7 @@ def resolve_finbert_label_mapping(model) -> dict[int, str]:
 def _empty_sentence_score_frame() -> pl.DataFrame:
     return pl.DataFrame(
         schema={
-            "benchmark_sentence_id": pl.Utf8,
-            "benchmark_row_id": pl.Utf8,
-            "doc_id": pl.Utf8,
-            "filing_date": pl.Date,
-            "filing_year": pl.Int32,
-            "benchmark_item_code": pl.Utf8,
-            "sentence_index": pl.Int64,
-            "sentence_text": pl.Utf8,
-            "sentence_char_count": pl.Int64,
-            "sentencizer_backend": pl.Utf8,
-            "sentencizer_version": pl.Utf8,
-            "finbert_token_count_512": pl.Int32,
-            "finbert_token_bucket_512": pl.Utf8,
+            **SENTENCE_FRAME_SCHEMA,
             "negative_prob": pl.Float64,
             "neutral_prob": pl.Float64,
             "positive_prob": pl.Float64,

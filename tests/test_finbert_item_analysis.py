@@ -10,6 +10,8 @@ from thesis_pkg.benchmarking.contracts import BucketBatchConfig
 from thesis_pkg.benchmarking.contracts import BucketLengthSpec
 from thesis_pkg.benchmarking.contracts import FinbertAnalysisRunConfig
 from thesis_pkg.benchmarking.contracts import FinbertBenchmarkSuiteConfig
+from thesis_pkg.benchmarking.contracts import FinbertSentenceParquetInferenceRunArtifacts
+from thesis_pkg.benchmarking.contracts import FinbertSentencePreprocessingRunArtifacts
 from thesis_pkg.benchmarking.contracts import FinbertSectionUniverseConfig
 from thesis_pkg.benchmarking.finbert_analysis import aggregate_sentence_scores_to_item_features
 from thesis_pkg.benchmarking.finbert_analysis import build_coverage_report
@@ -327,7 +329,7 @@ def test_build_coverage_report_against_backbone() -> None:
     assert coverage.filter(pl.col("doc_id") == "doc3")["has_finbert_features"].to_list() == [False]
 
 
-def test_run_finbert_item_analysis_reuses_existing_year_outputs(tmp_path: Path, monkeypatch) -> None:
+def test_run_finbert_item_analysis_delegates_to_staged_helpers(tmp_path: Path, monkeypatch) -> None:
     source_dir = tmp_path / "items_analysis"
     _write_parquet(source_dir / "2006.parquet", _sample_item_rows(2006, "a"))
     _write_parquet(source_dir / "2007.parquet", _sample_item_rows(2007, "b"))
@@ -335,57 +337,56 @@ def test_run_finbert_item_analysis_reuses_existing_year_outputs(tmp_path: Path, 
     pl.DataFrame({"doc_id": ["2006:doc:a", "2007:doc:b", "missing:doc"]}).write_parquet(backbone_path)
 
     from thesis_pkg.benchmarking import finbert_analysis
-    from thesis_pkg.benchmarking import finbert_benchmark
+    from thesis_pkg.benchmarking import finbert_staged_inference
 
-    monkeypatch.setattr(finbert_benchmark, "_import_torch", lambda: _FakeTorch())
+    captured: dict[str, object] = {}
 
-    load_counts = {"tokenizer": 0, "model": 0}
-
-    def _fake_load_tokenizer(authority):
+    def _fake_run_preprocessing(run_cfg, *, authority):
         del authority
-        load_counts["tokenizer"] += 1
-        return _FakeTokenizer()
+        captured["preprocessing_cfg"] = run_cfg
+        sentence_dataset_dir = tmp_path / "sentence_dataset" / "by_year"
+        sentence_dataset_dir.mkdir(parents=True, exist_ok=True)
+        pl.DataFrame({"benchmark_sentence_id": ["s1"]}).write_parquet(sentence_dataset_dir / "2006.parquet")
+        return FinbertSentencePreprocessingRunArtifacts(
+            run_dir=tmp_path / "sentence_prep_run",
+            run_manifest_path=tmp_path / "sentence_prep_run" / "run_manifest.json",
+            sentence_dataset_dir=sentence_dataset_dir,
+            yearly_summary_path=tmp_path / "sentence_prep_run" / "summary.parquet",
+        )
 
-    def _fake_load_model(authority, runtime):
-        del authority, runtime
-        load_counts["model"] += 1
-        return _FakeModel()
+    def _fake_run_inference(run_cfg, *, authority):
+        del authority
+        captured["inference_cfg"] = run_cfg
+        run_dir = tmp_path / "runs" / "analysis_smoke"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        item_features_long_path = run_dir / "item_features_long.parquet"
+        doc_features_wide_path = run_dir / "doc_features_wide.parquet"
+        coverage_report_path = run_dir / "coverage_report.parquet"
+        sentence_scores_dir = run_dir / "sentence_scores" / "by_year"
+        sentence_scores_dir.mkdir(parents=True, exist_ok=True)
+        pl.DataFrame({"doc_id": ["2006:doc:a"], "benchmark_item_code": ["item_1"]}).write_parquet(
+            item_features_long_path
+        )
+        pl.DataFrame({"doc_id": ["2006:doc:a"]}).write_parquet(doc_features_wide_path)
+        pl.DataFrame({"doc_id": ["2006:doc:a"], "has_finbert_features": [True]}).write_parquet(
+            coverage_report_path
+        )
+        return FinbertSentenceParquetInferenceRunArtifacts(
+            run_dir=run_dir,
+            run_manifest_path=run_dir / "run_manifest.json",
+            item_features_long_path=item_features_long_path,
+            doc_features_wide_path=doc_features_wide_path,
+            coverage_report_path=coverage_report_path,
+            sentence_scores_dir=sentence_scores_dir,
+            yearly_summary_path=run_dir / "model_inference_yearly_summary.parquet",
+        )
 
-    def _fake_derive_sentence_frame(sections_df: pl.DataFrame, sentence_cfg, *, authority):
-        del sentence_cfg, authority
-        records: list[dict[str, object]] = []
-        for row in sections_df.select(
-            [
-                "benchmark_row_id",
-                "doc_id",
-                "filing_date",
-                "filing_year",
-                "benchmark_item_code",
-            ]
-        ).iter_rows(named=True):
-            for sentence_index in range(2):
-                records.append(
-                    {
-                        "benchmark_sentence_id": f"{row['benchmark_row_id']}:{sentence_index}",
-                        "benchmark_row_id": row["benchmark_row_id"],
-                        "doc_id": row["doc_id"],
-                        "filing_date": row["filing_date"],
-                        "filing_year": row["filing_year"],
-                        "benchmark_item_code": row["benchmark_item_code"],
-                        "sentence_index": sentence_index,
-                        "sentence_text": f"sentence {sentence_index}",
-                        "sentence_char_count": 10,
-                        "sentencizer_backend": "test",
-                        "sentencizer_version": "test",
-                        "finbert_token_count_512": 5,
-                        "finbert_token_bucket_512": "short",
-                    }
-                )
-        return pl.DataFrame(records)
-
-    monkeypatch.setattr(finbert_analysis, "load_finbert_tokenizer", _fake_load_tokenizer)
-    monkeypatch.setattr(finbert_analysis, "load_finbert_model", _fake_load_model)
-    monkeypatch.setattr(finbert_analysis, "derive_sentence_frame", _fake_derive_sentence_frame)
+    monkeypatch.setattr(finbert_analysis, "run_finbert_sentence_preprocessing", _fake_run_preprocessing)
+    monkeypatch.setattr(
+        finbert_staged_inference,
+        "run_finbert_sentence_parquet_inference",
+        _fake_run_inference,
+    )
 
     run_cfg = FinbertAnalysisRunConfig(
         source_items_dir=source_dir,
@@ -399,23 +400,13 @@ def test_run_finbert_item_analysis_reuses_existing_year_outputs(tmp_path: Path, 
     )
 
     artifacts = run_finbert_item_analysis(run_cfg)
+    preprocessing_cfg = captured["preprocessing_cfg"]
+    inference_cfg = captured["inference_cfg"]
+
+    assert preprocessing_cfg.target_doc_universe_path == backbone_path.resolve()
+    assert preprocessing_cfg.run_name == "analysis_smoke_sentence_preprocessing"
+    assert inference_cfg.sentence_dataset_dir == (tmp_path / "sentence_dataset" / "by_year").resolve()
+    assert inference_cfg.run_name == "analysis_smoke"
     assert artifacts.item_features_long_path.exists()
     assert artifacts.doc_features_wide_path.exists()
     assert artifacts.coverage_report_path is not None and artifacts.coverage_report_path.exists()
-    assert load_counts == {"tokenizer": 1, "model": 1}
-
-    second_artifacts = run_finbert_item_analysis(run_cfg)
-    assert second_artifacts.run_manifest_path.exists()
-    assert load_counts == {"tokenizer": 1, "model": 1}
-
-    manifest = json.loads(second_artifacts.run_manifest_path.read_text(encoding="utf-8"))
-    assert manifest["counts"]["reused_year_count"] == 2
-    assert all(row["status"] == "reused_existing" for row in manifest["year_results"])
-
-    item_features = pl.read_parquet(second_artifacts.item_features_long_path)
-    doc_features = pl.read_parquet(second_artifacts.doc_features_wide_path)
-    coverage = pl.read_parquet(second_artifacts.coverage_report_path)
-
-    assert item_features.height == 6
-    assert doc_features.height == 2
-    assert coverage.height == 3

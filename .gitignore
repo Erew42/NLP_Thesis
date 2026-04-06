@@ -32,11 +32,15 @@ tmp/
 reports/
 core_paper/
 replication_plan/
+repo_review/
 # Agent ephemeral state and memory
 .agent/logs/
 .agent/cache/
 .agent/memory/
 .agent/artifacts/
+
+.claude/
+/CLAUDE.md
 
 # Repo-root files (ignore all except README.md)
 /AGENTS.md

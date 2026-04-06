@@ -11,17 +11,10 @@ from thesis_pkg.benchmarking.contracts import DEFAULT_FINBERT_AUTHORITY
 from thesis_pkg.benchmarking.contracts import FinbertAnalysisRunArtifacts
 from thesis_pkg.benchmarking.contracts import FinbertAnalysisRunConfig
 from thesis_pkg.benchmarking.contracts import FinbertAuthoritySpec
-from thesis_pkg.benchmarking.finbert_benchmark import _empty_sentence_score_frame
-from thesis_pkg.benchmarking.finbert_benchmark import _resolve_device
-from thesis_pkg.benchmarking.finbert_benchmark import _runtime_environment
-from thesis_pkg.benchmarking.finbert_benchmark import load_finbert_model
-from thesis_pkg.benchmarking.finbert_benchmark import resolve_finbert_label_mapping
-from thesis_pkg.benchmarking.finbert_benchmark import score_sentence_frame
-from thesis_pkg.benchmarking.finbert_dataset import _resolve_year_paths
-from thesis_pkg.benchmarking.finbert_dataset import load_eligible_section_universe
+from thesis_pkg.benchmarking.contracts import FinbertSentenceParquetInferenceRunConfig
+from thesis_pkg.benchmarking.contracts import FinbertSentencePreprocessingRunConfig
 from thesis_pkg.benchmarking.run_logging import utc_timestamp
-from thesis_pkg.benchmarking.sentences import derive_sentence_frame
-from thesis_pkg.benchmarking.token_lengths import load_finbert_tokenizer
+from thesis_pkg.benchmarking.finbert_sentence_preprocessing import run_finbert_sentence_preprocessing
 
 
 ITEM_FEATURE_METRIC_COLUMNS: tuple[str, ...] = (
@@ -294,225 +287,51 @@ def _concat_aligned_frames(frames: list[pl.DataFrame], *, empty_schema: pl.DataF
     return pl.concat([_align_frame_to_schema(frame, schema) for frame in frames], how="vertical")
 
 
-def _resolve_analysis_year_paths(run_cfg: FinbertAnalysisRunConfig) -> list[Path]:
-    year_paths = _resolve_year_paths(run_cfg.source_items_dir)
-    if run_cfg.year_filter is None:
-        return year_paths
-
-    target_years = set(run_cfg.year_filter)
-    selected = [path for path in year_paths if int(path.stem) in target_years]
-    missing_years = sorted(target_years - {int(path.stem) for path in selected})
-    if missing_years:
-        raise FileNotFoundError(
-            f"Requested filing years were not found in {run_cfg.source_items_dir}: {missing_years}"
-        )
-    return selected
-
-
-def _load_backbone_doc_ids(path: Path) -> pl.DataFrame:
-    return pl.scan_parquet(path).select(pl.col("doc_id").cast(pl.Utf8, strict=False).alias("doc_id")).collect()
-
-
 def run_finbert_item_analysis(
     run_cfg: FinbertAnalysisRunConfig,
     *,
     authority: FinbertAuthoritySpec = DEFAULT_FINBERT_AUTHORITY,
 ) -> FinbertAnalysisRunArtifacts:
-    year_paths = _resolve_analysis_year_paths(run_cfg)
     run_name = run_cfg.run_name or f"{RUNNER_NAME}_{utc_timestamp().replace(':', '')}"
-    run_dir = run_cfg.out_root / run_name
-    item_features_by_year_dir = run_dir / "item_features" / "by_year"
-    sentence_scores_dir = run_dir / "sentence_scores" / "by_year"
-    item_features_long_path = run_dir / "item_features_long.parquet"
-    doc_features_wide_path = run_dir / "doc_features_wide.parquet"
-    coverage_report_path = run_dir / "coverage_report.parquet" if run_cfg.backbone_path is not None else None
-    run_manifest_path = run_dir / "run_manifest.json"
-
-    runtime_environment = _runtime_environment(
-        run_cfg.runtime,
-        _resolve_device(run_cfg.runtime),
+    from thesis_pkg.benchmarking.finbert_staged_inference import (
+        run_finbert_sentence_parquet_inference,
     )
-    tokenizer = None
-    model = None
-    label_mapping: dict[int, str] | None = None
-    warnings: list[str] = []
-    year_results: list[dict[str, Any]] = []
-    item_feature_frames: list[pl.DataFrame] = []
 
-    for year_path in year_paths:
-        filing_year = int(year_path.stem)
-        year_item_features_path = item_features_by_year_dir / f"{filing_year}.parquet"
-        year_sentence_scores_path = sentence_scores_dir / f"{filing_year}.parquet"
-        can_reuse = (
-            year_item_features_path.exists()
-            and not run_cfg.overwrite
-            and (not run_cfg.write_sentence_scores or year_sentence_scores_path.exists())
-        )
-        if can_reuse:
-            item_features_df = pl.read_parquet(year_item_features_path)
-            item_feature_frames.append(item_features_df)
-            year_results.append(
-                {
-                    "filing_year": filing_year,
-                    "status": "reused_existing",
-                    "source_path": str(year_path.resolve()),
-                    "item_features_path": str(year_item_features_path.resolve()),
-                    "sentence_scores_path": (
-                        str(year_sentence_scores_path.resolve())
-                        if run_cfg.write_sentence_scores and year_sentence_scores_path.exists()
-                        else None
-                    ),
-                    "section_rows": None,
-                    "sentence_rows": None,
-                    "item_feature_rows": int(item_features_df.height),
-                    "doc_count": int(item_features_df["doc_id"].n_unique()) if item_features_df.height else 0,
-                }
-            )
-            continue
-
-        if tokenizer is None:
-            tokenizer = load_finbert_tokenizer(authority)
-        if model is None:
-            model = load_finbert_model(authority, run_cfg.runtime)
-            label_mapping = resolve_finbert_label_mapping(model)
-
-        sections_df = (
-            load_eligible_section_universe(run_cfg.section_universe, year_paths=[year_path]).collect()
-        )
-        sections_df = _annotate_analysis_sections(sections_df)
-        if sections_df.is_empty():
-            item_features_df = _empty_item_features_long_frame()
-            year_item_features_path.parent.mkdir(parents=True, exist_ok=True)
-            item_features_df.write_parquet(year_item_features_path, compression="zstd")
-            if run_cfg.write_sentence_scores:
-                year_sentence_scores_path.parent.mkdir(parents=True, exist_ok=True)
-                _empty_sentence_score_frame().write_parquet(year_sentence_scores_path, compression="zstd")
-            item_feature_frames.append(item_features_df)
-            year_results.append(
-                {
-                    "filing_year": filing_year,
-                    "status": "processed_empty",
-                    "source_path": str(year_path.resolve()),
-                    "item_features_path": str(year_item_features_path.resolve()),
-                    "sentence_scores_path": (
-                        str(year_sentence_scores_path.resolve()) if run_cfg.write_sentence_scores else None
-                    ),
-                    "section_rows": 0,
-                    "sentence_rows": 0,
-                    "item_feature_rows": 0,
-                    "doc_count": 0,
-                }
-            )
-            continue
-
-        sentence_scores = score_sentence_frame(
-            derive_sentence_frame(sections_df, run_cfg.sentence_dataset, authority=authority),
-            tokenizer,
-            model,
-            run_cfg.runtime,
+    preprocessing_artifacts = run_finbert_sentence_preprocessing(
+        FinbertSentencePreprocessingRunConfig(
+            source_items_dir=run_cfg.source_items_dir,
+            out_root=run_cfg.out_root / "_staged_intermediates",
+            section_universe=run_cfg.section_universe,
+            sentence_dataset=run_cfg.sentence_dataset,
+            target_doc_universe_path=run_cfg.backbone_path,
+            year_filter=run_cfg.year_filter,
+            overwrite=run_cfg.overwrite,
+            run_name=f"{run_name}_sentence_preprocessing",
+            note=run_cfg.note,
+        ),
+        authority=authority,
+    )
+    inference_artifacts = run_finbert_sentence_parquet_inference(
+        FinbertSentenceParquetInferenceRunConfig(
+            sentence_dataset_dir=preprocessing_artifacts.sentence_dataset_dir,
+            out_root=run_cfg.out_root,
             batch_config=run_cfg.batch_config,
+            runtime=run_cfg.runtime,
             bucket_lengths=run_cfg.bucket_lengths,
-        )
-        item_features_df = aggregate_sentence_scores_to_item_features(sentence_scores, sections_df)
-
-        year_item_features_path.parent.mkdir(parents=True, exist_ok=True)
-        item_features_df.write_parquet(year_item_features_path, compression="zstd")
-        if run_cfg.write_sentence_scores:
-            year_sentence_scores_path.parent.mkdir(parents=True, exist_ok=True)
-            sentence_scores.write_parquet(year_sentence_scores_path, compression="zstd")
-
-        item_feature_frames.append(item_features_df)
-        year_results.append(
-            {
-                "filing_year": filing_year,
-                "status": "processed",
-                "source_path": str(year_path.resolve()),
-                "item_features_path": str(year_item_features_path.resolve()),
-                "sentence_scores_path": (
-                    str(year_sentence_scores_path.resolve()) if run_cfg.write_sentence_scores else None
-                ),
-                "section_rows": int(sections_df.height),
-                "sentence_rows": int(sentence_scores.height),
-                "item_feature_rows": int(item_features_df.height),
-                "doc_count": int(item_features_df["doc_id"].n_unique()) if item_features_df.height else 0,
-            }
-        )
-
-    item_features_long = _concat_aligned_frames(
-        item_feature_frames,
-        empty_schema=_empty_item_features_long_frame(),
-    ).sort(["filing_year", "doc_id", "benchmark_item_code"])
-    run_dir.mkdir(parents=True, exist_ok=True)
-    item_features_long.write_parquet(item_features_long_path, compression="zstd")
-
-    doc_features_wide = pivot_item_features_to_doc_wide(item_features_long)
-    doc_features_wide.write_parquet(doc_features_wide_path, compression="zstd")
-
-    coverage_summary: dict[str, int] | None = None
-    if coverage_report_path is not None and run_cfg.backbone_path is not None:
-        coverage_report, coverage_summary = build_coverage_report(
-            item_features_long,
-            _load_backbone_doc_ids(run_cfg.backbone_path),
-        )
-        coverage_report.write_parquet(coverage_report_path, compression="zstd")
-
-    if run_cfg.backbone_path is None:
-        warnings.append("backbone_path_not_provided")
-    if label_mapping is None:
-        warnings.append("model_not_loaded_all_years_reused_existing_artifacts")
-
-    manifest = {
-        "runner_name": RUNNER_NAME,
-        "run_name": run_name,
-        "created_at_utc": utc_timestamp(),
-        "authority": asdict(authority),
-        "runtime": asdict(run_cfg.runtime),
-        "runtime_environment": runtime_environment,
-        "batch_config": asdict(run_cfg.batch_config),
-        "bucket_lengths": asdict(run_cfg.bucket_lengths),
-        "sentence_dataset": asdict(run_cfg.sentence_dataset),
-        "section_universe": {
-            "source_items_dir": str(run_cfg.section_universe.source_items_dir.resolve()),
-            "form_types": list(run_cfg.section_universe.form_types),
-            "target_items": [asdict(item) for item in run_cfg.section_universe.target_items],
-            "require_active_items": run_cfg.section_universe.require_active_items,
-            "require_exists_by_regime": run_cfg.section_universe.require_exists_by_regime,
-            "min_char_count": run_cfg.section_universe.min_char_count,
-        },
-        "backbone_path": str(run_cfg.backbone_path.resolve()) if run_cfg.backbone_path is not None else None,
-        "year_filter": list(run_cfg.year_filter) if run_cfg.year_filter is not None else None,
-        "write_sentence_scores": run_cfg.write_sentence_scores,
-        "overwrite": run_cfg.overwrite,
-        "note": run_cfg.note,
-        "label_mapping": {str(key): value for key, value in (label_mapping or {}).items()},
-        "counts": {
-            "requested_year_count": len(year_paths),
-            "processed_year_count": sum(1 for row in year_results if row["status"] != "reused_existing"),
-            "reused_year_count": sum(1 for row in year_results if row["status"] == "reused_existing"),
-            "item_feature_rows": int(item_features_long.height),
-            "doc_feature_rows": int(doc_features_wide.height),
-        },
-        "coverage_summary": coverage_summary,
-        "year_results": year_results,
-        "warnings": warnings,
-        "artifacts": {
-            "run_dir": str(run_dir.resolve()),
-            "item_features_long_path": str(item_features_long_path.resolve()),
-            "doc_features_wide_path": str(doc_features_wide_path.resolve()),
-            "coverage_report_path": str(coverage_report_path.resolve()) if coverage_report_path is not None else None,
-            "item_features_by_year_dir": str(item_features_by_year_dir.resolve()),
-            "sentence_scores_dir": (
-                str(sentence_scores_dir.resolve()) if run_cfg.write_sentence_scores else None
-            ),
-        },
-    }
-    _write_json(run_manifest_path, manifest)
-
+            backbone_path=run_cfg.backbone_path,
+            year_filter=run_cfg.year_filter,
+            write_sentence_scores=run_cfg.write_sentence_scores,
+            overwrite=run_cfg.overwrite,
+            run_name=run_name,
+            note=run_cfg.note,
+        ),
+        authority=authority,
+    )
     return FinbertAnalysisRunArtifacts(
-        run_dir=run_dir,
-        run_manifest_path=run_manifest_path,
-        item_features_long_path=item_features_long_path,
-        doc_features_wide_path=doc_features_wide_path,
-        coverage_report_path=coverage_report_path,
-        sentence_scores_dir=sentence_scores_dir if run_cfg.write_sentence_scores else None,
+        run_dir=inference_artifacts.run_dir,
+        run_manifest_path=inference_artifacts.run_manifest_path,
+        item_features_long_path=inference_artifacts.item_features_long_path,
+        doc_features_wide_path=inference_artifacts.doc_features_wide_path,
+        coverage_report_path=inference_artifacts.coverage_report_path,
+        sentence_scores_dir=inference_artifacts.sentence_scores_dir,
     )

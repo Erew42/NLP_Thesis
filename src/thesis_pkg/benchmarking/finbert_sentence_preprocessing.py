@@ -53,6 +53,7 @@ def _summary_row(
     *,
     filing_year: int,
     status: str,
+    source_path: Path,
     sentence_path: Path,
     sections_df: pl.DataFrame | None,
     sentence_df: pl.DataFrame,
@@ -70,9 +71,14 @@ def _summary_row(
     return {
         "filing_year": filing_year,
         "status": status,
+        "source_path": str(source_path.resolve()),
         "sentence_dataset_path": str(sentence_path.resolve()),
         "section_rows": int(sections_df.height) if sections_df is not None else None,
-        "doc_count": int(sections_df["doc_id"].n_unique()) if sections_df is not None and sections_df.height else 0,
+        "doc_count": (
+            int(sections_df["doc_id"].n_unique())
+            if sections_df is not None and sections_df.height
+            else int(sentence_df["doc_id"].n_unique()) if sentence_df.height else 0
+        ),
         "sentence_rows": int(sentence_df.height),
         "short_sentence_rows": int(bucket_counts.get("short", 0)),
         "medium_sentence_rows": int(bucket_counts.get("medium", 0)),
@@ -103,6 +109,7 @@ def run_finbert_sentence_preprocessing(
                 _summary_row(
                     filing_year=filing_year,
                     status="reused_existing",
+                    source_path=year_path,
                     sentence_path=sentence_path,
                     sections_df=None,
                     sentence_df=sentence_df,
@@ -111,7 +118,11 @@ def run_finbert_sentence_preprocessing(
             continue
 
         sections_df = (
-            load_eligible_section_universe(run_cfg.section_universe, year_paths=[year_path]).collect()
+            load_eligible_section_universe(
+                run_cfg.section_universe,
+                year_paths=[year_path],
+                target_doc_universe_path=run_cfg.target_doc_universe_path,
+            ).collect()
         )
         sections_df = _annotate_analysis_sections(sections_df)
         sentence_df = derive_sentence_frame(sections_df, run_cfg.sentence_dataset, authority=authority)
@@ -121,6 +132,7 @@ def run_finbert_sentence_preprocessing(
             _summary_row(
                 filing_year=filing_year,
                 status="processed",
+                source_path=year_path,
                 sentence_path=sentence_path,
                 sections_df=sections_df,
                 sentence_df=sentence_df,
@@ -146,6 +158,11 @@ def run_finbert_sentence_preprocessing(
             "require_exists_by_regime": run_cfg.section_universe.require_exists_by_regime,
             "min_char_count": run_cfg.section_universe.min_char_count,
         },
+        "target_doc_universe_path": (
+            str(run_cfg.target_doc_universe_path.resolve())
+            if run_cfg.target_doc_universe_path is not None
+            else None
+        ),
         "year_filter": list(run_cfg.year_filter) if run_cfg.year_filter is not None else None,
         "overwrite": run_cfg.overwrite,
         "note": run_cfg.note,
