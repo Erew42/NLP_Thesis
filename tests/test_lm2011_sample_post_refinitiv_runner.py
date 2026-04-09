@@ -23,13 +23,77 @@ def _write_text(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
+def _stub_table_i_sample_creation_df(
+    *,
+    window_label: str = "1994-2008",
+    unavailable_mda: bool = False,
+) -> pl.DataFrame:
+    rows = [
+        {
+            "section_id": "full_10k_document",
+            "section_label": "Full 10-K Document",
+            "section_order": 1,
+            "row_order": 1,
+            "row_id": "edgar_complete_nonduplicate_sample",
+            "display_label": f"EDGAR 10-K/10-K405 {window_label} complete sample (excluding duplicates)",
+            "sample_size_kind": "count",
+            "sample_size_value": 10.0,
+            "observations_removed": None,
+            "availability_status": "available",
+            "availability_reason": None,
+        },
+        {
+            "section_id": "firm_year_sample",
+            "section_label": "Firm-Year Sample",
+            "section_order": 2,
+            "row_order": 2,
+            "row_id": "firm_year_sample",
+            "display_label": "Firm-Year Sample",
+            "sample_size_kind": "count",
+            "sample_size_value": 10.0,
+            "observations_removed": None,
+            "availability_status": "available",
+            "availability_reason": None,
+        },
+    ]
+    if unavailable_mda:
+        rows.append(
+            {
+                "section_id": "mda_subsection",
+                "section_label": "Management Discussion and Analysis (MD&A) Subsection",
+                "section_order": 3,
+                "row_order": 3,
+                "row_id": "identifiable_mda",
+                "display_label": "Subset of 10-K sample where MD&A section could be identified",
+                "sample_size_kind": "count",
+                "sample_size_value": None,
+                "observations_removed": None,
+                "availability_status": "unavailable",
+                "availability_reason": "mda_text_features_unavailable",
+            }
+        )
+    return pl.DataFrame(rows)
+
+
 def _build_temp_layout(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
     sample_root = tmp_path / "sample"
     upstream_run_root = tmp_path / "upstream"
     additional_data_dir = tmp_path / "additional"
     output_dir = tmp_path / "output"
 
-    _write_parquet(sample_root / "year_merged" / "1995.parquet")
+    _write_parquet(
+        sample_root / "year_merged" / "1995.parquet",
+        pl.DataFrame(
+            {
+                "doc_id": ["d1"],
+                "cik_10": ["0000000001"],
+                "accession_nodash": ["000000000100000001"],
+                "file_date_filename": [dt.date(1995, 1, 1)],
+                "document_type_filename": ["10-K"],
+                "full_text": ["token"],
+            }
+        ),
+    )
     _write_parquet(sample_root / "derived_data" / "final_flagged_data_compdesc_added.sample_5pct_seed42.parquet")
 
     ccm_base_dir = sample_root / "ccm_parquet_data" / "documents-export-2025-3-19"
@@ -48,7 +112,19 @@ def _build_temp_layout(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
         _write_parquet(ccm_base_dir / name)
 
     _write_parquet(upstream_run_root / "sec_ccm_premerge" / "sec_ccm_matched_clean.parquet")
-    _write_parquet(upstream_run_root / "items_analysis" / "1995.parquet")
+    _write_parquet(
+        upstream_run_root / "items_analysis" / "1995.parquet",
+        pl.DataFrame(
+            {
+                "doc_id": ["d1"],
+                "cik_10": ["0000000001"],
+                "filing_date": [dt.date(1995, 1, 1)],
+                "document_type_filename": ["10-K"],
+                "item_id": ["7"],
+                "full_text": ["token"],
+            }
+        ),
+    )
     _write_parquet(upstream_run_root / "refinitiv_doc_ownership_lm2011" / "refinitiv_lm2011_doc_ownership.parquet")
     _write_parquet(
         upstream_run_root / "refinitiv_doc_analyst_lm2011" / "refinitiv_doc_analyst_selected.parquet",
@@ -70,6 +146,7 @@ def _build_temp_layout(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
     for name in ("Fin-Neg.txt", "Fin-Pos.txt", "Fin-Unc.txt", "Fin-Lit.txt", "MW-Strong.txt", "MW-Weak.txt"):
         _write_text(additional_data_dir / name, "token\n")
     _write_text(additional_data_dir / "Harvard_IV_NEG_Inf.txt", "harvard\n")
+    _write_text(additional_data_dir / "LM2011_MasterDictionary.txt", "Word\ntoken\nharvard\nrecognized\n")
     _write_text(additional_data_dir / "FF_Siccodes_48_Industries.txt", "1 Agric Agriculture\n0100-0199 Range\n")
     _write_text(
         additional_data_dir / "F-F_Research_Data_Factors_daily.csv",
@@ -192,6 +269,15 @@ def test_main_writes_expected_artifacts_and_manifest_for_stubbed_run(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     sample_root, upstream_run_root, additional_data_dir, output_dir = _build_temp_layout(tmp_path)
+    captured: dict[str, object] = {}
+
+    def _capture_text_features_full_10k(*_: object, **kwargs: object) -> pl.LazyFrame:
+        captured["text_features_full_10k_kwargs"] = kwargs
+        return pl.DataFrame({"doc_id": ["d1"], "token_count_full_10k": [2500]}).lazy()
+
+    def _capture_text_features_mda(*_: object, **kwargs: object) -> pl.LazyFrame:
+        captured["text_features_mda_kwargs"] = kwargs
+        return pl.DataFrame({"doc_id": ["d1"], "token_count_mda": [300]}).lazy()
 
     monkeypatch.setattr(
         runner,
@@ -209,12 +295,26 @@ def test_main_writes_expected_artifacts_and_manifest_for_stubbed_run(
     monkeypatch.setattr(
         runner,
         "build_lm2011_text_features_full_10k",
-        lambda *_, **__: pl.DataFrame({"doc_id": ["d1"], "token_count_full_10k": [2500]}).lazy(),
+        _capture_text_features_full_10k,
     )
     monkeypatch.setattr(
         runner,
         "build_lm2011_text_features_mda",
-        lambda *_, **__: pl.DataFrame({"doc_id": ["d1"], "token_count_mda": [300]}).lazy(),
+        _capture_text_features_mda,
+    )
+    def _capture_table_i_sample_creation(*_: object, **kwargs: object) -> pl.DataFrame:
+        sample_start = kwargs.get("sample_start", dt.date(1994, 1, 1))
+        sample_end = kwargs.get("sample_end", dt.date(2008, 12, 31))
+        captured.setdefault("table_i_windows", []).append((sample_start, sample_end))
+        return _stub_table_i_sample_creation_df(
+            window_label=f"{sample_start.year}-{sample_end.year}",
+            unavailable_mda=True,
+        )
+
+    monkeypatch.setattr(
+        runner,
+        "build_lm2011_table_i_sample_creation",
+        _capture_table_i_sample_creation,
     )
     monkeypatch.setattr(runner, "build_lm2011_event_panel", lambda *_, **__: pl.DataFrame({"doc_id": ["d1"]}).lazy())
     monkeypatch.setattr(runner, "build_lm2011_sue_panel", lambda *_, **__: pl.DataFrame({"doc_id": ["d1"]}).lazy())
@@ -234,7 +334,6 @@ def test_main_writes_expected_artifacts_and_manifest_for_stubbed_run(
     monkeypatch.setattr(runner, "build_lm2011_table_vi_results", lambda *_, **__: empty_table)
     monkeypatch.setattr(runner, "build_lm2011_table_viii_results", lambda *_, **__: empty_table)
     monkeypatch.setattr(runner, "build_lm2011_table_ia_i_results", lambda *_, **__: empty_table)
-
     exit_code = runner.main(
         [
             "--sample-root",
@@ -245,21 +344,110 @@ def test_main_writes_expected_artifacts_and_manifest_for_stubbed_run(
             str(additional_data_dir),
             "--output-dir",
             str(output_dir),
+            "--full-10k-cleaning-contract",
+            "lm2011_paper",
         ]
     )
 
     assert exit_code == 0
     assert (output_dir / "lm2011_sample_backbone.parquet").exists()
+    assert (output_dir / "lm2011_table_i_sample_creation.parquet").exists()
+    assert (output_dir / "lm2011_table_i_sample_creation.csv").exists()
+    assert (output_dir / "lm2011_table_i_sample_creation.md").exists()
+    assert (output_dir / "lm2011_table_i_sample_creation_1994_2024.parquet").exists()
+    assert (output_dir / "lm2011_table_i_sample_creation_1994_2024.csv").exists()
+    assert (output_dir / "lm2011_table_i_sample_creation_1994_2024.md").exists()
     assert (output_dir / "lm2011_event_panel.parquet").exists()
     assert (output_dir / "lm2011_table_iv_results.parquet").exists()
+    assert "1994-2024" in (output_dir / "lm2011_table_i_sample_creation_1994_2024.md").read_text(encoding="utf-8")
 
     manifest = json.loads((output_dir / "lm2011_sample_run_manifest.json").read_text(encoding="utf-8"))
     assert manifest["run_status"] == "completed"
+    assert manifest["config"]["full_10k_cleaning_contract"] == "lm2011_paper"
     assert manifest["stages"]["sample_backbone"]["status"] == "generated"
+    assert manifest["stages"]["table_i_sample_creation"]["status"] == "generated"
+    assert set(manifest["stages"]["table_i_sample_creation"]["extra_artifacts"]) == {"csv", "markdown"}
+    assert manifest["stages"]["table_i_sample_creation"]["warnings"] == [
+        "MD&A subsection rows are unavailable because lm2011_text_features_mda was not provided."
+    ]
+    assert manifest["stages"]["table_i_sample_creation_1994_2024"]["status"] == "generated"
+    assert set(manifest["stages"]["table_i_sample_creation_1994_2024"]["extra_artifacts"]) == {"csv", "markdown"}
+    assert manifest["stages"]["table_i_sample_creation_1994_2024"]["warnings"] == [
+        "MD&A subsection rows are unavailable because lm2011_text_features_mda was not provided."
+    ]
     assert manifest["stages"]["table_iv_results"]["status"] == "generated_empty"
     assert manifest["stages"]["table_iv_results"]["reason"] == runner.EMPTY_TABLE_REASON
     assert manifest["stages"]["trading_strategy_monthly_returns"]["status"] == runner.SKIPPED_MISSING_OPTIONAL_INPUT
     assert manifest["stages"]["table_ia_ii_results"]["status"] == runner.SKIPPED_MISSING_OPTIONAL_INPUT
+    assert captured["text_features_full_10k_kwargs"]["cleaning_contract"] == "lm2011_paper"
+    assert captured["text_features_full_10k_kwargs"]["master_dictionary_words"] == ("token", "harvard", "recognized")
+    assert captured["text_features_mda_kwargs"]["master_dictionary_words"] == ("token", "harvard", "recognized")
+    assert captured["table_i_windows"] == [
+        (dt.date(1994, 1, 1), dt.date(2008, 12, 31)),
+        (dt.date(1994, 1, 1), dt.date(2024, 12, 31)),
+    ]
+
+
+def test_resolve_paths_honors_colab_style_override_paths(tmp_path: Path) -> None:
+    sample_root, upstream_run_root, additional_data_dir, output_dir = _build_temp_layout(tmp_path)
+    drive_root = tmp_path / "drive" / "MyDrive" / "sec_full"
+    year_merged_dir = drive_root / "year_merged"
+    derived_data_dir = drive_root / "derived_data"
+    ccm_base_dir = drive_root / "ccm_parquet_data"
+    items_analysis_dir = drive_root / "items_analysis"
+    matched_clean_path = drive_root / "sec_ccm_premerge" / "sec_ccm_matched_clean.parquet"
+    daily_panel_path = derived_data_dir / "final_flagged_data_compdesc_added.parquet"
+
+    _write_parquet(year_merged_dir / "1995.parquet")
+    _write_parquet(daily_panel_path)
+    _write_parquet(matched_clean_path)
+    _write_parquet(items_analysis_dir / "1995.parquet")
+
+    ccm_nested = ccm_base_dir / "documents-export-2025-3-19"
+    for name in (
+        "filingdates.parquet",
+        "balancesheetquarterly.parquet",
+        "incomestatementquarterly.parquet",
+        "perioddescriptorquarterly.parquet",
+        "balancesheetindustrialannual.parquet",
+        "incomestatementindustrialannual.parquet",
+        "perioddescriptorannual.parquet",
+        "fiscalmarketdataannual.parquet",
+        "companyhistory.parquet",
+        "companydescription.parquet",
+    ):
+        _write_parquet(ccm_nested / name)
+
+    args = runner.parse_args(
+        [
+            "--sample-root",
+            str(sample_root),
+            "--upstream-run-root",
+            str(upstream_run_root),
+            "--additional-data-dir",
+            str(additional_data_dir),
+            "--output-dir",
+            str(output_dir),
+            "--year-merged-dir",
+            str(year_merged_dir),
+            "--matched-clean-path",
+            str(matched_clean_path),
+            "--daily-panel-path",
+            str(daily_panel_path),
+            "--items-analysis-dir",
+            str(items_analysis_dir),
+            "--ccm-base-dir",
+            str(ccm_base_dir),
+        ]
+    )
+    paths = runner._resolve_paths(args)
+
+    assert paths.year_merged_dir == year_merged_dir.resolve()
+    assert paths.matched_clean_path == matched_clean_path.resolve()
+    assert paths.daily_panel_path == daily_panel_path.resolve()
+    assert paths.items_analysis_dir == items_analysis_dir.resolve()
+    assert paths.ccm_base_dir == ccm_base_dir.resolve()
+    assert paths.filingdates_path == (ccm_nested / "filingdates.parquet").resolve()
 
 
 @pytest.mark.skipif(
@@ -288,6 +476,8 @@ def test_real_sample_smoke_builds_nonempty_panels_and_empty_tables(tmp_path: Pat
     assert exit_code == 0
 
     manifest = json.loads((output_dir / "lm2011_sample_run_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["stages"]["table_i_sample_creation"]["status"] == "generated"
+    assert manifest["stages"]["table_i_sample_creation_1994_2024"]["status"] == "generated"
     assert manifest["stages"]["event_panel"]["status"] == "generated"
     assert manifest["stages"]["sue_panel"]["status"] == "generated"
     assert manifest["row_counts"]["event_panel"] > 0

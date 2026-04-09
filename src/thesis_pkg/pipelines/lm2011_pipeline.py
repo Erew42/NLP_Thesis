@@ -12,6 +12,7 @@ except ImportError:  # pragma: no cover - exercised only when the dependency is 
     sm = None
 
 from thesis_pkg.core.ccm.lm2011 import (
+    _build_lm2011_sample_backbone_stage_frames,
     attach_eligible_quarterly_accounting,
     attach_latest_annual_accounting,
     attach_pre_filing_market_data,
@@ -24,6 +25,7 @@ from thesis_pkg.core.sec.lm2011_text import (
     build_lm2011_text_features_mda,
     build_lm2011_trading_strategy_signal_frame,
 )
+from thesis_pkg.core.sec.lm2011_cleaning import Full10KCleaningContract
 from thesis_pkg.pipelines.refinitiv.analyst import (
     select_refinitiv_lm2011_doc_analyst_inputs,
 )
@@ -39,6 +41,36 @@ _STRATEGY_SIGNAL_COLUMNS: tuple[str, ...] = (
     "h4n_inf_prop",
     "h4n_inf_tfidf",
 )
+_LM2011_TABLE_I_FULL_10K_SECTION_ID = "full_10k_document"
+_LM2011_TABLE_I_FULL_10K_SECTION_LABEL = "Full 10-K Document"
+_LM2011_TABLE_I_FIRM_YEAR_SECTION_ID = "firm_year_sample"
+_LM2011_TABLE_I_FIRM_YEAR_SECTION_LABEL = "Firm-Year Sample"
+_LM2011_TABLE_I_MDA_SECTION_ID = "mda_subsection"
+_LM2011_TABLE_I_MDA_SECTION_LABEL = "Management Discussion and Analysis (MD&A) Subsection"
+_LM2011_TABLE_I_DEFAULT_SAMPLE_START = dt.date(1994, 1, 1)
+_LM2011_TABLE_I_DEFAULT_SAMPLE_END = dt.date(2008, 12, 31)
+_LM2011_TABLE_I_FULL_10K_ROW_LABELS: dict[str, str] = {
+    "first_filing_per_year": "Include only first filing in a given year",
+    "minimum_180_day_spacing": "At least 180 days between a given firm's 10-K filings",
+    "crsp_permno_match": "CRSP PERMNO match",
+    "ordinary_common_equity": "Reported on CRSP as an ordinary common equity firm",
+    "market_cap_available": "CRSP market capitalization data available",
+    "price_day_minus_one_ge_3": "Price on filing date day minus one >= $3",
+    "event_window_returns_and_volume": "Returns and volume for day 0-3 event period",
+    "major_exchange_listing": "NYSE, AMEX, or Nasdaq exchange listing",
+    "sixty_day_pre_post_coverage": "At least 60 days of returns and volume in year prior to and following file date",
+    "book_to_market_available_and_book_value_positive": "Book-to-market COMPUSTAT data available and book value > 0",
+    "token_count_ge_2000": "Number of words in 10-K >= 2,000",
+}
+_LM2011_TABLE_I_FIRM_YEAR_ROW_LABELS: dict[str, str] = {
+    "firm_year_sample": "Firm-Year Sample",
+    "unique_firms": "Number of unique firms",
+    "average_years_per_firm": "Average number of years per firm",
+}
+_LM2011_TABLE_I_MDA_ROW_LABELS: dict[str, str] = {
+    "identifiable_mda": "Subset of 10-K sample where MD&A section could be identified",
+    "mda_token_count_ge_250": "MD&A section >= 250 words",
+}
 
 
 def _require_columns(lf: pl.LazyFrame, required: tuple[str, ...], label: str) -> None:
@@ -179,6 +211,57 @@ def _ensure_factor_scale(df: pl.DataFrame, columns: tuple[str, ...]) -> pl.DataF
     )
 
 
+def _frame_height(frame: pl.LazyFrame | pl.DataFrame) -> int:
+    if isinstance(frame, pl.LazyFrame):
+        return int(frame.select(pl.len().alias("_n")).collect().item())
+    return int(frame.height)
+
+
+def _format_table_i_window_label(sample_start: dt.date, sample_end: dt.date) -> str:
+    return f"{sample_start.year}-{sample_end.year}"
+
+
+def _table_i_full_10k_row_labels(sample_start: dt.date, sample_end: dt.date) -> dict[str, str]:
+    return {
+        "edgar_complete_nonduplicate_sample": (
+            f"EDGAR 10-K/10-K405 {_format_table_i_window_label(sample_start, sample_end)} complete sample "
+            "(excluding duplicates)"
+        ),
+        **_LM2011_TABLE_I_FULL_10K_ROW_LABELS,
+    }
+
+
+def _prepare_unique_doc_metric_frame(
+    metric_lf: pl.LazyFrame | None,
+    *,
+    metric_col: str,
+    label: str,
+    required_message: str,
+    metric_dtype: pl.DataType,
+) -> pl.DataFrame:
+    if metric_lf is None:
+        raise ValueError(required_message)
+    _require_columns(metric_lf, ("doc_id", metric_col), label)
+    metric_df = (
+        metric_lf.select(
+            pl.col("doc_id").cast(pl.Utf8, strict=False),
+            pl.col(metric_col).cast(metric_dtype, strict=False).alias(metric_col),
+        )
+        .unique(subset=["doc_id", metric_col], maintain_order=True)
+        .collect()
+    )
+    duplicate_doc_ids = (
+        metric_df.group_by("doc_id")
+        .len()
+        .filter(pl.col("len") > 1)
+        .get_column("doc_id")
+        .to_list()
+    )
+    if duplicate_doc_ids:
+        raise ValueError(f"{label} must be unique on doc_id after exact duplicate removal: {duplicate_doc_ids[:10]}")
+    return metric_df
+
+
 def _prepare_ownership_frame(ownership_lf: pl.LazyFrame | None) -> pl.DataFrame:
     if ownership_lf is None:
         raise ValueError(
@@ -194,25 +277,15 @@ def _prepare_ownership_frame(ownership_lf: pl.LazyFrame | None) -> pl.DataFrame:
     )
     if value_col is None:
         raise ValueError("ownership_lf missing institutional_ownership_pct or institutional_ownership")
-    _require_columns(ownership_lf, ("doc_id", value_col), "ownership")
-    ownership_df = (
-        ownership_lf.select(
-            pl.col("doc_id").cast(pl.Utf8, strict=False),
-            pl.col(value_col).cast(pl.Float64, strict=False).alias("institutional_ownership"),
-        )
-        .unique(subset=["doc_id", "institutional_ownership"], maintain_order=True)
-        .collect()
+    return _prepare_unique_doc_metric_frame(
+        ownership_lf.rename({value_col: "institutional_ownership"}),
+        metric_col="institutional_ownership",
+        label="ownership_lf",
+        required_message=(
+            "ownership_lf is required; fail-closed external_input_policy forbids building LM2011 panels without ownership"
+        ),
+        metric_dtype=pl.Float64,
     )
-    duplicate_doc_ids = (
-        ownership_df.group_by("doc_id")
-        .len()
-        .filter(pl.col("len") > 1)
-        .get_column("doc_id")
-        .to_list()
-    )
-    if duplicate_doc_ids:
-        raise ValueError(f"ownership_lf must be unique on doc_id after exact duplicate removal: {duplicate_doc_ids[:10]}")
-    return ownership_df
 
 
 def _price_expr_from_available_columns(
@@ -236,6 +309,22 @@ def _prepare_event_base_frame(
     daily_lf: pl.LazyFrame,
     annual_accounting_panel_lf: pl.LazyFrame,
     ownership_lf: pl.LazyFrame | None,
+    full_10k_text_features_lf: pl.LazyFrame | None,
+) -> pl.DataFrame:
+    docs_df = _prepare_table_i_base_frame(
+        sample_backbone_lf,
+        daily_lf,
+        annual_accounting_panel_lf,
+        full_10k_text_features_lf,
+    )
+    ownership_df = _prepare_ownership_frame(ownership_lf)
+    return docs_df.lazy().join(ownership_df.lazy(), on="doc_id", how="left").collect()
+
+
+def _prepare_table_i_base_frame(
+    sample_backbone_lf: pl.LazyFrame,
+    daily_lf: pl.LazyFrame,
+    annual_accounting_panel_lf: pl.LazyFrame,
     full_10k_text_features_lf: pl.LazyFrame | None,
 ) -> pl.DataFrame:
     if full_10k_text_features_lf is None:
@@ -271,17 +360,17 @@ def _prepare_event_base_frame(
         pre_filing_trade_date_col="pre_filing_trade_date",
     )
     with_pre_market_schema = with_pre_market.collect_schema()
-    ownership_df = _prepare_ownership_frame(ownership_lf)
-    text_df = (
-        full_10k_text_features_lf.select(
-            pl.col("doc_id").cast(pl.Utf8, strict=False),
-            pl.col("token_count_full_10k").cast(pl.Int32, strict=False),
-        )
-        .collect()
+    text_df = _prepare_unique_doc_metric_frame(
+        full_10k_text_features_lf,
+        metric_col="token_count_full_10k",
+        label="full_10k_text_features_lf",
+        required_message=(
+            "full_10k_text_features_lf is required; fail-closed external_input_policy forbids LM2011 clean panels without token-count text features"
+        ),
+        metric_dtype=pl.Int32,
     )
     return (
         with_pre_market
-        .join(ownership_df.lazy(), on="doc_id", how="left")
         .join(text_df.lazy(), on="doc_id", how="left")
         .with_columns(
             _price_expr_from_available_columns(
@@ -635,29 +724,7 @@ def _apply_lm2011_regression_transforms(lf: pl.LazyFrame) -> pl.LazyFrame:
     )
 
 
-def build_lm2011_event_panel(
-    sample_backbone_lf: pl.LazyFrame,
-    daily_lf: pl.LazyFrame,
-    annual_accounting_panel_lf: pl.LazyFrame,
-    ff_factors_daily_lf: pl.LazyFrame | None,
-    ownership_lf: pl.LazyFrame | None,
-    full_10k_text_features_lf: pl.LazyFrame | None,
-) -> pl.LazyFrame:
-    if ff_factors_daily_lf is None:
-        raise ValueError(
-            "ff_factors_daily_lf is required; fail-closed external_input_policy forbids LM2011 event panels without daily FF factors"
-        )
-    docs_df = _prepare_event_base_frame(
-        sample_backbone_lf,
-        daily_lf,
-        annual_accounting_panel_lf.with_columns(pl.col("gvkey_int").cast(pl.Int32, strict=False).alias("gvkey_int")),
-        ownership_lf,
-        full_10k_text_features_lf,
-    )
-    if docs_df.height == 0:
-        return _empty_event_panel_df().lazy()
-
-    daily_df = _prepare_daily_event_frame(daily_lf, ff_factors_daily_lf, docs_df)
+def _build_lm2011_event_screen_surface(docs_df: pl.DataFrame, daily_df: pl.DataFrame) -> pl.DataFrame:
     docs_df, daily_df = _attach_trade_indices(docs_df, daily_df)
     window_df = _build_window_rows(docs_df, daily_df)
 
@@ -745,7 +812,7 @@ def build_lm2011_event_panel(
     pre_alpha = pre_alpha.with_columns(pl.col("doc_id").cast(pl.Utf8, strict=False))
     post_alpha = post_alpha.with_columns(pl.col("doc_id").cast(pl.Utf8, strict=False))
 
-    panel = (
+    return (
         docs_df.join(event_summary, on="doc_id", how="left")
         .join(abnormal_event, on="doc_id", how="left")
         .join(pre_alpha, on="doc_id", how="left")
@@ -765,21 +832,296 @@ def build_lm2011_event_panel(
         )
     )
 
-    panel = panel.filter(pl.col("event_shrcd").is_in([10, 11]))
-    panel = panel.filter(pl.col("size_event").cast(pl.Float64, strict=False).is_not_null() & (pl.col("size_event") > 0))
-    panel = panel.filter(pl.col("pre_filing_price").is_not_null() & (pl.col("pre_filing_price") >= 3.0))
-    panel = panel.filter((pl.col("event_return_day_count") == 4) & (pl.col("event_volume_day_count") == 4))
-    panel = panel.filter(pl.col("event_exchcd").is_in([1, 2, 3]))
-    panel = panel.filter(
-        (pl.col("pre_turnover_obs") >= 60)
-        & (pl.col("abnormal_volume_pre_obs") >= 60)
-        & (pl.col("pre_alpha_obs") >= 60)
-        & (pl.col("post_alpha_obs") >= 60)
+
+def _lm2011_table_i_market_stage_specs() -> tuple[tuple[str, pl.Expr], ...]:
+    return (
+        ("ordinary_common_equity", pl.col("event_shrcd").is_in([10, 11])),
+        (
+            "market_cap_available",
+            pl.col("size_event").cast(pl.Float64, strict=False).is_not_null()
+            & (pl.col("size_event").cast(pl.Float64, strict=False) > 0),
+        ),
+        (
+            "price_day_minus_one_ge_3",
+            pl.col("pre_filing_price").cast(pl.Float64, strict=False).is_not_null()
+            & (pl.col("pre_filing_price").cast(pl.Float64, strict=False) >= 3.0),
+        ),
+        (
+            "event_window_returns_and_volume",
+            (pl.col("event_return_day_count") == 4) & (pl.col("event_volume_day_count") == 4),
+        ),
+        ("major_exchange_listing", pl.col("event_exchcd").is_in([1, 2, 3])),
+        (
+            "sixty_day_pre_post_coverage",
+            (pl.col("pre_turnover_obs") >= 60)
+            & (pl.col("abnormal_volume_pre_obs") >= 60)
+            & (pl.col("pre_alpha_obs") >= 60)
+            & (pl.col("post_alpha_obs") >= 60),
+        ),
+        (
+            "book_to_market_available_and_book_value_positive",
+            (pl.col("book_equity_be").cast(pl.Float64, strict=False) > 0)
+            & (pl.col("bm_event").cast(pl.Float64, strict=False) > 0),
+        ),
+        ("token_count_ge_2000", pl.col("token_count_full_10k").cast(pl.Int32, strict=False) >= 2000),
     )
-    panel = panel.filter(pl.col("book_equity_be").cast(pl.Float64, strict=False) > 0)
-    panel = panel.filter(pl.col("bm_event").cast(pl.Float64, strict=False) > 0)
+
+
+def _apply_lm2011_table_i_market_filters(panel: pl.DataFrame) -> tuple[tuple[str, pl.DataFrame], ...]:
+    current = panel
+    stage_frames: list[tuple[str, pl.DataFrame]] = []
+    for row_id, predicate in _lm2011_table_i_market_stage_specs():
+        current = current.filter(predicate)
+        stage_frames.append((row_id, current))
+    return tuple(stage_frames)
+
+
+def _build_lm2011_table_i_market_stage_frames(
+    sample_backbone_lf: pl.LazyFrame,
+    daily_lf: pl.LazyFrame,
+    annual_accounting_panel_lf: pl.LazyFrame,
+    ff_factors_daily_lf: pl.LazyFrame | None,
+    full_10k_text_features_lf: pl.LazyFrame | None,
+) -> tuple[tuple[str, pl.DataFrame], ...]:
+    if ff_factors_daily_lf is None:
+        raise ValueError(
+            "ff_factors_daily_lf is required; fail-closed external_input_policy forbids LM2011 event panels without daily FF factors"
+        )
+    docs_df = _prepare_table_i_base_frame(
+        sample_backbone_lf,
+        daily_lf,
+        annual_accounting_panel_lf.with_columns(pl.col("gvkey_int").cast(pl.Int32, strict=False).alias("gvkey_int")),
+        full_10k_text_features_lf,
+    )
+    if docs_df.height == 0:
+        return tuple((row_id, docs_df.clone()) for row_id, _ in _lm2011_table_i_market_stage_specs())
+    daily_df = _prepare_daily_event_frame(daily_lf, ff_factors_daily_lf, docs_df)
+    panel = _build_lm2011_event_screen_surface(docs_df, daily_df)
+    return _apply_lm2011_table_i_market_filters(panel)
+
+
+def _build_table_i_sample_creation_row(
+    *,
+    section_id: str,
+    section_label: str,
+    section_order: int,
+    row_order: int,
+    row_id: str,
+    display_label: str,
+    sample_size_kind: str,
+    sample_size_value: int | float | None,
+    observations_removed: int | None,
+    availability_status: str,
+    availability_reason: str | None = None,
+) -> dict[str, object]:
+    return {
+        "section_id": section_id,
+        "section_label": section_label,
+        "section_order": section_order,
+        "row_order": row_order,
+        "row_id": row_id,
+        "display_label": display_label,
+        "sample_size_kind": sample_size_kind,
+        "sample_size_value": float(sample_size_value) if sample_size_value is not None else None,
+        "observations_removed": observations_removed,
+        "availability_status": availability_status,
+        "availability_reason": availability_reason,
+    }
+
+
+def _build_lm2011_table_i_output(
+    early_stage_frames: tuple[tuple[str, pl.LazyFrame], ...],
+    market_stage_frames: tuple[tuple[str, pl.DataFrame], ...],
+    *,
+    sample_start: dt.date,
+    sample_end: dt.date,
+    mda_text_features_lf: pl.LazyFrame | None,
+) -> pl.DataFrame:
+    rows: list[dict[str, object]] = []
+    row_order = 1
+    previous_count: int | None = None
+    final_market_df = market_stage_frames[-1][1] if market_stage_frames else pl.DataFrame()
+    full_10k_row_labels = _table_i_full_10k_row_labels(sample_start, sample_end)
+
+    for row_id, frame in (*early_stage_frames, *market_stage_frames):
+        current_count = _frame_height(frame)
+        rows.append(
+            _build_table_i_sample_creation_row(
+                section_id=_LM2011_TABLE_I_FULL_10K_SECTION_ID,
+                section_label=_LM2011_TABLE_I_FULL_10K_SECTION_LABEL,
+                section_order=1,
+                row_order=row_order,
+                row_id=row_id,
+                display_label=full_10k_row_labels[row_id],
+                sample_size_kind="count",
+                sample_size_value=current_count,
+                observations_removed=None if previous_count is None else previous_count - current_count,
+                availability_status="available",
+            )
+        )
+        previous_count = current_count
+        row_order += 1
+
+    final_count = _frame_height(final_market_df)
+    unique_firms = (
+        final_market_df.select(pl.col("gvkey_int").drop_nulls().n_unique().alias("_n")).item()
+        if final_count > 0 and "gvkey_int" in final_market_df.columns
+        else 0
+    )
+    average_years_per_firm = (float(final_count) / float(unique_firms)) if unique_firms else None
+    for row_id, sample_size_kind, sample_size_value in (
+        ("firm_year_sample", "count", final_count),
+        ("unique_firms", "count", unique_firms),
+        ("average_years_per_firm", "mean", average_years_per_firm),
+    ):
+        rows.append(
+            _build_table_i_sample_creation_row(
+                section_id=_LM2011_TABLE_I_FIRM_YEAR_SECTION_ID,
+                section_label=_LM2011_TABLE_I_FIRM_YEAR_SECTION_LABEL,
+                section_order=2,
+                row_order=row_order,
+                row_id=row_id,
+                display_label=_LM2011_TABLE_I_FIRM_YEAR_ROW_LABELS[row_id],
+                sample_size_kind=sample_size_kind,
+                sample_size_value=sample_size_value,
+                observations_removed=None,
+                availability_status="available",
+            )
+        )
+        row_order += 1
+
+    if mda_text_features_lf is None:
+        for row_id in ("identifiable_mda", "mda_token_count_ge_250"):
+            rows.append(
+                _build_table_i_sample_creation_row(
+                    section_id=_LM2011_TABLE_I_MDA_SECTION_ID,
+                    section_label=_LM2011_TABLE_I_MDA_SECTION_LABEL,
+                    section_order=3,
+                    row_order=row_order,
+                    row_id=row_id,
+                    display_label=_LM2011_TABLE_I_MDA_ROW_LABELS[row_id],
+                    sample_size_kind="count",
+                    sample_size_value=None,
+                    observations_removed=None,
+                    availability_status="unavailable",
+                    availability_reason="mda_text_features_unavailable",
+                )
+            )
+            row_order += 1
+    else:
+        mda_df = _prepare_unique_doc_metric_frame(
+            mda_text_features_lf,
+            metric_col="token_count_mda",
+            label="mda_text_features_lf",
+            required_message="mda_text_features_lf is required for MD&A subsection rows",
+            metric_dtype=pl.Int32,
+        )
+        identifiable_mda = final_market_df.join(mda_df, on="doc_id", how="inner")
+        mda_token_count_ge_250 = identifiable_mda.filter(pl.col("token_count_mda").cast(pl.Int32, strict=False) >= 250)
+        previous_mda_count = final_count
+        for row_id, frame in (
+            ("identifiable_mda", identifiable_mda),
+            ("mda_token_count_ge_250", mda_token_count_ge_250),
+        ):
+            current_count = _frame_height(frame)
+            rows.append(
+                _build_table_i_sample_creation_row(
+                    section_id=_LM2011_TABLE_I_MDA_SECTION_ID,
+                    section_label=_LM2011_TABLE_I_MDA_SECTION_LABEL,
+                    section_order=3,
+                    row_order=row_order,
+                    row_id=row_id,
+                    display_label=_LM2011_TABLE_I_MDA_ROW_LABELS[row_id],
+                    sample_size_kind="count",
+                    sample_size_value=current_count,
+                    observations_removed=previous_mda_count - current_count,
+                    availability_status="available",
+                )
+            )
+            previous_mda_count = current_count
+            row_order += 1
+
+    return pl.DataFrame(
+        rows,
+        schema_overrides={
+            "section_id": pl.Utf8,
+            "section_label": pl.Utf8,
+            "section_order": pl.Int8,
+            "row_order": pl.Int16,
+            "row_id": pl.Utf8,
+            "display_label": pl.Utf8,
+            "sample_size_kind": pl.Utf8,
+            "sample_size_value": pl.Float64,
+            "observations_removed": pl.Int64,
+            "availability_status": pl.Utf8,
+            "availability_reason": pl.Utf8,
+        },
+    ).sort("section_order", "row_order")
+
+
+def build_lm2011_table_i_sample_creation(
+    sec_parsed_lf: pl.LazyFrame,
+    matched_clean_lf: pl.LazyFrame,
+    daily_lf: pl.LazyFrame,
+    annual_accounting_panel_lf: pl.LazyFrame,
+    ff_factors_daily_lf: pl.LazyFrame | None,
+    full_10k_text_features_lf: pl.LazyFrame | None,
+    *,
+    ccm_filingdates_lf: pl.LazyFrame | None = None,
+    mda_text_features_lf: pl.LazyFrame | None = None,
+    sample_start: dt.date = _LM2011_TABLE_I_DEFAULT_SAMPLE_START,
+    sample_end: dt.date = _LM2011_TABLE_I_DEFAULT_SAMPLE_END,
+) -> pl.DataFrame:
+    """Build the LM2011 Table I sample-selection ladder as a normalized row table."""
+    early_stage_frames = _build_lm2011_sample_backbone_stage_frames(
+        sec_parsed_lf,
+        matched_clean_lf,
+        ccm_filingdates_lf=ccm_filingdates_lf,
+        sample_start=sample_start,
+        sample_end=sample_end,
+    )
+    market_stage_frames = _build_lm2011_table_i_market_stage_frames(
+        early_stage_frames[-1][1],
+        daily_lf,
+        annual_accounting_panel_lf,
+        ff_factors_daily_lf,
+        full_10k_text_features_lf,
+    )
+    return _build_lm2011_table_i_output(
+        early_stage_frames,
+        market_stage_frames,
+        sample_start=sample_start,
+        sample_end=sample_end,
+        mda_text_features_lf=mda_text_features_lf,
+    )
+
+
+def build_lm2011_event_panel(
+    sample_backbone_lf: pl.LazyFrame,
+    daily_lf: pl.LazyFrame,
+    annual_accounting_panel_lf: pl.LazyFrame,
+    ff_factors_daily_lf: pl.LazyFrame | None,
+    ownership_lf: pl.LazyFrame | None,
+    full_10k_text_features_lf: pl.LazyFrame | None,
+) -> pl.LazyFrame:
+    if ff_factors_daily_lf is None:
+        raise ValueError(
+            "ff_factors_daily_lf is required; fail-closed external_input_policy forbids LM2011 event panels without daily FF factors"
+        )
+    docs_df = _prepare_event_base_frame(
+        sample_backbone_lf,
+        daily_lf,
+        annual_accounting_panel_lf.with_columns(pl.col("gvkey_int").cast(pl.Int32, strict=False).alias("gvkey_int")),
+        ownership_lf,
+        full_10k_text_features_lf,
+    )
+    if docs_df.height == 0:
+        return _empty_event_panel_df().lazy()
+
+    daily_df = _prepare_daily_event_frame(daily_lf, ff_factors_daily_lf, docs_df)
+    panel = _build_lm2011_event_screen_surface(docs_df, daily_df)
+    panel = _apply_lm2011_table_i_market_filters(panel)[-1][1]
     panel = _winsorize_column(panel, "bm_event")
-    panel = panel.filter(pl.col("token_count_full_10k").cast(pl.Int32, strict=False) >= 2000)
     panel = panel.filter(pl.col("abnormal_volume").is_not_null())
 
     return panel.select(
@@ -1208,8 +1550,10 @@ def _build_trading_strategy_monthly_returns_df(
     *,
     lm_dictionary_lists: Mapping[str, Iterable[str]],
     harvard_negative_word_list: Iterable[str] | None,
+    master_dictionary_words: Iterable[str],
     portfolio_weighting: str = "equal",
     monthly_return_col: str = "MRET",
+    cleaning_contract: Full10KCleaningContract = "current",
 ) -> pl.DataFrame:
     if portfolio_weighting not in {"equal", "lagged_value"}:
         raise ValueError("portfolio_weighting must be one of {'equal', 'lagged_value'}")
@@ -1232,6 +1576,8 @@ def _build_trading_strategy_monthly_returns_df(
         sec_parsed_lf.join(docs_df.lazy().select("doc_id"), on="doc_id", how="semi"),
         lm_dictionary_lists=lm_dictionary_lists,
         harvard_negative_word_list=harvard_negative_word_list,
+        master_dictionary_words=master_dictionary_words,
+        cleaning_contract=cleaning_contract,
     ).collect()
     strategy_docs_df = docs_df.join(signal_df, on="doc_id", how="inner")
     assignments = _build_strategy_assignment_frame(strategy_docs_df)
@@ -1267,8 +1613,10 @@ def build_lm2011_trading_strategy_monthly_returns(
     *,
     lm_dictionary_lists: Mapping[str, Iterable[str]],
     harvard_negative_word_list: Iterable[str] | None,
+    master_dictionary_words: Iterable[str],
     portfolio_weighting: str = "equal",
     monthly_return_col: str = "MRET",
+    cleaning_contract: Full10KCleaningContract = "current",
 ) -> pl.LazyFrame:
     return _build_trading_strategy_monthly_returns_df(
         event_panel_lf,
@@ -1276,8 +1624,10 @@ def build_lm2011_trading_strategy_monthly_returns(
         monthly_stock_lf,
         lm_dictionary_lists=lm_dictionary_lists,
         harvard_negative_word_list=harvard_negative_word_list,
+        master_dictionary_words=master_dictionary_words,
         portfolio_weighting=portfolio_weighting,
         monthly_return_col=monthly_return_col,
+        cleaning_contract=cleaning_contract,
     ).lazy()
 
 

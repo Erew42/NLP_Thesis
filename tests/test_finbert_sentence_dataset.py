@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import polars as pl
+import pytest
 
 from thesis_pkg.benchmarking.contracts import DEFAULT_FINBERT_AUTHORITY
 from thesis_pkg.benchmarking.contracts import FinbertSentencePreprocessingRunConfig
@@ -31,9 +33,16 @@ class _FakeNLP:
             yield _FakeDoc(text)
 
 
-def _write_items_year(path: Path, *, year: int) -> None:
-    doc_id = f"{year}:doc:001"
-    full_text = ("Sentence. " * 80).strip()
+def _write_items_year(
+    path: Path,
+    *,
+    year: int,
+    doc_id: str | None = None,
+    item_texts: dict[str, str] | None = None,
+) -> None:
+    doc_id = doc_id or f"{year}:doc:001"
+    default_text = ("Sentence. " * 80).strip()
+    item_texts = item_texts or {}
     path.parent.mkdir(parents=True, exist_ok=True)
     pl.DataFrame(
         {
@@ -48,9 +57,17 @@ def _write_items_year(path: Path, *, year: int) -> None:
             "item_status": ["active", "active", "active"],
             "exists_by_regime": [True, True, True],
             "filename": [f"{doc_id}_1.htm", f"{doc_id}_1a.htm", f"{doc_id}_7.htm"],
-            "full_text": [full_text, full_text, full_text],
+            "full_text": [
+                item_texts.get("1", default_text),
+                item_texts.get("1A", default_text),
+                item_texts.get("7", default_text),
+            ],
         }
     ).write_parquet(path)
+
+
+def _empty_split_audit(sentences_module) -> pl.DataFrame:
+    return pl.DataFrame(schema=sentences_module.SENTENCE_SPLIT_AUDIT_SCHEMA)
 
 
 def test_materialize_sentence_benchmark_dataset_honors_authority_and_compression(
@@ -156,6 +173,8 @@ def test_run_finbert_sentence_preprocessing_writes_by_year_artifacts(
 
     from thesis_pkg.benchmarking import finbert_sentence_preprocessing
 
+    from thesis_pkg.benchmarking import sentences
+
     def _fake_derive(sections_df: pl.DataFrame, sentence_cfg, *, authority):
         del sentence_cfg, authority
         rows: list[dict[str, object]] = []
@@ -201,9 +220,9 @@ def test_run_finbert_sentence_preprocessing_writes_by_year_artifacts(
                     "finbert_token_bucket_512": "short",
                 }
             )
-        return pl.DataFrame(rows)
+        return pl.DataFrame(rows), _empty_split_audit(sentences)
 
-    monkeypatch.setattr(finbert_sentence_preprocessing, "derive_sentence_frame", _fake_derive)
+    monkeypatch.setattr(finbert_sentence_preprocessing, "_derive_sentence_frame_with_split_audit", _fake_derive)
 
     artifacts = run_finbert_sentence_preprocessing(
         FinbertSentencePreprocessingRunConfig(
@@ -217,8 +236,13 @@ def test_run_finbert_sentence_preprocessing_writes_by_year_artifacts(
     summary = pl.read_parquet(artifacts.yearly_summary_path)
     sentence_dataset = pl.read_parquet(artifacts.sentence_dataset_dir / "2006.parquet")
 
+    assert artifacts.oversize_sections_path is not None
+    assert artifacts.oversize_sections_path.exists()
     assert summary["sentence_rows"].to_list() == [3]
     assert summary["short_sentence_rows"].to_list() == [3]
+    assert summary["oversize_section_rows"].to_list() == [0]
+    assert summary["chunked_section_rows"].to_list() == [0]
+    assert summary["warning_split_rows"].to_list() == [0]
     assert sentence_dataset.height == 3
     assert "benchmark_item_label" in sentence_dataset.columns
     assert "source_year_file" in sentence_dataset.columns
@@ -235,6 +259,8 @@ def test_run_finbert_sentence_preprocessing_reuses_existing_outputs(
     from thesis_pkg.benchmarking import finbert_sentence_preprocessing
 
     call_count = {"derive": 0}
+
+    from thesis_pkg.benchmarking import sentences
 
     def _fake_derive(sections_df: pl.DataFrame, sentence_cfg, *, authority):
         del sentence_cfg, authority
@@ -263,9 +289,9 @@ def test_run_finbert_sentence_preprocessing_reuses_existing_outputs(
                 "finbert_token_count_512": [5],
                 "finbert_token_bucket_512": ["short"],
             }
-        )
+        ), _empty_split_audit(sentences)
 
-    monkeypatch.setattr(finbert_sentence_preprocessing, "derive_sentence_frame", _fake_derive)
+    monkeypatch.setattr(finbert_sentence_preprocessing, "_derive_sentence_frame_with_split_audit", _fake_derive)
 
     cfg = FinbertSentencePreprocessingRunConfig(
         source_items_dir=source_dir,
@@ -308,6 +334,8 @@ def test_run_finbert_sentence_preprocessing_filters_to_target_doc_universe(
 
     from thesis_pkg.benchmarking import finbert_sentence_preprocessing
 
+    from thesis_pkg.benchmarking import sentences
+
     def _fake_derive(sections_df: pl.DataFrame, sentence_cfg, *, authority):
         del sentence_cfg, authority
         rows: list[dict[str, object]] = []
@@ -353,9 +381,9 @@ def test_run_finbert_sentence_preprocessing_filters_to_target_doc_universe(
                     "finbert_token_bucket_512": "short",
                 }
             )
-        return pl.DataFrame(rows)
+        return pl.DataFrame(rows), _empty_split_audit(sentences)
 
-    monkeypatch.setattr(finbert_sentence_preprocessing, "derive_sentence_frame", _fake_derive)
+    monkeypatch.setattr(finbert_sentence_preprocessing, "_derive_sentence_frame_with_split_audit", _fake_derive)
 
     artifacts = run_finbert_sentence_preprocessing(
         FinbertSentencePreprocessingRunConfig(
@@ -370,3 +398,127 @@ def test_run_finbert_sentence_preprocessing_filters_to_target_doc_universe(
 
     sentence_dataset = pl.read_parquet(artifacts.sentence_dataset_dir / "2006.parquet")
     assert sentence_dataset["doc_id"].unique().to_list() == ["2006:doc:001"]
+
+
+def test_derive_sentence_frame_chunks_large_sections_without_spacy_length_error(monkeypatch) -> None:
+    from thesis_pkg.benchmarking import sentences
+
+    huge_text = ("A" * 206_529) * 5
+    sections_df = pl.DataFrame(
+        {
+            "benchmark_row_id": ["doc1:item_1"],
+            "doc_id": ["doc1"],
+            "cik_10": ["0000000001"],
+            "accession_nodash": ["000000000100000001"],
+            "filing_date": [None],
+            "filing_year": [2006],
+            "benchmark_item_code": ["item_1"],
+            "benchmark_item_label": ["10-K Item 1"],
+            "source_year_file": [2006],
+            "document_type": ["10-K"],
+            "document_type_raw": ["10-K"],
+            "document_type_normalized": ["10-K"],
+            "canonical_item": ["I:1_BUSINESS"],
+            "full_text": [huge_text],
+        }
+    )
+
+    monkeypatch.setattr(sentences, "_build_sentencizer", lambda cfg: _FakeNLP())
+    monkeypatch.setattr(sentences, "_sentencizer_version", lambda: "test")
+
+    sentence_df, split_audit_df = sentences._derive_sentence_frame_with_split_audit(
+        sections_df,
+        SentenceDatasetConfig(enabled=True, spacy_batch_size=1),
+        authority=DEFAULT_FINBERT_AUTHORITY,
+    )
+
+    assert sentence_df.height == 5
+    assert split_audit_df["total_chunk_count"].unique().to_list() == [5]
+    assert split_audit_df["split_reason"].to_list()[-1] == "end_of_text"
+    assert split_audit_df["warning_boundary_used"].to_list() == [True, True, True, True, False]
+
+
+def test_derive_sentence_frame_prefers_double_newline_and_keeps_sentence_indices_continuous(monkeypatch) -> None:
+    from thesis_pkg.benchmarking import sentences
+
+    preferred_text = ("Alpha. " * 35_713) + "\n\n" + ("Beta. " * 4)
+    sections_df = pl.DataFrame(
+        {
+            "benchmark_row_id": ["doc1:item_1"],
+            "doc_id": ["doc1"],
+            "cik_10": ["0000000001"],
+            "accession_nodash": ["000000000100000001"],
+            "filing_date": [None],
+            "filing_year": [2006],
+            "benchmark_item_code": ["item_1"],
+            "benchmark_item_label": ["10-K Item 1"],
+            "source_year_file": [2006],
+            "document_type": ["10-K"],
+            "document_type_raw": ["10-K"],
+            "document_type_normalized": ["10-K"],
+            "canonical_item": ["I:1_BUSINESS"],
+            "full_text": [preferred_text],
+        }
+    )
+
+    monkeypatch.setattr(sentences, "_build_sentencizer", lambda cfg: _FakeNLP())
+    monkeypatch.setattr(sentences, "_sentencizer_version", lambda: "test")
+
+    sentence_df, split_audit_df = sentences._derive_sentence_frame_with_split_audit(
+        sections_df,
+        SentenceDatasetConfig(enabled=True, spacy_batch_size=1),
+        authority=DEFAULT_FINBERT_AUTHORITY,
+    )
+
+    split_reasons = split_audit_df["split_reason"].to_list()
+    assert split_reasons[0] == "double_newline"
+    assert split_reasons[-1] == "end_of_text"
+    assert sentence_df["sentence_index"].to_list() == list(range(sentence_df.height))
+    assert sentence_df["sentence_text"].to_list()[:2] == ["Alpha", "Alpha"]
+    assert sentence_df["sentence_text"].to_list()[-2:] == ["Beta", "Beta"]
+
+
+def test_run_finbert_sentence_preprocessing_logs_fallback_split_reasons_and_warnings(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source_dir = tmp_path / "items_analysis"
+    whitespace_text = ("A" * 249_999) + (" " + ("B" * 10)) * 3
+    hard_limit_text = "C" * 250_010
+    _write_items_year(
+        source_dir / "2006.parquet",
+        year=2006,
+        item_texts={
+            "1": whitespace_text,
+            "7": hard_limit_text,
+        },
+    )
+
+    from thesis_pkg.benchmarking import sentences
+
+    monkeypatch.setattr(sentences, "_build_sentencizer", lambda cfg: _FakeNLP())
+    monkeypatch.setattr(sentences, "_sentencizer_version", lambda: "test")
+
+    with pytest.warns(RuntimeWarning, match="fallback split boundaries"):
+        artifacts = run_finbert_sentence_preprocessing(
+            FinbertSentencePreprocessingRunConfig(
+                source_items_dir=source_dir,
+                out_root=tmp_path / "runs",
+                section_universe=FinbertSectionUniverseConfig(source_items_dir=source_dir),
+                run_name="sentence_prep_fallback_warning",
+            )
+        )
+
+    split_audit_df = pl.read_parquet(artifacts.oversize_sections_path)
+    summary_df = pl.read_parquet(artifacts.yearly_summary_path)
+    manifest = json.loads(artifacts.run_manifest_path.read_text(encoding="utf-8"))
+
+    warning_reasons = split_audit_df.filter(pl.col("warning_boundary_used"))["split_reason"].unique().sort().to_list()
+    assert warning_reasons == ["hard_limit_250k", "whitespace"]
+    assert summary_df["oversize_section_rows"].to_list() == [2]
+    assert summary_df["chunked_section_rows"].to_list() == [2]
+    assert summary_df["warning_split_rows"].to_list() == [2]
+    assert manifest["counts"]["oversize_section_rows"] == 2
+    assert manifest["counts"]["chunked_section_rows"] == 2
+    assert manifest["counts"]["warning_split_rows"] == 2
+    assert manifest["artifacts"]["oversize_sections_path"] == str(artifacts.oversize_sections_path.resolve())

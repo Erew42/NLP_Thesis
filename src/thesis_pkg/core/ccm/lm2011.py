@@ -219,7 +219,7 @@ def build_lm2011_normalized_filing_feeds(
     return sec, ccm
 
 
-def build_lm2011_sample_backbone(
+def _build_lm2011_sample_backbone_stage_frames(
     sec_parsed_lf: pl.LazyFrame,
     matched_clean_lf: pl.LazyFrame,
     *,
@@ -227,8 +227,11 @@ def build_lm2011_sample_backbone(
     sample_start: dt.date = _LM2011_SAMPLE_START,
     sample_end: dt.date = _LM2011_SAMPLE_END,
     sec_form_col: str = "document_type_filename",
-) -> pl.LazyFrame:
-    """Build the paper-faithful LM2011 10-K filing backbone before panel assembly."""
+) -> tuple[tuple[str, pl.LazyFrame], ...]:
+    """Build reusable staged LM2011 sample-backbone frames.
+
+    Stage ids align with the LM2011 Table I benchmark ladder.
+    """
     _require_columns(
         sec_parsed_lf,
         ("doc_id", "cik_10", "filing_date", "accession_nodash", sec_form_col),
@@ -247,7 +250,7 @@ def build_lm2011_sample_backbone(
         )
         if name in sec_schema
     ]
-    sec = (
+    sec_base = (
         sec_parsed_lf.drop("normalized_form", strict=False)
         .with_columns(
             pl.col("doc_id").cast(pl.Utf8, strict=False),
@@ -272,15 +275,6 @@ def build_lm2011_sample_backbone(
         .filter(pl.col("filing_date").is_between(pl.lit(sample_start), pl.lit(sample_end), closed="both"))
         .filter(pl.col("_sec_raw_form").is_in(sorted(_LM2011_SEC_INCLUDED_RAW_FORMS)))
         .filter(pl.col("_sec_raw_form").is_in(sorted(_LM2011_SEC_EXCLUDED_RAW_FORMS)).not_())
-        .with_columns(pl.col("filing_date").dt.year().alias("_filing_year"))
-        .sort("cik_10", "_filing_year", "filing_date", "accession_nodash")
-        .unique(subset=["cik_10", "_filing_year"], keep="first")
-        .sort("cik_10", "filing_date", "accession_nodash")
-        .with_columns(pl.col("filing_date").shift(1).over("cik_10").alias("_prev_kept_filing_date"))
-        .filter(
-            pl.col("_prev_kept_filing_date").is_null()
-            | ((pl.col("filing_date") - pl.col("_prev_kept_filing_date")).dt.total_days() >= pl.lit(180))
-        )
         .select(
             "doc_id",
             "cik_10",
@@ -292,13 +286,31 @@ def build_lm2011_sample_backbone(
         )
     )
 
+    first_filing = (
+        sec_base.with_columns(pl.col("filing_date").dt.year().alias("_filing_year"))
+        .sort("cik_10", "_filing_year", "filing_date", "accession_nodash")
+        .unique(subset=["cik_10", "_filing_year"], keep="first")
+        .drop("_filing_year")
+        .sort("cik_10", "filing_date", "accession_nodash")
+    )
+
+    spaced = (
+        first_filing.with_columns(pl.col("filing_date").shift(1).over("cik_10").alias("_prev_kept_filing_date"))
+        .filter(
+            pl.col("_prev_kept_filing_date").is_null()
+            | ((pl.col("filing_date") - pl.col("_prev_kept_filing_date")).dt.total_days() >= pl.lit(180))
+        )
+        .drop("_prev_kept_filing_date")
+        .sort("cik_10", "filing_date", "accession_nodash")
+    )
+
     matched_schema = matched_clean_lf.collect_schema()
     matched = matched_clean_lf.with_columns(pl.col("doc_id").cast(pl.Utf8, strict=False))
     duplicated_sec_cols = [name for name in ("cik_10", "filing_date", sec_form_col) if name in matched_schema]
     if duplicated_sec_cols:
         matched = matched.drop(*duplicated_sec_cols, strict=False)
 
-    joined = sec.join(matched, on="doc_id", how="inner", suffix="_matched")
+    joined = spaced.join(matched, on="doc_id", how="inner", suffix="_matched")
     joined_schema = joined.collect_schema()
     if "kypermno" not in joined_schema and "KYPERMNO" in joined_schema:
         joined = joined.with_columns(pl.col("KYPERMNO").cast(pl.Int32, strict=False).alias("kypermno"))
@@ -316,6 +328,7 @@ def build_lm2011_sample_backbone(
             pl.col("_ccm_raw_form").is_in(sorted(_LM2011_CCM_INCLUDED_RAW_FORMS))
             & pl.col("_ccm_raw_form").is_in(sorted(_LM2011_CCM_EXCLUDED_RAW_FORMS)).not_()
         )
+        joined_schema = joined.collect_schema()
     elif ccm_filingdates_lf is not None:
         _require_columns(ccm_filingdates_lf, ("LPERMNO", "FILEDATE", "SRCTYPE"), "ccm_filingdates")
         ccm_permno_col = _resolve_first_existing(
@@ -373,9 +386,37 @@ def build_lm2011_sample_backbone(
         ("gvkey", "KYGVKEY_final", "KYGVKEY", "KYGVKEY_ccm"),
         "lm2011 sample backbone",
     )
-    return joined.with_columns(
+    permno_matched = joined.with_columns(
         pl.col(gvkey_source).cast(GVKEY_DTYPE, strict=False).alias("gvkey_int"),
     )
+
+    return (
+        ("edgar_complete_nonduplicate_sample", sec_base),
+        ("first_filing_per_year", first_filing),
+        ("minimum_180_day_spacing", spaced),
+        ("crsp_permno_match", permno_matched),
+    )
+
+
+def build_lm2011_sample_backbone(
+    sec_parsed_lf: pl.LazyFrame,
+    matched_clean_lf: pl.LazyFrame,
+    *,
+    ccm_filingdates_lf: pl.LazyFrame | None = None,
+    sample_start: dt.date = _LM2011_SAMPLE_START,
+    sample_end: dt.date = _LM2011_SAMPLE_END,
+    sec_form_col: str = "document_type_filename",
+) -> pl.LazyFrame:
+    """Build the paper-faithful LM2011 10-K filing backbone before panel assembly."""
+    stage_frames = _build_lm2011_sample_backbone_stage_frames(
+        sec_parsed_lf,
+        matched_clean_lf,
+        ccm_filingdates_lf=ccm_filingdates_lf,
+        sample_start=sample_start,
+        sample_end=sample_end,
+        sec_form_col=sec_form_col,
+    )
+    return stage_frames[-1][1]
 
 
 def _mask_payload_columns(

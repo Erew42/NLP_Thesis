@@ -99,6 +99,8 @@ def test_lm2011_spec_loads_with_phase0_phase1_contract_sections() -> None:
     for output_name in (
         "lm2011_text_features_full_10k",
         "lm2011_text_features_mda",
+        "lm2011_table_i_sample_creation",
+        "lm2011_table_i_sample_creation_1994_2024",
         "lm2011_event_panel",
         "lm2011_sue_panel",
         "lm2011_trading_strategy_monthly_returns",
@@ -611,6 +613,49 @@ def test_lm2011_table_i_benchmarks_present_with_tolerances() -> None:
         assert row["tolerance_pct"] == 0.01
         assert row["basis"] == "paper_explicit"
         assert row["status"] == "active"
+
+
+@pytest.mark.parametrize(
+    ("output_name", "contract_name"),
+    [
+        ("lm2011_table_i_sample_creation", "table_i_sample_creation_contract"),
+        ("lm2011_table_i_sample_creation_1994_2024", "table_i_sample_creation_1994_2024_contract"),
+    ],
+)
+def test_lm2011_table_i_sample_creation_contract_aligns_with_benchmark_ids(
+    output_name: str,
+    contract_name: str,
+) -> None:
+    spec = _load_spec()
+    derived_output = spec["public_interfaces"]["derived_outputs"][output_name]
+    assert derived_output["grain"] == ["section_id", "row_id"]
+    assert derived_output["required_columns"] == [
+        "section_id",
+        "section_label",
+        "section_order",
+        "row_order",
+        "row_id",
+        "display_label",
+        "sample_size_kind",
+        "sample_size_value",
+        "observations_removed",
+        "availability_status",
+        "availability_reason",
+    ]
+
+    contract = spec["implementation_contracts"][contract_name]
+    benchmark_rows = spec["validation_and_acceptance"]["benchmark_targets"]["lm2011_table_i"]
+    expected_attrition_row_ids = [
+        *(row["id"] for row in benchmark_rows["full_10k_sample"]),
+        *(row["id"] for row in benchmark_rows["mda_subsample"]),
+    ]
+    assert contract["output"] == output_name
+    assert contract["benchmark_row_ids_in_order"] == expected_attrition_row_ids
+    assert contract["firm_year_summary_row_ids"] == [
+        "firm_year_sample",
+        "unique_firms",
+        "average_years_per_firm",
+    ]
 
 
 def test_lm2011_acceptance_scenarios_cover_phase0_phase1_contracts() -> None:

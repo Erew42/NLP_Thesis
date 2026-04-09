@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 import math
 import re
 
 import polars as pl
 
 from thesis_pkg.core.ccm.lm2011 import normalize_lm2011_form_value
+from thesis_pkg.core.sec.lm2011_cleaning import Full10KCleaningContract
+from thesis_pkg.core.sec.lm2011_cleaning import clean_full_10k_for_lm2011
 
 
 LM2011_DICTIONARY_REQUIRED_LISTS: tuple[str, ...] = (
@@ -18,7 +20,8 @@ LM2011_DICTIONARY_REQUIRED_LISTS: tuple[str, ...] = (
     "modal_strong",
     "modal_weak",
 )
-_TOKEN_RE = re.compile(r"[A-Za-z]+(?:'[A-Za-z]+)?")
+_LINEBREAK_HYPHEN_RE = re.compile(r"([A-Za-z])-\s*(?:\r?\n)\s*([A-Za-z])")
+_TOKEN_RE = re.compile(r"[A-Za-z]{2,}(?:[-'][A-Za-z]+)*")
 
 
 def _require_columns(lf: pl.LazyFrame, required: tuple[str, ...], label: str) -> None:
@@ -35,7 +38,7 @@ def _normalize_dictionary_tokens(values: Iterable[str] | None) -> frozenset[str]
         token
         for value in values
         if value is not None
-        for token in _TOKEN_RE.findall(str(value).casefold())
+        for token in tokenize_lm2011_text(str(value))
     }
     return frozenset(tokens)
 
@@ -55,7 +58,16 @@ def normalize_lm2011_dictionary_lists(
 def tokenize_lm2011_text(text: str | None) -> list[str]:
     if text is None:
         return []
-    return [token.casefold() for token in _TOKEN_RE.findall(text)]
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    normalized = _LINEBREAK_HYPHEN_RE.sub(r"\1\2", normalized)
+    return [token.casefold() for token in _TOKEN_RE.findall(normalized)]
+
+
+def _normalize_master_dictionary_words(master_dictionary_words: Iterable[str] | None) -> frozenset[str]:
+    tokens = _normalize_dictionary_tokens(master_dictionary_words)
+    if not tokens:
+        raise ValueError("master_dictionary_words is required and must contain at least one token")
+    return tokens
 
 
 def _lm2011_inverse_document_frequency(num_docs: int, document_frequency: int) -> float:
@@ -123,22 +135,30 @@ def _prepare_document_stats(
     *,
     text_col: str,
     vocabulary: frozenset[str],
-) -> tuple[list[dict[str, object]], dict[str, Counter[str]], dict[str, int], dict[str, float]]:
+    master_dictionary_words: frozenset[str],
+    text_cleaner: Callable[[str | None], str | None] | None = None,
+) -> tuple[list[dict[str, object]], dict[str, Counter[str]], dict[str, int], dict[str, int], dict[str, float]]:
     base_rows: list[dict[str, object]] = []
     doc_token_counts: dict[str, Counter[str]] = {}
     doc_token_totals: dict[str, int] = {}
+    doc_recognized_word_totals: dict[str, int] = {}
     document_frequency: Counter[str] = Counter()
 
     for row in df.iter_rows(named=True):
         row_dict = dict(row)
         doc_id = str(row_dict["doc_id"])
         text_value = row_dict.pop(text_col, None)
-        tokens = tokenize_lm2011_text(text_value if isinstance(text_value, str) else None)
+        text_input = text_value if isinstance(text_value, str) else None
+        if text_cleaner is not None:
+            text_input = text_cleaner(text_input)
+        tokens = tokenize_lm2011_text(text_input)
         token_total = len(tokens)
+        recognized_word_total = sum(1 for token in tokens if token in master_dictionary_words)
         counts = Counter(token for token in tokens if token in vocabulary)
         base_rows.append(row_dict)
         doc_token_counts[doc_id] = counts
         doc_token_totals[doc_id] = token_total
+        doc_recognized_word_totals[doc_id] = recognized_word_total
         document_frequency.update(counts.keys())
 
     num_docs = max(len(base_rows), 1)
@@ -146,14 +166,14 @@ def _prepare_document_stats(
         token: _lm2011_inverse_document_frequency(num_docs, doc_freq)
         for token, doc_freq in document_frequency.items()
     }
-    return base_rows, doc_token_counts, doc_token_totals, idf_by_token
+    return base_rows, doc_token_counts, doc_token_totals, doc_recognized_word_totals, idf_by_token
 
 
 def _build_feature_rows(
     base_rows: list[dict[str, object]],
     *,
     doc_token_counts: Mapping[str, Counter[str]],
-    doc_token_totals: Mapping[str, int],
+    doc_recognized_word_totals: Mapping[str, int],
     idf_by_token: Mapping[str, float],
     token_count_col: str,
     signal_specs: tuple[tuple[str, frozenset[str], bool], ...],
@@ -162,10 +182,10 @@ def _build_feature_rows(
     for row in base_rows:
         out = dict(row)
         doc_id = str(out["doc_id"])
-        token_total = int(doc_token_totals.get(doc_id, 0))
+        recognized_word_total = int(doc_recognized_word_totals.get(doc_id, 0))
         counts = doc_token_counts.get(doc_id, Counter())
-        denominator = float(token_total) if token_total > 0 else None
-        out[token_count_col] = token_total
+        denominator = float(recognized_word_total) if recognized_word_total > 0 else None
+        out[token_count_col] = recognized_word_total
         for signal_stem, signal_tokens, include_tfidf in signal_specs:
             matched_count = float(sum(counts.get(token, 0) for token in signal_tokens))
             out[f"{signal_stem}_prop"] = (matched_count / denominator) if denominator else None
@@ -175,7 +195,7 @@ def _build_feature_rows(
                         sum(
                             _lm2011_term_weight(
                                 term_frequency=counts.get(token, 0),
-                                document_length=token_total,
+                                document_length=recognized_word_total,
                                 inverse_document_frequency=idf_by_token.get(token, 0.0),
                             )
                             for token in signal_tokens
@@ -218,17 +238,22 @@ def _build_scored_text_frame(
     token_count_col: str,
     include_item_id: bool,
     signal_specs: tuple[tuple[str, frozenset[str], bool], ...],
+    master_dictionary_words: Iterable[str],
+    text_cleaner: Callable[[str | None], str | None] | None = None,
 ) -> pl.LazyFrame:
     vocabulary = frozenset().union(*(tokens for _, tokens, _ in signal_specs))
-    base_rows, doc_token_counts, doc_token_totals, idf_by_token = _prepare_document_stats(
+    normalized_master_dictionary_words = _normalize_master_dictionary_words(master_dictionary_words)
+    base_rows, doc_token_counts, _, doc_recognized_word_totals, idf_by_token = _prepare_document_stats(
         df,
         text_col=text_col,
         vocabulary=vocabulary,
+        master_dictionary_words=normalized_master_dictionary_words,
+        text_cleaner=text_cleaner,
     )
     rows = _build_feature_rows(
         base_rows,
         doc_token_counts=doc_token_counts,
-        doc_token_totals=doc_token_totals,
+        doc_recognized_word_totals=doc_recognized_word_totals,
         idf_by_token=idf_by_token,
         token_count_col=token_count_col,
         signal_specs=signal_specs,
@@ -271,8 +296,10 @@ def build_lm2011_text_features_full_10k(
     *,
     dictionary_lists: Mapping[str, Iterable[str]],
     harvard_negative_word_list: Iterable[str] | None,
+    master_dictionary_words: Iterable[str],
     text_col: str = "full_text",
     raw_form_col: str = "document_type_filename",
+    cleaning_contract: Full10KCleaningContract = "current",
 ) -> pl.LazyFrame:
     normalized_dict = normalize_lm2011_dictionary_lists(dictionary_lists)
     signal_specs = _build_lm2011_signal_specs(
@@ -291,6 +318,8 @@ def build_lm2011_text_features_full_10k(
         token_count_col="token_count_full_10k",
         include_item_id=False,
         signal_specs=signal_specs,
+        master_dictionary_words=master_dictionary_words,
+        text_cleaner=lambda value: clean_full_10k_for_lm2011(value, contract=cleaning_contract),
     )
 
 
@@ -299,6 +328,7 @@ def build_lm2011_text_features_mda(
     *,
     dictionary_lists: Mapping[str, Iterable[str]],
     harvard_negative_word_list: Iterable[str] | None,
+    master_dictionary_words: Iterable[str],
     text_col: str = "full_text",
     raw_form_col: str = "document_type_filename",
     required_item_id: str = "7",
@@ -322,6 +352,7 @@ def build_lm2011_text_features_mda(
         token_count_col="token_count_mda",
         include_item_id=True,
         signal_specs=signal_specs,
+        master_dictionary_words=master_dictionary_words,
     )
 
 
@@ -330,8 +361,10 @@ def build_lm2011_trading_strategy_signal_frame(
     *,
     lm_dictionary_lists: Mapping[str, Iterable[str]],
     harvard_negative_word_list: Iterable[str] | None,
+    master_dictionary_words: Iterable[str],
     text_col: str = "full_text",
     raw_form_col: str = "document_type_filename",
+    cleaning_contract: Full10KCleaningContract = "current",
 ) -> pl.LazyFrame:
     normalized_lm_dict = normalize_lm2011_dictionary_lists(lm_dictionary_lists)
     harvard_tokens = _normalize_dictionary_tokens(harvard_negative_word_list)
@@ -353,4 +386,6 @@ def build_lm2011_trading_strategy_signal_frame(
         token_count_col="token_count_full_10k",
         include_item_id=False,
         signal_specs=signal_specs,
+        master_dictionary_words=master_dictionary_words,
+        text_cleaner=lambda value: clean_full_10k_for_lm2011(value, contract=cleaning_contract),
     )

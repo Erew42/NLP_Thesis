@@ -14,13 +14,17 @@ from thesis_pkg.pipeline import (
     build_lm2011_normalized_filing_feeds,
     build_lm2011_sample_backbone,
     build_lm2011_sue_panel,
+    build_lm2011_table_i_sample_creation,
     build_lm2011_text_features_full_10k,
     build_lm2011_text_features_mda,
     build_lm2011_trading_strategy_ff4_summary,
     build_lm2011_trading_strategy_monthly_returns,
+    tokenize_lm2011_text,
 )
+from thesis_pkg.core.ccm.lm2011 import _build_lm2011_sample_backbone_stage_frames
 from thesis_pkg.pipelines.lm2011_pipeline import (
     _apply_lm2011_regression_transforms,
+    _build_lm2011_table_i_market_stage_frames,
     _ensure_factor_scale,
     _ols_alpha_and_rmse,
     _ols_coefficients_and_r2,
@@ -116,6 +120,110 @@ def _base_event_inputs(*, include_final_prc: bool = True, constant_pre_event_vol
     }
 
 
+def _mutate_relative_day_rows(
+    daily: pl.DataFrame,
+    *,
+    event_day_index: int,
+    relative_days: set[int],
+    updates: dict[str, object],
+) -> pl.DataFrame:
+    out = daily.with_row_index("_idx", offset=0).with_columns(
+        (pl.col("_idx").cast(pl.Int64, strict=False) - event_day_index).alias("_relative_day")
+    )
+    for column, value in updates.items():
+        out = out.with_columns(
+            pl.when(pl.col("_relative_day").is_in(sorted(relative_days)))
+            .then(pl.lit(value))
+            .otherwise(pl.col(column))
+            .alias(column)
+        )
+    return out.drop("_idx", "_relative_day")
+
+
+def _table_i_market_inputs() -> dict[str, pl.DataFrame]:
+    doc_specs = [
+        ("doc_fail_shrcd", 1, 1001),
+        ("doc_fail_market_cap", 2, 1002),
+        ("doc_fail_price", 3, 1003),
+        ("doc_fail_event_window", 4, 1004),
+        ("doc_fail_exchange", 5, 1005),
+        ("doc_fail_coverage", 6, 1006),
+        ("doc_fail_book_to_market", 7, 1007),
+        ("doc_fail_token_count", 8, 1008),
+        ("doc_keep", 9, 1009),
+    ]
+    daily_frames: list[pl.DataFrame] = []
+    for doc_id, permno, _gvkey in doc_specs:
+        daily = _daily_window_frame(
+            permno=permno,
+            start=dt.date(1997, 1, 1),
+            n_days=520,
+            event_day_index=260,
+        )
+        if doc_id == "doc_fail_shrcd":
+            daily = daily.with_columns(pl.lit(12).alias("SHRCD"))
+        elif doc_id == "doc_fail_market_cap":
+            daily = _mutate_relative_day_rows(
+                daily,
+                event_day_index=260,
+                relative_days={-1},
+                updates={"TCAP": None, "FINAL_PRC": None, "PRC": None},
+            )
+        elif doc_id == "doc_fail_price":
+            daily = _mutate_relative_day_rows(
+                daily,
+                event_day_index=260,
+                relative_days={-1},
+                updates={"TCAP": 25.0, "FINAL_PRC": 2.5, "PRC": 2.5},
+            )
+        elif doc_id == "doc_fail_event_window":
+            daily = _mutate_relative_day_rows(
+                daily,
+                event_day_index=260,
+                relative_days={2},
+                updates={"VOL": None},
+            )
+        elif doc_id == "doc_fail_exchange":
+            daily = daily.with_columns(pl.lit(4).alias("EXCHCD"))
+        elif doc_id == "doc_fail_coverage":
+            daily = _mutate_relative_day_rows(
+                daily,
+                event_day_index=260,
+                relative_days=set(range(-252, -5)),
+                updates={"VOL": None, "FINAL_RET": None, "RET": None},
+            )
+        daily_frames.append(daily)
+    filing_date = daily_frames[0].item(260, "CALDT")
+    return {
+        "sample_backbone": pl.DataFrame(
+            {
+                "doc_id": [doc_id for doc_id, _, _ in doc_specs],
+                "cik_10": [f"{idx + 1:010d}" for idx in range(len(doc_specs))],
+                "gvkey_int": [gvkey for _, _, gvkey in doc_specs],
+                "KYPERMNO": [permno for _, permno, _ in doc_specs],
+                "filing_date": [filing_date] * len(doc_specs),
+                "normalized_form": ["10-K"] * len(doc_specs),
+            }
+        ),
+        "daily": pl.concat(daily_frames, how="vertical_relaxed"),
+        "annual_panel": pl.DataFrame(
+            {
+                "gvkey_int": [gvkey for _, _, gvkey in doc_specs],
+                "accounting_period_end": [dt.date(1996, 12, 31)] * len(doc_specs),
+                "book_equity_be": [50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 0.0, 50.0, 50.0],
+                "AT": [80.0] * len(doc_specs),
+            }
+        ),
+        "text_features": pl.DataFrame(
+            {
+                "doc_id": [doc_id for doc_id, _, _ in doc_specs],
+                "token_count_full_10k": [2500, 2500, 2500, 2500, 2500, 2500, 2500, 1999, 2500],
+            }
+        ),
+        "ff": _ff_factors_for_dates(daily_frames[0].get_column("CALDT").to_list()),
+    }
+
+
 def _lm_dictionary_lists() -> dict[str, list[str]]:
     return {
         "negative": ["loss"],
@@ -129,6 +237,25 @@ def _lm_dictionary_lists() -> dict[str, list[str]]:
 
 def _harvard_negative_word_list() -> list[str]:
     return ["bad"]
+
+
+def _master_dictionary_words() -> list[str]:
+    return [
+        "loss",
+        "gain",
+        "uncertain",
+        "lawsuit",
+        "must",
+        "may",
+        "bad",
+        "neutral",
+        "safe",
+        "recognized",
+        "going-concern",
+        "don't",
+        "co-op",
+        "alphabeta",
+    ]
 
 
 def _strategy_months() -> list[dt.date]:
@@ -311,6 +438,54 @@ def test_build_lm2011_sample_backbone_uses_accession_nodash_as_same_day_tie_brea
     assert backbone.get_column("accession_nodash").to_list() == ["0000000001"]
 
 
+def test_build_lm2011_sample_backbone_stage_frames_report_expected_attrition() -> None:
+    sec_parsed = pl.DataFrame(
+        {
+            "doc_id": [
+                "keep_first",
+                "drop_same_year",
+                "keep_spacing",
+                "drop_spacing",
+                "drop_no_match",
+                "keep_final",
+                "keep_first",
+                "drop_amend",
+            ],
+            "cik_10": ["0001", "0001", "0002", "0002", "0003", "0004", "0001", "0005"],
+            "filing_date": [
+                dt.date(1995, 1, 10),
+                dt.date(1995, 7, 15),
+                dt.date(1997, 12, 31),
+                dt.date(1998, 6, 28),
+                dt.date(1995, 3, 1),
+                dt.date(1995, 4, 1),
+                dt.date(1995, 1, 10),
+                dt.date(1995, 5, 1),
+            ],
+            "accession_nodash": ["1", "2", "3", "4", "5", "6", "1", "7"],
+            "document_type_filename": ["10-K", "10-K", "10-K", "10-K", "10-K", "10-K", "10-K", "10-K/A"],
+        }
+    )
+    matched_clean = pl.DataFrame(
+        {
+            "doc_id": ["keep_first", "drop_same_year", "keep_spacing", "drop_spacing", "keep_final"],
+            "KYPERMNO": [1, 1, 2, 2, 4],
+            "gvkey": [1001, 1001, 1002, 1002, 1004],
+            "SRCTYPE": ["10K", "10K", "10K", "10K", "10K"],
+        }
+    )
+
+    stage_frames = _build_lm2011_sample_backbone_stage_frames(sec_parsed.lazy(), matched_clean.lazy())
+
+    assert [row_id for row_id, _ in stage_frames] == [
+        "edgar_complete_nonduplicate_sample",
+        "first_filing_per_year",
+        "minimum_180_day_spacing",
+        "crsp_permno_match",
+    ]
+    assert [frame.select(pl.len()).collect().item() for _, frame in stage_frames] == [6, 5, 4, 3]
+
+
 def test_build_annual_accounting_panel_computes_me_fiscal_and_firm_value_v() -> None:
     annual_bs = pl.DataFrame(
         {
@@ -401,11 +576,13 @@ def test_lm2011_text_feature_builders_match_public_spec_contract() -> None:
         sec_parsed.lazy(),
         dictionary_lists=dictionary_lists,
         harvard_negative_word_list=_harvard_negative_word_list(),
+        master_dictionary_words=_master_dictionary_words(),
     ).collect().sort("doc_id")
     mda_features = build_lm2011_text_features_mda(
         sec_items.lazy(),
         dictionary_lists=dictionary_lists,
         harvard_negative_word_list=_harvard_negative_word_list(),
+        master_dictionary_words=_master_dictionary_words(),
     ).collect().sort("doc_id")
 
     assert "h4n_inf_tfidf" in full_features.columns
@@ -422,6 +599,44 @@ def test_lm2011_text_feature_builders_match_public_spec_contract() -> None:
     assert mda_features.filter(pl.col("doc_id") == "d1").row(0, named=True)["token_count_mda"] == 2
 
 
+def test_tokenize_lm2011_text_matches_appendix_contract() -> None:
+    assert tokenize_lm2011_text("going-concern don't alpha-\nbeta a i x co-op") == [
+        "going-concern",
+        "don't",
+        "alphabeta",
+        "co-op",
+    ]
+
+
+def test_lm2011_text_features_use_recognized_word_denominators_and_match_hyphenated_dictionary_entries() -> None:
+    features = build_lm2011_text_features_full_10k(
+        pl.DataFrame(
+            {
+                "doc_id": ["d1"],
+                "cik_10": ["0001"],
+                "filing_date": [dt.date(2023, 1, 1)],
+                "document_type_filename": ["10-K"],
+                "full_text": ["going-concern don't unknown a"],
+            }
+        ).lazy(),
+        dictionary_lists={
+            "negative": ["going-concern"],
+            "positive": ["gain"],
+            "uncertainty": ["uncertain"],
+            "litigious": ["lawsuit"],
+            "modal_strong": ["must"],
+            "modal_weak": ["may"],
+        },
+        harvard_negative_word_list=["don't"],
+        master_dictionary_words=["going-concern", "don't"],
+    ).collect()
+
+    row = features.row(0, named=True)
+    assert row["token_count_full_10k"] == 2
+    assert row["lm_negative_prop"] == pytest.approx(0.5)
+    assert row["h4n_inf_prop"] == pytest.approx(0.5)
+
+
 def test_lm2011_text_feature_builders_use_exact_paper_tfidf_formula() -> None:
     full_features = build_lm2011_text_features_full_10k(
         pl.DataFrame(
@@ -435,12 +650,13 @@ def test_lm2011_text_feature_builders_use_exact_paper_tfidf_formula() -> None:
         ).lazy(),
         dictionary_lists=_lm_dictionary_lists(),
         harvard_negative_word_list=_harvard_negative_word_list(),
+        master_dictionary_words=["loss", "gain"],
     ).collect().sort("doc_id")
 
     idf_loss = math.log(3.0 / 2.0)
     expected_d1_negative = ((1.0 + math.log(2.0)) / (1.0 + math.log(3.0))) * idf_loss
-    expected_d2_negative = (1.0 / (1.0 + math.log(2.0))) * idf_loss
-    expected_d2_h4n = (1.0 / (1.0 + math.log(2.0))) * math.log(3.0 / 1.0)
+    expected_d2_negative = idf_loss
+    expected_d2_h4n = math.log(3.0)
 
     d1 = full_features.filter(pl.col("doc_id") == "d1").row(0, named=True)
     d2 = full_features.filter(pl.col("doc_id") == "d2").row(0, named=True)
@@ -451,6 +667,25 @@ def test_lm2011_text_feature_builders_use_exact_paper_tfidf_formula() -> None:
     assert d2["h4n_inf_tfidf"] == pytest.approx(expected_d2_h4n)
     assert d3["lm_negative_tfidf"] == pytest.approx(0.0)
     assert d1["h4n_inf_tfidf"] == pytest.approx(0.0)
+
+
+def test_build_lm2011_text_features_full_10k_sets_recognized_word_screen_count() -> None:
+    features = build_lm2011_text_features_full_10k(
+        pl.DataFrame(
+            {
+                "doc_id": ["d1"],
+                "cik_10": ["0001"],
+                "filing_date": [dt.date(2023, 1, 1)],
+                "document_type_filename": ["10-K"],
+                "full_text": ["gain neutral unknown"],
+            }
+        ).lazy(),
+        dictionary_lists=_lm_dictionary_lists(),
+        harvard_negative_word_list=_harvard_negative_word_list(),
+        master_dictionary_words=["gain", "neutral"],
+    ).collect()
+
+    assert features.item(0, "token_count_full_10k") == 2
 
 
 def test_build_lm2011_event_panel_uses_prc_when_final_prc_is_missing() -> None:
@@ -565,6 +800,46 @@ def test_build_lm2011_event_panel_rejects_paper_filter_failures(case_name: str, 
     assert panel.height == 0, case_name
 
 
+def test_build_lm2011_event_panel_enforces_recognized_word_boundary_from_builder() -> None:
+    inputs = _base_event_inputs()
+
+    def _build_text_features(recognized_count: int) -> pl.LazyFrame:
+        return build_lm2011_text_features_full_10k(
+            pl.DataFrame(
+                {
+                    "doc_id": ["doc_ok"],
+                    "cik_10": ["0001"],
+                    "filing_date": [inputs["sample_backbone"].item(0, "filing_date")],
+                    "document_type_filename": ["10-K"],
+                    "full_text": [" ".join(["recognized"] * recognized_count)],
+                }
+            ).lazy(),
+            dictionary_lists=_lm_dictionary_lists(),
+            harvard_negative_word_list=_harvard_negative_word_list(),
+            master_dictionary_words=["recognized"],
+        )
+
+    short_panel = build_lm2011_event_panel(
+        inputs["sample_backbone"].lazy(),
+        inputs["daily"].lazy(),
+        inputs["annual_panel"].lazy(),
+        inputs["ff"].lazy(),
+        inputs["ownership"].lazy(),
+        _build_text_features(1999),
+    ).collect()
+    boundary_panel = build_lm2011_event_panel(
+        inputs["sample_backbone"].lazy(),
+        inputs["daily"].lazy(),
+        inputs["annual_panel"].lazy(),
+        inputs["ff"].lazy(),
+        inputs["ownership"].lazy(),
+        _build_text_features(2000),
+    ).collect()
+
+    assert short_panel.height == 0
+    assert boundary_panel.height == 1
+
+
 def test_build_lm2011_event_panel_rejects_insufficient_coverage_and_constant_pre_event_volume() -> None:
     short_daily = _daily_window_frame(
         permno=1,
@@ -661,6 +936,186 @@ def test_build_lm2011_event_panel_rejects_non_unique_ownership_input() -> None:
             duplicate_ownership.lazy(),
             inputs["text_features"].lazy(),
         ).collect()
+
+
+def test_build_lm2011_table_i_market_stage_frames_report_expected_attrition() -> None:
+    inputs = _table_i_market_inputs()
+
+    stage_frames = _build_lm2011_table_i_market_stage_frames(
+        inputs["sample_backbone"].lazy(),
+        inputs["daily"].lazy(),
+        inputs["annual_panel"].lazy(),
+        inputs["ff"].lazy(),
+        inputs["text_features"].lazy(),
+    )
+
+    assert [row_id for row_id, _ in stage_frames] == [
+        "ordinary_common_equity",
+        "market_cap_available",
+        "price_day_minus_one_ge_3",
+        "event_window_returns_and_volume",
+        "major_exchange_listing",
+        "sixty_day_pre_post_coverage",
+        "book_to_market_available_and_book_value_positive",
+        "token_count_ge_2000",
+    ]
+    assert [frame.height for _, frame in stage_frames] == [8, 7, 6, 5, 4, 3, 2, 1]
+
+
+def test_build_lm2011_table_i_sample_creation_emits_expected_mda_rows() -> None:
+    base_daily = _daily_window_frame(permno=1, start=dt.date(1997, 1, 1), n_days=520, event_day_index=260)
+    filing_date = base_daily.item(260, "CALDT")
+    sec_parsed = pl.DataFrame(
+        {
+            "doc_id": ["doc_a", "doc_b"],
+            "cik_10": ["0000000001", "0000000002"],
+            "filing_date": [filing_date, filing_date],
+            "accession_nodash": ["1", "2"],
+            "document_type_filename": ["10-K", "10-K"],
+        }
+    )
+    matched_clean = pl.DataFrame(
+        {
+            "doc_id": ["doc_a", "doc_b"],
+            "KYPERMNO": [1, 2],
+            "gvkey": [1001, 1002],
+            "SRCTYPE": ["10K", "10K"],
+        }
+    )
+    daily = pl.concat(
+        [
+            base_daily,
+            _daily_window_frame(permno=2, start=dt.date(1997, 1, 1), n_days=520, event_day_index=260),
+        ],
+        how="vertical_relaxed",
+    )
+    annual_panel = pl.DataFrame(
+        {
+            "gvkey_int": [1001, 1002],
+            "accounting_period_end": [dt.date(1996, 12, 31), dt.date(1996, 12, 31)],
+            "book_equity_be": [50.0, 50.0],
+            "AT": [80.0, 80.0],
+        }
+    )
+    full_text = pl.DataFrame({"doc_id": ["doc_a", "doc_b"], "token_count_full_10k": [2500, 2500]})
+    mda_text = pl.DataFrame({"doc_id": ["doc_a", "doc_b"], "token_count_mda": [300, 200]})
+
+    out = build_lm2011_table_i_sample_creation(
+        sec_parsed.lazy(),
+        matched_clean.lazy(),
+        daily.lazy(),
+        annual_panel.lazy(),
+        _ff_factors_for_dates(base_daily.get_column("CALDT").to_list()).lazy(),
+        full_text.lazy(),
+        mda_text_features_lf=mda_text.lazy(),
+    ).sort("row_order")
+
+    out_rows = {row["row_id"]: row for row in out.iter_rows(named=True)}
+    assert out_rows["token_count_ge_2000"]["sample_size_value"] == pytest.approx(2.0)
+    assert out_rows["firm_year_sample"]["sample_size_value"] == pytest.approx(2.0)
+    assert out_rows["unique_firms"]["sample_size_value"] == pytest.approx(2.0)
+    assert out_rows["average_years_per_firm"]["sample_size_value"] == pytest.approx(1.0)
+    assert out_rows["identifiable_mda"]["sample_size_value"] == pytest.approx(2.0)
+    assert out_rows["identifiable_mda"]["observations_removed"] == 0
+    assert out_rows["mda_token_count_ge_250"]["sample_size_value"] == pytest.approx(1.0)
+    assert out_rows["mda_token_count_ge_250"]["observations_removed"] == 1
+    assert out_rows["identifiable_mda"]["availability_status"] == "available"
+
+
+def test_build_lm2011_table_i_sample_creation_marks_missing_mda_inputs_unavailable() -> None:
+    daily = _daily_window_frame(permno=1, start=dt.date(1997, 1, 1), n_days=520, event_day_index=260)
+    filing_date = daily.item(260, "CALDT")
+    sec_parsed = pl.DataFrame(
+        {
+            "doc_id": ["doc_a"],
+            "cik_10": ["0000000001"],
+            "filing_date": [filing_date],
+            "accession_nodash": ["1"],
+            "document_type_filename": ["10-K"],
+        }
+    )
+    matched_clean = pl.DataFrame({"doc_id": ["doc_a"], "KYPERMNO": [1], "gvkey": [1001], "SRCTYPE": ["10K"]})
+    annual_panel = pl.DataFrame(
+        {
+            "gvkey_int": [1001],
+            "accounting_period_end": [dt.date(1996, 12, 31)],
+            "book_equity_be": [50.0],
+            "AT": [80.0],
+        }
+    )
+    out = build_lm2011_table_i_sample_creation(
+        sec_parsed.lazy(),
+        matched_clean.lazy(),
+        daily.lazy(),
+        annual_panel.lazy(),
+        _ff_factors_for_dates(daily.get_column("CALDT").to_list()).lazy(),
+        pl.DataFrame({"doc_id": ["doc_a"], "token_count_full_10k": [2500]}).lazy(),
+    )
+
+    mda_rows = out.filter(pl.col("section_id") == pl.lit("mda_subsection")).sort("row_order")
+    assert mda_rows.get_column("availability_status").to_list() == ["unavailable", "unavailable"]
+    assert mda_rows.get_column("availability_reason").to_list() == [
+        "mda_text_features_unavailable",
+        "mda_text_features_unavailable",
+    ]
+    assert out.filter(pl.col("row_id") == pl.lit("token_count_ge_2000")).item(0, "sample_size_value") == pytest.approx(1.0)
+
+
+def test_build_lm2011_table_i_sample_creation_window_controls_counts_and_label() -> None:
+    daily_1997 = _daily_window_frame(permno=1, start=dt.date(1997, 1, 1), n_days=520, event_day_index=260)
+    daily_2010 = _daily_window_frame(permno=2, start=dt.date(2010, 1, 1), n_days=520, event_day_index=260)
+    sec_parsed = pl.DataFrame(
+        {
+            "doc_id": ["doc_1997", "doc_2010"],
+            "cik_10": ["0000000001", "0000000002"],
+            "filing_date": [daily_1997.item(260, "CALDT"), daily_2010.item(260, "CALDT")],
+            "accession_nodash": ["1", "2"],
+            "document_type_filename": ["10-K", "10-K"],
+        }
+    )
+    matched_clean = pl.DataFrame(
+        {
+            "doc_id": ["doc_1997", "doc_2010"],
+            "KYPERMNO": [1, 2],
+            "gvkey": [1001, 1002],
+            "SRCTYPE": ["10K", "10K"],
+        }
+    )
+    daily = pl.concat([daily_1997, daily_2010], how="vertical_relaxed")
+    annual_panel = pl.DataFrame(
+        {
+            "gvkey_int": [1001, 1002],
+            "accounting_period_end": [dt.date(1996, 12, 31), dt.date(2009, 12, 31)],
+            "book_equity_be": [50.0, 50.0],
+            "AT": [80.0, 80.0],
+        }
+    )
+    full_text = pl.DataFrame({"doc_id": ["doc_1997", "doc_2010"], "token_count_full_10k": [2500, 2500]})
+    ff = _ff_factors_for_dates(daily.select(pl.col("CALDT").unique().sort()).get_column("CALDT").to_list())
+
+    default_out = build_lm2011_table_i_sample_creation(
+        sec_parsed.lazy(),
+        matched_clean.lazy(),
+        daily.lazy(),
+        annual_panel.lazy(),
+        ff.lazy(),
+        full_text.lazy(),
+    )
+    extended_out = build_lm2011_table_i_sample_creation(
+        sec_parsed.lazy(),
+        matched_clean.lazy(),
+        daily.lazy(),
+        annual_panel.lazy(),
+        ff.lazy(),
+        full_text.lazy(),
+        sample_start=dt.date(1994, 1, 1),
+        sample_end=dt.date(2024, 12, 31),
+    )
+
+    assert default_out.filter(pl.col("row_id") == pl.lit("token_count_ge_2000")).item(0, "sample_size_value") == pytest.approx(1.0)
+    assert extended_out.filter(pl.col("row_id") == pl.lit("token_count_ge_2000")).item(0, "sample_size_value") == pytest.approx(2.0)
+    assert "1994-2008" in default_out.item(0, "display_label")
+    assert "1994-2024" in extended_out.item(0, "display_label")
 
 
 def test_factor_scaling_is_uniform_across_columns() -> None:
@@ -920,6 +1375,7 @@ def test_build_lm2011_trading_strategy_monthly_returns_pin_direction_and_support
         monthly_stock.lazy(),
         lm_dictionary_lists=_lm_dictionary_lists(),
         harvard_negative_word_list=_harvard_negative_word_list(),
+        master_dictionary_words=_master_dictionary_words(),
     ).collect().sort("portfolio_month", "sort_signal_name")
 
     lagged_value_panel = build_lm2011_trading_strategy_monthly_returns(
@@ -928,6 +1384,7 @@ def test_build_lm2011_trading_strategy_monthly_returns_pin_direction_and_support
         monthly_stock.lazy(),
         lm_dictionary_lists=_lm_dictionary_lists(),
         harvard_negative_word_list=_harvard_negative_word_list(),
+        master_dictionary_words=_master_dictionary_words(),
         portfolio_weighting="lagged_value",
     ).collect().sort("portfolio_month", "sort_signal_name")
 
@@ -966,8 +1423,49 @@ def test_build_lm2011_trading_strategy_monthly_returns_use_prior_year_signal_yea
         monthly_stock.lazy(),
         lm_dictionary_lists=_lm_dictionary_lists(),
         harvard_negative_word_list=_harvard_negative_word_list(),
+        master_dictionary_words=_master_dictionary_words(),
     ).collect()
     assert prior_year_required.height == 0
+
+
+def test_build_lm2011_trading_strategy_monthly_returns_propagates_cleaning_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event_panel, sec_parsed, monthly_stock, _ = _build_strategy_inputs()
+    captured: dict[str, object] = {}
+
+    def _capture_signal_frame(*_: object, **kwargs: object) -> pl.LazyFrame:
+        captured["cleaning_contract"] = kwargs.get("cleaning_contract")
+        return pl.DataFrame(
+            {
+                "doc_id": [f"doc_{idx}" for idx in range(10)],
+                "cik_10": [f"{idx:010d}" for idx in range(10)],
+                "filing_date": [dt.date(1996, 3, 1) + dt.timedelta(days=idx) for idx in range(10)],
+                "normalized_form": ["10-K"] * 10,
+                "token_count_full_10k": [100] * 10,
+                "fin_neg_prop": [0.1 + 0.01 * idx for idx in range(10)],
+                "fin_neg_tfidf": [0.2 + 0.01 * idx for idx in range(10)],
+                "h4n_inf_prop": [0.3 + 0.01 * idx for idx in range(10)],
+                "h4n_inf_tfidf": [0.4 + 0.01 * idx for idx in range(10)],
+            }
+        ).lazy()
+
+    monkeypatch.setattr(
+        "thesis_pkg.pipelines.lm2011_pipeline.build_lm2011_trading_strategy_signal_frame",
+        _capture_signal_frame,
+    )
+
+    build_lm2011_trading_strategy_monthly_returns(
+        event_panel.lazy(),
+        sec_parsed.lazy(),
+        monthly_stock.lazy(),
+        lm_dictionary_lists=_lm_dictionary_lists(),
+        harvard_negative_word_list=_harvard_negative_word_list(),
+        master_dictionary_words=_master_dictionary_words(),
+        cleaning_contract="lm2011_paper",
+    ).collect()
+
+    assert captured["cleaning_contract"] == "lm2011_paper"
 
 
 def test_build_lm2011_trading_strategy_ff4_summary_is_separate_artifact_with_r2() -> None:
@@ -978,6 +1476,7 @@ def test_build_lm2011_trading_strategy_ff4_summary_is_separate_artifact_with_r2(
         monthly_stock.lazy(),
         lm_dictionary_lists=_lm_dictionary_lists(),
         harvard_negative_word_list=_harvard_negative_word_list(),
+        master_dictionary_words=_master_dictionary_words(),
     ).collect()
     summary = build_lm2011_trading_strategy_ff4_summary(
         monthly_returns.lazy(),
@@ -1008,6 +1507,7 @@ def test_build_lm2011_trading_strategy_builders_fail_closed_without_required_ext
             monthly_stock.lazy(),
             lm_dictionary_lists=_lm_dictionary_lists(),
             harvard_negative_word_list=None,
+            master_dictionary_words=_master_dictionary_words(),
         ).collect()
     with pytest.raises(ValueError, match="ff_factors_monthly_with_mom_lf is required"):
         build_lm2011_trading_strategy_ff4_summary(
@@ -1017,6 +1517,7 @@ def test_build_lm2011_trading_strategy_builders_fail_closed_without_required_ext
                 monthly_stock.lazy(),
                 lm_dictionary_lists=_lm_dictionary_lists(),
                 harvard_negative_word_list=_harvard_negative_word_list(),
+                master_dictionary_words=_master_dictionary_words(),
             ),
             None,
         ).collect()

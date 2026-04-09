@@ -55,6 +55,20 @@ def _harvard_negative_word_list() -> list[str]:
     return ["bad"]
 
 
+def _master_dictionary_words() -> list[str]:
+    return [
+        "loss",
+        "gain",
+        "uncertain",
+        "lawsuit",
+        "must",
+        "may",
+        "bad",
+        "neutral",
+        "recognized",
+    ]
+
+
 def _strategy_months() -> list[dt.date]:
     return [
         dt.date(1997, 7, 31),
@@ -629,6 +643,66 @@ def test_build_lm2011_table_v_results_enforces_mda_token_count_floor(tmp_path) -
     assert boundary_table_v.height > 0
 
 
+def test_build_lm2011_table_v_results_enforces_builder_linked_recognized_word_floor(tmp_path) -> None:
+    from thesis_pkg.pipeline import build_lm2011_text_features_mda
+
+    inputs = _regression_test_inputs(tmp_path)
+    event_panel = inputs["event_panel"]
+
+    def _build_mda_features(target_token_count: int) -> pl.DataFrame:
+        rows: list[dict[str, object]] = []
+        for idx, row in enumerate(event_panel.iter_rows(named=True), start=1):
+            negative_count = 1 + (idx % 5)
+            harvard_count = 2 + (idx % 3)
+            filler_count = target_token_count - negative_count - harvard_count
+            assert filler_count > 0
+            rows.append(
+                {
+                    "doc_id": row["doc_id"],
+                    "cik_10": f"{idx:010d}",
+                    "filing_date": row["filing_date"],
+                    "document_type_filename": "10-K",
+                    "item_id": "7",
+                    "full_text": " ".join(
+                        [
+                            *(["recognized"] * filler_count),
+                            *(["loss"] * negative_count),
+                            *(["bad"] * harvard_count),
+                        ]
+                    ),
+                }
+            )
+        built_counts = build_lm2011_text_features_mda(
+            pl.DataFrame(rows).lazy(),
+            dictionary_lists=_lm_dictionary_lists(),
+            harvard_negative_word_list=_harvard_negative_word_list(),
+            master_dictionary_words=["recognized", "loss", "bad"],
+        ).collect().select("doc_id", "token_count_mda")
+        return (
+            inputs["mda_text_features"]
+            .drop("token_count_mda")
+            .join(built_counts, on="doc_id", how="inner")
+        )
+
+    low_token_table_v = build_lm2011_table_v_results(
+        inputs["event_panel"].lazy(),
+        _build_mda_features(249).lazy(),
+        inputs["company_history"].lazy(),
+        inputs["company_description"].lazy(),
+        ff48_siccodes_path=inputs["ff48_path"],
+    )
+    boundary_table_v = build_lm2011_table_v_results(
+        inputs["event_panel"].lazy(),
+        _build_mda_features(250).lazy(),
+        inputs["company_history"].lazy(),
+        inputs["company_description"].lazy(),
+        ff48_siccodes_path=inputs["ff48_path"],
+    )
+
+    assert low_token_table_v.height == 0
+    assert boundary_table_v.height > 0
+
+
 def test_build_lm2011_table_ia_i_results_uses_normalized_difference_signals(tmp_path) -> None:
     inputs = _regression_test_inputs(tmp_path)
 
@@ -656,6 +730,7 @@ def test_build_lm2011_table_ia_ii_results_matches_strategy_artifacts() -> None:
         monthly_stock.lazy(),
         lm_dictionary_lists=_lm_dictionary_lists(),
         harvard_negative_word_list=_harvard_negative_word_list(),
+        master_dictionary_words=_master_dictionary_words(),
     ).collect().sort("portfolio_month", "sort_signal_name")
     summary = build_lm2011_trading_strategy_ff4_summary(
         monthly_returns.lazy(),
@@ -669,6 +744,7 @@ def test_build_lm2011_table_ia_ii_results_matches_strategy_artifacts() -> None:
         monthly_factors.lazy(),
         lm_dictionary_lists=_lm_dictionary_lists(),
         harvard_negative_word_list=_harvard_negative_word_list(),
+        master_dictionary_words=_master_dictionary_words(),
     ).sort("signal_name", "coefficient_name")
 
     assert set(table_ia_ii.get_column("coefficient_name").unique().to_list()) == {

@@ -78,6 +78,7 @@ from thesis_pkg.io.parquet import load_tables, sink_exact_firm_sample_from_parqu
 from thesis_pkg.pipelines.ccm_pipeline import build_or_reuse_ccm_daily_stage, merge_histories
 from thesis_pkg.pipelines.lm2011_pipeline import (
     build_lm2011_event_panel,
+    build_lm2011_table_i_sample_creation,
     build_lm2011_sue_panel,
     build_lm2011_trading_strategy_ff4_summary,
     build_lm2011_trading_strategy_monthly_returns,

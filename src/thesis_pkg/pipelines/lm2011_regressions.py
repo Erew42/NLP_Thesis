@@ -648,6 +648,7 @@ def build_lm2011_table_ia_ii_results(
     *,
     lm_dictionary_lists: Mapping[str, Iterable[str]],
     harvard_negative_word_list: Iterable[str] | None,
+    master_dictionary_words: Iterable[str],
     portfolio_weighting: str = "equal",
     monthly_return_col: str = "MRET",
 ) -> pl.DataFrame:
@@ -657,6 +658,7 @@ def build_lm2011_table_ia_ii_results(
         monthly_stock_lf,
         lm_dictionary_lists=lm_dictionary_lists,
         harvard_negative_word_list=harvard_negative_word_list,
+        master_dictionary_words=master_dictionary_words,
         portfolio_weighting=portfolio_weighting,
         monthly_return_col=monthly_return_col,
     )

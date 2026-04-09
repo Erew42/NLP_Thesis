@@ -77,6 +77,7 @@ from thesis_pkg.io.parquet import load_tables
 from thesis_pkg.pipelines.ccm_pipeline import merge_histories
 from thesis_pkg.pipelines.lm2011_pipeline import (
     build_lm2011_event_panel,
+    build_lm2011_table_i_sample_creation,
     build_lm2011_sue_panel,
     build_lm2011_trading_strategy_ff4_summary,
     build_lm2011_trading_strategy_monthly_returns,
@@ -177,6 +178,7 @@ __all__ = [
     "build_lm2011_text_features_full_10k",
     "build_lm2011_text_features_mda",
     "build_lm2011_event_panel",
+    "build_lm2011_table_i_sample_creation",
     "build_lm2011_sue_panel",
     "build_lm2011_return_regression_panel",
     "build_lm2011_sue_regression_panel",

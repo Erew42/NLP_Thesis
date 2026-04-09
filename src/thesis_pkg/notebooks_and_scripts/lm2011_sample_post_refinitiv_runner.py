@@ -47,6 +47,7 @@ from thesis_pkg.core.ccm.lm2011 import (
     build_lm2011_sample_backbone,
     build_quarterly_accounting_panel,
 )
+from thesis_pkg.core.sec.lm2011_cleaning import FULL_10K_CLEANING_CONTRACTS
 from thesis_pkg.core.sec.lm2011_text import (
     build_lm2011_text_features_full_10k,
     build_lm2011_text_features_mda,
@@ -54,6 +55,7 @@ from thesis_pkg.core.sec.lm2011_text import (
 from thesis_pkg.pipelines.lm2011_pipeline import (
     build_lm2011_event_panel,
     build_lm2011_sue_panel,
+    build_lm2011_table_i_sample_creation,
     build_lm2011_trading_strategy_monthly_returns,
 )
 from thesis_pkg.pipelines.lm2011_regressions import (
@@ -136,6 +138,8 @@ STAGE_ARTIFACT_FILENAMES: dict[str, str] = {
     "ff_factors_daily_normalized": "lm2011_ff_factors_daily_normalized.parquet",
     "text_features_full_10k": "lm2011_text_features_full_10k.parquet",
     "text_features_mda": "lm2011_text_features_mda.parquet",
+    "table_i_sample_creation": "lm2011_table_i_sample_creation.parquet",
+    "table_i_sample_creation_1994_2024": "lm2011_table_i_sample_creation_1994_2024.parquet",
     "event_panel": "lm2011_event_panel.parquet",
     "sue_panel": "lm2011_sue_panel.parquet",
     "return_regression_panel_full_10k": "lm2011_return_regression_panel_full_10k.parquet",
@@ -179,6 +183,7 @@ class RunnerPaths:
     ff48_siccodes_path: Path
     monthly_stock_path: Path | None
     ff_monthly_with_mom_path: Path | None
+    full_10k_cleaning_contract: str
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -187,6 +192,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--upstream-run-root", type=Path, default=DEFAULT_UPSTREAM_RUN_ROOT)
     parser.add_argument("--additional-data-dir", type=Path, default=DEFAULT_ADDITIONAL_DATA_DIR)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
+    parser.add_argument("--year-merged-dir", type=Path, default=None)
+    parser.add_argument("--matched-clean-path", type=Path, default=None)
+    parser.add_argument("--daily-panel-path", type=Path, default=None)
+    parser.add_argument("--items-analysis-dir", type=Path, default=None)
+    parser.add_argument("--ccm-base-dir", type=Path, default=None)
     parser.add_argument(
         "--monthly-stock-path",
         type=Path,
@@ -198,6 +208,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         type=Path,
         default=None,
         help="Optional monthly FF+momentum parquet. If omitted, Table IA.II is skipped.",
+    )
+    parser.add_argument(
+        "--full-10k-cleaning-contract",
+        default="current",
+        choices=FULL_10K_CLEANING_CONTRACTS,
+        help="Full-10-K cleaning contract for paper-faithful sample reruns.",
     )
     return parser.parse_args(argv)
 
@@ -229,6 +245,13 @@ def _resolve_optional_ccm_parquet_artifact(base_dir: Path, parquet_names: Sequen
     return None
 
 
+def _resolve_optional_existing_path(*paths: Path) -> Path | None:
+    for path in paths:
+        if path.exists():
+            return path
+    return None
+
+
 def _parquet_glob_exists(directory: Path, pattern: str) -> bool:
     return any(directory.glob(pattern))
 
@@ -253,7 +276,33 @@ def _resolve_paths(args: argparse.Namespace) -> RunnerPaths:
     upstream_run_root = Path(args.upstream_run_root).resolve()
     additional_data_dir = Path(args.additional_data_dir).resolve()
     output_dir = Path(args.output_dir).resolve()
-    ccm_base_dir = sample_root / "ccm_parquet_data"
+    year_merged_dir = (
+        Path(args.year_merged_dir).resolve()
+        if args.year_merged_dir is not None
+        else sample_root / "year_merged"
+    )
+    daily_panel_path = (
+        Path(args.daily_panel_path).resolve()
+        if args.daily_panel_path is not None
+        else (
+            _resolve_optional_existing_path(
+                sample_root / "derived_data" / "final_flagged_data_compdesc_added.sample_5pct_seed42.parquet",
+                sample_root / "derived_data" / "final_flagged_data_compdesc_added.parquet",
+            )
+            or sample_root / "derived_data" / "final_flagged_data_compdesc_added.sample_5pct_seed42.parquet"
+        )
+    )
+    ccm_base_dir = Path(args.ccm_base_dir).resolve() if args.ccm_base_dir is not None else sample_root / "ccm_parquet_data"
+    matched_clean_path = (
+        Path(args.matched_clean_path).resolve()
+        if args.matched_clean_path is not None
+        else upstream_run_root / "sec_ccm_premerge" / "sec_ccm_matched_clean.parquet"
+    )
+    items_analysis_dir = (
+        Path(args.items_analysis_dir).resolve()
+        if args.items_analysis_dir is not None
+        else upstream_run_root / "items_analysis"
+    )
     monthly_stock_path = (
         Path(args.monthly_stock_path).resolve()
         if args.monthly_stock_path is not None
@@ -269,11 +318,11 @@ def _resolve_paths(args: argparse.Namespace) -> RunnerPaths:
         upstream_run_root=upstream_run_root,
         additional_data_dir=additional_data_dir,
         output_dir=output_dir,
-        year_merged_dir=sample_root / "year_merged",
-        daily_panel_path=sample_root / "derived_data" / "final_flagged_data_compdesc_added.sample_5pct_seed42.parquet",
+        year_merged_dir=year_merged_dir,
+        daily_panel_path=daily_panel_path,
         ccm_base_dir=ccm_base_dir,
-        matched_clean_path=upstream_run_root / "sec_ccm_premerge" / "sec_ccm_matched_clean.parquet",
-        items_analysis_dir=upstream_run_root / "items_analysis",
+        matched_clean_path=matched_clean_path,
+        items_analysis_dir=items_analysis_dir,
         doc_ownership_path=(
             upstream_run_root
             / "refinitiv_doc_ownership_lm2011"
@@ -325,6 +374,7 @@ def _resolve_paths(args: argparse.Namespace) -> RunnerPaths:
         ff48_siccodes_path=additional_data_dir / "FF_Siccodes_48_Industries.txt",
         monthly_stock_path=monthly_stock_path,
         ff_monthly_with_mom_path=ff_monthly_with_mom_path,
+        full_10k_cleaning_contract=str(args.full_10k_cleaning_contract),
     )
 
 
@@ -349,6 +399,42 @@ def _load_dictionary_lists(additional_data_dir: Path) -> tuple[dict[str, tuple[s
     }
     harvard_negative_word_list = _load_word_list(additional_data_dir / "Harvard_IV_NEG_Inf.txt")
     return dictionary_lists, harvard_negative_word_list
+
+
+def _load_master_dictionary_words(additional_data_dir: Path) -> tuple[str, ...]:
+    txt_path = additional_data_dir / "LM2011_MasterDictionary.txt"
+    csv_path = additional_data_dir / "Loughran-McDonald_MasterDictionary_1993-2024.csv"
+    if txt_path.exists():
+        dictionary_path = txt_path
+    elif csv_path.exists():
+        dictionary_path = csv_path
+    else:
+        raise FileNotFoundError(f"No LM master dictionary file found in {additional_data_dir}")
+    words_df = pl.read_csv(dictionary_path).select(pl.col("Word").cast(pl.Utf8, strict=False).alias("Word"))
+    return tuple(
+        word.strip()
+        for word in words_df.get_column("Word").drop_nulls().to_list()
+        if isinstance(word, str) and word.strip()
+    )
+
+
+def _normalize_filing_date_expr(schema_names: set[str]) -> pl.Expr:
+    if "filing_date" in schema_names and "file_date_filename" in schema_names:
+        return pl.coalesce(
+            [
+                pl.col("filing_date").cast(pl.Date, strict=False),
+                pl.col("file_date_filename").cast(pl.Date, strict=False),
+            ]
+        ).alias("filing_date")
+    if "filing_date" in schema_names:
+        return pl.col("filing_date").cast(pl.Date, strict=False).alias("filing_date")
+    if "file_date_filename" in schema_names:
+        return pl.col("file_date_filename").cast(pl.Date, strict=False).alias("filing_date")
+    raise ValueError("SEC input files must contain filing_date or file_date_filename.")
+
+
+def _prepare_lm2011_sec_input_lf(lf: pl.LazyFrame) -> pl.LazyFrame:
+    return lf.with_columns(_normalize_filing_date_expr(set(lf.collect_schema().names())))
 
 
 def _filter_valid_annual_period_descriptor_rows(lf: pl.LazyFrame) -> pl.LazyFrame:
@@ -450,6 +536,123 @@ def _artifact_output_path(output_dir: Path, stage_name: str) -> Path:
     return output_dir / STAGE_ARTIFACT_FILENAMES[stage_name]
 
 
+def _format_table_i_sample_value(row: dict[str, Any]) -> str:
+    if row["availability_status"] != "available" or row["sample_size_value"] is None:
+        return "n/a"
+    value = float(row["sample_size_value"])
+    if row["sample_size_kind"] == "count":
+        return f"{int(round(value)):,}"
+    return f"{value:.2f}"
+
+
+def _format_table_i_removed_value(row: dict[str, Any]) -> str:
+    removed = row["observations_removed"]
+    if removed is None or row["availability_status"] != "available":
+        return ""
+    return f"{int(removed):,}"
+
+
+def _format_table_i_window_label(sample_start: dt.date, sample_end: dt.date) -> str:
+    return f"{sample_start.year}-{sample_end.year}"
+
+
+def _table_i_stage_warnings(table_df: pl.DataFrame) -> list[str]:
+    unavailable_reasons = (
+        table_df.filter(pl.col("availability_status") != "available")
+        .select(pl.col("availability_reason").drop_nulls().unique().sort())
+        .get_column("availability_reason")
+        .to_list()
+        if table_df.height > 0 and "availability_reason" in table_df.columns
+        else []
+    )
+    warnings: list[str] = []
+    for reason in unavailable_reasons:
+        if reason == "mda_text_features_unavailable":
+            warnings.append(
+                "MD&A subsection rows are unavailable because lm2011_text_features_mda was not provided."
+            )
+        else:
+            warnings.append(str(reason))
+    return warnings
+
+
+def _render_table_i_sample_creation_markdown(
+    table_df: pl.DataFrame,
+    *,
+    sample_start: dt.date,
+    sample_end: dt.date,
+    warnings: Sequence[str] | None = None,
+) -> str:
+    lines = [
+        f"# LM2011 Table I Sample Creation ({_format_table_i_window_label(sample_start, sample_end)})",
+        "",
+        "This table reports the impact of various data filters on initial 10-K sample size.",
+        "",
+    ]
+    for section_label in (
+        "Full 10-K Document",
+        "Firm-Year Sample",
+        "Management Discussion and Analysis (MD&A) Subsection",
+    ):
+        section_df = table_df.filter(pl.col("section_label") == pl.lit(section_label)).sort("row_order")
+        lines.extend(
+            [
+                f"## {section_label}",
+                "",
+                "| Source/Filter | Sample Size | Observations Removed |",
+                "| --- | ---: | ---: |",
+            ]
+        )
+        for row in section_df.iter_rows(named=True):
+            lines.append(
+                f"| {row['display_label']} | {_format_table_i_sample_value(row)} | {_format_table_i_removed_value(row)} |"
+            )
+        lines.append("")
+    if warnings:
+        lines.append("Notes")
+        lines.append("")
+        for warning in warnings:
+            lines.append(f"- {warning}")
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _table_i_extra_artifact_paths(output_dir: Path, stage_name: str) -> tuple[Path, Path]:
+    stem = Path(STAGE_ARTIFACT_FILENAMES[stage_name]).stem
+    return output_dir / f"{stem}.csv", output_dir / f"{stem}.md"
+
+
+def _write_table_i_stage(
+    manifest: dict[str, Any],
+    *,
+    output_dir: Path,
+    stage_name: str,
+    table_df: pl.DataFrame,
+    sample_start: dt.date,
+    sample_end: dt.date,
+) -> pl.LazyFrame:
+    csv_path, markdown_path = _table_i_extra_artifact_paths(output_dir, stage_name)
+    table_df.write_csv(csv_path)
+    table_i_warnings = _table_i_stage_warnings(table_df)
+    markdown_path.write_text(
+        _render_table_i_sample_creation_markdown(
+            table_df,
+            sample_start=sample_start,
+            sample_end=sample_end,
+            warnings=table_i_warnings,
+        ),
+        encoding="utf-8",
+    )
+    return _write_stage(
+        manifest,
+        output_dir=output_dir,
+        stage_name=stage_name,
+        frame=table_df,
+        extra_artifacts={"csv": csv_path, "markdown": markdown_path},
+        warnings=table_i_warnings,
+    )
+
+
 def _build_manifest(paths: RunnerPaths) -> dict[str, Any]:
     return {
         "runner_name": "lm2011_sample_post_refinitiv_runner",
@@ -460,6 +663,9 @@ def _build_manifest(paths: RunnerPaths) -> dict[str, Any]:
             "upstream_run_root": _absolute_path_str(paths.upstream_run_root),
             "additional_data_dir": _absolute_path_str(paths.additional_data_dir),
             "output_dir": _absolute_path_str(paths.output_dir),
+        },
+        "config": {
+            "full_10k_cleaning_contract": paths.full_10k_cleaning_contract,
         },
         "resolved_inputs": {
             "year_merged_dir": _absolute_path_str(paths.year_merged_dir),
@@ -497,6 +703,8 @@ def _record_stage_success(
     artifact_path: Path,
     row_count: int,
     empty_reason: str | None = None,
+    extra_artifacts: dict[str, Path] | None = None,
+    warnings: Sequence[str] | None = None,
 ) -> None:
     status = "generated_empty" if row_count == 0 else "generated"
     manifest["artifacts"][stage_name] = _absolute_path_str(artifact_path)
@@ -506,6 +714,11 @@ def _record_stage_success(
         "artifact_path": _absolute_path_str(artifact_path),
         "row_count": row_count,
         "reason": empty_reason if status == "generated_empty" else None,
+        "extra_artifacts": {
+            name: _absolute_path_str(path)
+            for name, path in (extra_artifacts or {}).items()
+        },
+        "warnings": list(warnings or []),
     }
     print({"stage": stage_name, "status": status, "row_count": row_count, "artifact_path": str(artifact_path)})
 
@@ -533,9 +746,12 @@ def _record_stage_failed(
     stage_name: str,
     exc: Exception,
 ) -> None:
+    output_dir = Path(manifest["roots"]["output_dir"])
     manifest["stages"][stage_name] = {
         "status": "failed",
-        "artifact_path": _absolute_path_str(_artifact_output_path(Path(manifest["roots"]["output_dir"]), stage_name)),
+        "artifact_path": _absolute_path_str(_artifact_output_path(output_dir, stage_name))
+        if stage_name in STAGE_ARTIFACT_FILENAMES
+        else None,
         "row_count": None,
         "reason": f"{type(exc).__name__}: {exc}",
     }
@@ -548,6 +764,8 @@ def _write_stage(
     stage_name: str,
     frame: pl.LazyFrame | pl.DataFrame,
     empty_reason: str | None = None,
+    extra_artifacts: dict[str, Path] | None = None,
+    warnings: Sequence[str] | None = None,
 ) -> pl.LazyFrame:
     artifact_path = _artifact_output_path(output_dir, stage_name)
     written_path, row_count = _write_frame_artifact(frame, artifact_path)
@@ -557,6 +775,8 @@ def _write_stage(
         artifact_path=written_path,
         row_count=row_count,
         empty_reason=empty_reason,
+        extra_artifacts=extra_artifacts,
+        warnings=warnings,
     )
     return pl.scan_parquet(written_path)
 
@@ -580,6 +800,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         dictionary_lists, harvard_negative_word_list = _load_dictionary_lists(paths.additional_data_dir)
+        master_dictionary_words = _load_master_dictionary_words(paths.additional_data_dir)
 
         sample_backbone_lf: pl.LazyFrame | None = None
         annual_accounting_panel_lf: pl.LazyFrame | None = None
@@ -587,15 +808,26 @@ def main(argv: Sequence[str] | None = None) -> int:
         ff_factors_daily_lf: pl.LazyFrame | None = None
         text_features_full_10k_lf: pl.LazyFrame | None = None
         text_features_mda_lf: pl.LazyFrame | None = None
+        table_i_sample_creation_lf: pl.LazyFrame | None = None
         event_panel_lf: pl.LazyFrame | None = None
         sue_panel_lf: pl.LazyFrame | None = None
         return_regression_panel_full_10k_lf: pl.LazyFrame | None = None
         return_regression_panel_mda_lf: pl.LazyFrame | None = None
         sue_regression_panel_lf: pl.LazyFrame | None = None
+        year_merged_lf = (
+            _prepare_lm2011_sec_input_lf(pl.scan_parquet(str(paths.year_merged_dir / YEAR_MERGED_GLOB)))
+            if _parquet_glob_exists(paths.year_merged_dir, YEAR_MERGED_GLOB)
+            else None
+        )
+        items_analysis_lf = (
+            _prepare_lm2011_sec_input_lf(pl.scan_parquet(str(paths.items_analysis_dir / ITEMS_ANALYSIS_GLOB)))
+            if _parquet_glob_exists(paths.items_analysis_dir, ITEMS_ANALYSIS_GLOB)
+            else None
+        )
 
         current_stage_name = "sample_backbone"
         if (
-            _parquet_glob_exists(paths.year_merged_dir, YEAR_MERGED_GLOB)
+            year_merged_lf is not None
             and paths.matched_clean_path.exists()
             and paths.filingdates_path is not None
             and paths.filingdates_path.exists()
@@ -605,7 +837,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 output_dir=paths.output_dir,
                 stage_name="sample_backbone",
                 frame=build_lm2011_sample_backbone(
-                    pl.scan_parquet(str(paths.year_merged_dir / YEAR_MERGED_GLOB)),
+                    year_merged_lf,
                     pl.scan_parquet(paths.matched_clean_path),
                     ccm_filingdates_lf=pl.scan_parquet(paths.filingdates_path),
                 ),
@@ -712,15 +944,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
 
         current_stage_name = "text_features_full_10k"
-        if _parquet_glob_exists(paths.year_merged_dir, YEAR_MERGED_GLOB):
+        if year_merged_lf is not None:
             text_features_full_10k_lf = _write_stage(
                 manifest,
                 output_dir=paths.output_dir,
                 stage_name="text_features_full_10k",
                 frame=build_lm2011_text_features_full_10k(
-                    pl.scan_parquet(str(paths.year_merged_dir / YEAR_MERGED_GLOB)),
+                    year_merged_lf,
                     dictionary_lists=dictionary_lists,
                     harvard_negative_word_list=harvard_negative_word_list,
+                    master_dictionary_words=master_dictionary_words,
+                    cleaning_contract=paths.full_10k_cleaning_contract,
                 ),
             )
         else:
@@ -732,15 +966,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
 
         current_stage_name = "text_features_mda"
-        if _parquet_glob_exists(paths.items_analysis_dir, ITEMS_ANALYSIS_GLOB):
+        if items_analysis_lf is not None:
             text_features_mda_lf = _write_stage(
                 manifest,
                 output_dir=paths.output_dir,
                 stage_name="text_features_mda",
                 frame=build_lm2011_text_features_mda(
-                    pl.scan_parquet(str(paths.items_analysis_dir / ITEMS_ANALYSIS_GLOB)),
+                    items_analysis_lf,
                     dictionary_lists=dictionary_lists,
                     harvard_negative_word_list=harvard_negative_word_list,
+                    master_dictionary_words=master_dictionary_words,
                 ),
             )
         else:
@@ -749,6 +984,102 @@ def main(argv: Sequence[str] | None = None) -> int:
                 stage_name="text_features_mda",
                 reason=SKIPPED_MISSING_SEEDED_UPSTREAM,
                 detail="items_analysis",
+            )
+
+        current_stage_name = "table_i_sample_creation"
+        if (
+            year_merged_lf is not None
+            and paths.matched_clean_path.exists()
+            and paths.filingdates_path is not None
+            and paths.filingdates_path.exists()
+            and annual_accounting_panel_lf is not None
+            and ff_factors_daily_lf is not None
+            and text_features_full_10k_lf is not None
+            and paths.daily_panel_path.exists()
+        ):
+            table_i_df = build_lm2011_table_i_sample_creation(
+                year_merged_lf,
+                pl.scan_parquet(paths.matched_clean_path),
+                pl.scan_parquet(paths.daily_panel_path),
+                annual_accounting_panel_lf,
+                ff_factors_daily_lf,
+                text_features_full_10k_lf,
+                ccm_filingdates_lf=pl.scan_parquet(paths.filingdates_path),
+                mda_text_features_lf=text_features_mda_lf,
+            )
+            table_i_sample_creation_lf = _write_table_i_stage(
+                manifest,
+                output_dir=paths.output_dir,
+                stage_name="table_i_sample_creation",
+                table_df=table_i_df,
+                sample_start=dt.date(1994, 1, 1),
+                sample_end=dt.date(2008, 12, 31),
+            )
+        else:
+            _record_stage_skipped(
+                manifest,
+                stage_name="table_i_sample_creation",
+                reason=SKIPPED_MISSING_OPTIONAL_INPUT,
+                detail=_describe_missing_paths(
+                    {
+                        "year_merged": paths.year_merged_dir if _parquet_glob_exists(paths.year_merged_dir, YEAR_MERGED_GLOB) else None,
+                        "matched_clean": paths.matched_clean_path,
+                        "filingdates": paths.filingdates_path,
+                        "annual_accounting_panel": Path(manifest["artifacts"]["annual_accounting_panel"]) if "annual_accounting_panel" in manifest["artifacts"] else None,
+                        "ff_factors_daily_normalized": Path(manifest["artifacts"]["ff_factors_daily_normalized"]) if "ff_factors_daily_normalized" in manifest["artifacts"] else None,
+                        "text_features_full_10k": Path(manifest["artifacts"]["text_features_full_10k"]) if "text_features_full_10k" in manifest["artifacts"] else None,
+                        "daily_panel_path": paths.daily_panel_path,
+                    }
+                ),
+            )
+
+        current_stage_name = "table_i_sample_creation_1994_2024"
+        if (
+            year_merged_lf is not None
+            and paths.matched_clean_path.exists()
+            and paths.filingdates_path is not None
+            and paths.filingdates_path.exists()
+            and annual_accounting_panel_lf is not None
+            and ff_factors_daily_lf is not None
+            and text_features_full_10k_lf is not None
+            and paths.daily_panel_path.exists()
+        ):
+            table_i_1994_2024_df = build_lm2011_table_i_sample_creation(
+                year_merged_lf,
+                pl.scan_parquet(paths.matched_clean_path),
+                pl.scan_parquet(paths.daily_panel_path),
+                annual_accounting_panel_lf,
+                ff_factors_daily_lf,
+                text_features_full_10k_lf,
+                ccm_filingdates_lf=pl.scan_parquet(paths.filingdates_path),
+                mda_text_features_lf=text_features_mda_lf,
+                sample_start=dt.date(1994, 1, 1),
+                sample_end=dt.date(2024, 12, 31),
+            )
+            _write_table_i_stage(
+                manifest,
+                output_dir=paths.output_dir,
+                stage_name="table_i_sample_creation_1994_2024",
+                table_df=table_i_1994_2024_df,
+                sample_start=dt.date(1994, 1, 1),
+                sample_end=dt.date(2024, 12, 31),
+            )
+        else:
+            _record_stage_skipped(
+                manifest,
+                stage_name="table_i_sample_creation_1994_2024",
+                reason=SKIPPED_MISSING_OPTIONAL_INPUT,
+                detail=_describe_missing_paths(
+                    {
+                        "year_merged": paths.year_merged_dir if year_merged_lf is not None else None,
+                        "matched_clean": paths.matched_clean_path,
+                        "filingdates": paths.filingdates_path,
+                        "annual_accounting_panel": Path(manifest["artifacts"]["annual_accounting_panel"]) if "annual_accounting_panel" in manifest["artifacts"] else None,
+                        "ff_factors_daily_normalized": Path(manifest["artifacts"]["ff_factors_daily_normalized"]) if "ff_factors_daily_normalized" in manifest["artifacts"] else None,
+                        "text_features_full_10k": Path(manifest["artifacts"]["text_features_full_10k"]) if "text_features_full_10k" in manifest["artifacts"] else None,
+                        "daily_panel_path": paths.daily_panel_path,
+                    }
+                ),
             )
 
         current_stage_name = "event_panel"
@@ -997,17 +1328,24 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
 
         current_stage_name = "trading_strategy_monthly_returns"
-        if paths.monthly_stock_path is not None and paths.monthly_stock_path.exists() and event_panel_lf is not None:
+        if (
+            paths.monthly_stock_path is not None
+            and paths.monthly_stock_path.exists()
+            and event_panel_lf is not None
+            and year_merged_lf is not None
+        ):
             _write_stage(
                 manifest,
                 output_dir=paths.output_dir,
                 stage_name="trading_strategy_monthly_returns",
                 frame=build_lm2011_trading_strategy_monthly_returns(
                     event_panel_lf,
-                    pl.scan_parquet(str(paths.year_merged_dir / YEAR_MERGED_GLOB)),
+                    year_merged_lf,
                     pl.scan_parquet(paths.monthly_stock_path),
                     lm_dictionary_lists=dictionary_lists,
                     harvard_negative_word_list=harvard_negative_word_list,
+                    master_dictionary_words=master_dictionary_words,
+                    cleaning_contract=paths.full_10k_cleaning_contract,
                 ),
             )
         else:
@@ -1025,6 +1363,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             and paths.ff_monthly_with_mom_path is not None
             and paths.ff_monthly_with_mom_path.exists()
             and event_panel_lf is not None
+            and year_merged_lf is not None
         ):
             _write_stage(
                 manifest,
@@ -1032,11 +1371,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 stage_name="table_ia_ii_results",
                 frame=build_lm2011_table_ia_ii_results(
                     event_panel_lf,
-                    pl.scan_parquet(str(paths.year_merged_dir / YEAR_MERGED_GLOB)),
+                    year_merged_lf,
                     pl.scan_parquet(paths.monthly_stock_path),
                     pl.scan_parquet(paths.ff_monthly_with_mom_path),
                     lm_dictionary_lists=dictionary_lists,
                     harvard_negative_word_list=harvard_negative_word_list,
+                    master_dictionary_words=master_dictionary_words,
                 ),
                 empty_reason=EMPTY_TABLE_REASON,
             )

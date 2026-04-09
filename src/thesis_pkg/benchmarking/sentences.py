@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from importlib import metadata
 from pathlib import Path
+import re
 from typing import Any
 
 import polars as pl
@@ -35,6 +36,28 @@ SENTENCE_FRAME_SCHEMA: dict[str, pl.DataType] = {
     "finbert_token_count_512": pl.Int32,
     "finbert_token_bucket_512": pl.Utf8,
 }
+
+SENTENCE_SPLIT_AUDIT_SCHEMA: dict[str, pl.DataType] = {
+    "benchmark_row_id": pl.Utf8,
+    "doc_id": pl.Utf8,
+    "benchmark_item_code": pl.Utf8,
+    "filing_year": pl.Int32,
+    "original_char_count": pl.Int64,
+    "chunk_index": pl.Int32,
+    "chunk_char_count": pl.Int64,
+    "split_start_char": pl.Int64,
+    "split_end_char": pl.Int64,
+    "split_reason": pl.Utf8,
+    "total_chunk_count": pl.Int32,
+    "warning_boundary_used": pl.Boolean,
+}
+
+SENTENCE_CHUNK_CHAR_LIMIT = 250_000
+_WARNING_SPLIT_REASONS = frozenset({"whitespace", "hard_limit_250k"})
+_DOUBLE_NEWLINE_BOUNDARY_RE = re.compile(r"\n\s*\n+")
+_NEWLINE_BOUNDARY_RE = re.compile(r"\n+")
+_SENTENCE_PUNCT_BOUNDARY_RE = re.compile(r"""[.!?][)"'\]]*\s+""")
+_WHITESPACE_BOUNDARY_RE = re.compile(r"\s+")
 
 _SECTION_METADATA_COLUMNS: tuple[str, ...] = (
     "cik_10",
@@ -74,6 +97,101 @@ def _empty_sentence_frame() -> pl.DataFrame:
     return pl.DataFrame(schema=SENTENCE_FRAME_SCHEMA)
 
 
+def _empty_sentence_split_audit_frame() -> pl.DataFrame:
+    return pl.DataFrame(schema=SENTENCE_SPLIT_AUDIT_SCHEMA)
+
+
+def _last_boundary_end(
+    text: str,
+    *,
+    start: int,
+    end: int,
+    pattern: re.Pattern[str],
+) -> int | None:
+    last_end: int | None = None
+    for match in pattern.finditer(text, start, end):
+        if match.end() > start:
+            last_end = match.end()
+    return last_end
+
+
+def _choose_chunk_end(text: str, *, start: int) -> tuple[int, str]:
+    max_end = min(start + SENTENCE_CHUNK_CHAR_LIMIT, len(text))
+    if max_end >= len(text):
+        return len(text), "end_of_text"
+
+    for split_reason, pattern in (
+        ("double_newline", _DOUBLE_NEWLINE_BOUNDARY_RE),
+        ("newline", _NEWLINE_BOUNDARY_RE),
+        ("sentence_punct", _SENTENCE_PUNCT_BOUNDARY_RE),
+        ("whitespace", _WHITESPACE_BOUNDARY_RE),
+    ):
+        split_end = _last_boundary_end(text, start=start, end=max_end, pattern=pattern)
+        if split_end is not None and split_end > start:
+            return split_end, split_reason
+
+    return max_end, "hard_limit_250k"
+
+
+def _chunk_row_text(row: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    full_text = str(row["full_text"])
+    original_char_count = len(full_text)
+    if original_char_count <= SENTENCE_CHUNK_CHAR_LIMIT:
+        return [row], []
+
+    chunk_rows: list[dict[str, Any]] = []
+    audit_rows: list[dict[str, Any]] = []
+    start = 0
+    chunk_index = 0
+    while start < original_char_count:
+        end, split_reason = _choose_chunk_end(full_text, start=start)
+        if end <= start:
+            end = min(start + SENTENCE_CHUNK_CHAR_LIMIT, original_char_count)
+            split_reason = "hard_limit_250k"
+
+        chunk_text = full_text[start:end]
+        chunk_row = dict(row)
+        chunk_row["full_text"] = chunk_text
+        chunk_rows.append(chunk_row)
+        audit_rows.append(
+            {
+                "benchmark_row_id": row["benchmark_row_id"],
+                "doc_id": row["doc_id"],
+                "benchmark_item_code": row["benchmark_item_code"],
+                "filing_year": row["filing_year"],
+                "original_char_count": original_char_count,
+                "chunk_index": chunk_index,
+                "chunk_char_count": len(chunk_text),
+                "split_start_char": start,
+                "split_end_char": end,
+                "split_reason": split_reason,
+                "total_chunk_count": 0,
+                "warning_boundary_used": split_reason in _WARNING_SPLIT_REASONS,
+            }
+        )
+        start = end
+        chunk_index += 1
+
+    total_chunk_count = len(chunk_rows)
+    for audit_row in audit_rows:
+        audit_row["total_chunk_count"] = total_chunk_count
+
+    return chunk_rows, audit_rows
+
+
+def _expand_chunked_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], pl.DataFrame]:
+    expanded_rows: list[dict[str, Any]] = []
+    audit_rows: list[dict[str, Any]] = []
+    for row in rows:
+        row_chunks, row_audit = _chunk_row_text(row)
+        expanded_rows.extend(row_chunks)
+        audit_rows.extend(row_audit)
+
+    if not audit_rows:
+        return expanded_rows, _empty_sentence_split_audit_frame()
+    return expanded_rows, pl.DataFrame(audit_rows, schema=SENTENCE_SPLIT_AUDIT_SCHEMA)
+
+
 def _derive_sentence_batch(
     batch_df: pl.DataFrame,
     cfg: SentenceDatasetConfig,
@@ -81,7 +199,7 @@ def _derive_sentence_batch(
     authority: FinbertAuthoritySpec,
     nlp: Any,
     sentencizer_version: str,
-) -> pl.DataFrame:
+) -> tuple[pl.DataFrame, pl.DataFrame]:
     records: list[dict[str, Any]] = []
     select_columns = [
         "benchmark_row_id",
@@ -95,9 +213,12 @@ def _derive_sentence_batch(
     rows = list(
         batch_df.select(select_columns).iter_rows(named=True)
     )
-    texts = [str(row["full_text"]) for row in rows]
-    for row, doc in zip(rows, nlp.pipe(texts, batch_size=cfg.spacy_batch_size)):
-        sentence_index = 0
+    expanded_rows, split_audit_df = _expand_chunked_rows(rows)
+    texts = [str(row["full_text"]) for row in expanded_rows]
+    sentence_index_by_row_id: dict[str, int] = {}
+    for row, doc in zip(expanded_rows, nlp.pipe(texts, batch_size=cfg.spacy_batch_size)):
+        benchmark_row_id = str(row["benchmark_row_id"])
+        sentence_index = sentence_index_by_row_id.get(benchmark_row_id, 0)
         for sent in doc.sents:
             sentence_text = sent.text.strip()
             if cfg.drop_blank_sentences and not sentence_text:
@@ -126,9 +247,10 @@ def _derive_sentence_batch(
                 }
             )
             sentence_index += 1
+        sentence_index_by_row_id[benchmark_row_id] = sentence_index
 
     if not records:
-        return _empty_sentence_frame()
+        return _empty_sentence_frame(), split_audit_df
 
     sentence_df = pl.DataFrame(records, schema=SENTENCE_FRAME_SCHEMA)
     sentence_df = sentence_df.rename({"sentence_text": "full_text"})
@@ -138,7 +260,46 @@ def _derive_sentence_batch(
         text_col="full_text",
         batch_size=max(cfg.token_length_batch_size, 1),
     )
-    return sentence_df.rename({"full_text": "sentence_text"})
+    return sentence_df.rename({"full_text": "sentence_text"}), split_audit_df
+
+
+def _derive_sentence_frame_with_split_audit(
+    sections_df: pl.DataFrame,
+    cfg: SentenceDatasetConfig,
+    *,
+    authority: FinbertAuthoritySpec = DEFAULT_FINBERT_AUTHORITY,
+) -> tuple[pl.DataFrame, pl.DataFrame]:
+    nlp = _build_sentencizer(cfg)
+    if sections_df.is_empty():
+        return _empty_sentence_frame(), _empty_sentence_split_audit_frame()
+
+    sentencizer_version = _sentencizer_version()
+    sentence_chunks: list[pl.DataFrame] = []
+    split_audit_chunks: list[pl.DataFrame] = []
+    for batch_df in sections_df.iter_slices(n_rows=max(cfg.spacy_batch_size, 1)):
+        sentence_chunk, split_audit_chunk = _derive_sentence_batch(
+            batch_df,
+            cfg,
+            authority=authority,
+            nlp=nlp,
+            sentencizer_version=sentencizer_version,
+        )
+        sentence_chunks.append(sentence_chunk)
+        split_audit_chunks.append(split_audit_chunk)
+
+    non_empty_sentence_chunks = [chunk for chunk in sentence_chunks if not chunk.is_empty()]
+    sentence_df = (
+        pl.concat(non_empty_sentence_chunks, how="vertical_relaxed")
+        if non_empty_sentence_chunks
+        else _empty_sentence_frame()
+    )
+    non_empty_audit_chunks = [chunk for chunk in split_audit_chunks if not chunk.is_empty()]
+    split_audit_df = (
+        pl.concat(non_empty_audit_chunks, how="vertical_relaxed")
+        if non_empty_audit_chunks
+        else _empty_sentence_split_audit_frame()
+    )
+    return sentence_df, split_audit_df
 
 
 def derive_sentence_frame(
@@ -147,26 +308,12 @@ def derive_sentence_frame(
     *,
     authority: FinbertAuthoritySpec = DEFAULT_FINBERT_AUTHORITY,
 ) -> pl.DataFrame:
-    nlp = _build_sentencizer(cfg)
-    if sections_df.is_empty():
-        return _empty_sentence_frame()
-
-    sentencizer_version = _sentencizer_version()
-    chunks: list[pl.DataFrame] = []
-    for batch_df in sections_df.iter_slices(n_rows=max(cfg.spacy_batch_size, 1)):
-        chunks.append(
-            _derive_sentence_batch(
-                batch_df,
-                cfg,
-                authority=authority,
-                nlp=nlp,
-                sentencizer_version=sentencizer_version,
-            )
-        )
-    non_empty_chunks = [chunk for chunk in chunks if not chunk.is_empty()]
-    if not non_empty_chunks:
-        return _empty_sentence_frame()
-    return pl.concat(non_empty_chunks, how="vertical_relaxed")
+    sentence_df, _split_audit_df = _derive_sentence_frame_with_split_audit(
+        sections_df,
+        cfg,
+        authority=authority,
+    )
+    return sentence_df
 
 
 def materialize_sentence_benchmark_dataset(

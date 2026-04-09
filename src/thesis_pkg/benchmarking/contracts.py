@@ -303,6 +303,7 @@ class FinbertSentencePreprocessingRunArtifacts:
     run_manifest_path: Path
     sentence_dataset_dir: Path
     yearly_summary_path: Path
+    oversize_sections_path: Path | None = None
 
 
 @dataclass(frozen=True)
