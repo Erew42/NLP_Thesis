@@ -173,18 +173,22 @@ def _build_feature_rows(
     base_rows: list[dict[str, object]],
     *,
     doc_token_counts: Mapping[str, Counter[str]],
+    doc_token_totals: Mapping[str, int],
     doc_recognized_word_totals: Mapping[str, int],
     idf_by_token: Mapping[str, float],
     token_count_col: str,
+    total_token_count_col: str,
     signal_specs: tuple[tuple[str, frozenset[str], bool], ...],
 ) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for row in base_rows:
         out = dict(row)
         doc_id = str(out["doc_id"])
+        token_total = int(doc_token_totals.get(doc_id, 0))
         recognized_word_total = int(doc_recognized_word_totals.get(doc_id, 0))
         counts = doc_token_counts.get(doc_id, Counter())
         denominator = float(recognized_word_total) if recognized_word_total > 0 else None
+        out[total_token_count_col] = token_total
         out[token_count_col] = recognized_word_total
         for signal_stem, signal_tokens, include_tfidf in signal_specs:
             matched_count = float(sum(counts.get(token, 0) for token in signal_tokens))
@@ -213,6 +217,7 @@ def _feature_schema(
     *,
     include_item_id: bool,
     token_count_col: str,
+    total_token_count_col: str,
     signal_specs: tuple[tuple[str, frozenset[str], bool], ...],
 ) -> dict[str, pl.DataType]:
     schema: dict[str, pl.DataType] = {
@@ -220,6 +225,7 @@ def _feature_schema(
         "cik_10": pl.Utf8,
         "filing_date": pl.Date,
         "normalized_form": pl.Utf8,
+        total_token_count_col: pl.Int32,
         token_count_col: pl.Int32,
     }
     if include_item_id:
@@ -236,6 +242,7 @@ def _build_scored_text_frame(
     *,
     text_col: str,
     token_count_col: str,
+    total_token_count_col: str,
     include_item_id: bool,
     signal_specs: tuple[tuple[str, frozenset[str], bool], ...],
     master_dictionary_words: Iterable[str],
@@ -243,7 +250,7 @@ def _build_scored_text_frame(
 ) -> pl.LazyFrame:
     vocabulary = frozenset().union(*(tokens for _, tokens, _ in signal_specs))
     normalized_master_dictionary_words = _normalize_master_dictionary_words(master_dictionary_words)
-    base_rows, doc_token_counts, _, doc_recognized_word_totals, idf_by_token = _prepare_document_stats(
+    base_rows, doc_token_counts, doc_token_totals, doc_recognized_word_totals, idf_by_token = _prepare_document_stats(
         df,
         text_col=text_col,
         vocabulary=vocabulary,
@@ -253,19 +260,25 @@ def _build_scored_text_frame(
     rows = _build_feature_rows(
         base_rows,
         doc_token_counts=doc_token_counts,
+        doc_token_totals=doc_token_totals,
         doc_recognized_word_totals=doc_recognized_word_totals,
         idf_by_token=idf_by_token,
         token_count_col=token_count_col,
+        total_token_count_col=total_token_count_col,
         signal_specs=signal_specs,
     )
     schema = _feature_schema(
         include_item_id=include_item_id,
         token_count_col=token_count_col,
+        total_token_count_col=total_token_count_col,
         signal_specs=signal_specs,
     )
     return (
         pl.DataFrame(rows, schema_overrides=schema)
-        .with_columns(pl.col(token_count_col).cast(pl.Int32, strict=False))
+        .with_columns(
+            pl.col(total_token_count_col).cast(pl.Int32, strict=False),
+            pl.col(token_count_col).cast(pl.Int32, strict=False),
+        )
         .lazy()
     )
 
@@ -316,6 +329,7 @@ def build_lm2011_text_features_full_10k(
         df.select("doc_id", "cik_10", "filing_date", "normalized_form", text_col),
         text_col=text_col,
         token_count_col="token_count_full_10k",
+        total_token_count_col="total_token_count_full_10k",
         include_item_id=False,
         signal_specs=signal_specs,
         master_dictionary_words=master_dictionary_words,
@@ -350,6 +364,7 @@ def build_lm2011_text_features_mda(
         df.select("doc_id", "cik_10", "filing_date", "normalized_form", "item_id", text_col),
         text_col=text_col,
         token_count_col="token_count_mda",
+        total_token_count_col="total_token_count_mda",
         include_item_id=True,
         signal_specs=signal_specs,
         master_dictionary_words=master_dictionary_words,
@@ -384,6 +399,7 @@ def build_lm2011_trading_strategy_signal_frame(
         df.select("doc_id", "cik_10", "filing_date", "normalized_form", text_col),
         text_col=text_col,
         token_count_col="token_count_full_10k",
+        total_token_count_col="total_token_count_full_10k",
         include_item_id=False,
         signal_specs=signal_specs,
         master_dictionary_words=master_dictionary_words,

@@ -70,6 +70,22 @@ def _empty_split_audit(sentences_module) -> pl.DataFrame:
     return pl.DataFrame(schema=sentences_module.SENTENCE_SPLIT_AUDIT_SCHEMA)
 
 
+def _fake_annotate_token_lengths(
+    df: pl.DataFrame,
+    authority,
+    *,
+    text_col: str = "sentence_text",
+    batch_size: int | None = None,
+) -> pl.DataFrame:
+    del authority, text_col, batch_size
+    return df.with_columns(
+        [
+            pl.lit(5, dtype=pl.Int32).alias("finbert_token_count_512"),
+            pl.lit("short", dtype=pl.Utf8).alias("finbert_token_bucket_512"),
+        ]
+    )
+
+
 def test_materialize_sentence_benchmark_dataset_honors_authority_and_compression(
     tmp_path: Path,
     monkeypatch,
@@ -235,6 +251,7 @@ def test_run_finbert_sentence_preprocessing_writes_by_year_artifacts(
 
     summary = pl.read_parquet(artifacts.yearly_summary_path)
     sentence_dataset = pl.read_parquet(artifacts.sentence_dataset_dir / "2006.parquet")
+    manifest = json.loads(artifacts.run_manifest_path.read_text(encoding="utf-8"))
 
     assert artifacts.oversize_sections_path is not None
     assert artifacts.oversize_sections_path.exists()
@@ -247,6 +264,9 @@ def test_run_finbert_sentence_preprocessing_writes_by_year_artifacts(
     assert "benchmark_item_label" in sentence_dataset.columns
     assert "source_year_file" in sentence_dataset.columns
     assert "document_type_raw" in sentence_dataset.columns
+    assert manifest["accepted_universe_contract"]["accepted_unit"] == ["doc_id", "benchmark_item_code"]
+    assert manifest["accepted_universe_contract"]["filters"]["raw_form_allowlist"] == ["10-K", "10-K405"]
+    assert manifest["accepted_universe_contract"]["dedupe"]["key"] == ["doc_id", "benchmark_item_code"]
 
 
 def test_run_finbert_sentence_preprocessing_reuses_existing_outputs(
@@ -425,6 +445,7 @@ def test_derive_sentence_frame_chunks_large_sections_without_spacy_length_error(
 
     monkeypatch.setattr(sentences, "_build_sentencizer", lambda cfg: _FakeNLP())
     monkeypatch.setattr(sentences, "_sentencizer_version", lambda: "test")
+    monkeypatch.setattr(sentences, "annotate_finbert_token_lengths_in_batches", _fake_annotate_token_lengths)
 
     sentence_df, split_audit_df = sentences._derive_sentence_frame_with_split_audit(
         sections_df,
@@ -463,6 +484,7 @@ def test_derive_sentence_frame_prefers_double_newline_and_keeps_sentence_indices
 
     monkeypatch.setattr(sentences, "_build_sentencizer", lambda cfg: _FakeNLP())
     monkeypatch.setattr(sentences, "_sentencizer_version", lambda: "test")
+    monkeypatch.setattr(sentences, "annotate_finbert_token_lengths_in_batches", _fake_annotate_token_lengths)
 
     sentence_df, split_audit_df = sentences._derive_sentence_frame_with_split_audit(
         sections_df,
@@ -498,6 +520,7 @@ def test_run_finbert_sentence_preprocessing_logs_fallback_split_reasons_and_warn
 
     monkeypatch.setattr(sentences, "_build_sentencizer", lambda cfg: _FakeNLP())
     monkeypatch.setattr(sentences, "_sentencizer_version", lambda: "test")
+    monkeypatch.setattr(sentences, "annotate_finbert_token_lengths_in_batches", _fake_annotate_token_lengths)
 
     with pytest.warns(RuntimeWarning, match="fallback split boundaries"):
         artifacts = run_finbert_sentence_preprocessing(

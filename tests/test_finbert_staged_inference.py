@@ -257,8 +257,18 @@ def test_run_finbert_sentence_parquet_inference_uses_precomputed_sentence_datase
     manifest = json.loads(artifacts.run_manifest_path.read_text(encoding="utf-8"))
 
     assert item_features.height == 2
+    item_1 = item_features.filter(pl.col("benchmark_item_code") == "item_1").row(0, named=True)
+    assert item_1["text_scope"] == "item_1"
+    assert item_1["model_name"] == "yiyanghkust/finbert-tone"
+    assert item_1["segment_policy_id"] == "sentence_dataset_v1_finbert_token_512"
+    assert item_1["finbert_segment_count"] == 2
+    assert item_1["finbert_token_count_512_sum"] == 42
+    assert "finbert_neg_prob_lenw_mean" in item_features.columns
     assert doc_features.height == 1
+    assert "item_1_finbert_neg_prob_lenw_mean" in doc_features.columns
     assert coverage.height == 2
     assert sentence_scores.height == 3
     assert sentence_scores["predicted_label"].to_list() == ["negative", "neutral", "negative"]
     assert manifest["counts"]["processed_year_count"] == 1
+    assert manifest["item_feature_contract"]["accepted_unit"] == ["doc_id", "benchmark_item_code"]
+    assert manifest["item_feature_contract"]["denominator_contract"]["length_weight_column"] == "finbert_token_count_512"

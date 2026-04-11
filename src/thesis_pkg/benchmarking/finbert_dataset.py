@@ -41,6 +41,46 @@ def _resolve_section_universe(
     return cfg.section_universe
 
 
+def section_universe_contract_payload(
+    universe: FinbertSectionUniverseConfig,
+    *,
+    target_doc_universe_path: Path | None = None,
+) -> dict[str, Any]:
+    return {
+        "accepted_unit": ["doc_id", "benchmark_item_code"],
+        "text_scope_column": "benchmark_item_code",
+        "text_source_column": "full_text",
+        "source_items_dir": str(universe.source_items_dir.resolve()),
+        "target_doc_universe_path": (
+            str(target_doc_universe_path.resolve())
+            if target_doc_universe_path is not None
+            else None
+        ),
+        "target_items": [asdict(item) for item in universe.target_items],
+        "filters": {
+            "raw_form_allowlist": list(universe.form_types),
+            "normalized_form_allowlist": ["10-K"],
+            "require_active_items": universe.require_active_items,
+            "require_exists_by_regime": universe.require_exists_by_regime,
+            "min_char_count": universe.min_char_count,
+            "drop_null_filing_date": True,
+            "drop_null_or_blank_text": True,
+        },
+        "dedupe": {
+            "key": ["doc_id", "benchmark_item_code"],
+            "policy": "keep longest active regime-valid extracted item text per doc-scope",
+            "sort": [
+                "doc_id",
+                "benchmark_item_code",
+                "char_count_desc",
+                "canonical_item",
+                "filename",
+                "accession_nodash",
+            ],
+        },
+    }
+
+
 def _utc_timestamp() -> str:
     return dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat()
 

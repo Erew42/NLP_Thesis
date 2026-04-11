@@ -115,7 +115,13 @@ def _base_event_inputs(*, include_final_prc: bool = True, constant_pre_event_vol
             }
         ),
         "ownership": pl.DataFrame({"doc_id": ["doc_ok"], "institutional_ownership_pct": [44.0]}),
-        "text_features": pl.DataFrame({"doc_id": ["doc_ok"], "token_count_full_10k": [2500]}),
+        "text_features": pl.DataFrame(
+            {
+                "doc_id": ["doc_ok"],
+                "token_count_full_10k": [2500],
+                "total_token_count_full_10k": [2500],
+            }
+        ),
         "ff": _ff_factors_for_dates(daily.get_column("CALDT").to_list()),
     }
 
@@ -218,6 +224,7 @@ def _table_i_market_inputs() -> dict[str, pl.DataFrame]:
             {
                 "doc_id": [doc_id for doc_id, _, _ in doc_specs],
                 "token_count_full_10k": [2500, 2500, 2500, 2500, 2500, 2500, 2500, 1999, 2500],
+                "total_token_count_full_10k": [2500, 2500, 2500, 2500, 2500, 2500, 2500, 1999, 2500],
             }
         ),
         "ff": _ff_factors_for_dates(daily_frames[0].get_column("CALDT").to_list()),
@@ -596,7 +603,9 @@ def test_lm2011_text_feature_builders_match_public_spec_contract() -> None:
     assert "lm_uncertainty_tfidf" in mda_features.columns
 
     assert full_features.filter(pl.col("doc_id") == "d1").row(0, named=True)["token_count_full_10k"] == 6
+    assert full_features.filter(pl.col("doc_id") == "d1").row(0, named=True)["total_token_count_full_10k"] == 6
     assert mda_features.filter(pl.col("doc_id") == "d1").row(0, named=True)["token_count_mda"] == 2
+    assert mda_features.filter(pl.col("doc_id") == "d1").row(0, named=True)["total_token_count_mda"] == 2
 
 
 def test_tokenize_lm2011_text_matches_appendix_contract() -> None:
@@ -632,6 +641,7 @@ def test_lm2011_text_features_use_recognized_word_denominators_and_match_hyphena
     ).collect()
 
     row = features.row(0, named=True)
+    assert row["total_token_count_full_10k"] == 3
     assert row["token_count_full_10k"] == 2
     assert row["lm_negative_prop"] == pytest.approx(0.5)
     assert row["h4n_inf_prop"] == pytest.approx(0.5)
@@ -669,7 +679,7 @@ def test_lm2011_text_feature_builders_use_exact_paper_tfidf_formula() -> None:
     assert d1["h4n_inf_tfidf"] == pytest.approx(0.0)
 
 
-def test_build_lm2011_text_features_full_10k_sets_recognized_word_screen_count() -> None:
+def test_build_lm2011_text_features_full_10k_exports_total_and_recognized_token_counts() -> None:
     features = build_lm2011_text_features_full_10k(
         pl.DataFrame(
             {
@@ -685,6 +695,7 @@ def test_build_lm2011_text_features_full_10k_sets_recognized_word_screen_count()
         master_dictionary_words=["gain", "neutral"],
     ).collect()
 
+    assert features.item(0, "total_token_count_full_10k") == 3
     assert features.item(0, "token_count_full_10k") == 2
 
 
@@ -783,7 +794,19 @@ def test_regression_transforms_log_share_turnover_without_mutating_event_panel_c
         ("missing_event_volume", lambda inputs: inputs.__setitem__("daily", inputs["daily"].with_columns(pl.when(pl.col("CALDT") == pl.lit(dt.date(2023, 9, 21))).then(None).otherwise(pl.col("VOL")).alias("VOL")))),
         ("bad_exchange", lambda inputs: inputs.__setitem__("daily", inputs["daily"].with_columns(pl.lit(4).alias("EXCHCD")))),
         ("nonpositive_book_equity", lambda inputs: inputs.__setitem__("annual_panel", inputs["annual_panel"].with_columns(pl.lit(0.0).alias("book_equity_be")))),
-        ("short_token_count", lambda inputs: inputs.__setitem__("text_features", pl.DataFrame({"doc_id": ["doc_ok"], "token_count_full_10k": [1999]}))),
+        (
+            "short_token_count",
+            lambda inputs: inputs.__setitem__(
+                "text_features",
+                pl.DataFrame(
+                    {
+                        "doc_id": ["doc_ok"],
+                        "token_count_full_10k": [1999],
+                        "total_token_count_full_10k": [1999],
+                    }
+                ),
+            ),
+        ),
     ],
 )
 def test_build_lm2011_event_panel_rejects_paper_filter_failures(case_name: str, mutator) -> None:
@@ -800,10 +823,10 @@ def test_build_lm2011_event_panel_rejects_paper_filter_failures(case_name: str, 
     assert panel.height == 0, case_name
 
 
-def test_build_lm2011_event_panel_enforces_recognized_word_boundary_from_builder() -> None:
+def test_build_lm2011_event_panel_enforces_total_token_boundary_from_builder() -> None:
     inputs = _base_event_inputs()
 
-    def _build_text_features(recognized_count: int) -> pl.LazyFrame:
+    def _build_text_features(total_count: int) -> pl.LazyFrame:
         return build_lm2011_text_features_full_10k(
             pl.DataFrame(
                 {
@@ -811,7 +834,7 @@ def test_build_lm2011_event_panel_enforces_recognized_word_boundary_from_builder
                     "cik_10": ["0001"],
                     "filing_date": [inputs["sample_backbone"].item(0, "filing_date")],
                     "document_type_filename": ["10-K"],
-                    "full_text": [" ".join(["recognized"] * recognized_count)],
+                    "full_text": [" ".join(["recognized"] * total_count)],
                 }
             ).lazy(),
             dictionary_lists=_lm_dictionary_lists(),
@@ -838,6 +861,20 @@ def test_build_lm2011_event_panel_enforces_recognized_word_boundary_from_builder
 
     assert short_panel.height == 0
     assert boundary_panel.height == 1
+
+
+def test_build_lm2011_event_panel_requires_total_token_screen_count_column() -> None:
+    inputs = _base_event_inputs()
+
+    with pytest.raises(ValueError, match="missing required columns"):
+        build_lm2011_event_panel(
+            inputs["sample_backbone"].lazy(),
+            inputs["daily"].lazy(),
+            inputs["annual_panel"].lazy(),
+            inputs["ff"].lazy(),
+            inputs["ownership"].lazy(),
+            inputs["text_features"].drop("total_token_count_full_10k").lazy(),
+        ).collect()
 
 
 def test_build_lm2011_event_panel_rejects_insufficient_coverage_and_constant_pre_event_volume() -> None:
@@ -997,8 +1034,20 @@ def test_build_lm2011_table_i_sample_creation_emits_expected_mda_rows() -> None:
             "AT": [80.0, 80.0],
         }
     )
-    full_text = pl.DataFrame({"doc_id": ["doc_a", "doc_b"], "token_count_full_10k": [2500, 2500]})
-    mda_text = pl.DataFrame({"doc_id": ["doc_a", "doc_b"], "token_count_mda": [300, 200]})
+    full_text = pl.DataFrame(
+        {
+            "doc_id": ["doc_a", "doc_b"],
+            "token_count_full_10k": [2500, 2500],
+            "total_token_count_full_10k": [2500, 2500],
+        }
+    )
+    mda_text = pl.DataFrame(
+        {
+            "doc_id": ["doc_a", "doc_b"],
+            "token_count_mda": [300, 200],
+            "total_token_count_mda": [300, 200],
+        }
+    )
 
     out = build_lm2011_table_i_sample_creation(
         sec_parsed.lazy(),
@@ -1049,7 +1098,13 @@ def test_build_lm2011_table_i_sample_creation_marks_missing_mda_inputs_unavailab
         daily.lazy(),
         annual_panel.lazy(),
         _ff_factors_for_dates(daily.get_column("CALDT").to_list()).lazy(),
-        pl.DataFrame({"doc_id": ["doc_a"], "token_count_full_10k": [2500]}).lazy(),
+        pl.DataFrame(
+            {
+                "doc_id": ["doc_a"],
+                "token_count_full_10k": [2500],
+                "total_token_count_full_10k": [2500],
+            }
+        ).lazy(),
     )
 
     mda_rows = out.filter(pl.col("section_id") == pl.lit("mda_subsection")).sort("row_order")
@@ -1090,7 +1145,13 @@ def test_build_lm2011_table_i_sample_creation_window_controls_counts_and_label()
             "AT": [80.0, 80.0],
         }
     )
-    full_text = pl.DataFrame({"doc_id": ["doc_1997", "doc_2010"], "token_count_full_10k": [2500, 2500]})
+    full_text = pl.DataFrame(
+        {
+            "doc_id": ["doc_1997", "doc_2010"],
+            "token_count_full_10k": [2500, 2500],
+            "total_token_count_full_10k": [2500, 2500],
+        }
+    )
     ff = _ff_factors_for_dates(daily.select(pl.col("CALDT").unique().sort()).get_column("CALDT").to_list())
 
     default_out = build_lm2011_table_i_sample_creation(
@@ -1443,6 +1504,7 @@ def test_build_lm2011_trading_strategy_monthly_returns_propagates_cleaning_contr
                 "filing_date": [dt.date(1996, 3, 1) + dt.timedelta(days=idx) for idx in range(10)],
                 "normalized_form": ["10-K"] * 10,
                 "token_count_full_10k": [100] * 10,
+                "total_token_count_full_10k": [100] * 10,
                 "fin_neg_prop": [0.1 + 0.01 * idx for idx in range(10)],
                 "fin_neg_tfidf": [0.2 + 0.01 * idx for idx in range(10)],
                 "h4n_inf_prop": [0.3 + 0.01 * idx for idx in range(10)],

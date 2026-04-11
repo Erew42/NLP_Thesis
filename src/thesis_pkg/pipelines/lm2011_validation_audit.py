@@ -17,6 +17,7 @@ from thesis_pkg.core.ccm.lm2011 import attach_eligible_quarterly_accounting
 from thesis_pkg.core.ccm.lm2011 import normalize_lm2011_form_value
 from thesis_pkg.core.sec.extraction import extract_filing_items
 from thesis_pkg.core.sec.extraction import _strip_edgar_metadata
+from thesis_pkg.core.sec.lm2011_dictionary import load_lm2011_master_dictionary_words
 from thesis_pkg.core.sec.lm2011_cleaning import _apply_lm2011_paper_cleaning
 from thesis_pkg.core.sec.lm2011_text import tokenize_lm2011_text
 from thesis_pkg.pipelines.lm2011_pipeline import _attach_pre_filing_price_and_prior_month_price
@@ -547,7 +548,13 @@ def _run_packet_d(
     ).collect()
     reconciliation_df = _packet_d_reconciliation_table(dictionary_universe_df, item_features_long_path)
     removal_df = _packet_d_removal_waterfall(section_cfg, selected_year_paths, paths.sample_backbone_path)
-    coverage_df = _packet_d_coverage_reconciliation(section_cfg, selected_year_paths, run_manifest, item_features_long_path)
+    coverage_df = _packet_d_coverage_reconciliation(
+        section_cfg,
+        selected_year_paths,
+        run_manifest,
+        item_features_long_path,
+        sample_backbone_path=paths.sample_backbone_path,
+    )
     regime_df = _packet_d_extraction_regime_comparison(
         cfg,
         paths,
@@ -573,14 +580,29 @@ def _run_packet_d(
             f"Reported FinBERT denominator = {int(coverage_df.item(0, 'reported_backbone_doc_count'))}, "
             f"actual filtered denominator = {int(coverage_df.item(0, 'actual_filtered_doc_count')) if coverage_df.item(0, 'actual_filtered_doc_count') is not None else 'n/a'}"
         ),
+        (
+            "FinBERT backbone matches sampled LM backbone: "
+            f"{bool(coverage_df.item(0, 'finbert_backbone_matches_sample_backbone'))}"
+        ),
     ]
+    warnings: list[str] = []
+    backbone_matches = bool(coverage_df.item(0, "finbert_backbone_matches_sample_backbone"))
+    denominator_gap = coverage_df.item(0, "denominator_gap")
+    sample_backbone_denominator_gap = coverage_df.item(0, "sample_backbone_denominator_gap")
+    if not backbone_matches:
+        warnings.append("FinBERT run backbone path does not match the sampled LM2011 backbone path.")
+    if denominator_gap is not None and int(denominator_gap) != 0:
+        warnings.append("FinBERT reported denominator differs from actual filtered item-universe docs.")
+    if sample_backbone_denominator_gap is not None and int(sample_backbone_denominator_gap) != 0:
+        warnings.append("FinBERT reported denominator differs from sampled LM2011 backbone docs.")
     return _PacketResult(
-        status=STATUS_COMPLETED,
+        status=STATUS_COMPLETED if not warnings else STATUS_COMPLETED_WITH_WARNINGS,
         output_paths=output_paths,
         summary={
             "dictionary_universe_rows": int(dictionary_universe_df.height),
             "reconciliation_rows": int(reconciliation_df.height),
         },
+        warnings=warnings or None,
         top_findings=findings,
     )
 
@@ -786,19 +808,10 @@ def _write_report(
 
 
 def _load_master_dictionary_tokens(additional_data_dir: Path) -> frozenset[str]:
-    txt_path = additional_data_dir / "LM2011_MasterDictionary.txt"
-    csv_path = additional_data_dir / "Loughran-McDonald_MasterDictionary_1993-2024.csv"
-    if txt_path.exists():
-        dictionary_path = txt_path
-    elif csv_path.exists():
-        dictionary_path = csv_path
-    else:
-        raise FileNotFoundError(f"No LM master dictionary file found in {additional_data_dir}")
-    words_df = pl.read_csv(dictionary_path).select(pl.col("Word").cast(pl.Utf8, strict=False).alias("Word"))
+    words, _, _ = load_lm2011_master_dictionary_words(additional_data_dir)
     return frozenset(
         token
-        for word in words_df.get_column("Word").drop_nulls().to_list()
-        if isinstance(word, str) and word.strip()
+        for word in words
         for token in tokenize_lm2011_text(word)
     )
 
@@ -978,7 +991,7 @@ def _suggested_next_target(packet_results: dict[str, _PacketResult]) -> str:
         flips = int(packet_a.summary.get("full_10k_threshold_flip_count") or 0)
         mda_flips = int(packet_a.summary.get("mda_threshold_flip_count") or 0)
         if dirty or flips or mda_flips:
-            return "Remediate `R-01` and `R-02` first: clean the accepted full 10-K text object, replace the tokenizer, and switch denominator construction to recognized-word counts."
+            return "Remediate `R-01` first: clean the accepted full 10-K text object; Packet A threshold flips now track current-vs-Appendix total-token screens while Appendix-vs-recognized deltas remain diagnostic."
 
     packet_b = packet_results.get("B")
     if packet_b is not None and packet_b.status in {STATUS_COMPLETED, STATUS_COMPLETED_WITH_WARNINGS}:
@@ -1071,8 +1084,9 @@ def _packet_a_full_text_rows(
                     "appendix_token_count": len(appendix_tokens),
                     "recognized_word_count": recognized_word_count,
                     "current_threshold_pass": len(current_tokens) >= FULL_10K_THRESHOLD,
+                    "appendix_threshold_pass": len(appendix_tokens) >= FULL_10K_THRESHOLD,
                     "recognized_threshold_pass": recognized_word_count >= FULL_10K_THRESHOLD,
-                    "threshold_flip": (len(current_tokens) >= FULL_10K_THRESHOLD) != (recognized_word_count >= FULL_10K_THRESHOLD),
+                    "threshold_flip": (len(current_tokens) >= FULL_10K_THRESHOLD) != (len(appendix_tokens) >= FULL_10K_THRESHOLD),
                     "has_sec_header": marker_flags["sec_header"],
                     "has_html_marker": marker_flags["html"],
                     "has_table_marker": marker_flags["table"],
@@ -1090,10 +1104,11 @@ def _packet_a_full_text_rows(
                     "paper_cleaned_appendix_token_count": len(paper_cleaned_appendix_tokens),
                     "paper_cleaned_recognized_word_count": paper_cleaned_recognized_word_count,
                     "paper_cleaned_current_threshold_pass": len(paper_cleaned_current_tokens) >= FULL_10K_THRESHOLD,
+                    "paper_cleaned_appendix_threshold_pass": len(paper_cleaned_appendix_tokens) >= FULL_10K_THRESHOLD,
                     "paper_cleaned_recognized_threshold_pass": paper_cleaned_recognized_word_count >= FULL_10K_THRESHOLD,
                     "paper_cleaned_threshold_flip": (
                         (len(paper_cleaned_current_tokens) >= FULL_10K_THRESHOLD)
-                        != (paper_cleaned_recognized_word_count >= FULL_10K_THRESHOLD)
+                        != (len(paper_cleaned_appendix_tokens) >= FULL_10K_THRESHOLD)
                     ),
                     "paper_cleaned_has_sec_header": paper_cleaned_marker_flags["sec_header"],
                     "paper_cleaned_has_html_marker": paper_cleaned_marker_flags["html"],
@@ -1174,8 +1189,9 @@ def _packet_a_mda_rows(
                     "appendix_token_count": len(appendix_tokens),
                     "recognized_word_count": recognized_word_count,
                     "current_threshold_pass": len(current_tokens) >= MDA_THRESHOLD,
+                    "appendix_threshold_pass": len(appendix_tokens) >= MDA_THRESHOLD,
                     "recognized_threshold_pass": recognized_word_count >= MDA_THRESHOLD,
-                    "threshold_flip": (len(current_tokens) >= MDA_THRESHOLD) != (recognized_word_count >= MDA_THRESHOLD),
+                    "threshold_flip": (len(current_tokens) >= MDA_THRESHOLD) != (len(appendix_tokens) >= MDA_THRESHOLD),
                     "has_sec_header": False,
                     "has_html_marker": False,
                     "has_table_marker": False,
@@ -1193,8 +1209,9 @@ def _packet_a_mda_rows(
                     "paper_cleaned_appendix_token_count": len(appendix_tokens),
                     "paper_cleaned_recognized_word_count": recognized_word_count,
                     "paper_cleaned_current_threshold_pass": len(current_tokens) >= MDA_THRESHOLD,
+                    "paper_cleaned_appendix_threshold_pass": len(appendix_tokens) >= MDA_THRESHOLD,
                     "paper_cleaned_recognized_threshold_pass": recognized_word_count >= MDA_THRESHOLD,
-                    "paper_cleaned_threshold_flip": (len(current_tokens) >= MDA_THRESHOLD) != (recognized_word_count >= MDA_THRESHOLD),
+                    "paper_cleaned_threshold_flip": (len(current_tokens) >= MDA_THRESHOLD) != (len(appendix_tokens) >= MDA_THRESHOLD),
                     "paper_cleaned_has_sec_header": False,
                     "paper_cleaned_has_html_marker": False,
                     "paper_cleaned_has_table_marker": False,
@@ -1226,12 +1243,14 @@ def _packet_a_summary_frame(rows: list[dict[str, Any]]) -> pl.DataFrame:
                 "docs_with_any_marker_after_paper_cleaning": pl.Int64,
                 "docs_with_exhibit_marker_after_paper_cleaning": pl.Int64,
                 "current_threshold_pass_count": pl.Int64,
+                "appendix_threshold_pass_count": pl.Int64,
                 "recognized_threshold_pass_count": pl.Int64,
                 "threshold_flip_count": pl.Int64,
                 "mean_token_drop_after_edgar_strip": pl.Float64,
                 "mean_token_drop_after_paper_cleaning": pl.Float64,
                 "mean_recognized_word_drop_after_paper_cleaning": pl.Float64,
                 "paper_cleaned_threshold_flip_count": pl.Int64,
+                "paper_cleaned_appendix_threshold_pass_count": pl.Int64,
                 "paper_cleaned_truncated_doc_count": pl.Int64,
             }
         )
@@ -1245,9 +1264,11 @@ def _packet_a_summary_frame(rows: list[dict[str, Any]]) -> pl.DataFrame:
             pl.col("paper_cleaned_any_marker").sum().cast(pl.Int64).alias("docs_with_any_marker_after_paper_cleaning"),
             pl.col("paper_cleaned_has_exhibit_marker").sum().cast(pl.Int64).alias("docs_with_exhibit_marker_after_paper_cleaning"),
             pl.col("current_threshold_pass").sum().cast(pl.Int64).alias("current_threshold_pass_count"),
+            pl.col("appendix_threshold_pass").sum().cast(pl.Int64).alias("appendix_threshold_pass_count"),
             pl.col("recognized_threshold_pass").sum().cast(pl.Int64).alias("recognized_threshold_pass_count"),
             pl.col("threshold_flip").sum().cast(pl.Int64).alias("threshold_flip_count"),
             pl.col("paper_cleaned_threshold_flip").sum().cast(pl.Int64).alias("paper_cleaned_threshold_flip_count"),
+            pl.col("paper_cleaned_appendix_threshold_pass").sum().cast(pl.Int64).alias("paper_cleaned_appendix_threshold_pass_count"),
             (
                 pl.col("paper_cleaned_cut_reason") != "no_tail_anchor"
             ).sum().cast(pl.Int64).alias("paper_cleaned_truncated_doc_count"),
@@ -1272,9 +1293,11 @@ def _packet_a_summary_frame(rows: list[dict[str, Any]]) -> pl.DataFrame:
             pl.col("paper_cleaned_any_marker").sum().cast(pl.Int64).alias("docs_with_any_marker_after_paper_cleaning"),
             pl.col("paper_cleaned_has_exhibit_marker").sum().cast(pl.Int64).alias("docs_with_exhibit_marker_after_paper_cleaning"),
             pl.col("current_threshold_pass").sum().cast(pl.Int64).alias("current_threshold_pass_count"),
+            pl.col("appendix_threshold_pass").sum().cast(pl.Int64).alias("appendix_threshold_pass_count"),
             pl.col("recognized_threshold_pass").sum().cast(pl.Int64).alias("recognized_threshold_pass_count"),
             pl.col("threshold_flip").sum().cast(pl.Int64).alias("threshold_flip_count"),
             pl.col("paper_cleaned_threshold_flip").sum().cast(pl.Int64).alias("paper_cleaned_threshold_flip_count"),
+            pl.col("paper_cleaned_appendix_threshold_pass").sum().cast(pl.Int64).alias("paper_cleaned_appendix_threshold_pass_count"),
             (
                 pl.col("paper_cleaned_cut_reason") != "no_tail_anchor"
             ).sum().cast(pl.Int64).alias("paper_cleaned_truncated_doc_count"),
@@ -1307,6 +1330,7 @@ def _packet_a_threshold_frame(rows: list[dict[str, Any]]) -> pl.DataFrame:
                 "appendix_token_count": pl.Int32,
                 "recognized_word_count": pl.Int32,
                 "current_threshold_pass": pl.Boolean,
+                "appendix_threshold_pass": pl.Boolean,
                 "recognized_threshold_pass": pl.Boolean,
                 "threshold_flip": pl.Boolean,
                 "has_sec_header": pl.Boolean,
@@ -1326,6 +1350,7 @@ def _packet_a_threshold_frame(rows: list[dict[str, Any]]) -> pl.DataFrame:
                 "paper_cleaned_appendix_token_count": pl.Int32,
                 "paper_cleaned_recognized_word_count": pl.Int32,
                 "paper_cleaned_current_threshold_pass": pl.Boolean,
+                "paper_cleaned_appendix_threshold_pass": pl.Boolean,
                 "paper_cleaned_recognized_threshold_pass": pl.Boolean,
                 "paper_cleaned_threshold_flip": pl.Boolean,
                 "paper_cleaned_has_sec_header": pl.Boolean,
@@ -1350,6 +1375,7 @@ def _packet_a_threshold_frame(rows: list[dict[str, Any]]) -> pl.DataFrame:
             "appendix_token_count",
             "recognized_word_count",
             "current_threshold_pass",
+            "appendix_threshold_pass",
             "recognized_threshold_pass",
             "threshold_flip",
             "has_sec_header",
@@ -1369,6 +1395,7 @@ def _packet_a_threshold_frame(rows: list[dict[str, Any]]) -> pl.DataFrame:
             "paper_cleaned_appendix_token_count",
             "paper_cleaned_recognized_word_count",
             "paper_cleaned_current_threshold_pass",
+            "paper_cleaned_appendix_threshold_pass",
             "paper_cleaned_recognized_threshold_pass",
             "paper_cleaned_threshold_flip",
             "paper_cleaned_has_sec_header",
@@ -2115,6 +2142,8 @@ def _packet_d_coverage_reconciliation(
     year_paths: list[Path],
     run_manifest: dict[str, Any],
     item_features_long_path: Path,
+    *,
+    sample_backbone_path: Path,
 ) -> pl.DataFrame:
     reported = run_manifest.get("coverage_summary") or {}
     backbone_path_raw = run_manifest.get("backbone_path")
@@ -2131,22 +2160,50 @@ def _packet_d_coverage_reconciliation(
             .collect()
             .item()
         )
+    sample_backbone_filtered_doc_count: int | None = None
+    if sample_backbone_path.exists():
+        sample_backbone_filtered_doc_count = int(
+            load_eligible_section_universe(
+                section_cfg,
+                year_paths=year_paths,
+                target_doc_universe_path=sample_backbone_path,
+            )
+            .select(pl.col("doc_id").n_unique())
+            .collect()
+            .item()
+        )
     covered_doc_count = int(
         pl.read_parquet(item_features_long_path)
         .select(pl.col("doc_id").n_unique())
         .item()
     )
+    reported_backbone_doc_count = int(reported.get("backbone_doc_count") or 0)
+    normalized_finbert_backbone = str(backbone_path) if backbone_path is not None else None
+    normalized_sample_backbone = str(sample_backbone_path.resolve())
     return pl.DataFrame(
         [
             {
                 "run_name": str(run_manifest.get("run_name") or ""),
-                "reported_backbone_doc_count": int(reported.get("backbone_doc_count") or 0),
+                "finbert_backbone_path": normalized_finbert_backbone,
+                "sample_backbone_path": normalized_sample_backbone,
+                "finbert_backbone_matches_sample_backbone": (
+                    normalized_finbert_backbone == normalized_sample_backbone
+                    if normalized_finbert_backbone is not None
+                    else False
+                ),
+                "reported_backbone_doc_count": reported_backbone_doc_count,
                 "actual_filtered_doc_count": actual_filtered_doc_count,
+                "sample_backbone_filtered_doc_count": sample_backbone_filtered_doc_count,
                 "reported_covered_doc_count": int(reported.get("covered_doc_count") or 0),
                 "actual_covered_doc_count": covered_doc_count,
                 "denominator_gap": (
-                    int(reported.get("backbone_doc_count") or 0) - actual_filtered_doc_count
+                    reported_backbone_doc_count - actual_filtered_doc_count
                     if actual_filtered_doc_count is not None
+                    else None
+                ),
+                "sample_backbone_denominator_gap": (
+                    reported_backbone_doc_count - sample_backbone_filtered_doc_count
+                    if sample_backbone_filtered_doc_count is not None
                     else None
                 ),
             }

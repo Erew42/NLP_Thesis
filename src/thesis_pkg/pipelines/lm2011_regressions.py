@@ -76,7 +76,12 @@ def _select_text_signal_surface(text_features_lf: pl.LazyFrame, *, label: str) -
         name
         for name in schema.names()
         if name != "doc_id"
-        and (name.startswith("token_count_") or name.endswith("_prop") or name.endswith("_tfidf"))
+        and (
+            name.startswith("token_count_")
+            or name.startswith("total_token_count_")
+            or name.endswith("_prop")
+            or name.endswith("_tfidf")
+        )
     ]
     if not signal_columns:
         raise ValueError(f"{label} missing LM2011 text signal columns")
@@ -530,6 +535,7 @@ def build_lm2011_table_v_results(
     *,
     ff48_siccodes_path: Path | str,
 ) -> pl.DataFrame:
+    _require_columns(mda_text_features_lf, ("doc_id", "total_token_count_mda"), "mda_text_features")
     panel_lf = build_lm2011_return_regression_panel(
         event_panel_lf,
         mda_text_features_lf,
@@ -538,7 +544,7 @@ def build_lm2011_table_v_results(
         ff48_siccodes_path=ff48_siccodes_path,
         text_scope="mda_item_7",
     )
-    panel_lf = panel_lf.filter(pl.col("token_count_mda").cast(pl.Float64, strict=False) >= 250.0)
+    panel_lf = panel_lf.filter(pl.col("total_token_count_mda").cast(pl.Float64, strict=False) >= 250.0)
     return _run_signal_family(
         panel_lf,
         table_id="table_v_mda",

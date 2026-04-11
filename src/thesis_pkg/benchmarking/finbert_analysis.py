@@ -15,6 +15,7 @@ from thesis_pkg.benchmarking.contracts import FinbertSentenceParquetInferenceRun
 from thesis_pkg.benchmarking.contracts import FinbertSentencePreprocessingRunConfig
 from thesis_pkg.benchmarking.run_logging import utc_timestamp
 from thesis_pkg.benchmarking.finbert_sentence_preprocessing import run_finbert_sentence_preprocessing
+from thesis_pkg.benchmarking.token_lengths import FINBERT_TOKEN_COUNT_COLUMN
 
 
 ITEM_FEATURE_METRIC_COLUMNS: tuple[str, ...] = (
@@ -26,14 +27,57 @@ ITEM_FEATURE_METRIC_COLUMNS: tuple[str, ...] = (
     "argmax_share_neutral",
     "argmax_share_positive",
     "sentiment_balance_mean",
+    "finbert_segment_count",
+    "finbert_token_count_512_sum",
+    "finbert_neg_prob_lenw_mean",
+    "finbert_pos_prob_lenw_mean",
+    "finbert_neu_prob_lenw_mean",
+    "finbert_net_negative_lenw_mean",
+    "finbert_neg_dominant_share",
 )
 TARGET_SENTIMENT_LABELS: tuple[str, ...] = ("negative", "neutral", "positive")
 RUNNER_NAME = "finbert_item_analysis"
+FINBERT_SEGMENT_POLICY_ID = "sentence_dataset_v1_finbert_token_512"
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def finbert_item_feature_contract_payload(authority: FinbertAuthoritySpec) -> dict[str, Any]:
+    return {
+        "accepted_unit": ["doc_id", "benchmark_item_code"],
+        "segment_grain": "benchmark_sentence_id",
+        "text_scope_column": "benchmark_item_code",
+        "model_family": authority.model_class_name,
+        "checkpoint_id": authority.model_name,
+        "denominator_contract": {
+            "segment_count_column": "finbert_segment_count",
+            "length_weight_column": FINBERT_TOKEN_COUNT_COLUMN,
+            "length_weight_sum_column": "finbert_token_count_512_sum",
+            "length_weight_policy": "sum positive FinBERT tokenizer lengths across accepted scored segments",
+        },
+        "metadata_columns": ["text_scope", "model_name", "model_version", "segment_policy_id"],
+        "segment_policy_id": FINBERT_SEGMENT_POLICY_ID,
+        "primary_extension_columns": [
+            "finbert_neg_prob_lenw_mean",
+            "finbert_pos_prob_lenw_mean",
+            "finbert_neu_prob_lenw_mean",
+            "finbert_net_negative_lenw_mean",
+            "finbert_neg_dominant_share",
+            "finbert_segment_count",
+        ],
+        "legacy_unweighted_columns": [
+            "negative_prob_mean",
+            "neutral_prob_mean",
+            "positive_prob_mean",
+            "argmax_share_negative",
+            "argmax_share_neutral",
+            "argmax_share_positive",
+            "sentiment_balance_mean",
+        ],
+    }
 
 
 def _empty_item_features_long_frame() -> pl.DataFrame:
@@ -49,6 +93,10 @@ def _empty_item_features_long_frame() -> pl.DataFrame:
             "document_type": pl.Utf8,
             "document_type_raw": pl.Utf8,
             "document_type_normalized": pl.Utf8,
+            "text_scope": pl.Utf8,
+            "model_name": pl.Utf8,
+            "model_version": pl.Utf8,
+            "segment_policy_id": pl.Utf8,
             "benchmark_item_code": pl.Utf8,
             "benchmark_item_label": pl.Utf8,
             "sentence_count": pl.Int32,
@@ -59,6 +107,13 @@ def _empty_item_features_long_frame() -> pl.DataFrame:
             "argmax_share_neutral": pl.Float64,
             "argmax_share_positive": pl.Float64,
             "sentiment_balance_mean": pl.Float64,
+            "finbert_segment_count": pl.Int32,
+            "finbert_token_count_512_sum": pl.Int64,
+            "finbert_neg_prob_lenw_mean": pl.Float64,
+            "finbert_pos_prob_lenw_mean": pl.Float64,
+            "finbert_neu_prob_lenw_mean": pl.Float64,
+            "finbert_net_negative_lenw_mean": pl.Float64,
+            "finbert_neg_dominant_share": pl.Float64,
         }
     )
 
@@ -115,6 +170,13 @@ def aggregate_sentence_scores_to_item_features(
             "benchmark_item_code",
             "benchmark_item_label",
         ]
+    ).with_columns(
+        [
+            pl.col("benchmark_item_code").alias("text_scope"),
+            pl.lit(None, dtype=pl.Utf8).alias("model_name"),
+            pl.lit(None, dtype=pl.Utf8).alias("model_version"),
+            pl.lit(FINBERT_SEGMENT_POLICY_ID, dtype=pl.Utf8).alias("segment_policy_id"),
+        ]
     ).sort(["filing_year", "doc_id", "benchmark_item_code"])
     if metadata.is_empty():
         return _empty_item_features_long_frame()
@@ -131,9 +193,35 @@ def aggregate_sentence_scores_to_item_features(
                     pl.lit(None, dtype=pl.Float64).alias("argmax_share_neutral"),
                     pl.lit(None, dtype=pl.Float64).alias("argmax_share_positive"),
                     pl.lit(None, dtype=pl.Float64).alias("sentiment_balance_mean"),
+                    pl.lit(0, dtype=pl.Int32).alias("finbert_segment_count"),
+                    pl.lit(0, dtype=pl.Int64).alias("finbert_token_count_512_sum"),
+                    pl.lit(None, dtype=pl.Float64).alias("finbert_neg_prob_lenw_mean"),
+                    pl.lit(None, dtype=pl.Float64).alias("finbert_pos_prob_lenw_mean"),
+                    pl.lit(None, dtype=pl.Float64).alias("finbert_neu_prob_lenw_mean"),
+                    pl.lit(None, dtype=pl.Float64).alias("finbert_net_negative_lenw_mean"),
+                    pl.lit(None, dtype=pl.Float64).alias("finbert_neg_dominant_share"),
                 ]
             )
             .select(_empty_item_features_long_frame().columns)
+        )
+
+    if FINBERT_TOKEN_COUNT_COLUMN not in sentence_scores_df.columns:
+        sentence_scores_df = sentence_scores_df.with_columns(
+            pl.lit(1, dtype=pl.Int32).alias(FINBERT_TOKEN_COUNT_COLUMN)
+        )
+    token_weight = (
+        pl.when(pl.col(FINBERT_TOKEN_COUNT_COLUMN).cast(pl.Float64, strict=False) > 0.0)
+        .then(pl.col(FINBERT_TOKEN_COUNT_COLUMN).cast(pl.Float64, strict=False))
+        .otherwise(pl.lit(0.0))
+    )
+
+    def _length_weighted_mean(value: pl.Expr, alias: str) -> pl.Expr:
+        denominator = token_weight.sum()
+        return (
+            pl.when(denominator > 0.0)
+            .then((value * token_weight).sum() / denominator)
+            .otherwise(pl.lit(None, dtype=pl.Float64))
+            .alias(alias)
         )
 
     aggregated = (
@@ -147,6 +235,16 @@ def aggregate_sentence_scores_to_item_features(
                 (pl.col("predicted_label") == "negative").mean().alias("argmax_share_negative"),
                 (pl.col("predicted_label") == "neutral").mean().alias("argmax_share_neutral"),
                 (pl.col("predicted_label") == "positive").mean().alias("argmax_share_positive"),
+                pl.len().cast(pl.Int32).alias("finbert_segment_count"),
+                token_weight.sum().round(0).cast(pl.Int64).alias("finbert_token_count_512_sum"),
+                _length_weighted_mean(pl.col("negative_prob"), "finbert_neg_prob_lenw_mean"),
+                _length_weighted_mean(pl.col("positive_prob"), "finbert_pos_prob_lenw_mean"),
+                _length_weighted_mean(pl.col("neutral_prob"), "finbert_neu_prob_lenw_mean"),
+                _length_weighted_mean(
+                    pl.col("negative_prob") - pl.col("positive_prob"),
+                    "finbert_net_negative_lenw_mean",
+                ),
+                (pl.col("predicted_label") == "negative").mean().alias("finbert_neg_dominant_share"),
             ]
         )
         .with_columns(
@@ -179,6 +277,8 @@ def pivot_item_features_to_doc_wide(item_features_df: pl.DataFrame) -> pl.DataFr
         .sort(["filing_year", "doc_id"])
     )
     for metric in ITEM_FEATURE_METRIC_COLUMNS:
+        if metric not in item_features_df.columns:
+            continue
         metric_wide = item_features_df.select(["doc_id", "benchmark_item_code", metric]).pivot(
             values=metric,
             index="doc_id",

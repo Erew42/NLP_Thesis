@@ -111,6 +111,65 @@ def test_build_and_attach_annual_accounting_panel_applies_ff2001_formulas_and_ag
     assert attached.filter(pl.col("doc_id") == "stale").select("accounting_period_end").item() is None
 
 
+def test_build_annual_accounting_panel_handles_invalid_fiscal_year_components_without_crashing() -> None:
+    annual_bs = pl.DataFrame(
+        {
+            "KYGVKEY": [1000, 1001],
+            "KEYSET": ["STD", "STD"],
+            "FYYYY": [2022, 2021],
+            "fyra": [12, 6],
+            "SEQ": [100.0, 80.0],
+            "CEQ": [90.0, 70.0],
+            "AT": [150.0, 130.0],
+            "LT": [60.0, 55.0],
+            "TXDITC": [5.0, 4.0],
+            "PSTKL": [None, None],
+            "PSTKRV": [None, None],
+            "PSTK": [10.0, 5.0],
+        }
+    )
+    annual_is = pl.DataFrame(
+        {
+            "KYGVKEY": [1000, 1001],
+            "KEYSET": ["STD", "STD"],
+            "FYYYY": [2022, 2021],
+            "fyra": [12, 6],
+            "IB": [20.0, 10.0],
+            "XINT": [3.0, 1.0],
+            "TXDI": [1.0, 0.5],
+            "DVP": [2.0, 1.0],
+        }
+    )
+    annual_pd = pl.DataFrame(
+        {
+            "KYGVKEY": [1000, 1001],
+            "KEYSET": ["STD", "STD"],
+            "FYYYY": [2022, 2021],
+            "fyra": [12, 6],
+            "FYEAR": [0, 0],
+            "FYR": [0, 13],
+            "APDEDATE": [dt.date(2022, 12, 31), None],
+            "FDATE": [dt.date(2023, 1, 31), None],
+            "PDATE": [dt.date(2022, 12, 31), None],
+        }
+    )
+
+    annual_panel = (
+        build_annual_accounting_panel(
+            annual_bs.lazy(),
+            annual_is.lazy(),
+            annual_pd.lazy(),
+        )
+        .collect()
+        .sort("gvkey_int")
+    )
+
+    assert annual_panel.select("accounting_period_end").to_series().to_list() == [
+        dt.date(2022, 12, 31),
+        None,
+    ]
+
+
 def test_build_and_attach_quarterly_accounting_panel_uses_rdq_fallback_and_90_day_gate() -> None:
     quarterly_bs = pl.DataFrame(
         {

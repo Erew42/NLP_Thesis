@@ -95,11 +95,10 @@ def _optional_float_expr(schema: pl.Schema, col_name: str) -> pl.Expr:
 def _last_day_of_fiscal_year_expr(year_col: str, month_col: str) -> pl.Expr:
     year = pl.col(year_col).cast(pl.Int32, strict=False)
     month = pl.col(month_col).cast(pl.Int32, strict=False)
-    return (
-        pl.when(year.is_between(_MIN_VALID_YEAR, _MAX_VALID_YEAR) & month.is_between(1, 12))
-        .then(pl.date(year, month, pl.lit(1)).dt.month_end())
-        .otherwise(pl.lit(None).cast(pl.Date))
-    )
+    valid_components = year.is_between(_MIN_VALID_YEAR, _MAX_VALID_YEAR) & month.is_between(1, 12)
+    safe_year = pl.when(valid_components).then(year).otherwise(pl.lit(None).cast(pl.Int32))
+    safe_month = pl.when(valid_components).then(month).otherwise(pl.lit(None).cast(pl.Int32))
+    return pl.date(safe_year, safe_month, pl.lit(1)).dt.month_end()
 
 
 def _parse_yyyymmdd_date_expr(col_name: str) -> pl.Expr:

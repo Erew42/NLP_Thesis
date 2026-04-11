@@ -176,4 +176,5 @@ def test_full_text_feature_builder_respects_lm2011_paper_cleaning_contract() -> 
         cleaning_contract="lm2011_paper",
     ).collect()
 
+    assert current_df.item(0, "total_token_count_full_10k") > paper_df.item(0, "total_token_count_full_10k")
     assert current_df.item(0, "token_count_full_10k") > paper_df.item(0, "token_count_full_10k")

@@ -244,6 +244,7 @@ def _regression_test_inputs(tmp_path) -> dict[str, object]:
                 full_signal_row = {
                     "doc_id": doc_id,
                     "token_count_full_10k": 2500 + doc_index,
+                    "total_token_count_full_10k": 2500 + doc_index,
                     "h4n_inf_prop": h4n_prop,
                     "h4n_inf_tfidf": h4n_inf_tfidf,
                     "lm_negative_prop": lm_negative_prop,
@@ -262,6 +263,7 @@ def _regression_test_inputs(tmp_path) -> dict[str, object]:
                 mda_signal_row = {
                     "doc_id": doc_id,
                     "token_count_mda": 600 + doc_index,
+                    "total_token_count_mda": 600 + doc_index,
                     "h4n_inf_prop": h4n_prop + 0.002,
                     "h4n_inf_tfidf": h4n_inf_tfidf + 0.003,
                     "lm_negative_prop": lm_negative_prop + 0.001,
@@ -626,14 +628,14 @@ def test_build_lm2011_table_v_results_enforces_mda_token_count_floor(tmp_path) -
 
     low_token_table_v = build_lm2011_table_v_results(
         inputs["event_panel"].lazy(),
-        inputs["mda_text_features"].with_columns(pl.lit(249).alias("token_count_mda")).lazy(),
+        inputs["mda_text_features"].with_columns(pl.lit(249).alias("total_token_count_mda")).lazy(),
         inputs["company_history"].lazy(),
         inputs["company_description"].lazy(),
         ff48_siccodes_path=inputs["ff48_path"],
     )
     boundary_table_v = build_lm2011_table_v_results(
         inputs["event_panel"].lazy(),
-        inputs["mda_text_features"].with_columns(pl.lit(250).alias("token_count_mda")).lazy(),
+        inputs["mda_text_features"].with_columns(pl.lit(250).alias("total_token_count_mda")).lazy(),
         inputs["company_history"].lazy(),
         inputs["company_description"].lazy(),
         ff48_siccodes_path=inputs["ff48_path"],
@@ -643,7 +645,7 @@ def test_build_lm2011_table_v_results_enforces_mda_token_count_floor(tmp_path) -
     assert boundary_table_v.height > 0
 
 
-def test_build_lm2011_table_v_results_enforces_builder_linked_recognized_word_floor(tmp_path) -> None:
+def test_build_lm2011_table_v_results_enforces_builder_linked_total_token_floor(tmp_path) -> None:
     from thesis_pkg.pipeline import build_lm2011_text_features_mda
 
     inputs = _regression_test_inputs(tmp_path)
@@ -677,10 +679,10 @@ def test_build_lm2011_table_v_results_enforces_builder_linked_recognized_word_fl
             dictionary_lists=_lm_dictionary_lists(),
             harvard_negative_word_list=_harvard_negative_word_list(),
             master_dictionary_words=["recognized", "loss", "bad"],
-        ).collect().select("doc_id", "token_count_mda")
+        ).collect().select("doc_id", "token_count_mda", "total_token_count_mda")
         return (
             inputs["mda_text_features"]
-            .drop("token_count_mda")
+            .drop("token_count_mda", "total_token_count_mda")
             .join(built_counts, on="doc_id", how="inner")
         )
 
@@ -701,6 +703,19 @@ def test_build_lm2011_table_v_results_enforces_builder_linked_recognized_word_fl
 
     assert low_token_table_v.height == 0
     assert boundary_table_v.height > 0
+
+
+def test_build_lm2011_table_v_results_requires_total_token_screen_count_column(tmp_path) -> None:
+    inputs = _regression_test_inputs(tmp_path)
+
+    with pytest.raises(ValueError, match="missing required columns"):
+        build_lm2011_table_v_results(
+            inputs["event_panel"].lazy(),
+            inputs["mda_text_features"].drop("total_token_count_mda").lazy(),
+            inputs["company_history"].lazy(),
+            inputs["company_description"].lazy(),
+            ff48_siccodes_path=inputs["ff48_path"],
+        )
 
 
 def test_build_lm2011_table_ia_i_results_uses_normalized_difference_signals(tmp_path) -> None:

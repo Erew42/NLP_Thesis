@@ -376,6 +376,7 @@ def test_lm2011_spec_records_strategy_defaults_as_explicit_assumptions() -> None
 def test_lm2011_spec_encodes_exact_tfidf_formula_and_signal_surface() -> None:
     spec = _load_spec()
     weighting = _get_node(spec, "derived_variables", "text_weighting_contract")
+    screen_count = _get_node(spec, "derived_variables", "screen_count_contract")
     full_cols = _get_node(
         spec, "public_interfaces", "derived_outputs", "lm2011_text_features_full_10k", "required_columns"
     )
@@ -385,12 +386,16 @@ def test_lm2011_spec_encodes_exact_tfidf_formula_and_signal_surface() -> None:
 
     assert weighting["basis"] == "paper_explicit"
     assert weighting["formula"] == "w_i,j = ((1 + log(tf_i,j)) / (1 + log(a_j))) * log(N / df_i) when tf_i,j >= 1, else 0."
+    assert "a_j = LM master-dictionary recognized-word token count in document j" in weighting["inputs"]
     assert "Do not use smoothed idf." in weighting["implementation_guardrails"]
     assert "Do not add a +1 idf offset." in weighting["implementation_guardrails"]
+    assert "total_token_count_full_10k" in full_cols
     assert "h4n_inf_tfidf" in full_cols
     assert "lm_modal_weak_tfidf" in full_cols
+    assert "total_token_count_mda" in mda_cols
     assert "h4n_inf_tfidf" in mda_cols
     assert "lm_negative_tfidf" in mda_cols
+    assert screen_count["exported_columns"] == ["total_token_count_full_10k", "total_token_count_mda"]
 
 
 def test_lm2011_spec_separates_raw_share_turnover_from_log_regression_transform() -> None:

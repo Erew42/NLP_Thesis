@@ -51,7 +51,13 @@ DEFAULT_FULL_DATA_ROOT = ROOT / "full_data_run"
 DEFAULT_SAMPLE_ROOT = DEFAULT_FULL_DATA_ROOT / "sample_5pct_seed42"
 DEFAULT_SAMPLE_UPSTREAM_RUN_ROOT = DEFAULT_SAMPLE_ROOT / "results" / "sec_ccm_unified_runner" / "local_sample"
 DEFAULT_SAMPLE_ITEMS_ANALYSIS_DIR = DEFAULT_SAMPLE_UPSTREAM_RUN_ROOT / "items_analysis"
-DEFAULT_SAMPLE_BACKBONE_PATH = (
+DEFAULT_SAMPLE_LM2011_BACKBONE_PATH = (
+    DEFAULT_SAMPLE_ROOT / "results" / "lm2011_sample_post_refinitiv_runner" / "lm2011_sample_backbone.parquet"
+)
+DEFAULT_SAMPLE_UPSTREAM_LM2011_BACKBONE_PATH = (
+    DEFAULT_SAMPLE_UPSTREAM_RUN_ROOT / "sec_ccm_premerge" / "lm2011_sample_backbone.parquet"
+)
+DEFAULT_SAMPLE_PREMERGE_BACKBONE_PATH = (
     DEFAULT_SAMPLE_UPSTREAM_RUN_ROOT / "sec_ccm_premerge" / "final_flagged_data.parquet"
 )
 DEFAULT_SAMPLE_OUTPUT_ROOT = DEFAULT_SAMPLE_ROOT / "results" / "finbert_item_analysis_runner"
@@ -61,6 +67,17 @@ BATCH_PRESETS: dict[str, BucketBatchConfig] = {
     "baseline": BucketBatchConfig(name="baseline", short_batch_size=64, medium_batch_size=32, long_batch_size=16),
     "large": BucketBatchConfig(name="large", short_batch_size=128, medium_batch_size=64, long_batch_size=32),
 }
+
+
+def _default_local_sample_backbone_path() -> Path:
+    for candidate in (
+        DEFAULT_SAMPLE_LM2011_BACKBONE_PATH,
+        DEFAULT_SAMPLE_UPSTREAM_LM2011_BACKBONE_PATH,
+        DEFAULT_SAMPLE_PREMERGE_BACKBONE_PATH,
+    ):
+        if candidate.exists():
+            return candidate
+    return DEFAULT_SAMPLE_LM2011_BACKBONE_PATH
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -92,7 +109,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 def _resolve_run_config(args: argparse.Namespace) -> FinbertAnalysisRunConfig:
     if args.data_profile == "LOCAL_SAMPLE":
         source_items_dir = DEFAULT_SAMPLE_ITEMS_ANALYSIS_DIR
-        backbone_path = DEFAULT_SAMPLE_BACKBONE_PATH
+        backbone_path = _default_local_sample_backbone_path()
         output_dir = DEFAULT_SAMPLE_OUTPUT_ROOT
         year_filter = tuple(args.years) if args.years else (2006, 2007, 2008)
     else:
@@ -138,6 +155,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 out_root=base_cfg.out_root,
                 section_universe=base_cfg.section_universe,
                 sentence_dataset=base_cfg.sentence_dataset,
+                target_doc_universe_path=base_cfg.backbone_path,
                 year_filter=base_cfg.year_filter,
                 overwrite=base_cfg.overwrite,
                 run_name=base_cfg.run_name,

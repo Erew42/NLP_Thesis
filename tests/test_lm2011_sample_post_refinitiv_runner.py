@@ -273,11 +273,23 @@ def test_main_writes_expected_artifacts_and_manifest_for_stubbed_run(
 
     def _capture_text_features_full_10k(*_: object, **kwargs: object) -> pl.LazyFrame:
         captured["text_features_full_10k_kwargs"] = kwargs
-        return pl.DataFrame({"doc_id": ["d1"], "token_count_full_10k": [2500]}).lazy()
+        return pl.DataFrame(
+            {
+                "doc_id": ["d1"],
+                "token_count_full_10k": [2500],
+                "total_token_count_full_10k": [2500],
+            }
+        ).lazy()
 
     def _capture_text_features_mda(*_: object, **kwargs: object) -> pl.LazyFrame:
         captured["text_features_mda_kwargs"] = kwargs
-        return pl.DataFrame({"doc_id": ["d1"], "token_count_mda": [300]}).lazy()
+        return pl.DataFrame(
+            {
+                "doc_id": ["d1"],
+                "token_count_mda": [300],
+                "total_token_count_mda": [300],
+            }
+        ).lazy()
 
     monkeypatch.setattr(
         runner,
@@ -364,6 +376,15 @@ def test_main_writes_expected_artifacts_and_manifest_for_stubbed_run(
     manifest = json.loads((output_dir / "lm2011_sample_run_manifest.json").read_text(encoding="utf-8"))
     assert manifest["run_status"] == "completed"
     assert manifest["config"]["full_10k_cleaning_contract"] == "lm2011_paper"
+    assert manifest["dictionary_inputs"]["resource_scope"] == "repo-local operative LM2011-style lexicon inputs"
+    assert "not asserted to be the original LM2011" in manifest["dictionary_inputs"]["historical_provenance_warning"]
+    master_resources = [
+        resource
+        for resource in manifest["dictionary_inputs"]["resources"]
+        if resource["role"] == "recognized_word_master_dictionary"
+    ]
+    assert master_resources[0]["name"] == "LM2011_MasterDictionary.txt"
+    assert "not provenance-verified" in master_resources[0]["provenance_status"]
     assert manifest["stages"]["sample_backbone"]["status"] == "generated"
     assert manifest["stages"]["table_i_sample_creation"]["status"] == "generated"
     assert set(manifest["stages"]["table_i_sample_creation"]["extra_artifacts"]) == {"csv", "markdown"}

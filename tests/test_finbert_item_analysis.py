@@ -262,6 +262,7 @@ def test_aggregate_sentence_scores_to_item_features() -> None:
             "neutral_prob": [0.1, 0.2, 0.3],
             "positive_prob": [0.1, 0.4, 0.5],
             "predicted_label": ["negative", "positive", "positive"],
+            "finbert_token_count_512": [1, 3, 5],
         }
     )
 
@@ -275,6 +276,12 @@ def test_aggregate_sentence_scores_to_item_features() -> None:
     assert round(item_1["positive_prob_mean"], 4) == 0.25
     assert round(item_1["argmax_share_negative"], 4) == 0.5
     assert round(item_1["sentiment_balance_mean"], 4) == -0.35
+    assert item_1["finbert_segment_count"] == 2
+    assert item_1["finbert_token_count_512_sum"] == 4
+    assert round(item_1["finbert_neg_prob_lenw_mean"], 4) == 0.5
+    assert round(item_1["finbert_pos_prob_lenw_mean"], 4) == 0.325
+    assert round(item_1["finbert_net_negative_lenw_mean"], 4) == 0.175
+    assert round(item_1["finbert_neg_dominant_share"], 4) == 0.5
 
 
 def test_pivot_item_features_to_doc_wide() -> None:
@@ -410,3 +417,49 @@ def test_run_finbert_item_analysis_delegates_to_staged_helpers(tmp_path: Path, m
     assert artifacts.item_features_long_path.exists()
     assert artifacts.doc_features_wide_path.exists()
     assert artifacts.coverage_report_path is not None and artifacts.coverage_report_path.exists()
+
+
+def test_finbert_item_analysis_runner_preprocess_only_uses_backbone_path(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from thesis_pkg.notebooks_and_scripts import finbert_item_analysis_runner as runner
+
+    source_dir = tmp_path / "items_analysis"
+    output_dir = tmp_path / "runs"
+    backbone_path = tmp_path / "backbone.parquet"
+    source_dir.mkdir(parents=True)
+    pl.DataFrame({"doc_id": ["doc1"]}).write_parquet(backbone_path)
+    captured: dict[str, object] = {}
+
+    def _fake_run_preprocessing(run_cfg):
+        captured["run_cfg"] = run_cfg
+        run_dir = tmp_path / "sentence_prep"
+        sentence_dataset_dir = run_dir / "sentence_dataset" / "by_year"
+        sentence_dataset_dir.mkdir(parents=True, exist_ok=True)
+        return FinbertSentencePreprocessingRunArtifacts(
+            run_dir=run_dir,
+            run_manifest_path=run_dir / "run_manifest.json",
+            sentence_dataset_dir=sentence_dataset_dir,
+            yearly_summary_path=run_dir / "yearly_summary.parquet",
+        )
+
+    monkeypatch.setattr(runner, "run_finbert_sentence_preprocessing", _fake_run_preprocessing)
+
+    exit_code = runner.main(
+        [
+            "--data-profile",
+            "EXPLICIT",
+            "--source-items-dir",
+            str(source_dir),
+            "--backbone-path",
+            str(backbone_path),
+            "--output-dir",
+            str(output_dir),
+            "--preprocess-only",
+        ]
+    )
+
+    assert exit_code == 0
+    run_cfg = captured["run_cfg"]
+    assert run_cfg.target_doc_universe_path == backbone_path.resolve()

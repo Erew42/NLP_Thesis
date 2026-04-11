@@ -25,6 +25,7 @@ from thesis_pkg.benchmarking.contracts import FinbertTokenizerProfileRunConfig
 from thesis_pkg.benchmarking.contracts import SentenceDatasetConfig
 from thesis_pkg.benchmarking.contracts import StageRunsConfig
 from thesis_pkg.benchmarking.finbert_analysis import run_finbert_item_analysis
+from thesis_pkg.benchmarking.finbert_analysis import finbert_item_feature_contract_payload
 from thesis_pkg.benchmarking.finbert_benchmark import benchmark_full_pipeline
 from thesis_pkg.benchmarking.finbert_benchmark import benchmark_model_only
 from thesis_pkg.benchmarking.finbert_benchmark import benchmark_sentence_splitting
@@ -36,6 +37,7 @@ from thesis_pkg.benchmarking.finbert_dataset import build_finbert_benchmark_suit
 from thesis_pkg.benchmarking.finbert_dataset import compute_year_allocations
 from thesis_pkg.benchmarking.finbert_dataset import compute_year_item_allocations
 from thesis_pkg.benchmarking.finbert_dataset import load_eligible_section_universe
+from thesis_pkg.benchmarking.finbert_dataset import section_universe_contract_payload
 from thesis_pkg.benchmarking.finbert_dataset import select_ranked_section_sample
 from thesis_pkg.benchmarking.finbert_sentence_preprocessing import run_finbert_sentence_preprocessing
 from thesis_pkg.benchmarking.finbert_staged_inference import run_finbert_sentence_parquet_inference
@@ -80,6 +82,7 @@ __all__ = [
     "compute_year_allocations",
     "compute_year_item_allocations",
     "derive_sentence_frame",
+    "finbert_item_feature_contract_payload",
     "load_eligible_section_universe",
     "load_finbert_model",
     "load_finbert_tokenizer",
@@ -91,5 +94,6 @@ __all__ = [
     "run_finbert_sentence_parquet_inference",
     "run_finbert_sentence_preprocessing",
     "run_finbert_tokenizer_profile",
+    "section_universe_contract_payload",
     "select_ranked_section_sample",
 ]

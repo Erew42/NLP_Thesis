@@ -48,6 +48,9 @@ from thesis_pkg.core.ccm.lm2011 import (
     build_quarterly_accounting_panel,
 )
 from thesis_pkg.core.sec.lm2011_cleaning import FULL_10K_CLEANING_CONTRACTS
+from thesis_pkg.core.sec.lm2011_dictionary import load_lm2011_dictionary_inputs
+from thesis_pkg.core.sec.lm2011_dictionary import load_lm2011_master_dictionary_words
+from thesis_pkg.core.sec.lm2011_dictionary import load_lm2011_word_list
 from thesis_pkg.core.sec.lm2011_text import (
     build_lm2011_text_features_full_10k,
     build_lm2011_text_features_mda,
@@ -379,13 +382,7 @@ def _resolve_paths(args: argparse.Namespace) -> RunnerPaths:
 
 
 def _load_word_list(path: Path) -> tuple[str, ...]:
-    words: list[str] = []
-    with path.open("r", encoding="utf-8", errors="ignore") as handle:
-        for line in handle:
-            token = line.strip()
-            if token:
-                words.append(token.casefold())
-    return tuple(words)
+    return load_lm2011_word_list(path)
 
 
 def _load_dictionary_lists(additional_data_dir: Path) -> tuple[dict[str, tuple[str, ...]], tuple[str, ...]]:
@@ -402,20 +399,8 @@ def _load_dictionary_lists(additional_data_dir: Path) -> tuple[dict[str, tuple[s
 
 
 def _load_master_dictionary_words(additional_data_dir: Path) -> tuple[str, ...]:
-    txt_path = additional_data_dir / "LM2011_MasterDictionary.txt"
-    csv_path = additional_data_dir / "Loughran-McDonald_MasterDictionary_1993-2024.csv"
-    if txt_path.exists():
-        dictionary_path = txt_path
-    elif csv_path.exists():
-        dictionary_path = csv_path
-    else:
-        raise FileNotFoundError(f"No LM master dictionary file found in {additional_data_dir}")
-    words_df = pl.read_csv(dictionary_path).select(pl.col("Word").cast(pl.Utf8, strict=False).alias("Word"))
-    return tuple(
-        word.strip()
-        for word in words_df.get_column("Word").drop_nulls().to_list()
-        if isinstance(word, str) and word.strip()
-    )
+    words, _, _ = load_lm2011_master_dictionary_words(additional_data_dir)
+    return words
 
 
 def _normalize_filing_date_expr(schema_names: set[str]) -> pl.Expr:
@@ -693,6 +678,7 @@ def _build_manifest(paths: RunnerPaths) -> dict[str, Any]:
         "artifacts": {},
         "row_counts": {},
         "stages": {},
+        "dictionary_inputs": {},
     }
 
 
@@ -799,8 +785,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     current_stage_name = "initialization"
 
     try:
-        dictionary_lists, harvard_negative_word_list = _load_dictionary_lists(paths.additional_data_dir)
-        master_dictionary_words = _load_master_dictionary_words(paths.additional_data_dir)
+        dictionary_inputs = load_lm2011_dictionary_inputs(paths.additional_data_dir)
+        dictionary_lists = dictionary_inputs.dictionary_lists
+        harvard_negative_word_list = dictionary_inputs.harvard_negative_word_list
+        master_dictionary_words = dictionary_inputs.master_dictionary_words
+        manifest["dictionary_inputs"] = dictionary_inputs.to_manifest_dict()
 
         sample_backbone_lf: pl.LazyFrame | None = None
         annual_accounting_panel_lf: pl.LazyFrame | None = None

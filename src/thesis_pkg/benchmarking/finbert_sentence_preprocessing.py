@@ -14,6 +14,7 @@ from thesis_pkg.benchmarking.contracts import FinbertSentencePreprocessingRunArt
 from thesis_pkg.benchmarking.contracts import FinbertSentencePreprocessingRunConfig
 from thesis_pkg.benchmarking.finbert_dataset import _resolve_year_paths
 from thesis_pkg.benchmarking.finbert_dataset import load_eligible_section_universe
+from thesis_pkg.benchmarking.finbert_dataset import section_universe_contract_payload
 from thesis_pkg.benchmarking.run_logging import utc_timestamp
 from thesis_pkg.benchmarking.sentences import SENTENCE_CHUNK_CHAR_LIMIT
 from thesis_pkg.benchmarking.sentences import SENTENCE_SPLIT_AUDIT_SCHEMA
@@ -282,6 +283,10 @@ def run_finbert_sentence_preprocessing(
             "require_exists_by_regime": run_cfg.section_universe.require_exists_by_regime,
             "min_char_count": run_cfg.section_universe.min_char_count,
         },
+        "accepted_universe_contract": section_universe_contract_payload(
+            run_cfg.section_universe,
+            target_doc_universe_path=run_cfg.target_doc_universe_path,
+        ),
         "target_doc_universe_path": (
             str(run_cfg.target_doc_universe_path.resolve())
             if run_cfg.target_doc_universe_path is not None

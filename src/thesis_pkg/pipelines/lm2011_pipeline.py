@@ -362,7 +362,7 @@ def _prepare_table_i_base_frame(
     with_pre_market_schema = with_pre_market.collect_schema()
     text_df = _prepare_unique_doc_metric_frame(
         full_10k_text_features_lf,
-        metric_col="token_count_full_10k",
+        metric_col="total_token_count_full_10k",
         label="full_10k_text_features_lf",
         required_message=(
             "full_10k_text_features_lf is required; fail-closed external_input_policy forbids LM2011 clean panels without token-count text features"
@@ -863,7 +863,7 @@ def _lm2011_table_i_market_stage_specs() -> tuple[tuple[str, pl.Expr], ...]:
             (pl.col("book_equity_be").cast(pl.Float64, strict=False) > 0)
             & (pl.col("bm_event").cast(pl.Float64, strict=False) > 0),
         ),
-        ("token_count_ge_2000", pl.col("token_count_full_10k").cast(pl.Int32, strict=False) >= 2000),
+        ("token_count_ge_2000", pl.col("total_token_count_full_10k").cast(pl.Int32, strict=False) >= 2000),
     )
 
 
@@ -1011,13 +1011,13 @@ def _build_lm2011_table_i_output(
     else:
         mda_df = _prepare_unique_doc_metric_frame(
             mda_text_features_lf,
-            metric_col="token_count_mda",
+            metric_col="total_token_count_mda",
             label="mda_text_features_lf",
             required_message="mda_text_features_lf is required for MD&A subsection rows",
             metric_dtype=pl.Int32,
         )
         identifiable_mda = final_market_df.join(mda_df, on="doc_id", how="inner")
-        mda_token_count_ge_250 = identifiable_mda.filter(pl.col("token_count_mda").cast(pl.Int32, strict=False) >= 250)
+        mda_token_count_ge_250 = identifiable_mda.filter(pl.col("total_token_count_mda").cast(pl.Int32, strict=False) >= 250)
         previous_mda_count = final_count
         for row_id, frame in (
             ("identifiable_mda", identifiable_mda),

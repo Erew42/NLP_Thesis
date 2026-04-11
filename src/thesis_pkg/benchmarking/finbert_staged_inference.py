@@ -13,8 +13,10 @@ from thesis_pkg.benchmarking.contracts import FinbertSentenceParquetInferenceRun
 from thesis_pkg.benchmarking.contracts import FinbertTokenizerProfileRunArtifacts
 from thesis_pkg.benchmarking.contracts import FinbertTokenizerProfileRunConfig
 from thesis_pkg.benchmarking.finbert_analysis import _empty_item_features_long_frame
+from thesis_pkg.benchmarking.finbert_analysis import FINBERT_SEGMENT_POLICY_ID
 from thesis_pkg.benchmarking.finbert_analysis import aggregate_sentence_scores_to_item_features
 from thesis_pkg.benchmarking.finbert_analysis import build_coverage_report
+from thesis_pkg.benchmarking.finbert_analysis import finbert_item_feature_contract_payload
 from thesis_pkg.benchmarking.finbert_analysis import pivot_item_features_to_doc_wide
 from thesis_pkg.benchmarking.finbert_benchmark import _bucket_frame
 from thesis_pkg.benchmarking.finbert_benchmark import _bucket_max_length
@@ -609,6 +611,12 @@ def run_finbert_sentence_parquet_inference(
             item_features_df = aggregate_sentence_scores_to_item_features(
                 sentence_scores_df,
                 _section_metadata_from_sentence_frame(sentence_df),
+            ).with_columns(
+                [
+                    pl.lit(authority.model_name, dtype=pl.Utf8).alias("model_name"),
+                    pl.lit(None, dtype=pl.Utf8).alias("model_version"),
+                    pl.lit(FINBERT_SEGMENT_POLICY_ID, dtype=pl.Utf8).alias("segment_policy_id"),
+                ]
             )
 
         year_item_features_path.parent.mkdir(parents=True, exist_ok=True)
@@ -671,6 +679,7 @@ def run_finbert_sentence_parquet_inference(
             "run_name": run_name,
             "created_at_utc": utc_timestamp(),
             "authority": asdict(authority),
+            "item_feature_contract": finbert_item_feature_contract_payload(authority),
             "runtime": asdict(run_cfg.runtime),
             "runtime_environment": runtime_environment,
             "batch_config": asdict(run_cfg.batch_config),

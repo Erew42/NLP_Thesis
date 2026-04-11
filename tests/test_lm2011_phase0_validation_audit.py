@@ -148,6 +148,7 @@ def _build_sample_audit_layout(tmp_path: Path) -> _AuditLayout:
                 "filing_date": [filing_date, second_filing_date, dt.date(2006, 4, 1)],
                 "normalized_form": ["10-K", "10-K405", "10-Q"],
                 "token_count_full_10k": [2100, 2050, 120],
+                "total_token_count_full_10k": [2100, 2050, 120],
             }
         ),
     )
@@ -161,6 +162,7 @@ def _build_sample_audit_layout(tmp_path: Path) -> _AuditLayout:
                 "normalized_form": ["10-K", "10-K405"],
                 "item_id": ["7", "7"],
                 "token_count_mda": [260, 320],
+                "total_token_count_mda": [260, 320],
             }
         ),
     )
@@ -366,12 +368,14 @@ def test_packet_a_detects_marker_and_threshold_flips(tmp_path: Path, monkeypatch
     mda_metrics = _token_delta_metrics(threshold_df.to_dicts(), "mda")
 
     assert full_flip["threshold_flip"] is True
+    assert full_flip["appendix_threshold_pass"] is False
     assert full_flip["any_marker"] is True
     assert full_flip["edgar_stripped_has_html_marker"] is False
     assert full_flip["paper_cleaned_has_exhibit_marker"] is False
     assert full_flip["paper_cleaned_cut_reason"] == "strong_anchor_exhibit_index"
     assert full_flip["paper_cleaned_current_token_count"] < full_flip["edgar_stripped_current_token_count"]
     assert mda_flip["threshold_flip"] is True
+    assert mda_flip["appendix_threshold_pass"] is False
     assert int(summary_df.filter((pl.col("text_scope") == "full_10k") & pl.col("filing_year").is_null()).item(0, "threshold_flip_count")) == 1
     assert int(strip_df.filter((pl.col("text_scope") == "full_10k") & pl.col("filing_year").is_null()).item(0, "docs_with_exhibit_marker_after_paper_cleaning")) == 0
     assert int(strip_df.filter((pl.col("text_scope") == "full_10k") & pl.col("filing_year").is_null()).item(0, "truncated_doc_count")) == 1
@@ -442,7 +446,7 @@ def test_packet_d_reconciles_dictionary_and_finbert_universe(tmp_path: Path) -> 
 
     artifacts = _run_audit(layout, packets=("D",))
 
-    assert artifacts.packet_statuses["D"] == audit.STATUS_COMPLETED
+    assert artifacts.packet_statuses["D"] == audit.STATUS_COMPLETED_WITH_WARNINGS
     reconciliation_df = pl.read_parquet(layout.output_root / "packet_d_reconciliation.parquet")
     coverage_df = pl.read_parquet(layout.output_root / "packet_d_coverage_reconciliation.parquet")
     removal_df = pl.read_parquet(layout.output_root / "packet_d_removal_waterfall.parquet")
@@ -452,6 +456,9 @@ def test_packet_d_reconciles_dictionary_and_finbert_universe(tmp_path: Path) -> 
     assert int(reconciliation_df.filter((pl.col("item_id") == "1") & (pl.col("classification") == "finbert_only")).item(0, "row_count")) == 1
     assert int(coverage_df.item(0, "reported_backbone_doc_count")) == 5
     assert int(coverage_df.item(0, "actual_filtered_doc_count")) == 3
+    assert int(coverage_df.item(0, "sample_backbone_filtered_doc_count")) == 2
+    assert int(coverage_df.item(0, "sample_backbone_denominator_gap")) == 3
+    assert coverage_df.item(0, "finbert_backbone_matches_sample_backbone") is False
     assert int(removal_df.filter(pl.col("stage_name") == "raw_target_items").item(0, "row_count")) > int(
         removal_df.filter(pl.col("stage_name") == "deduped_final").item(0, "row_count")
     )
@@ -480,7 +487,7 @@ def test_cli_main_writes_report_and_manifest_for_sample_layout(tmp_path: Path) -
     assert (layout.output_root / "phase0_validation_report.md").exists()
     manifest = json.loads((layout.output_root / "audit_manifest.json").read_text(encoding="utf-8"))
     assert manifest["packet_statuses"]["A"] == audit.STATUS_COMPLETED_WITH_WARNINGS
-    assert manifest["packet_statuses"]["D"] == audit.STATUS_COMPLETED
+    assert manifest["packet_statuses"]["D"] == audit.STATUS_COMPLETED_WITH_WARNINGS
 
 
 def test_missing_artifacts_block_optional_packets_and_fail_packet_a(tmp_path: Path) -> None:
