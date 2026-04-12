@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import polars as pl
+import pytest
 
 from thesis_pkg.benchmarking.contracts import BucketBatchConfig
 from thesis_pkg.benchmarking.contracts import FinbertSentenceParquetInferenceRunConfig
@@ -272,3 +273,58 @@ def test_run_finbert_sentence_parquet_inference_uses_precomputed_sentence_datase
     assert manifest["counts"]["processed_year_count"] == 1
     assert manifest["item_feature_contract"]["accepted_unit"] == ["doc_id", "benchmark_item_code"]
     assert manifest["item_feature_contract"]["denominator_contract"]["length_weight_column"] == "finbert_token_count_512"
+
+
+def test_run_finbert_sentence_parquet_inference_rejects_changed_sentence_manifest(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    preprocess_run_dir = tmp_path / "preprocess_run"
+    sentence_dataset_dir = preprocess_run_dir / "sentence_dataset" / "by_year"
+    _write_sentence_year(sentence_dataset_dir / "2006.parquet", year=2006)
+    source_manifest_path = preprocess_run_dir / "run_manifest.json"
+    source_manifest_path.write_text(
+        json.dumps(
+            {
+                "cleaning_policy_id": "item_text_clean_v2",
+                "cleaning": {"cleaning_policy_id": "item_text_clean_v2"},
+                "segment_policy_id": "segment_v1",
+                "authority": {},
+                "sentence_dataset": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    from thesis_pkg.benchmarking import finbert_benchmark
+    from thesis_pkg.benchmarking import finbert_staged_inference
+
+    monkeypatch.setattr(finbert_benchmark, "_import_torch", lambda: _FakeTorch())
+    monkeypatch.setattr(finbert_staged_inference, "load_finbert_tokenizer", lambda authority: _FakeTokenizer())
+    monkeypatch.setattr(finbert_staged_inference, "load_finbert_model", lambda authority, runtime: _FakeModel())
+
+    cfg = FinbertSentenceParquetInferenceRunConfig(
+        sentence_dataset_dir=sentence_dataset_dir,
+        out_root=tmp_path / "runs",
+        batch_config=BucketBatchConfig(name="baseline", short_batch_size=2, medium_batch_size=1, long_batch_size=1),
+        run_name="sentence_parquet_inference_smoke",
+    )
+    artifacts = run_finbert_sentence_parquet_inference(cfg)
+    manifest = json.loads(artifacts.run_manifest_path.read_text(encoding="utf-8"))
+    assert manifest["item_feature_contract"]["segment_policy_id"] == "segment_v1"
+    assert manifest["source_sentence_dataset_manifest"]["cleaning_policy_id"] == "item_text_clean_v2"
+    source_manifest_path.write_text(
+        json.dumps(
+            {
+                "cleaning_policy_id": "item_text_clean_v3",
+                "cleaning": {"cleaning_policy_id": "item_text_clean_v3"},
+                "segment_policy_id": "segment_v2",
+                "authority": {},
+                "sentence_dataset": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="incompatible semantic settings"):
+        run_finbert_sentence_parquet_inference(cfg)

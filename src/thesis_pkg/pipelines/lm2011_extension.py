@@ -154,6 +154,7 @@ def _empty_extension_dictionary_features_df() -> pl.DataFrame:
         "cik_10": pl.Utf8,
         "filing_date": pl.Date,
         "text_scope": pl.Utf8,
+        "cleaning_policy_id": pl.Utf8,
         "dictionary_family": pl.Utf8,
         "total_token_count": pl.Int32,
         "token_count": pl.Int32,
@@ -166,7 +167,9 @@ def _empty_extension_model_features_df() -> pl.DataFrame:
     return pl.DataFrame(
         schema={
             "doc_id": pl.Utf8,
+            "filing_date": pl.Date,
             "text_scope": pl.Utf8,
+            "cleaning_policy_id": pl.Utf8,
             "model_name": pl.Utf8,
             "model_version": pl.Utf8,
             "segment_policy_id": pl.Utf8,
@@ -296,10 +299,82 @@ def build_lm2011_extension_dictionary_features(
         frames.append(
             scored_lf.with_columns(
                 pl.lit(text_scope, dtype=pl.Utf8).alias("text_scope"),
+                pl.lit(None, dtype=pl.Utf8).alias("cleaning_policy_id"),
                 pl.lit(dictionary_family, dtype=pl.Utf8).alias("dictionary_family"),
                 pl.col("total_token_count_mda").cast(pl.Int32, strict=False).alias("total_token_count"),
                 pl.col("token_count_mda").cast(pl.Int32, strict=False).alias("token_count"),
             ).select(_empty_extension_dictionary_features_df().columns)
+        )
+    if not frames:
+        return _empty_extension_dictionary_features_df().lazy()
+    return pl.concat(frames, how="vertical_relaxed")
+
+
+def build_lm2011_extension_dictionary_features_from_cleaned_scopes(
+    cleaned_scope_lf: pl.LazyFrame,
+    *,
+    dictionary_lists: Mapping[str, Iterable[str]],
+    harvard_negative_word_list: Iterable[str] | None,
+    master_dictionary_words: Iterable[str],
+    dictionary_family: str = EXTENSION_DICTIONARY_FAMILY_LM2011,
+    text_col: str = "cleaned_text",
+    raw_form_col: str = "document_type_raw",
+) -> pl.LazyFrame:
+    _require_columns(
+        cleaned_scope_lf,
+        (
+            "doc_id",
+            "cik_10",
+            "filing_date",
+            "text_scope",
+            "item_id",
+            "cleaning_policy_id",
+            text_col,
+            raw_form_col,
+        ),
+        "cleaned_item_scopes",
+    )
+
+    frames: list[pl.LazyFrame] = []
+    for raw_text_scope, item_id in EXTENSION_ITEM_SCOPE_IDS.items():
+        text_scope = _normalize_scope_value(raw_text_scope)
+        scope_lf = cleaned_scope_lf.filter(
+            (normalize_lm2011_extension_text_scope_expr(pl.col("text_scope")) == pl.lit(text_scope))
+            & (pl.col("item_id").cast(pl.Utf8, strict=False).str.to_uppercase() == pl.lit(item_id.upper()))
+        )
+        # The existing LM2011 scorer materializes text into Python counters and cannot infer
+        # its empty output schema for an absent scoped slice.
+        if scope_lf.select(pl.len()).collect().item() == 0:
+            continue
+        scored_lf = build_lm2011_text_features_mda(
+            scope_lf,
+            dictionary_lists=dictionary_lists,
+            harvard_negative_word_list=harvard_negative_word_list,
+            master_dictionary_words=master_dictionary_words,
+            text_col=text_col,
+            raw_form_col=raw_form_col,
+            required_item_id=item_id,
+        )
+        scope_metadata_lf = scope_lf.select(
+            pl.col("doc_id").cast(pl.Utf8, strict=False),
+            pl.col("item_id").cast(pl.Utf8, strict=False),
+            normalize_lm2011_extension_text_scope_expr(pl.col("text_scope")).alias("text_scope"),
+            pl.col("cleaning_policy_id").cast(pl.Utf8, strict=False),
+        ).unique(subset=["doc_id", "item_id", "text_scope"], keep="first")
+        frames.append(
+            scored_lf.join(scope_metadata_lf, on=["doc_id", "item_id"], how="left")
+            .with_columns(
+                pl.coalesce(
+                    [
+                        normalize_lm2011_extension_text_scope_expr(pl.col("text_scope")),
+                        pl.lit(text_scope, dtype=pl.Utf8),
+                    ]
+                ).alias("text_scope"),
+                pl.lit(dictionary_family, dtype=pl.Utf8).alias("dictionary_family"),
+                pl.col("total_token_count_mda").cast(pl.Int32, strict=False).alias("total_token_count"),
+                pl.col("token_count_mda").cast(pl.Int32, strict=False).alias("token_count"),
+            )
+            .select(_empty_extension_dictionary_features_df().columns)
         )
     if not frames:
         return _empty_extension_dictionary_features_df().lazy()
@@ -374,6 +449,11 @@ def _select_extension_dictionary_surface(
             else pl.lit(None, dtype=pl.Date)
         ).alias("filing_date"),
         scope_expr.alias("text_scope"),
+        (
+            pl.col("cleaning_policy_id").cast(pl.Utf8, strict=False)
+            if "cleaning_policy_id" in schema
+            else pl.lit(None, dtype=pl.Utf8)
+        ).alias("cleaning_policy_id"),
         family_expr.alias("dictionary_family"),
         _coalesce_existing_int(
             schema,
@@ -409,7 +489,17 @@ def _select_extension_model_surface(model_features_lf: pl.LazyFrame | None) -> p
     )
     selected = model_features_lf.select(
         pl.col("doc_id").cast(pl.Utf8, strict=False),
+        (
+            pl.col("filing_date").cast(pl.Date, strict=False)
+            if "filing_date" in schema
+            else pl.lit(None, dtype=pl.Date)
+        ).alias("filing_date"),
         scope_expr.alias("text_scope"),
+        (
+            pl.col("cleaning_policy_id").cast(pl.Utf8, strict=False)
+            if "cleaning_policy_id" in schema
+            else pl.lit(None, dtype=pl.Utf8)
+        ).alias("cleaning_policy_id"),
         (
             pl.col("model_name").cast(pl.Utf8, strict=False)
             if "model_name" in schema
@@ -520,6 +610,39 @@ def _build_extension_event_base(
     )
 
 
+def _has_non_null_column(lf: pl.LazyFrame, column: str) -> bool:
+    schema = lf.collect_schema()
+    if column not in schema:
+        return False
+    return bool(lf.select(pl.col(column).is_not_null().any()).collect().item())
+
+
+def _validate_cleaned_scope_alignment(
+    dictionary_surface_lf: pl.LazyFrame,
+    model_surface_lf: pl.LazyFrame,
+) -> None:
+    dictionary_cleaned = _has_non_null_column(dictionary_surface_lf, "cleaning_policy_id")
+    model_cleaned = _has_non_null_column(model_surface_lf, "cleaning_policy_id")
+    if not dictionary_cleaned and not model_cleaned:
+        return
+    if not dictionary_cleaned or not model_cleaned:
+        raise ValueError(
+            "Matched dictionary-versus-FinBERT comparison requires both feature surfaces "
+            "to carry cleaning_policy_id metadata from the same cleaned item-scope artifact."
+        )
+
+    keys = ["doc_id", "filing_date", "text_scope", "cleaning_policy_id"]
+    dictionary_keys = dictionary_surface_lf.select(keys).unique()
+    model_keys = model_surface_lf.select(keys).unique()
+    dictionary_only = dictionary_keys.join(model_keys, on=keys, how="anti").limit(1).collect()
+    model_only = model_keys.join(dictionary_keys, on=keys, how="anti").limit(1).collect()
+    if dictionary_only.height or model_only.height:
+        raise ValueError(
+            "Matched dictionary-versus-FinBERT comparison requires identical cleaned "
+            "doc_id, filing_date, text_scope, and cleaning_policy_id universes."
+        )
+
+
 def build_lm2011_extension_analysis_panel(
     event_panel_lf: pl.LazyFrame,
     dictionary_features_lf: pl.LazyFrame | None,
@@ -540,6 +663,8 @@ def build_lm2011_extension_analysis_panel(
         default_dictionary_family=dictionary_family,
     )
     model_surface_lf = _select_extension_model_surface(model_features_lf)
+    if dictionary_features_lf is not None and model_features_lf is not None:
+        _validate_cleaned_scope_alignment(dictionary_surface_lf, model_surface_lf)
 
     key_frames: list[pl.LazyFrame] = []
     if dictionary_features_lf is not None:
@@ -569,7 +694,11 @@ def build_lm2011_extension_analysis_panel(
             on=["doc_id", "text_scope"],
             how="left",
         )
-        .join(model_surface_lf, on=["doc_id", "text_scope"], how="left")
+        .join(
+            model_surface_lf.drop("filing_date", "cleaning_policy_id", strict=False),
+            on=["doc_id", "text_scope"],
+            how="left",
+        )
         .join(industries_lf, on="doc_id", how="left")
         .unique(subset=["doc_id", "text_scope"], keep="first")
     )

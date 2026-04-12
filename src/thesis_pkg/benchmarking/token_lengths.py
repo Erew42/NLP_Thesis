@@ -26,9 +26,12 @@ def _import_bert_tokenizer():
 @lru_cache(maxsize=None)
 def load_finbert_tokenizer(authority: FinbertAuthoritySpec):
     bert_tokenizer = _import_bert_tokenizer()
+    kwargs = {"do_lower_case": authority.do_lower_case}
+    if authority.tokenizer_revision is not None:
+        kwargs["revision"] = authority.tokenizer_revision
     return bert_tokenizer.from_pretrained(
         authority.model_name,
-        do_lower_case=authority.do_lower_case,
+        **kwargs,
     )
 
 

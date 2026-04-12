@@ -45,7 +45,11 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 
 
-def finbert_item_feature_contract_payload(authority: FinbertAuthoritySpec) -> dict[str, Any]:
+def finbert_item_feature_contract_payload(
+    authority: FinbertAuthoritySpec,
+    *,
+    segment_policy_id: str = FINBERT_SEGMENT_POLICY_ID,
+) -> dict[str, Any]:
     return {
         "accepted_unit": ["doc_id", "benchmark_item_code"],
         "segment_grain": "benchmark_sentence_id",
@@ -58,8 +62,8 @@ def finbert_item_feature_contract_payload(authority: FinbertAuthoritySpec) -> di
             "length_weight_sum_column": "finbert_token_count_512_sum",
             "length_weight_policy": "sum positive FinBERT tokenizer lengths across accepted scored segments",
         },
-        "metadata_columns": ["text_scope", "model_name", "model_version", "segment_policy_id"],
-        "segment_policy_id": FINBERT_SEGMENT_POLICY_ID,
+        "metadata_columns": ["text_scope", "cleaning_policy_id", "model_name", "model_version", "segment_policy_id"],
+        "segment_policy_id": segment_policy_id,
         "primary_extension_columns": [
             "finbert_neg_prob_lenw_mean",
             "finbert_pos_prob_lenw_mean",
@@ -94,6 +98,7 @@ def _empty_item_features_long_frame() -> pl.DataFrame:
             "document_type_raw": pl.Utf8,
             "document_type_normalized": pl.Utf8,
             "text_scope": pl.Utf8,
+            "cleaning_policy_id": pl.Utf8,
             "model_name": pl.Utf8,
             "model_version": pl.Utf8,
             "segment_policy_id": pl.Utf8,
@@ -155,6 +160,7 @@ def aggregate_sentence_scores_to_item_features(
     sentence_scores_df: pl.DataFrame,
     sections_df: pl.DataFrame,
 ) -> pl.DataFrame:
+    schema_names = set(sections_df.columns)
     metadata = sections_df.select(
         [
             "benchmark_row_id",
@@ -169,13 +175,26 @@ def aggregate_sentence_scores_to_item_features(
             "document_type_normalized",
             "benchmark_item_code",
             "benchmark_item_label",
+            (
+                pl.col("text_scope").cast(pl.Utf8, strict=False)
+                if "text_scope" in schema_names
+                else pl.col("benchmark_item_code").cast(pl.Utf8, strict=False)
+            ).alias("text_scope"),
+            (
+                pl.col("cleaning_policy_id").cast(pl.Utf8, strict=False)
+                if "cleaning_policy_id" in schema_names
+                else pl.lit(None, dtype=pl.Utf8)
+            ).alias("cleaning_policy_id"),
+            (
+                pl.col("segment_policy_id").cast(pl.Utf8, strict=False)
+                if "segment_policy_id" in schema_names
+                else pl.lit(FINBERT_SEGMENT_POLICY_ID, dtype=pl.Utf8)
+            ).alias("segment_policy_id"),
         ]
     ).with_columns(
         [
-            pl.col("benchmark_item_code").alias("text_scope"),
             pl.lit(None, dtype=pl.Utf8).alias("model_name"),
             pl.lit(None, dtype=pl.Utf8).alias("model_version"),
-            pl.lit(FINBERT_SEGMENT_POLICY_ID, dtype=pl.Utf8).alias("segment_policy_id"),
         ]
     ).sort(["filing_year", "doc_id", "benchmark_item_code"])
     if metadata.is_empty():
@@ -403,6 +422,7 @@ def run_finbert_item_analysis(
             out_root=run_cfg.out_root / "_staged_intermediates",
             section_universe=run_cfg.section_universe,
             sentence_dataset=run_cfg.sentence_dataset,
+            cleaning=run_cfg.cleaning,
             target_doc_universe_path=run_cfg.backbone_path,
             year_filter=run_cfg.year_filter,
             overwrite=run_cfg.overwrite,

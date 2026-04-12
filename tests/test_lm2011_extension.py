@@ -10,6 +10,7 @@ import polars as pl
 from thesis_pkg.pipeline import build_lm2011_extension_analysis_panel
 from thesis_pkg.pipeline import build_lm2011_extension_control_ladder
 from thesis_pkg.pipeline import build_lm2011_extension_dictionary_features
+from thesis_pkg.pipeline import build_lm2011_extension_dictionary_features_from_cleaned_scopes
 from thesis_pkg.pipeline import build_lm2011_extension_sample_loss_table
 from thesis_pkg.pipeline import build_lm2011_extension_specification_grid
 from thesis_pkg.pipeline import run_lm2011_extension_estimation_scaffold
@@ -117,6 +118,73 @@ def test_extension_dictionary_features_score_item_scopes() -> None:
     assert item_7["total_token_count"] == 5
     assert item_7["token_count"] == 5
     assert item_7["lm_negative_prop"] == 0.4
+
+
+def test_extension_dictionary_features_can_score_cleaned_scope_artifact() -> None:
+    cleaned_scopes = pl.DataFrame(
+        {
+            "doc_id": ["doc_owner", "doc_owner"],
+            "cik_10": ["0000000001", "0000000001"],
+            "filing_date": [dt.date(2009, 3, 3), dt.date(2009, 3, 3)],
+            "document_type_raw": ["10-K", "10-K"],
+            "item_id": ["7", "1A"],
+            "text_scope": ["item_7_mda", "item_1a_risk_factors"],
+            "cleaning_policy_id": ["item_text_clean_v2", "item_text_clean_v2"],
+            "cleaned_text": ["loss loss gain recognized must", "loss uncertain lawsuit recognized"],
+        }
+    )
+
+    features = build_lm2011_extension_dictionary_features_from_cleaned_scopes(
+        cleaned_scopes.lazy(),
+        dictionary_lists=_dictionary_lists(),
+        harvard_negative_word_list=["bad"],
+        master_dictionary_words=["loss", "gain", "uncertain", "lawsuit", "must", "may", "recognized", "bad"],
+    ).collect().sort("text_scope")
+
+    assert features["text_scope"].to_list() == ["item_1a_risk_factors", "item_7_mda"]
+    assert features["cleaning_policy_id"].to_list() == ["item_text_clean_v2", "item_text_clean_v2"]
+    item_7 = features.filter(pl.col("text_scope") == "item_7_mda").row(0, named=True)
+    assert item_7["lm_negative_prop"] == 0.4
+
+
+def test_extension_panel_rejects_mismatched_cleaned_dictionary_and_model_universes(tmp_path: Path) -> None:
+    dictionary_features = pl.DataFrame(
+        {
+            "doc_id": ["doc_owner"],
+            "cik_10": ["0000000001"],
+            "filing_date": [dt.date(2009, 3, 3)],
+            "text_scope": ["item_7_mda"],
+            "cleaning_policy_id": ["item_text_clean_v2"],
+            "dictionary_family": ["lm2011_frozen"],
+            "total_token_count": [5],
+            "token_count": [5],
+            "lm_negative_tfidf": [0.2],
+        }
+    )
+    model_features = pl.DataFrame(
+        {
+            "doc_id": ["doc_owner"],
+            "filing_date": [dt.date(2009, 3, 3)],
+            "text_scope": ["item_7_mda"],
+            "cleaning_policy_id": ["other_policy"],
+            "finbert_neg_prob_lenw_mean": [0.3],
+        }
+    )
+    company_history, company_description = _company_frames()
+
+    try:
+        build_lm2011_extension_analysis_panel(
+            _event_panel().lazy(),
+            dictionary_features.lazy(),
+            model_features.lazy(),
+            company_history.lazy(),
+            company_description.lazy(),
+            ff48_siccodes_path=_write_ff48_mapping(tmp_path),
+        )
+    except ValueError as exc:
+        assert "identical cleaned" in str(exc)
+    else:
+        raise AssertionError("Expected mismatched cleaned-scope universes to be rejected")
 
 
 def test_extension_panel_and_sample_loss_make_ownership_ladder_auditable(tmp_path: Path) -> None:

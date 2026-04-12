@@ -53,6 +53,8 @@ class BenchmarkSampleSpec:
 @dataclass(frozen=True)
 class FinbertAuthoritySpec:
     model_name: str = "yiyanghkust/finbert-tone"
+    model_revision: str | None = None
+    tokenizer_revision: str | None = None
     tokenizer_class_name: str = "BertTokenizer"
     model_class_name: str = "BertForSequenceClassification"
     do_lower_case: bool = True
@@ -67,6 +69,51 @@ class FinbertAuthoritySpec:
 
 
 DEFAULT_FINBERT_AUTHORITY = FinbertAuthoritySpec()
+
+
+@dataclass(frozen=True)
+class ItemTextCleaningConfig:
+    enabled: bool = True
+    cleaning_policy_id: str = "item_text_clean_v2"
+    drop_page_markers: bool = True
+    drop_report_headers: bool = True
+    drop_structural_tags: bool = True
+    trim_early_toc_prefix: bool = True
+    truncate_item_aware_tail_bleed: bool = True
+    drop_reference_only_stubs: bool = True
+    drop_table_like_lines: bool = False
+    toc_scan_char_window: int = 2000
+    toc_min_matching_lines: int = 2
+    tail_scan_fraction: float = 0.35
+    reference_stub_max_char_count: int = 1200
+    drop_blank_after_cleaning: bool = True
+    enforce_item7_lm_token_floor: bool = True
+    item7_min_lm_tokens: int = 250
+    hard_drop_min_clean_char_count: int | None = None
+    warn_below_clean_char_count: int = 500
+    large_removal_warning_threshold: float = 0.40
+    emit_cleaned_scope_artifact: bool = True
+    emit_manual_audit_sample: bool = True
+
+    def __post_init__(self) -> None:
+        if not self.cleaning_policy_id:
+            raise ValueError("cleaning_policy_id must be non-empty.")
+        if self.toc_scan_char_window < 0:
+            raise ValueError("toc_scan_char_window must be non-negative.")
+        if self.toc_min_matching_lines < 1:
+            raise ValueError("toc_min_matching_lines must be positive.")
+        if not (0.0 <= self.tail_scan_fraction <= 1.0):
+            raise ValueError("tail_scan_fraction must be between 0 and 1.")
+        if self.reference_stub_max_char_count < 0:
+            raise ValueError("reference_stub_max_char_count must be non-negative.")
+        if self.item7_min_lm_tokens < 0:
+            raise ValueError("item7_min_lm_tokens must be non-negative.")
+        if self.hard_drop_min_clean_char_count is not None and self.hard_drop_min_clean_char_count < 0:
+            raise ValueError("hard_drop_min_clean_char_count must be non-negative when provided.")
+        if self.warn_below_clean_char_count < 0:
+            raise ValueError("warn_below_clean_char_count must be non-negative.")
+        if not (0.0 <= self.large_removal_warning_threshold <= 1.0):
+            raise ValueError("large_removal_warning_threshold must be between 0 and 1.")
 
 
 @dataclass(frozen=True)
@@ -243,6 +290,7 @@ class FinbertAnalysisRunConfig:
     runtime: FinbertRuntimeConfig = field(default_factory=FinbertRuntimeConfig)
     bucket_lengths: BucketLengthSpec = field(default_factory=BucketLengthSpec)
     sentence_dataset: SentenceDatasetConfig = field(default_factory=SentenceDatasetConfig)
+    cleaning: ItemTextCleaningConfig = field(default_factory=ItemTextCleaningConfig)
     backbone_path: Path | None = None
     year_filter: tuple[int, ...] | None = None
     write_sentence_scores: bool = False
@@ -275,6 +323,7 @@ class FinbertSentencePreprocessingRunConfig:
     out_root: Path
     section_universe: FinbertSectionUniverseConfig | None = None
     sentence_dataset: SentenceDatasetConfig = field(default_factory=SentenceDatasetConfig)
+    cleaning: ItemTextCleaningConfig = field(default_factory=ItemTextCleaningConfig)
     target_doc_universe_path: Path | None = None
     year_filter: tuple[int, ...] | None = None
     overwrite: bool = False
@@ -304,6 +353,11 @@ class FinbertSentencePreprocessingRunArtifacts:
     sentence_dataset_dir: Path
     yearly_summary_path: Path
     oversize_sections_path: Path | None = None
+    cleaned_item_scopes_dir: Path | None = None
+    cleaning_row_audit_path: Path | None = None
+    cleaning_flagged_rows_path: Path | None = None
+    item_scope_cleaning_diagnostics_path: Path | None = None
+    manual_boundary_audit_sample_path: Path | None = None
 
 
 @dataclass(frozen=True)

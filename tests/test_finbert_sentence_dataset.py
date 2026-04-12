@@ -9,6 +9,7 @@ import pytest
 from thesis_pkg.benchmarking.contracts import DEFAULT_FINBERT_AUTHORITY
 from thesis_pkg.benchmarking.contracts import FinbertSentencePreprocessingRunConfig
 from thesis_pkg.benchmarking.contracts import FinbertSectionUniverseConfig
+from thesis_pkg.benchmarking.contracts import ItemTextCleaningConfig
 from thesis_pkg.benchmarking.contracts import SentenceDatasetConfig
 from thesis_pkg.benchmarking.finbert_sentence_preprocessing import run_finbert_sentence_preprocessing
 from thesis_pkg.benchmarking.sentences import materialize_sentence_benchmark_dataset
@@ -41,7 +42,7 @@ def _write_items_year(
     item_texts: dict[str, str] | None = None,
 ) -> None:
     doc_id = doc_id or f"{year}:doc:001"
-    default_text = ("Sentence. " * 80).strip()
+    default_text = ("Sentence. " * 300).strip()
     item_texts = item_texts or {}
     path.parent.mkdir(parents=True, exist_ok=True)
     pl.DataFrame(
@@ -209,6 +210,9 @@ def test_run_finbert_sentence_preprocessing_writes_by_year_artifacts(
                 "document_type_raw",
                 "document_type_normalized",
                 "canonical_item",
+                "text_scope",
+                "cleaning_policy_id",
+                "segment_policy_id",
             ]
         ).iter_rows(named=True):
             rows.append(
@@ -227,6 +231,9 @@ def test_run_finbert_sentence_preprocessing_writes_by_year_artifacts(
                     "document_type_raw": row["document_type_raw"],
                     "document_type_normalized": row["document_type_normalized"],
                     "canonical_item": row["canonical_item"],
+                    "text_scope": row["text_scope"],
+                    "cleaning_policy_id": row["cleaning_policy_id"],
+                    "segment_policy_id": row["segment_policy_id"],
                     "sentence_index": 0,
                     "sentence_text": "stub sentence",
                     "sentence_char_count": 13,
@@ -255,18 +262,34 @@ def test_run_finbert_sentence_preprocessing_writes_by_year_artifacts(
 
     assert artifacts.oversize_sections_path is not None
     assert artifacts.oversize_sections_path.exists()
+    assert artifacts.cleaned_item_scopes_dir is not None
+    assert (artifacts.cleaned_item_scopes_dir / "2006.parquet").exists()
+    assert artifacts.cleaning_row_audit_path is not None
+    assert artifacts.cleaning_row_audit_path.exists()
+    assert artifacts.cleaning_flagged_rows_path is not None
+    assert artifacts.cleaning_flagged_rows_path.exists()
+    assert artifacts.item_scope_cleaning_diagnostics_path is not None
+    assert artifacts.item_scope_cleaning_diagnostics_path.exists()
+    assert artifacts.manual_boundary_audit_sample_path is not None
+    assert artifacts.manual_boundary_audit_sample_path.exists()
     assert summary["sentence_rows"].to_list() == [3]
+    assert summary["cleaned_scope_rows"].to_list() == [3]
     assert summary["short_sentence_rows"].to_list() == [3]
     assert summary["oversize_section_rows"].to_list() == [0]
     assert summary["chunked_section_rows"].to_list() == [0]
     assert summary["warning_split_rows"].to_list() == [0]
     assert sentence_dataset.height == 3
+    assert "text_scope" in sentence_dataset.columns
+    assert "cleaning_policy_id" in sentence_dataset.columns
+    assert "segment_policy_id" in sentence_dataset.columns
     assert "benchmark_item_label" in sentence_dataset.columns
     assert "source_year_file" in sentence_dataset.columns
     assert "document_type_raw" in sentence_dataset.columns
     assert manifest["accepted_universe_contract"]["accepted_unit"] == ["doc_id", "benchmark_item_code"]
     assert manifest["accepted_universe_contract"]["filters"]["raw_form_allowlist"] == ["10-K", "10-K405"]
     assert manifest["accepted_universe_contract"]["dedupe"]["key"] == ["doc_id", "benchmark_item_code"]
+    assert manifest["cleaning_policy_id"] == "item_text_clean_v2"
+    assert "item_text_clean_v2" in manifest["segment_policy_id"]
 
 
 def test_run_finbert_sentence_preprocessing_reuses_existing_outputs(
@@ -326,6 +349,74 @@ def test_run_finbert_sentence_preprocessing_reuses_existing_outputs(
     assert call_count["derive"] == 1
 
 
+def test_run_finbert_sentence_preprocessing_rejects_stale_cleaning_manifest(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source_dir = tmp_path / "items_analysis"
+    _write_items_year(source_dir / "2006.parquet", year=2006)
+
+    from thesis_pkg.benchmarking import finbert_sentence_preprocessing
+    from thesis_pkg.benchmarking import sentences
+
+    def _fake_derive(sections_df: pl.DataFrame, sentence_cfg, *, authority):
+        del sentence_cfg, authority
+        sentence_df = (
+            sections_df.head(1)
+            .select(
+                "benchmark_row_id",
+                "doc_id",
+                "cik_10",
+                "accession_nodash",
+                "filing_date",
+                "filing_year",
+                "benchmark_item_code",
+                "benchmark_item_label",
+                "source_year_file",
+                "document_type",
+                "document_type_raw",
+                "document_type_normalized",
+                "canonical_item",
+                "text_scope",
+                "cleaning_policy_id",
+                "segment_policy_id",
+            )
+            .with_columns(
+                [
+                    pl.concat_str([pl.col("benchmark_row_id"), pl.lit(":0")]).alias("benchmark_sentence_id"),
+                    pl.lit(0, dtype=pl.Int32).alias("sentence_index"),
+                    pl.lit("stub sentence", dtype=pl.Utf8).alias("sentence_text"),
+                    pl.lit(13, dtype=pl.Int32).alias("sentence_char_count"),
+                    pl.lit("test", dtype=pl.Utf8).alias("sentencizer_backend"),
+                    pl.lit("test", dtype=pl.Utf8).alias("sentencizer_version"),
+                    pl.lit(5, dtype=pl.Int32).alias("finbert_token_count_512"),
+                    pl.lit("short", dtype=pl.Utf8).alias("finbert_token_bucket_512"),
+                ]
+            )
+        )
+        return sentence_df, _empty_split_audit(sentences)
+
+    monkeypatch.setattr(finbert_sentence_preprocessing, "_derive_sentence_frame_with_split_audit", _fake_derive)
+
+    cfg = FinbertSentencePreprocessingRunConfig(
+        source_items_dir=source_dir,
+        out_root=tmp_path / "runs",
+        section_universe=FinbertSectionUniverseConfig(source_items_dir=source_dir),
+        run_name="sentence_prep",
+    )
+    run_finbert_sentence_preprocessing(cfg)
+
+    stale_cfg = FinbertSentencePreprocessingRunConfig(
+        source_items_dir=source_dir,
+        out_root=tmp_path / "runs",
+        section_universe=FinbertSectionUniverseConfig(source_items_dir=source_dir),
+        cleaning=ItemTextCleaningConfig(cleaning_policy_id="item_text_clean_v3"),
+        run_name="sentence_prep",
+    )
+    with pytest.raises(ValueError, match="incompatible semantic settings"):
+        run_finbert_sentence_preprocessing(stale_cfg)
+
+
 def test_run_finbert_sentence_preprocessing_filters_to_target_doc_universe(
     tmp_path: Path,
     monkeypatch,
@@ -374,6 +465,9 @@ def test_run_finbert_sentence_preprocessing_filters_to_target_doc_universe(
                 "document_type_raw",
                 "document_type_normalized",
                 "canonical_item",
+                "text_scope",
+                "cleaning_policy_id",
+                "segment_policy_id",
             ]
         ).iter_rows(named=True):
             rows.append(
@@ -392,6 +486,9 @@ def test_run_finbert_sentence_preprocessing_filters_to_target_doc_universe(
                     "document_type_raw": row["document_type_raw"],
                     "document_type_normalized": row["document_type_normalized"],
                     "canonical_item": row["canonical_item"],
+                    "text_scope": row["text_scope"],
+                    "cleaning_policy_id": row["cleaning_policy_id"],
+                    "segment_policy_id": row["segment_policy_id"],
                     "sentence_index": 0,
                     "sentence_text": "stub sentence",
                     "sentence_char_count": 13,
@@ -506,7 +603,7 @@ def test_run_finbert_sentence_preprocessing_logs_fallback_split_reasons_and_warn
 ) -> None:
     source_dir = tmp_path / "items_analysis"
     whitespace_text = ("A" * 249_999) + (" " + ("B" * 10)) * 3
-    hard_limit_text = "C" * 250_010
+    hard_limit_text = "AA1" * 90_000
     _write_items_year(
         source_dir / "2006.parquet",
         year=2006,

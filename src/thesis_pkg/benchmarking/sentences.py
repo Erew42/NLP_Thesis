@@ -28,6 +28,9 @@ SENTENCE_FRAME_SCHEMA: dict[str, pl.DataType] = {
     "document_type_raw": pl.Utf8,
     "document_type_normalized": pl.Utf8,
     "canonical_item": pl.Utf8,
+    "text_scope": pl.Utf8,
+    "cleaning_policy_id": pl.Utf8,
+    "segment_policy_id": pl.Utf8,
     "sentence_index": pl.Int64,
     "sentence_text": pl.Utf8,
     "sentence_char_count": pl.Int64,
@@ -68,6 +71,9 @@ _SECTION_METADATA_COLUMNS: tuple[str, ...] = (
     "document_type_raw",
     "document_type_normalized",
     "canonical_item",
+    "text_scope",
+    "cleaning_policy_id",
+    "segment_policy_id",
 )
 
 
@@ -239,6 +245,9 @@ def _derive_sentence_batch(
                     "document_type_raw": row.get("document_type_raw"),
                     "document_type_normalized": row.get("document_type_normalized"),
                     "canonical_item": row.get("canonical_item"),
+                    "text_scope": row.get("text_scope"),
+                    "cleaning_policy_id": row.get("cleaning_policy_id"),
+                    "segment_policy_id": row.get("segment_policy_id"),
                     "sentence_index": sentence_index,
                     "sentence_text": sentence_text,
                     "sentence_char_count": len(sentence_text),

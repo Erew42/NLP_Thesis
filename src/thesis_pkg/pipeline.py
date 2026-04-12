@@ -99,6 +99,7 @@ from thesis_pkg.pipelines.lm2011_extension import (
     build_lm2011_extension_analysis_panel,
     build_lm2011_extension_control_ladder,
     build_lm2011_extension_dictionary_features,
+    build_lm2011_extension_dictionary_features_from_cleaned_scopes,
     build_lm2011_extension_sample_loss_table,
     build_lm2011_extension_specification_grid,
     run_lm2011_extension_estimation_scaffold,

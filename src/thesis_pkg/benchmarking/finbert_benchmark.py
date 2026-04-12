@@ -124,7 +124,10 @@ def load_finbert_model(
     torch = _import_torch()
     bert_model = _import_bert_model_class()
     device = _resolve_device(runtime)
-    model = bert_model.from_pretrained(authority.model_name)
+    kwargs = {}
+    if authority.model_revision is not None:
+        kwargs["revision"] = authority.model_revision
+    model = bert_model.from_pretrained(authority.model_name, **kwargs)
     model.eval()
     return model.to(torch.device(device))
 

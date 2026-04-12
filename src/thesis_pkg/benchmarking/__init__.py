@@ -22,10 +22,15 @@ from thesis_pkg.benchmarking.contracts import FinbertSentencePreprocessingRunCon
 from thesis_pkg.benchmarking.contracts import FinbertSectionUniverseConfig
 from thesis_pkg.benchmarking.contracts import FinbertTokenizerProfileRunArtifacts
 from thesis_pkg.benchmarking.contracts import FinbertTokenizerProfileRunConfig
+from thesis_pkg.benchmarking.contracts import ItemTextCleaningConfig
 from thesis_pkg.benchmarking.contracts import SentenceDatasetConfig
 from thesis_pkg.benchmarking.contracts import StageRunsConfig
 from thesis_pkg.benchmarking.finbert_analysis import run_finbert_item_analysis
 from thesis_pkg.benchmarking.finbert_analysis import finbert_item_feature_contract_payload
+from thesis_pkg.benchmarking.item_text_cleaning import benchmark_item_code_to_text_scope
+from thesis_pkg.benchmarking.item_text_cleaning import build_segment_policy_id
+from thesis_pkg.benchmarking.item_text_cleaning import clean_item_scopes_with_audit
+from thesis_pkg.benchmarking.item_text_cleaning import clean_item_text
 from thesis_pkg.benchmarking.finbert_benchmark import benchmark_full_pipeline
 from thesis_pkg.benchmarking.finbert_benchmark import benchmark_model_only
 from thesis_pkg.benchmarking.finbert_benchmark import benchmark_sentence_splitting
@@ -71,6 +76,7 @@ __all__ = [
     "FinbertSectionUniverseConfig",
     "FinbertTokenizerProfileRunArtifacts",
     "FinbertTokenizerProfileRunConfig",
+    "ItemTextCleaningConfig",
     "SentenceDatasetConfig",
     "StageRunsConfig",
     "annotate_finbert_token_lengths",
@@ -79,8 +85,12 @@ __all__ = [
     "benchmark_sentence_splitting",
     "benchmark_tokenizer_only",
     "build_finbert_benchmark_suite",
+    "build_segment_policy_id",
     "compute_year_allocations",
     "compute_year_item_allocations",
+    "benchmark_item_code_to_text_scope",
+    "clean_item_scopes_with_audit",
+    "clean_item_text",
     "derive_sentence_frame",
     "finbert_item_feature_contract_payload",
     "load_eligible_section_universe",

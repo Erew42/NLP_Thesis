@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from importlib import metadata
+import json
 from pathlib import Path
 from typing import Any
 
@@ -53,6 +55,11 @@ _SENTENCE_METADATA_COLUMNS: tuple[str, ...] = (
     "document_type_normalized",
     "benchmark_item_code",
     "benchmark_item_label",
+)
+_OPTIONAL_SENTENCE_METADATA_COLUMNS: tuple[str, ...] = (
+    "text_scope",
+    "cleaning_policy_id",
+    "segment_policy_id",
 )
 
 
@@ -153,6 +160,70 @@ def _select_sentence_year_paths(
             f"Requested filing years were not found in {sentence_dataset_dir}: {missing_years}"
         )
     return selected
+
+
+def _package_version(name: str) -> str | None:
+    try:
+        return metadata.version(name)
+    except metadata.PackageNotFoundError:
+        return None
+
+
+def _sentence_dataset_manifest_payload(sentence_dataset_dir: Path) -> dict[str, Any] | None:
+    manifest_path = sentence_dataset_dir.parent.parent / "run_manifest.json"
+    if not manifest_path.exists():
+        return None
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload = {
+        "manifest_path": str(manifest_path.resolve()),
+        "cleaning_policy_id": manifest.get("cleaning_policy_id"),
+        "cleaning": manifest.get("cleaning"),
+        "segment_policy_id": manifest.get("segment_policy_id"),
+        "authority": manifest.get("authority"),
+        "sentence_dataset": manifest.get("sentence_dataset"),
+    }
+    return json.loads(json.dumps(payload))
+
+
+def _semantic_inference_payload(
+    run_cfg: FinbertSentenceParquetInferenceRunConfig,
+    authority: FinbertAuthoritySpec,
+) -> dict[str, Any]:
+    payload = {
+        "authority": asdict(authority),
+        "runtime": asdict(run_cfg.runtime),
+        "batch_config": asdict(run_cfg.batch_config),
+        "bucket_lengths": asdict(run_cfg.bucket_lengths),
+        "sentence_dataset_dir": str(run_cfg.sentence_dataset_dir.resolve()),
+        "backbone_path": str(run_cfg.backbone_path.resolve()) if run_cfg.backbone_path is not None else None,
+        "year_filter": list(run_cfg.year_filter) if run_cfg.year_filter is not None else None,
+        "sentence_slice_rows": run_cfg.sentence_slice_rows,
+        "write_sentence_scores": run_cfg.write_sentence_scores,
+        "source_sentence_dataset_manifest": _sentence_dataset_manifest_payload(run_cfg.sentence_dataset_dir),
+    }
+    return json.loads(json.dumps(payload))
+
+
+def _assert_existing_inference_run_compatible(
+    run_manifest_path: Path,
+    run_cfg: FinbertSentenceParquetInferenceRunConfig,
+    authority: FinbertAuthoritySpec,
+) -> None:
+    if run_cfg.overwrite or not run_manifest_path.exists():
+        return
+    manifest = json.loads(run_manifest_path.read_text(encoding="utf-8"))
+    expected = _semantic_inference_payload(run_cfg, authority)
+    existing = manifest.get("semantic_reuse_guard", {})
+    mismatched = [
+        key
+        for key, expected_value in expected.items()
+        if existing.get(key) != expected_value
+    ]
+    if mismatched:
+        raise ValueError(
+            "Existing FinBERT inference artifacts were created with incompatible semantic settings "
+            f"for {mismatched}. Use a new run_name or set overwrite=True."
+        )
 
 
 def _validate_sentence_frame_columns(
@@ -299,8 +370,12 @@ def _section_metadata_from_sentence_frame(sentence_df: pl.DataFrame) -> pl.DataF
     if sentence_df.is_empty():
         return _empty_item_features_long_frame().select(_SENTENCE_METADATA_COLUMNS)
 
+    selected_columns = [
+        *_SENTENCE_METADATA_COLUMNS,
+        *[column for column in _OPTIONAL_SENTENCE_METADATA_COLUMNS if column in sentence_df.columns],
+    ]
     return (
-        sentence_df.select(_SENTENCE_METADATA_COLUMNS)
+        sentence_df.select(selected_columns)
         .unique(subset=["benchmark_row_id"], maintain_order=True)
         .sort(["filing_year", "doc_id", "benchmark_item_code"])
     )
@@ -520,6 +595,13 @@ def run_finbert_sentence_parquet_inference(
     yearly_summary_path = run_dir / "model_inference_yearly_summary.parquet"
     yearly_summary_csv_path = run_dir / "model_inference_yearly_summary.csv"
     run_manifest_path = run_dir / "run_manifest.json"
+    source_sentence_manifest = _sentence_dataset_manifest_payload(run_cfg.sentence_dataset_dir)
+    source_segment_policy_id = (
+        source_sentence_manifest.get("segment_policy_id")
+        if source_sentence_manifest is not None
+        else None
+    )
+    _assert_existing_inference_run_compatible(run_manifest_path, run_cfg, authority)
 
     tokenizer = None
     model = None
@@ -614,8 +696,13 @@ def run_finbert_sentence_parquet_inference(
             ).with_columns(
                 [
                     pl.lit(authority.model_name, dtype=pl.Utf8).alias("model_name"),
-                    pl.lit(None, dtype=pl.Utf8).alias("model_version"),
-                    pl.lit(FINBERT_SEGMENT_POLICY_ID, dtype=pl.Utf8).alias("segment_policy_id"),
+                    pl.lit(authority.model_revision, dtype=pl.Utf8).alias("model_version"),
+                    pl.coalesce(
+                        [
+                            pl.col("segment_policy_id").cast(pl.Utf8, strict=False),
+                            pl.lit(FINBERT_SEGMENT_POLICY_ID, dtype=pl.Utf8),
+                        ]
+                    ).alias("segment_policy_id"),
                 ]
             )
 
@@ -679,9 +766,16 @@ def run_finbert_sentence_parquet_inference(
             "run_name": run_name,
             "created_at_utc": utc_timestamp(),
             "authority": asdict(authority),
-            "item_feature_contract": finbert_item_feature_contract_payload(authority),
+            "semantic_reuse_guard": _semantic_inference_payload(run_cfg, authority),
+            "item_feature_contract": finbert_item_feature_contract_payload(
+                authority,
+                segment_policy_id=source_segment_policy_id or FINBERT_SEGMENT_POLICY_ID,
+            ),
             "runtime": asdict(run_cfg.runtime),
             "runtime_environment": runtime_environment,
+            "transformers_version": _package_version("transformers"),
+            "torch_version": runtime_environment.get("torch_version"),
+            "source_sentence_dataset_manifest": source_sentence_manifest,
             "batch_config": asdict(run_cfg.batch_config),
             "bucket_lengths": asdict(run_cfg.bucket_lengths),
             "sentence_dataset_dir": str(run_cfg.sentence_dataset_dir.resolve()),
