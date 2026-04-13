@@ -125,7 +125,11 @@ ANNUAL_FISCAL_MARKET_COLUMNS: tuple[str, ...] = (
     "PRCC",
 )
 FF_DAILY_COLUMNS: tuple[str, ...] = ("raw_date", "mkt_rf", "smb", "hml", "rf")
+FF_MONTHLY_COLUMNS: tuple[str, ...] = ("raw_month", "mkt_rf", "smb", "hml", "rf")
+MOMENTUM_MONTHLY_COLUMNS: tuple[str, ...] = ("raw_month", "mom")
+KEN_FRENCH_MISSING_FACTOR_VALUES: tuple[float, ...] = (-99.99, -999.0)
 MONTHLY_STOCK_CANDIDATES: tuple[str, ...] = (
+    "sfz_mth.parquet",
     "stockmonthly.parquet",
     "securitymonthly.parquet",
     "monthlystock.parquet",
@@ -139,6 +143,7 @@ STAGE_ARTIFACT_FILENAMES: dict[str, str] = {
     "annual_accounting_panel": "lm2011_annual_accounting_panel.parquet",
     "quarterly_accounting_panel": "lm2011_quarterly_accounting_panel.parquet",
     "ff_factors_daily_normalized": "lm2011_ff_factors_daily_normalized.parquet",
+    "ff_factors_monthly_with_mom_normalized": "lm2011_ff_factors_monthly_with_mom_normalized.parquet",
     "text_features_full_10k": "lm2011_text_features_full_10k.parquet",
     "text_features_mda": "lm2011_text_features_mda.parquet",
     "table_i_sample_creation": "lm2011_table_i_sample_creation.parquet",
@@ -183,6 +188,8 @@ class RunnerPaths:
     company_history_path: Path | None
     company_description_path: Path | None
     ff_daily_csv_path: Path
+    ff_monthly_csv_path: Path
+    momentum_monthly_csv_path: Path
     ff48_siccodes_path: Path
     monthly_stock_path: Path | None
     ff_monthly_with_mom_path: Path | None
@@ -374,6 +381,8 @@ def _resolve_paths(args: argparse.Namespace) -> RunnerPaths:
             ("companydescription.parquet",),
         ),
         ff_daily_csv_path=additional_data_dir / "F-F_Research_Data_Factors_daily.csv",
+        ff_monthly_csv_path=additional_data_dir / "F-F_Research_Data_Factors.csv",
+        momentum_monthly_csv_path=additional_data_dir / "F-F_Momentum_Factor.csv",
         ff48_siccodes_path=additional_data_dir / "FF_Siccodes_48_Industries.txt",
         monthly_stock_path=monthly_stock_path,
         ff_monthly_with_mom_path=ff_monthly_with_mom_path,
@@ -460,25 +469,138 @@ def _prepare_annual_accounting_inputs(
     )
 
 
-def _load_ff_factors_daily_lf(csv_path: Path) -> pl.LazyFrame:
+def _ken_french_data_skip_rows(csv_path: Path, header_columns: tuple[str, ...]) -> int:
+    expected = ("", *header_columns)
+    for line_number, line in enumerate(csv_path.read_text(encoding="utf-8-sig").splitlines()):
+        cells = tuple(cell.strip().lower() for cell in line.split(",")[: len(expected)])
+        if cells == tuple(cell.lower() for cell in expected):
+            return line_number + 1
+    raise ValueError(f"{csv_path} missing Ken French header row for columns: {list(header_columns)}")
+
+
+def _factor_value_expr(column: str) -> pl.Expr:
+    value = pl.col(column).str.strip_chars().cast(pl.Float64, strict=False)
+    return (
+        pl.when(value.is_in(KEN_FRENCH_MISSING_FACTOR_VALUES))
+        .then(pl.lit(None, dtype=pl.Float64))
+        .otherwise(value)
+        .alias(column)
+    )
+
+
+def _load_ken_french_factor_csv_lf(
+    csv_path: Path,
+    *,
+    raw_period_column: str,
+    output_date_column: str,
+    output_factor_columns: tuple[str, ...],
+    header_columns: tuple[str, ...],
+    date_format: str,
+    date_len: int,
+    month_end_dates: bool,
+) -> pl.LazyFrame:
+    columns = (raw_period_column, *output_factor_columns)
+    parsed_date = pl.col(raw_period_column).str.strip_chars().str.strptime(pl.Date, date_format, strict=False)
+    if month_end_dates:
+        parsed_date = parsed_date.dt.month_end()
+    stripped_period = pl.col(raw_period_column).str.strip_chars()
     return (
         pl.scan_csv(
             csv_path,
-            skip_rows=5,
+            skip_rows=_ken_french_data_skip_rows(csv_path, header_columns),
             has_header=False,
-            new_columns=list(FF_DAILY_COLUMNS),
-            schema_overrides={name: pl.Utf8 for name in FF_DAILY_COLUMNS},
+            new_columns=list(columns),
+            schema_overrides={name: pl.Utf8 for name in columns},
+            truncate_ragged_lines=True,
         )
-        .filter(pl.col("raw_date").str.len_chars() == 8)
+        .filter((stripped_period.str.len_chars() == date_len) & stripped_period.str.contains(r"^\d+$"))
         .with_columns(
-            pl.col("raw_date").str.strptime(pl.Date, "%Y%m%d", strict=False).alias("trading_date"),
-            pl.col("mkt_rf").str.strip_chars().cast(pl.Float64, strict=False).alias("mkt_rf"),
-            pl.col("smb").str.strip_chars().cast(pl.Float64, strict=False).alias("smb"),
-            pl.col("hml").str.strip_chars().cast(pl.Float64, strict=False).alias("hml"),
-            pl.col("rf").str.strip_chars().cast(pl.Float64, strict=False).alias("rf"),
+            parsed_date.alias(output_date_column),
+            *[_factor_value_expr(column) for column in output_factor_columns],
         )
-        .drop("raw_date")
-        .drop_nulls(subset=["trading_date", "mkt_rf", "smb", "hml", "rf"])
+        .drop(raw_period_column)
+        .drop_nulls(subset=[output_date_column, *output_factor_columns])
+    )
+
+
+def _load_ff_factors_daily_lf(csv_path: Path) -> pl.LazyFrame:
+    return _load_ken_french_factor_csv_lf(
+        csv_path,
+        raw_period_column=FF_DAILY_COLUMNS[0],
+        output_date_column="trading_date",
+        output_factor_columns=FF_DAILY_COLUMNS[1:],
+        header_columns=("Mkt-RF", "SMB", "HML", "RF"),
+        date_format="%Y%m%d",
+        date_len=8,
+        month_end_dates=False,
+    )
+
+
+def _load_ff_factors_monthly_lf(csv_path: Path) -> pl.LazyFrame:
+    return _load_ken_french_factor_csv_lf(
+        csv_path,
+        raw_period_column=FF_MONTHLY_COLUMNS[0],
+        output_date_column="month_end",
+        output_factor_columns=FF_MONTHLY_COLUMNS[1:],
+        header_columns=("Mkt-RF", "SMB", "HML", "RF"),
+        date_format="%Y%m",
+        date_len=6,
+        month_end_dates=True,
+    )
+
+
+def _load_momentum_factors_monthly_lf(csv_path: Path) -> pl.LazyFrame:
+    return _load_ken_french_factor_csv_lf(
+        csv_path,
+        raw_period_column=MOMENTUM_MONTHLY_COLUMNS[0],
+        output_date_column="month_end",
+        output_factor_columns=MOMENTUM_MONTHLY_COLUMNS[1:],
+        header_columns=("Mom",),
+        date_format="%Y%m",
+        date_len=6,
+        month_end_dates=True,
+    )
+
+
+def _require_unique_month_end(lf: pl.LazyFrame, label: str) -> None:
+    duplicate_months = (
+        lf.group_by("month_end")
+        .agg(pl.len().alias("_n"))
+        .filter(pl.col("_n") > 1)
+        .select("month_end")
+        .head(10)
+        .collect()
+        .get_column("month_end")
+        .to_list()
+    )
+    if duplicate_months:
+        formatted = [
+            value.isoformat() if hasattr(value, "isoformat") else str(value)
+            for value in duplicate_months
+        ]
+        raise ValueError(f"{label} contains duplicate month_end values: {formatted}")
+
+
+def _load_ff_factors_monthly_with_mom_lf(ff_csv_path: Path, mom_csv_path: Path) -> pl.LazyFrame:
+    ff_lf = _load_ff_factors_monthly_lf(ff_csv_path)
+    mom_lf = _load_momentum_factors_monthly_lf(mom_csv_path)
+    _require_unique_month_end(ff_lf, "monthly FF factors")
+    _require_unique_month_end(mom_lf, "monthly momentum factors")
+    return (
+        ff_lf.join(mom_lf, on="month_end", how="inner")
+        .select("month_end", "mkt_rf", "smb", "hml", "rf", "mom")
+        .sort("month_end")
+    )
+
+
+def _scan_ff_factors_monthly_with_mom_lf(parquet_path: Path) -> pl.LazyFrame:
+    return pl.scan_parquet(parquet_path).select(
+        pl.col("month_end").cast(pl.Date, strict=False).alias("month_end"),
+        pl.col("mkt_rf").cast(pl.Float64, strict=False).alias("mkt_rf"),
+        pl.col("smb").cast(pl.Float64, strict=False).alias("smb"),
+        pl.col("hml").cast(pl.Float64, strict=False).alias("hml"),
+        pl.col("rf").cast(pl.Float64, strict=False).alias("rf"),
+        pl.col("mom").cast(pl.Float64, strict=False).alias("mom"),
     )
 
 
@@ -671,6 +793,8 @@ def _build_manifest(paths: RunnerPaths) -> dict[str, Any]:
             "company_history_path": _absolute_path_str(paths.company_history_path),
             "company_description_path": _absolute_path_str(paths.company_description_path),
             "ff_daily_csv_path": _absolute_path_str(paths.ff_daily_csv_path),
+            "ff_monthly_csv_path": _absolute_path_str(paths.ff_monthly_csv_path),
+            "momentum_monthly_csv_path": _absolute_path_str(paths.momentum_monthly_csv_path),
             "ff48_siccodes_path": _absolute_path_str(paths.ff48_siccodes_path),
             "monthly_stock_path": _absolute_path_str(paths.monthly_stock_path),
             "ff_monthly_with_mom_path": _absolute_path_str(paths.ff_monthly_with_mom_path),
@@ -795,6 +919,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         annual_accounting_panel_lf: pl.LazyFrame | None = None
         quarterly_accounting_panel_lf: pl.LazyFrame | None = None
         ff_factors_daily_lf: pl.LazyFrame | None = None
+        ff_factors_monthly_with_mom_lf: pl.LazyFrame | None = None
         text_features_full_10k_lf: pl.LazyFrame | None = None
         text_features_mda_lf: pl.LazyFrame | None = None
         table_i_sample_creation_lf: pl.LazyFrame | None = None
@@ -930,6 +1055,47 @@ def main(argv: Sequence[str] | None = None) -> int:
                 stage_name="ff_factors_daily_normalized",
                 reason=SKIPPED_MISSING_OPTIONAL_INPUT,
                 detail="ff_daily_csv_path",
+            )
+
+        current_stage_name = "ff_factors_monthly_with_mom_normalized"
+        if paths.ff_monthly_with_mom_path is not None:
+            if paths.ff_monthly_with_mom_path.exists():
+                monthly_factor_input_lf = _scan_ff_factors_monthly_with_mom_lf(paths.ff_monthly_with_mom_path)
+                _require_unique_month_end(monthly_factor_input_lf, "monthly FF+momentum factors")
+                ff_factors_monthly_with_mom_lf = _write_stage(
+                    manifest,
+                    output_dir=paths.output_dir,
+                    stage_name="ff_factors_monthly_with_mom_normalized",
+                    frame=monthly_factor_input_lf,
+                )
+            else:
+                _record_stage_skipped(
+                    manifest,
+                    stage_name="ff_factors_monthly_with_mom_normalized",
+                    reason=SKIPPED_MISSING_OPTIONAL_INPUT,
+                    detail="ff_monthly_with_mom_path",
+                )
+        elif paths.ff_monthly_csv_path.exists() and paths.momentum_monthly_csv_path.exists():
+            ff_factors_monthly_with_mom_lf = _write_stage(
+                manifest,
+                output_dir=paths.output_dir,
+                stage_name="ff_factors_monthly_with_mom_normalized",
+                frame=_load_ff_factors_monthly_with_mom_lf(
+                    paths.ff_monthly_csv_path,
+                    paths.momentum_monthly_csv_path,
+                ),
+            )
+        else:
+            _record_stage_skipped(
+                manifest,
+                stage_name="ff_factors_monthly_with_mom_normalized",
+                reason=SKIPPED_MISSING_OPTIONAL_INPUT,
+                detail=_describe_missing_paths(
+                    {
+                        "ff_monthly_csv_path": paths.ff_monthly_csv_path,
+                        "momentum_monthly_csv_path": paths.momentum_monthly_csv_path,
+                    }
+                ),
             )
 
         current_stage_name = "text_features_full_10k"
@@ -1349,8 +1515,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if (
             paths.monthly_stock_path is not None
             and paths.monthly_stock_path.exists()
-            and paths.ff_monthly_with_mom_path is not None
-            and paths.ff_monthly_with_mom_path.exists()
+            and ff_factors_monthly_with_mom_lf is not None
             and event_panel_lf is not None
             and year_merged_lf is not None
         ):
@@ -1362,7 +1527,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     event_panel_lf,
                     year_merged_lf,
                     pl.scan_parquet(paths.monthly_stock_path),
-                    pl.scan_parquet(paths.ff_monthly_with_mom_path),
+                    ff_factors_monthly_with_mom_lf,
                     lm_dictionary_lists=dictionary_lists,
                     harvard_negative_word_list=harvard_negative_word_list,
                     master_dictionary_words=master_dictionary_words,
@@ -1374,7 +1539,18 @@ def main(argv: Sequence[str] | None = None) -> int:
                 manifest,
                 stage_name="table_ia_ii_results",
                 reason=SKIPPED_MISSING_OPTIONAL_INPUT,
-                detail="monthly_stock_path or ff_monthly_with_mom_path",
+                detail=_describe_missing_paths(
+                    {
+                        "monthly_stock_path": paths.monthly_stock_path,
+                        "ff_factors_monthly_with_mom_normalized": Path(
+                            manifest["artifacts"]["ff_factors_monthly_with_mom_normalized"]
+                        )
+                        if "ff_factors_monthly_with_mom_normalized" in manifest["artifacts"]
+                        else None,
+                        "event_panel": Path(manifest["artifacts"]["event_panel"]) if "event_panel" in manifest["artifacts"] else None,
+                        "year_merged": paths.year_merged_dir if year_merged_lf is not None else None,
+                    }
+                ),
             )
 
         manifest["run_status"] = "completed"

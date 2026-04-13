@@ -110,6 +110,17 @@ def _build_temp_layout(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
         "companydescription.parquet",
     ):
         _write_parquet(ccm_base_dir / name)
+    _write_parquet(
+        ccm_base_dir / "sfz_mth.parquet",
+        pl.DataFrame(
+            {
+                "KYPERMNO": [1],
+                "MCALDT": [dt.date(2000, 1, 31)],
+                "MRET": [0.01],
+                "MTCAP": [100.0],
+            }
+        ),
+    )
 
     _write_parquet(upstream_run_root / "sec_ccm_premerge" / "sec_ccm_matched_clean.parquet")
     _write_parquet(
@@ -161,6 +172,37 @@ def _build_temp_layout(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
             ]
         ),
     )
+    _write_text(
+        additional_data_dir / "F-F_Research_Data_Factors.csv",
+        "\n".join(
+            [
+                "monthly preamble",
+                "",
+                ",Mkt-RF,SMB,HML,RF",
+                "199707,   7.81,  -2.42,   1.00,   0.45",
+                "199708,  -5.56,   3.91,   0.80,   0.42",
+                " Annual Factors: January-December",
+                ",Mkt-RF,SMB,HML,RF",
+                "1997,  33.35, -10.00,  15.00,   5.00",
+            ]
+        ),
+    )
+    _write_text(
+        additional_data_dir / "F-F_Momentum_Factor.csv",
+        "\n".join(
+            [
+                "momentum preamble",
+                "more preamble",
+                "",
+                ",Mom",
+                "199707,   1.22",
+                "199708,  -0.56",
+                "Annual Factors:",
+                ",Mom",
+                "1997,  -10.00",
+            ]
+        ),
+    )
     return sample_root, upstream_run_root, additional_data_dir, output_dir
 
 
@@ -172,6 +214,29 @@ def test_resolve_ccm_parquet_artifact_supports_nested_documents_export_layout(tm
     target.write_text("placeholder", encoding="utf-8")
 
     assert runner._resolve_ccm_parquet_artifact(base_dir, "filingdates.parquet") == target
+
+
+def test_resolve_paths_auto_resolves_sfz_mth_monthly_stock(tmp_path: Path) -> None:
+    sample_root, upstream_run_root, additional_data_dir, output_dir = _build_temp_layout(tmp_path)
+
+    paths = runner._resolve_paths(
+        runner.parse_args(
+            [
+                "--sample-root",
+                str(sample_root),
+                "--upstream-run-root",
+                str(upstream_run_root),
+                "--additional-data-dir",
+                str(additional_data_dir),
+                "--output-dir",
+                str(output_dir),
+            ]
+        )
+    )
+
+    assert paths.monthly_stock_path == (
+        sample_root / "ccm_parquet_data" / "documents-export-2025-3-19" / "sfz_mth.parquet"
+    ).resolve()
 
 
 def test_filter_valid_annual_period_descriptor_rows_excludes_invalid_fallback_rows() -> None:
@@ -194,7 +259,7 @@ def test_filter_valid_annual_period_descriptor_rows_excludes_invalid_fallback_ro
     assert out.get_column("KYGVKEY").to_list() == [2]
 
 
-def test_load_ff_factors_daily_lf_uses_skip_rows_5_and_ignores_footer(tmp_path: Path) -> None:
+def test_load_ff_factors_daily_lf_detects_header_and_ignores_footer(tmp_path: Path) -> None:
     csv_path = tmp_path / "F-F_Research_Data_Factors_daily.csv"
     csv_path.write_text(
         "\n".join(
@@ -203,6 +268,7 @@ def test_load_ff_factors_daily_lf_uses_skip_rows_5_and_ignores_footer(tmp_path: 
                 "preamble2",
                 "preamble3",
                 "preamble4",
+                "preamble5",
                 ",Mkt-RF,SMB,HML,RF",
                 "19260701,    0.09,   -0.25,   -0.27,    0.01",
                 "19260702,    0.45,   -0.33,   -0.06,    0.01",
@@ -217,6 +283,121 @@ def test_load_ff_factors_daily_lf_uses_skip_rows_5_and_ignores_footer(tmp_path: 
     assert out.height == 2
     assert out.row(0, named=True)["trading_date"].isoformat() == "1926-07-01"
     assert out.row(1, named=True)["mkt_rf"] == 0.45
+
+
+def test_load_monthly_ff_factors_excludes_annual_rows_and_missing_sentinels(tmp_path: Path) -> None:
+    csv_path = tmp_path / "F-F_Research_Data_Factors.csv"
+    csv_path.write_text(
+        "\n".join(
+            [
+                "monthly preamble",
+                "",
+                ",Mkt-RF,SMB,HML,RF",
+                "199707,   7.81,  -2.42,   1.00,   0.45",
+                "199708, -99.99,   3.91,   0.80,   0.42",
+                " Annual Factors: January-December",
+                ",Mkt-RF,SMB,HML,RF",
+                "1997,  33.35, -10.00,  15.00,   5.00",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    out = runner._load_ff_factors_monthly_lf(csv_path).collect()
+
+    assert out.height == 1
+    assert out.columns == ["mkt_rf", "smb", "hml", "rf", "month_end"]
+    assert out.item(0, "month_end") == dt.date(1997, 7, 31)
+    assert out.item(0, "mkt_rf") == pytest.approx(7.81)
+
+
+def test_load_monthly_momentum_factors_excludes_annual_rows(tmp_path: Path) -> None:
+    csv_path = tmp_path / "F-F_Momentum_Factor.csv"
+    csv_path.write_text(
+        "\n".join(
+            [
+                "momentum preamble",
+                "more preamble",
+                "",
+                ",Mom",
+                "199707,   1.22",
+                "199708,  -0.56",
+                "Annual Factors:",
+                ",Mom",
+                "1997,  -10.00",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    out = runner._load_momentum_factors_monthly_lf(csv_path).collect().sort("month_end")
+
+    assert out.height == 2
+    assert out.get_column("month_end").to_list() == [dt.date(1997, 7, 31), dt.date(1997, 8, 31)]
+    assert out.get_column("mom").to_list() == pytest.approx([1.22, -0.56])
+
+
+def test_load_ff_factors_monthly_with_mom_lf_joins_and_sorts(tmp_path: Path) -> None:
+    ff_path = tmp_path / "F-F_Research_Data_Factors.csv"
+    mom_path = tmp_path / "F-F_Momentum_Factor.csv"
+    ff_path.write_text(
+        "\n".join(
+            [
+                "preamble",
+                ",Mkt-RF,SMB,HML,RF",
+                "199708,  -5.56,   3.91,   0.80,   0.42",
+                "199707,   7.81,  -2.42,   1.00,   0.45",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    mom_path.write_text(
+        "\n".join(
+            [
+                "preamble",
+                ",Mom",
+                "199708,  -0.56",
+                "199707,   1.22",
+                "199709,   9.99",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    out = runner._load_ff_factors_monthly_with_mom_lf(ff_path, mom_path).collect()
+
+    assert out.columns == ["month_end", "mkt_rf", "smb", "hml", "rf", "mom"]
+    assert out.get_column("month_end").to_list() == [dt.date(1997, 7, 31), dt.date(1997, 8, 31)]
+    assert out.get_column("mom").to_list() == pytest.approx([1.22, -0.56])
+
+
+def test_load_ff_factors_monthly_with_mom_lf_rejects_duplicate_months(tmp_path: Path) -> None:
+    ff_path = tmp_path / "F-F_Research_Data_Factors.csv"
+    mom_path = tmp_path / "F-F_Momentum_Factor.csv"
+    ff_path.write_text(
+        "\n".join(
+            [
+                "preamble",
+                ",Mkt-RF,SMB,HML,RF",
+                "199707,   7.81,  -2.42,   1.00,   0.45",
+                "199707,   7.82,  -2.43,   1.01,   0.46",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    mom_path.write_text(
+        "\n".join(
+            [
+                "preamble",
+                ",Mom",
+                "199707,   1.22",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="monthly FF factors contains duplicate month_end values"):
+        runner._load_ff_factors_monthly_with_mom_lf(ff_path, mom_path)
 
 
 def test_prepare_doc_analyst_sue_input_filters_matched_and_deduplicates(tmp_path: Path) -> None:
@@ -346,6 +527,18 @@ def test_main_writes_expected_artifacts_and_manifest_for_stubbed_run(
     monkeypatch.setattr(runner, "build_lm2011_table_vi_results", lambda *_, **__: empty_table)
     monkeypatch.setattr(runner, "build_lm2011_table_viii_results", lambda *_, **__: empty_table)
     monkeypatch.setattr(runner, "build_lm2011_table_ia_i_results", lambda *_, **__: empty_table)
+    monkeypatch.setattr(
+        runner,
+        "build_lm2011_trading_strategy_monthly_returns",
+        lambda *_, **__: pl.DataFrame(
+            {
+                "portfolio_month": [dt.date(2000, 1, 31)],
+                "sort_signal_name": ["fin_neg_prop"],
+                "long_short_return": [0.01],
+            }
+        ).lazy(),
+    )
+    monkeypatch.setattr(runner, "build_lm2011_table_ia_ii_results", lambda *_, **__: empty_table)
     exit_code = runner.main(
         [
             "--sample-root",
@@ -371,11 +564,15 @@ def test_main_writes_expected_artifacts_and_manifest_for_stubbed_run(
     assert (output_dir / "lm2011_table_i_sample_creation_1994_2024.md").exists()
     assert (output_dir / "lm2011_event_panel.parquet").exists()
     assert (output_dir / "lm2011_table_iv_results.parquet").exists()
+    assert (output_dir / "lm2011_ff_factors_monthly_with_mom_normalized.parquet").exists()
     assert "1994-2024" in (output_dir / "lm2011_table_i_sample_creation_1994_2024.md").read_text(encoding="utf-8")
 
     manifest = json.loads((output_dir / "lm2011_sample_run_manifest.json").read_text(encoding="utf-8"))
     assert manifest["run_status"] == "completed"
     assert manifest["config"]["full_10k_cleaning_contract"] == "lm2011_paper"
+    assert manifest["resolved_inputs"]["ff_monthly_csv_path"].endswith("F-F_Research_Data_Factors.csv")
+    assert manifest["resolved_inputs"]["momentum_monthly_csv_path"].endswith("F-F_Momentum_Factor.csv")
+    assert manifest["resolved_inputs"]["monthly_stock_path"].endswith("sfz_mth.parquet")
     assert manifest["dictionary_inputs"]["resource_scope"] == "repo-local operative LM2011-style lexicon inputs"
     assert "not asserted to be the original LM2011" in manifest["dictionary_inputs"]["historical_provenance_warning"]
     master_resources = [
@@ -398,8 +595,11 @@ def test_main_writes_expected_artifacts_and_manifest_for_stubbed_run(
     ]
     assert manifest["stages"]["table_iv_results"]["status"] == "generated_empty"
     assert manifest["stages"]["table_iv_results"]["reason"] == runner.EMPTY_TABLE_REASON
-    assert manifest["stages"]["trading_strategy_monthly_returns"]["status"] == runner.SKIPPED_MISSING_OPTIONAL_INPUT
-    assert manifest["stages"]["table_ia_ii_results"]["status"] == runner.SKIPPED_MISSING_OPTIONAL_INPUT
+    assert manifest["stages"]["ff_factors_monthly_with_mom_normalized"]["status"] == "generated"
+    assert manifest["stages"]["ff_factors_monthly_with_mom_normalized"]["row_count"] == 2
+    assert manifest["stages"]["trading_strategy_monthly_returns"]["status"] == "generated"
+    assert manifest["stages"]["table_ia_ii_results"]["status"] == "generated_empty"
+    assert manifest["stages"]["table_ia_ii_results"]["reason"] == runner.EMPTY_TABLE_REASON
     assert captured["text_features_full_10k_kwargs"]["cleaning_contract"] == "lm2011_paper"
     assert captured["text_features_full_10k_kwargs"]["master_dictionary_words"] == ("token", "harvard", "recognized")
     assert captured["text_features_mda_kwargs"]["master_dictionary_words"] == ("token", "harvard", "recognized")
