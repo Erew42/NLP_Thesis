@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 import datetime as dt
 import math
 import warnings
@@ -49,6 +49,7 @@ _LM2011_TABLE_I_MDA_SECTION_ID = "mda_subsection"
 _LM2011_TABLE_I_MDA_SECTION_LABEL = "Management Discussion and Analysis (MD&A) Subsection"
 _LM2011_TABLE_I_DEFAULT_SAMPLE_START = dt.date(1994, 1, 1)
 _LM2011_TABLE_I_DEFAULT_SAMPLE_END = dt.date(2008, 12, 31)
+DEFAULT_EVENT_WINDOW_DOC_BATCH_SIZE = 250
 _LM2011_TABLE_I_FULL_10K_ROW_LABELS: dict[str, str] = {
     "first_filing_per_year": "Include only first filing in a given year",
     "minimum_180_day_spacing": "At least 180 days between a given firm's 10-K filings",
@@ -71,6 +72,89 @@ _LM2011_TABLE_I_MDA_ROW_LABELS: dict[str, str] = {
     "identifiable_mda": "Subset of 10-K sample where MD&A section could be identified",
     "mda_token_count_ge_250": "MD&A section >= 250 words",
 }
+_EVENT_SCREEN_SURFACE_REQUIRED_COLUMNS: tuple[str, ...] = (
+    "doc_id",
+    "gvkey_int",
+    "KYPERMNO",
+    "filing_date",
+    "filing_trade_date",
+    "pre_filing_trade_date",
+    "book_equity_be",
+    "total_token_count_full_10k",
+    "pre_filing_price",
+    "size_event",
+    "bm_event",
+    "event_return_day_count",
+    "event_volume_day_count",
+    "pre_turnover_obs",
+    "abnormal_volume_pre_obs",
+    "event_shares",
+    "event_shrcd",
+    "event_exchcd",
+    "pre_alpha_obs",
+    "post_alpha_obs",
+    "filing_period_excess_return",
+    "share_turnover",
+    "abnormal_volume",
+    "pre_ffalpha",
+    "postevent_return_volatility",
+    "nasdaq_dummy",
+)
+
+
+def _empty_event_screen_surface_df() -> pl.DataFrame:
+    return pl.DataFrame(
+        schema={
+            "doc_id": pl.Utf8,
+            "gvkey_int": pl.Int32,
+            "KYPERMNO": pl.Int32,
+            "filing_date": pl.Date,
+            "filing_trade_date": pl.Date,
+            "pre_filing_trade_date": pl.Date,
+            "book_equity_be": pl.Float64,
+            "total_token_count_full_10k": pl.Int32,
+            "pre_filing_price": pl.Float64,
+            "size_event": pl.Float64,
+            "bm_event": pl.Float64,
+            "event_return_day_count": pl.Int64,
+            "event_volume_day_count": pl.Int64,
+            "pre_turnover_obs": pl.Int64,
+            "abnormal_volume_pre_obs": pl.Int64,
+            "event_shares": pl.Float64,
+            "event_shrcd": pl.Int32,
+            "event_exchcd": pl.Int32,
+            "pre_alpha_obs": pl.Int32,
+            "post_alpha_obs": pl.Int32,
+            "filing_period_excess_return": pl.Float64,
+            "share_turnover": pl.Float64,
+            "abnormal_volume": pl.Float64,
+            "pre_ffalpha": pl.Float64,
+            "postevent_return_volatility": pl.Float64,
+            "nasdaq_dummy": pl.Int8,
+        }
+    )
+
+
+def _empty_prepared_daily_event_df() -> pl.DataFrame:
+    return pl.DataFrame(
+        schema={
+            "KYPERMNO": pl.Int32,
+            "trade_date": pl.Date,
+            "stock_return": pl.Float64,
+            "VOL": pl.Float64,
+            "FINAL_PRC": pl.Float64,
+            "PRC": pl.Float64,
+            "TCAP": pl.Float64,
+            "SHROUT": pl.Float64,
+            "SHRCD": pl.Int32,
+            "EXCHCD": pl.Int32,
+            "mkt_rf": pl.Float64,
+            "smb": pl.Float64,
+            "hml": pl.Float64,
+            "rf": pl.Float64,
+            "market_return": pl.Float64,
+        }
+    )
 
 
 def _require_columns(lf: pl.LazyFrame, required: tuple[str, ...], label: str) -> None:
@@ -217,6 +301,13 @@ def _frame_height(frame: pl.LazyFrame | pl.DataFrame) -> int:
     return int(frame.height)
 
 
+def _validated_event_window_doc_batch_size(batch_size: int) -> int:
+    resolved = int(batch_size)
+    if resolved < 1:
+        raise ValueError("event_window_doc_batch_size must be >= 1")
+    return resolved
+
+
 def _format_table_i_window_label(sample_start: dt.date, sample_end: dt.date) -> str:
     return f"{sample_start.year}-{sample_end.year}"
 
@@ -304,23 +395,6 @@ def _price_expr_from_available_columns(
     return pl.coalesce(exprs)
 
 
-def _prepare_event_base_frame(
-    sample_backbone_lf: pl.LazyFrame,
-    daily_lf: pl.LazyFrame,
-    annual_accounting_panel_lf: pl.LazyFrame,
-    ownership_lf: pl.LazyFrame | None,
-    full_10k_text_features_lf: pl.LazyFrame | None,
-) -> pl.DataFrame:
-    docs_df = _prepare_table_i_base_frame(
-        sample_backbone_lf,
-        daily_lf,
-        annual_accounting_panel_lf,
-        full_10k_text_features_lf,
-    )
-    ownership_df = _prepare_ownership_frame(ownership_lf)
-    return docs_df.lazy().join(ownership_df.lazy(), on="doc_id", how="left").collect()
-
-
 def _prepare_table_i_base_frame(
     sample_backbone_lf: pl.LazyFrame,
     daily_lf: pl.LazyFrame,
@@ -385,15 +459,9 @@ def _prepare_table_i_base_frame(
     )
 
 
-def _prepare_daily_event_frame(
+def _prepare_daily_event_source_lf(
     daily_lf: pl.LazyFrame,
-    ff_factors_daily_lf: pl.LazyFrame | None,
-    docs_df: pl.DataFrame,
-) -> pl.DataFrame:
-    if ff_factors_daily_lf is None:
-        raise ValueError(
-            "ff_factors_daily_lf is required; fail-closed external_input_policy forbids LM2011 event panels without daily FF factors"
-        )
+) -> pl.LazyFrame:
     daily_schema = daily_lf.collect_schema()
     daily_permno_col = _resolve_first_existing(daily_schema, ("KYPERMNO", "kypermno"), "daily_panel")
     daily_date_col = _resolve_first_existing(daily_schema, ("CALDT", "daily_caldt"), "daily_panel")
@@ -403,88 +471,34 @@ def _prepare_daily_event_frame(
     missing_daily = [name for name in required_daily if name not in daily_schema]
     if missing_daily:
         raise ValueError(f"daily_lf missing required columns for LM2011 event metrics: {missing_daily}")
+    return daily_lf.select(
+        pl.col(daily_permno_col).cast(pl.Int32, strict=False).alias("KYPERMNO"),
+        pl.col(daily_date_col).cast(pl.Date, strict=False).alias("trade_date"),
+        pl.col(return_col).cast(pl.Float64, strict=False).alias("stock_return"),
+        pl.col("VOL").cast(pl.Float64, strict=False).alias("VOL"),
+        pl.col(price_col).cast(pl.Float64, strict=False).alias("FINAL_PRC"),
+        (
+            pl.col("PRC").cast(pl.Float64, strict=False)
+            if "PRC" in daily_schema
+            else pl.col(price_col).cast(pl.Float64, strict=False)
+        ).alias("PRC"),
+        (
+            pl.col("TCAP").cast(pl.Float64, strict=False)
+            if "TCAP" in daily_schema
+            else pl.lit(None, dtype=pl.Float64)
+        ).alias("TCAP"),
+        pl.col("SHROUT").cast(pl.Float64, strict=False).alias("SHROUT"),
+        pl.col("SHRCD").cast(pl.Int32, strict=False).alias("SHRCD"),
+        pl.col("EXCHCD").cast(pl.Int32, strict=False).alias("EXCHCD"),
+    ).drop_nulls(subset=["KYPERMNO", "trade_date"])
+
+
+def _prepare_daily_factor_frame(ff_factors_daily_lf: pl.LazyFrame | None) -> pl.DataFrame:
+    if ff_factors_daily_lf is None:
+        raise ValueError(
+            "ff_factors_daily_lf is required; fail-closed external_input_policy forbids LM2011 event panels without daily FF factors"
+        )
     _require_columns(ff_factors_daily_lf, ("trading_date", "mkt_rf", "smb", "hml", "rf"), "ff_factors_daily")
-
-    permnos = docs_df.get_column("KYPERMNO").drop_nulls().unique().to_list()
-    if not permnos:
-        return pl.DataFrame(
-            schema={
-                "KYPERMNO": pl.Int32,
-                "trade_date": pl.Date,
-                "stock_return": pl.Float64,
-                "VOL": pl.Float64,
-                "FINAL_PRC": pl.Float64,
-                "PRC": pl.Float64,
-                "TCAP": pl.Float64,
-                "SHROUT": pl.Float64,
-                "SHRCD": pl.Int32,
-                "EXCHCD": pl.Int32,
-                "mkt_rf": pl.Float64,
-                "smb": pl.Float64,
-                "hml": pl.Float64,
-                "rf": pl.Float64,
-                "market_return": pl.Float64,
-            }
-        )
-
-    filing_trade_dates = docs_df.get_column("filing_trade_date").drop_nulls()
-    if filing_trade_dates.len() == 0:
-        return pl.DataFrame(
-            schema={
-                "KYPERMNO": pl.Int32,
-                "trade_date": pl.Date,
-                "stock_return": pl.Float64,
-                "VOL": pl.Float64,
-                "FINAL_PRC": pl.Float64,
-                "PRC": pl.Float64,
-                "TCAP": pl.Float64,
-                "SHROUT": pl.Float64,
-                "SHRCD": pl.Int32,
-                "EXCHCD": pl.Int32,
-                "mkt_rf": pl.Float64,
-                "smb": pl.Float64,
-                "hml": pl.Float64,
-                "rf": pl.Float64,
-                "market_return": pl.Float64,
-            }
-        )
-    min_trade_date = _coerce_python_date(filing_trade_dates.min(), label="minimum filing_trade_date")
-    max_trade_date = _coerce_python_date(filing_trade_dates.max(), label="maximum filing_trade_date")
-    min_lookup_date = min_trade_date - dt.timedelta(days=450)
-    max_lookup_date = max_trade_date + dt.timedelta(days=450)
-
-    daily_df = (
-        daily_lf.filter(
-            pl.col(daily_permno_col).cast(pl.Int32, strict=False).is_in(permnos)
-            & pl.col(daily_date_col).cast(pl.Date, strict=False).is_between(
-                pl.lit(min_lookup_date),
-                pl.lit(max_lookup_date),
-                closed="both",
-            )
-        )
-        .select(
-            pl.col(daily_permno_col).cast(pl.Int32, strict=False).alias("KYPERMNO"),
-            pl.col(daily_date_col).cast(pl.Date, strict=False).alias("trade_date"),
-            pl.col(return_col).cast(pl.Float64, strict=False).alias("stock_return"),
-            pl.col("VOL").cast(pl.Float64, strict=False).alias("VOL"),
-            pl.col(price_col).cast(pl.Float64, strict=False).alias("FINAL_PRC"),
-            (
-                pl.col("PRC").cast(pl.Float64, strict=False)
-                if "PRC" in daily_schema
-                else pl.col(price_col).cast(pl.Float64, strict=False)
-            ).alias("PRC"),
-            (
-                pl.col("TCAP").cast(pl.Float64, strict=False)
-                if "TCAP" in daily_schema
-                else pl.lit(None, dtype=pl.Float64)
-            ).alias("TCAP"),
-            pl.col("SHROUT").cast(pl.Float64, strict=False).alias("SHROUT"),
-            pl.col("SHRCD").cast(pl.Int32, strict=False).alias("SHRCD"),
-            pl.col("EXCHCD").cast(pl.Int32, strict=False).alias("EXCHCD"),
-        )
-        .collect()
-    )
-
     factors_df = ff_factors_daily_lf.select(
         pl.col("trading_date").cast(pl.Date, strict=False).alias("trade_date"),
         pl.col("mkt_rf").cast(pl.Float64, strict=False).alias("mkt_rf"),
@@ -493,8 +507,58 @@ def _prepare_daily_event_frame(
         pl.col("rf").cast(pl.Float64, strict=False).alias("rf"),
     ).collect()
     factors_df = _ensure_factor_scale(factors_df, ("mkt_rf", "smb", "hml", "rf"))
-    factors_df = factors_df.with_columns((pl.col("mkt_rf") + pl.col("rf")).alias("market_return"))
-    return daily_df.join(factors_df, on="trade_date", how="left")
+    return factors_df.with_columns((pl.col("mkt_rf") + pl.col("rf")).alias("market_return"))
+
+
+def _collect_daily_event_batch(
+    daily_source_lf: pl.LazyFrame,
+    factors_df: pl.DataFrame,
+    docs_df: pl.DataFrame,
+) -> pl.DataFrame:
+    permnos = docs_df.get_column("KYPERMNO").drop_nulls().unique().to_list()
+    if not permnos:
+        return _empty_prepared_daily_event_df()
+
+    filing_trade_dates = docs_df.get_column("filing_trade_date").drop_nulls()
+    if filing_trade_dates.len() == 0:
+        return _empty_prepared_daily_event_df()
+    min_trade_date = _coerce_python_date(filing_trade_dates.min(), label="minimum filing_trade_date")
+    max_trade_date = _coerce_python_date(filing_trade_dates.max(), label="maximum filing_trade_date")
+    min_lookup_date = min_trade_date - dt.timedelta(days=450)
+    max_lookup_date = max_trade_date + dt.timedelta(days=450)
+    daily_df = (
+        daily_source_lf.filter(
+            pl.col("KYPERMNO").cast(pl.Int32, strict=False).is_in(permnos)
+            & pl.col("trade_date").cast(pl.Date, strict=False).is_between(
+                pl.lit(min_lookup_date),
+                pl.lit(max_lookup_date),
+                closed="both",
+            )
+        )
+        .collect()
+        .unique(subset=["KYPERMNO", "trade_date"], keep="first")
+        .sort("KYPERMNO", "trade_date")
+    )
+    if daily_df.height == 0:
+        return _empty_prepared_daily_event_df()
+    return daily_df.join(factors_df, on="trade_date", how="left").sort("KYPERMNO", "trade_date")
+
+
+def _collect_event_screen_surface_df(event_screen_surface: pl.LazyFrame | pl.DataFrame) -> pl.DataFrame:
+    surface_df = event_screen_surface.collect() if isinstance(event_screen_surface, pl.LazyFrame) else event_screen_surface
+    missing = [name for name in _EVENT_SCREEN_SURFACE_REQUIRED_COLUMNS if name not in surface_df.columns]
+    if missing:
+        raise ValueError(f"event_screen_surface missing required columns: {missing}")
+    duplicate_doc_ids = (
+        surface_df.group_by("doc_id")
+        .len()
+        .filter(pl.col("len") > 1)
+        .get_column("doc_id")
+        .to_list()
+    )
+    if duplicate_doc_ids:
+        raise ValueError(f"event_screen_surface must be unique on doc_id: {duplicate_doc_ids[:10]}")
+    return surface_df
 
 
 def _attach_trade_indices(docs_df: pl.DataFrame, daily_df: pl.DataFrame) -> tuple[pl.DataFrame, pl.DataFrame]:
@@ -572,6 +636,7 @@ def _build_window_rows(docs_df: pl.DataFrame, daily_df: pl.DataFrame) -> pl.Data
             pl.col("_daily_market_return").alias("market_return"),
         )
         .collect()
+        .sort("doc_id", "relative_day", "trade_date")
     )
 def _require_statsmodels():
     if sm is None:
@@ -833,6 +898,54 @@ def _build_lm2011_event_screen_surface(docs_df: pl.DataFrame, daily_df: pl.DataF
     )
 
 
+def _build_lm2011_event_screen_surface_batched(
+    sample_backbone_lf: pl.LazyFrame,
+    daily_lf: pl.LazyFrame,
+    annual_accounting_panel_lf: pl.LazyFrame,
+    ff_factors_daily_lf: pl.LazyFrame | None,
+    full_10k_text_features_lf: pl.LazyFrame | None,
+    *,
+    event_window_doc_batch_size: int = DEFAULT_EVENT_WINDOW_DOC_BATCH_SIZE,
+    progress_callback: Callable[[dict[str, int]], None] | None = None,
+) -> pl.DataFrame:
+    docs_df = _prepare_table_i_base_frame(
+        sample_backbone_lf,
+        daily_lf,
+        annual_accounting_panel_lf,
+        full_10k_text_features_lf,
+    )
+    if docs_df.height == 0:
+        return _empty_event_screen_surface_df()
+
+    batch_size = _validated_event_window_doc_batch_size(event_window_doc_batch_size)
+    docs_sorted = docs_df.sort("filing_date", "KYPERMNO", "doc_id")
+    daily_source_lf = _prepare_daily_event_source_lf(daily_lf)
+    factors_df = _prepare_daily_factor_frame(ff_factors_daily_lf)
+    batch_frames: list[pl.DataFrame] = []
+    total_docs = docs_sorted.height
+    total_batches = int(math.ceil(total_docs / batch_size))
+
+    for batch_start in range(0, total_docs, batch_size):
+        docs_batch = docs_sorted.slice(batch_start, batch_size)
+        daily_batch_df = _collect_daily_event_batch(daily_source_lf, factors_df, docs_batch)
+        batch_frames.append(_build_lm2011_event_screen_surface(docs_batch, daily_batch_df))
+        if progress_callback is not None:
+            batch_index = int(batch_start / batch_size) + 1
+            progress_callback(
+                {
+                    "batch_index": batch_index,
+                    "total_batches": total_batches,
+                    "batch_doc_count": docs_batch.height,
+                    "docs_completed": min(batch_start + docs_batch.height, total_docs),
+                    "docs_total": total_docs,
+                }
+            )
+
+    if not batch_frames:
+        return _empty_event_screen_surface_df()
+    return pl.concat(batch_frames, how="vertical_relaxed")
+
+
 def _lm2011_table_i_market_stage_specs() -> tuple[tuple[str, pl.Expr], ...]:
     return (
         ("ordinary_common_equity", pl.col("event_shrcd").is_in([10, 11])),
@@ -882,21 +995,26 @@ def _build_lm2011_table_i_market_stage_frames(
     annual_accounting_panel_lf: pl.LazyFrame,
     ff_factors_daily_lf: pl.LazyFrame | None,
     full_10k_text_features_lf: pl.LazyFrame | None,
+    *,
+    event_window_doc_batch_size: int = DEFAULT_EVENT_WINDOW_DOC_BATCH_SIZE,
+    precomputed_event_screen_surface_lf: pl.LazyFrame | pl.DataFrame | None = None,
+    event_screen_progress_callback: Callable[[dict[str, int]], None] | None = None,
 ) -> tuple[tuple[str, pl.DataFrame], ...]:
-    if ff_factors_daily_lf is None:
-        raise ValueError(
-            "ff_factors_daily_lf is required; fail-closed external_input_policy forbids LM2011 event panels without daily FF factors"
+    panel = (
+        _collect_event_screen_surface_df(precomputed_event_screen_surface_lf)
+        if precomputed_event_screen_surface_lf is not None
+        else _build_lm2011_event_screen_surface_batched(
+            sample_backbone_lf,
+            daily_lf,
+            annual_accounting_panel_lf.with_columns(pl.col("gvkey_int").cast(pl.Int32, strict=False).alias("gvkey_int")),
+            ff_factors_daily_lf,
+            full_10k_text_features_lf,
+            event_window_doc_batch_size=event_window_doc_batch_size,
+            progress_callback=event_screen_progress_callback,
         )
-    docs_df = _prepare_table_i_base_frame(
-        sample_backbone_lf,
-        daily_lf,
-        annual_accounting_panel_lf.with_columns(pl.col("gvkey_int").cast(pl.Int32, strict=False).alias("gvkey_int")),
-        full_10k_text_features_lf,
     )
-    if docs_df.height == 0:
-        return tuple((row_id, docs_df.clone()) for row_id, _ in _lm2011_table_i_market_stage_specs())
-    daily_df = _prepare_daily_event_frame(daily_lf, ff_factors_daily_lf, docs_df)
-    panel = _build_lm2011_event_screen_surface(docs_df, daily_df)
+    if panel.height == 0:
+        return tuple((row_id, panel.clone()) for row_id, _ in _lm2011_table_i_market_stage_specs())
     return _apply_lm2011_table_i_market_filters(panel)
 
 
@@ -1059,70 +1177,21 @@ def _build_lm2011_table_i_output(
     ).sort("section_order", "row_order")
 
 
-def build_lm2011_table_i_sample_creation(
-    sec_parsed_lf: pl.LazyFrame,
-    matched_clean_lf: pl.LazyFrame,
-    daily_lf: pl.LazyFrame,
-    annual_accounting_panel_lf: pl.LazyFrame,
-    ff_factors_daily_lf: pl.LazyFrame | None,
-    full_10k_text_features_lf: pl.LazyFrame | None,
-    *,
-    ccm_filingdates_lf: pl.LazyFrame | None = None,
-    mda_text_features_lf: pl.LazyFrame | None = None,
-    sample_start: dt.date = _LM2011_TABLE_I_DEFAULT_SAMPLE_START,
-    sample_end: dt.date = _LM2011_TABLE_I_DEFAULT_SAMPLE_END,
-) -> pl.DataFrame:
-    """Build the LM2011 Table I sample-selection ladder as a normalized row table."""
-    early_stage_frames = _build_lm2011_sample_backbone_stage_frames(
-        sec_parsed_lf,
-        matched_clean_lf,
-        ccm_filingdates_lf=ccm_filingdates_lf,
-        sample_start=sample_start,
-        sample_end=sample_end,
-    )
-    market_stage_frames = _build_lm2011_table_i_market_stage_frames(
-        early_stage_frames[-1][1],
-        daily_lf,
-        annual_accounting_panel_lf,
-        ff_factors_daily_lf,
-        full_10k_text_features_lf,
-    )
-    return _build_lm2011_table_i_output(
-        early_stage_frames,
-        market_stage_frames,
-        sample_start=sample_start,
-        sample_end=sample_end,
-        mda_text_features_lf=mda_text_features_lf,
-    )
-
-
-def build_lm2011_event_panel(
-    sample_backbone_lf: pl.LazyFrame,
-    daily_lf: pl.LazyFrame,
-    annual_accounting_panel_lf: pl.LazyFrame,
-    ff_factors_daily_lf: pl.LazyFrame | None,
+def _build_lm2011_event_panel_df_from_surface(
+    event_screen_surface: pl.LazyFrame | pl.DataFrame,
     ownership_lf: pl.LazyFrame | None,
-    full_10k_text_features_lf: pl.LazyFrame | None,
-) -> pl.LazyFrame:
-    if ff_factors_daily_lf is None:
-        raise ValueError(
-            "ff_factors_daily_lf is required; fail-closed external_input_policy forbids LM2011 event panels without daily FF factors"
-        )
-    docs_df = _prepare_event_base_frame(
-        sample_backbone_lf,
-        daily_lf,
-        annual_accounting_panel_lf.with_columns(pl.col("gvkey_int").cast(pl.Int32, strict=False).alias("gvkey_int")),
-        ownership_lf,
-        full_10k_text_features_lf,
-    )
-    if docs_df.height == 0:
-        return _empty_event_panel_df().lazy()
+) -> pl.DataFrame:
+    surface_df = _collect_event_screen_surface_df(event_screen_surface)
+    if surface_df.height == 0:
+        return _empty_event_panel_df()
 
-    daily_df = _prepare_daily_event_frame(daily_lf, ff_factors_daily_lf, docs_df)
-    panel = _build_lm2011_event_screen_surface(docs_df, daily_df)
+    ownership_df = _prepare_ownership_frame(ownership_lf)
+    panel = surface_df.join(ownership_df, on="doc_id", how="left")
     panel = _apply_lm2011_table_i_market_filters(panel)[-1][1]
     panel = _winsorize_column(panel, "bm_event")
     panel = panel.filter(pl.col("abnormal_volume").is_not_null())
+    if panel.height == 0:
+        return _empty_event_panel_df()
 
     return panel.select(
         "doc_id",
@@ -1140,7 +1209,78 @@ def build_lm2011_event_panel(
         "filing_period_excess_return",
         "abnormal_volume",
         "postevent_return_volatility",
-    ).lazy()
+    )
+
+
+def build_lm2011_table_i_sample_creation(
+    sec_parsed_lf: pl.LazyFrame,
+    matched_clean_lf: pl.LazyFrame,
+    daily_lf: pl.LazyFrame,
+    annual_accounting_panel_lf: pl.LazyFrame,
+    ff_factors_daily_lf: pl.LazyFrame | None,
+    full_10k_text_features_lf: pl.LazyFrame | None,
+    *,
+    ccm_filingdates_lf: pl.LazyFrame | None = None,
+    mda_text_features_lf: pl.LazyFrame | None = None,
+    sample_start: dt.date = _LM2011_TABLE_I_DEFAULT_SAMPLE_START,
+    sample_end: dt.date = _LM2011_TABLE_I_DEFAULT_SAMPLE_END,
+    event_window_doc_batch_size: int = DEFAULT_EVENT_WINDOW_DOC_BATCH_SIZE,
+    _precomputed_event_screen_surface_lf: pl.LazyFrame | pl.DataFrame | None = None,
+    _event_screen_progress_callback: Callable[[dict[str, int]], None] | None = None,
+) -> pl.DataFrame:
+    """Build the LM2011 Table I sample-selection ladder as a normalized row table."""
+    early_stage_frames = _build_lm2011_sample_backbone_stage_frames(
+        sec_parsed_lf,
+        matched_clean_lf,
+        ccm_filingdates_lf=ccm_filingdates_lf,
+        sample_start=sample_start,
+        sample_end=sample_end,
+    )
+    market_stage_frames = _build_lm2011_table_i_market_stage_frames(
+        early_stage_frames[-1][1],
+        daily_lf,
+        annual_accounting_panel_lf,
+        ff_factors_daily_lf,
+        full_10k_text_features_lf,
+        event_window_doc_batch_size=event_window_doc_batch_size,
+        precomputed_event_screen_surface_lf=_precomputed_event_screen_surface_lf,
+        event_screen_progress_callback=_event_screen_progress_callback,
+    )
+    return _build_lm2011_table_i_output(
+        early_stage_frames,
+        market_stage_frames,
+        sample_start=sample_start,
+        sample_end=sample_end,
+        mda_text_features_lf=mda_text_features_lf,
+    )
+
+
+def build_lm2011_event_panel(
+    sample_backbone_lf: pl.LazyFrame,
+    daily_lf: pl.LazyFrame,
+    annual_accounting_panel_lf: pl.LazyFrame,
+    ff_factors_daily_lf: pl.LazyFrame | None,
+    ownership_lf: pl.LazyFrame | None,
+    full_10k_text_features_lf: pl.LazyFrame | None,
+    *,
+    event_window_doc_batch_size: int = DEFAULT_EVENT_WINDOW_DOC_BATCH_SIZE,
+    _precomputed_event_screen_surface_lf: pl.LazyFrame | pl.DataFrame | None = None,
+    _event_screen_progress_callback: Callable[[dict[str, int]], None] | None = None,
+) -> pl.LazyFrame:
+    event_screen_surface = (
+        _precomputed_event_screen_surface_lf
+        if _precomputed_event_screen_surface_lf is not None
+        else _build_lm2011_event_screen_surface_batched(
+            sample_backbone_lf,
+            daily_lf,
+            annual_accounting_panel_lf.with_columns(pl.col("gvkey_int").cast(pl.Int32, strict=False).alias("gvkey_int")),
+            ff_factors_daily_lf,
+            full_10k_text_features_lf,
+            event_window_doc_batch_size=event_window_doc_batch_size,
+            progress_callback=_event_screen_progress_callback,
+        )
+    )
+    return _build_lm2011_event_panel_df_from_surface(event_screen_surface, ownership_lf).lazy()
 
 
 def _attach_pre_filing_price_and_prior_month_price(event_panel_df: pl.DataFrame, daily_lf: pl.LazyFrame) -> pl.DataFrame:
@@ -1675,6 +1815,7 @@ __all__ = [
     "build_lm2011_sample_backbone",
     "build_lm2011_text_features_full_10k",
     "build_lm2011_text_features_mda",
+    "build_lm2011_table_i_sample_creation",
     "build_lm2011_event_panel",
     "build_lm2011_sue_panel",
     "build_lm2011_trading_strategy_monthly_returns",

@@ -122,7 +122,17 @@ def _build_temp_layout(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
         ),
     )
 
-    _write_parquet(upstream_run_root / "sec_ccm_premerge" / "sec_ccm_matched_clean.parquet")
+    _write_parquet(
+        upstream_run_root / "sec_ccm_premerge" / "sec_ccm_matched_clean.parquet",
+        pl.DataFrame(
+            {
+                "doc_id": ["d1"],
+                "KYPERMNO": [1],
+                "gvkey": [1],
+                "SRCTYPE": ["10K"],
+            }
+        ),
+    )
     _write_parquet(
         upstream_run_root / "items_analysis" / "1995.parquet",
         pl.DataFrame(
@@ -136,7 +146,15 @@ def _build_temp_layout(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
             }
         ),
     )
-    _write_parquet(upstream_run_root / "refinitiv_doc_ownership_lm2011" / "refinitiv_lm2011_doc_ownership.parquet")
+    _write_parquet(
+        upstream_run_root / "refinitiv_doc_ownership_lm2011" / "refinitiv_lm2011_doc_ownership.parquet",
+        pl.DataFrame(
+            {
+                "doc_id": ["d1"],
+                "institutional_ownership_pct": [44.0],
+            }
+        ),
+    )
     _write_parquet(
         upstream_run_root / "refinitiv_doc_analyst_lm2011" / "refinitiv_doc_analyst_selected.parquet",
         pl.DataFrame(
@@ -340,6 +358,7 @@ def test_write_frame_artifact_streams_lazy_frame_without_collect(tmp_path: Path,
 def test_write_stage_records_reused_source_path(tmp_path: Path) -> None:
     source = tmp_path / "source.parquet"
     output_dir = tmp_path / "output"
+    manifest_path = tmp_path / "manifest.json"
     _write_parquet(source, pl.DataFrame({"doc_id": ["d1"]}))
     manifest: dict[str, object] = {
         "roots": {"output_dir": str(output_dir)},
@@ -353,12 +372,14 @@ def test_write_stage_records_reused_source_path(tmp_path: Path) -> None:
         output_dir=output_dir,
         stage_name="sample_backbone",
         frame=pl.scan_parquet(source),
+        manifest_path=manifest_path,
         source_path=source,
     )
 
     stage = manifest["stages"]["sample_backbone"]  # type: ignore[index]
     assert stage["source_path"] == str(source.resolve())
     assert stage["row_count"] == 1
+    assert manifest_path.exists()
 
 
 def test_filter_valid_annual_period_descriptor_rows_excludes_invalid_fallback_rows() -> None:
@@ -623,6 +644,13 @@ def test_main_writes_expected_artifacts_and_manifest_for_stubbed_run(
         "build_lm2011_text_features_mda",
         _capture_text_features_mda,
     )
+
+    monkeypatch.setattr(
+        runner.lm2011_pipeline,
+        "_build_lm2011_event_screen_surface_batched",
+        lambda *_, **__: pl.DataFrame({"doc_id": ["d1"]}),
+    )
+
     def _capture_table_i_sample_creation(*_: object, **kwargs: object) -> pl.DataFrame:
         sec_input = _[0]
         if isinstance(sec_input, pl.LazyFrame):
@@ -630,6 +658,12 @@ def test_main_writes_expected_artifacts_and_manifest_for_stubbed_run(
         sample_start = kwargs.get("sample_start", dt.date(1994, 1, 1))
         sample_end = kwargs.get("sample_end", dt.date(2008, 12, 31))
         captured.setdefault("table_i_windows", []).append((sample_start, sample_end))
+        captured.setdefault("table_i_has_precomputed_surface", []).append(
+            kwargs.get("_precomputed_event_screen_surface_lf") is not None
+        )
+        captured.setdefault("table_i_has_progress_callback", []).append(
+            kwargs.get("_event_screen_progress_callback") is not None
+        )
         return _stub_table_i_sample_creation_df(
             window_label=f"{sample_start.year}-{sample_end.year}",
             unavailable_mda=True,
@@ -640,7 +674,11 @@ def test_main_writes_expected_artifacts_and_manifest_for_stubbed_run(
         "build_lm2011_table_i_sample_creation",
         _capture_table_i_sample_creation,
     )
-    monkeypatch.setattr(runner, "build_lm2011_event_panel", lambda *_, **__: pl.DataFrame({"doc_id": ["d1"]}).lazy())
+    def _capture_event_panel(*_: object, **kwargs: object) -> pl.LazyFrame:
+        captured["event_panel_has_precomputed_surface"] = kwargs.get("_precomputed_event_screen_surface_lf") is not None
+        return pl.DataFrame({"doc_id": ["d1"]}).lazy()
+
+    monkeypatch.setattr(runner, "build_lm2011_event_panel", _capture_event_panel)
     monkeypatch.setattr(runner, "build_lm2011_sue_panel", lambda *_, **__: pl.DataFrame({"doc_id": ["d1"]}).lazy())
     monkeypatch.setattr(
         runner,
@@ -687,6 +725,7 @@ def test_main_writes_expected_artifacts_and_manifest_for_stubbed_run(
 
     assert exit_code == 0
     assert (output_dir / "lm2011_sample_backbone.parquet").exists()
+    assert (output_dir / "lm2011_event_screen_surface.parquet").exists()
     assert (output_dir / "lm2011_table_i_sample_creation.parquet").exists()
     assert (output_dir / "lm2011_table_i_sample_creation.csv").exists()
     assert (output_dir / "lm2011_table_i_sample_creation.md").exists()
@@ -700,8 +739,13 @@ def test_main_writes_expected_artifacts_and_manifest_for_stubbed_run(
 
     manifest = json.loads((output_dir / "lm2011_sample_run_manifest.json").read_text(encoding="utf-8"))
     assert manifest["run_status"] == "completed"
+    assert manifest["started_at_utc"] is not None
+    assert manifest["completed_at_utc"] is not None
+    assert manifest["elapsed_seconds"] is not None
+    assert manifest["failed_stage"] is None
     assert manifest["config"]["full_10k_cleaning_contract"] == "lm2011_paper"
     assert manifest["config"]["text_feature_batch_size"] == 1000
+    assert manifest["config"]["event_window_doc_batch_size"] == 250
     assert manifest["resolved_inputs"]["ff_monthly_csv_path"].endswith("F-F_Research_Data_Factors.csv")
     assert manifest["resolved_inputs"]["momentum_monthly_csv_path"].endswith("F-F_Momentum_Factor.csv")
     assert manifest["resolved_inputs"]["monthly_stock_path"].endswith("sfz_mth.parquet")
@@ -716,6 +760,7 @@ def test_main_writes_expected_artifacts_and_manifest_for_stubbed_run(
     assert "not provenance-verified" in master_resources[0]["provenance_status"]
     assert manifest["stages"]["sample_backbone"]["status"] == "generated"
     assert manifest["stages"]["sample_backbone"]["source_path"] == str(prebuilt_backbone.resolve())
+    assert manifest["stages"]["event_screen_surface"]["status"] == "generated"
     assert manifest["stages"]["table_i_sample_creation"]["status"] == "generated"
     assert set(manifest["stages"]["table_i_sample_creation"]["extra_artifacts"]) == {"csv", "markdown"}
     assert manifest["stages"]["table_i_sample_creation"]["warnings"] == [
@@ -742,7 +787,195 @@ def test_main_writes_expected_artifacts_and_manifest_for_stubbed_run(
         (dt.date(1994, 1, 1), dt.date(2008, 12, 31)),
         (dt.date(1994, 1, 1), dt.date(2024, 12, 31)),
     ]
+    assert captured["table_i_has_precomputed_surface"] == [True, False]
+    assert captured["table_i_has_progress_callback"] == [False, True]
+    assert captured["event_panel_has_precomputed_surface"] is True
     assert all("full_text" not in columns for columns in captured["table_i_sec_columns"])
+
+
+def test_runner_builds_event_screen_surface_twice_and_reuses_default_surface(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sample_root, upstream_run_root, additional_data_dir, output_dir = _build_temp_layout(tmp_path)
+    prebuilt_backbone = upstream_run_root / "sec_ccm_premerge" / "lm2011_sample_backbone.parquet"
+    _write_parquet(prebuilt_backbone, pl.DataFrame({"doc_id": ["d1"]}))
+    captured: dict[str, object] = {"surface_calls": 0}
+
+    monkeypatch.setattr(
+        runner,
+        "_prepare_annual_accounting_inputs",
+        lambda *_: (
+            pl.DataFrame({"x": [1]}).lazy(),
+            pl.DataFrame({"x": [1]}).lazy(),
+            pl.DataFrame({"x": [1]}).lazy(),
+            pl.DataFrame({"x": [1]}).lazy(),
+        ),
+    )
+    monkeypatch.setattr(runner, "build_annual_accounting_panel", lambda *_, **__: pl.DataFrame({"gvkey_int": [1]}).lazy())
+    monkeypatch.setattr(runner, "build_quarterly_accounting_panel", lambda *_, **__: pl.DataFrame({"gvkey_int": [1]}).lazy())
+    monkeypatch.setattr(
+        runner,
+        "build_lm2011_text_features_full_10k",
+        lambda *_, **__: pl.DataFrame({"doc_id": ["d1"], "total_token_count_full_10k": [2500]}).lazy(),
+    )
+    monkeypatch.setattr(
+        runner,
+        "build_lm2011_text_features_mda",
+        lambda *_, **__: pl.DataFrame({"doc_id": ["d1"], "total_token_count_mda": [300]}).lazy(),
+    )
+
+    def _capture_surface(*_: object, **kwargs: object) -> pl.DataFrame:
+        captured["surface_calls"] = int(captured["surface_calls"]) + 1
+        captured.setdefault("surface_progress_callbacks", []).append(kwargs.get("progress_callback") is not None)
+        return pl.DataFrame({"doc_id": ["d1"]})
+
+    monkeypatch.setattr(runner.lm2011_pipeline, "_build_lm2011_event_screen_surface_batched", _capture_surface)
+
+    def _capture_table_i(*_: object, **kwargs: object) -> pl.DataFrame:
+        captured.setdefault("table_i_has_precomputed_surface", []).append(
+            kwargs.get("_precomputed_event_screen_surface_lf") is not None
+        )
+        if kwargs.get("_precomputed_event_screen_surface_lf") is None:
+            runner.lm2011_pipeline._build_lm2011_event_screen_surface_batched(
+                pl.DataFrame({"doc_id": ["d1"]}).lazy(),
+                pl.DataFrame({"CALDT": [dt.date(1995, 1, 1)], "KYPERMNO": [1], "FINAL_RET": [0.0], "VOL": [1.0], "FINAL_PRC": [1.0], "PRC": [1.0], "SHROUT": [1.0], "SHRCD": [10], "EXCHCD": [1]}).lazy(),
+                pl.DataFrame({"gvkey_int": [1]}).lazy(),
+                pl.DataFrame({"trading_date": [dt.date(1995, 1, 1)], "mkt_rf": [0.0], "smb": [0.0], "hml": [0.0], "rf": [0.0]}).lazy(),
+                pl.DataFrame({"doc_id": ["d1"], "total_token_count_full_10k": [2500]}).lazy(),
+                event_window_doc_batch_size=int(kwargs["event_window_doc_batch_size"]),
+                progress_callback=kwargs.get("_event_screen_progress_callback"),
+            )
+        return _stub_table_i_sample_creation_df(
+            window_label=f"{kwargs.get('sample_start', dt.date(1994, 1, 1)).year}-{kwargs.get('sample_end', dt.date(2008, 12, 31)).year}",
+            unavailable_mda=False,
+        )
+
+    monkeypatch.setattr(runner, "build_lm2011_table_i_sample_creation", _capture_table_i)
+
+    def _capture_event_panel(*_: object, **kwargs: object) -> pl.LazyFrame:
+        captured["event_panel_has_precomputed_surface"] = kwargs.get("_precomputed_event_screen_surface_lf") is not None
+        return pl.DataFrame({"doc_id": ["d1"]}).lazy()
+
+    monkeypatch.setattr(runner, "build_lm2011_event_panel", _capture_event_panel)
+    monkeypatch.setattr(runner, "build_lm2011_sue_panel", lambda *_, **__: pl.DataFrame({"doc_id": ["d1"]}).lazy())
+    empty_table = pl.DataFrame({"table_id": [], "estimate": []}, schema_overrides={"table_id": pl.Utf8, "estimate": pl.Float64})
+    monkeypatch.setattr(runner, "build_lm2011_return_regression_panel", lambda *_, **__: pl.DataFrame({"doc_id": ["d1"]}).lazy())
+    monkeypatch.setattr(runner, "build_lm2011_sue_regression_panel", lambda *_, **__: pl.DataFrame({"doc_id": ["d1"]}).lazy())
+    monkeypatch.setattr(runner, "build_lm2011_table_iv_results", lambda *_, **__: empty_table)
+    monkeypatch.setattr(runner, "build_lm2011_table_v_results", lambda *_, **__: empty_table)
+    monkeypatch.setattr(runner, "build_lm2011_table_vi_results", lambda *_, **__: empty_table)
+    monkeypatch.setattr(runner, "build_lm2011_table_viii_results", lambda *_, **__: empty_table)
+    monkeypatch.setattr(runner, "build_lm2011_table_ia_i_results", lambda *_, **__: empty_table)
+    monkeypatch.setattr(runner, "build_lm2011_table_ia_ii_results", lambda *_, **__: empty_table)
+    monkeypatch.setattr(
+        runner,
+        "build_lm2011_trading_strategy_monthly_returns",
+        lambda *_, **__: pl.DataFrame({"portfolio_month": [dt.date(2000, 1, 31)], "sort_signal_name": ["fin_neg_prop"], "long_short_return": [0.01]}).lazy(),
+    )
+
+    exit_code = runner.main(
+        [
+            "--sample-root",
+            str(sample_root),
+            "--upstream-run-root",
+            str(upstream_run_root),
+            "--additional-data-dir",
+            str(additional_data_dir),
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    assert exit_code == 0
+    assert captured["surface_calls"] == 2
+    assert captured["surface_progress_callbacks"] == [True, True]
+    assert captured["table_i_has_precomputed_surface"] == [True, False]
+    assert captured["event_panel_has_precomputed_surface"] is True
+
+
+def test_runner_failure_manifest_preserves_completed_stages_before_extended_table_i_crash(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sample_root, upstream_run_root, additional_data_dir, output_dir = _build_temp_layout(tmp_path)
+    prebuilt_backbone = upstream_run_root / "sec_ccm_premerge" / "lm2011_sample_backbone.parquet"
+    _write_parquet(prebuilt_backbone, pl.DataFrame({"doc_id": ["d1"]}))
+
+    monkeypatch.setattr(
+        runner,
+        "_prepare_annual_accounting_inputs",
+        lambda *_: (
+            pl.DataFrame({"x": [1]}).lazy(),
+            pl.DataFrame({"x": [1]}).lazy(),
+            pl.DataFrame({"x": [1]}).lazy(),
+            pl.DataFrame({"x": [1]}).lazy(),
+        ),
+    )
+    monkeypatch.setattr(runner, "build_annual_accounting_panel", lambda *_, **__: pl.DataFrame({"gvkey_int": [1]}).lazy())
+    monkeypatch.setattr(runner, "build_quarterly_accounting_panel", lambda *_, **__: pl.DataFrame({"gvkey_int": [1]}).lazy())
+    monkeypatch.setattr(
+        runner,
+        "build_lm2011_text_features_full_10k",
+        lambda *_, **__: pl.DataFrame({"doc_id": ["d1"], "total_token_count_full_10k": [2500]}).lazy(),
+    )
+    monkeypatch.setattr(
+        runner,
+        "build_lm2011_text_features_mda",
+        lambda *_, **__: pl.DataFrame({"doc_id": ["d1"], "total_token_count_mda": [300]}).lazy(),
+    )
+    monkeypatch.setattr(
+        runner.lm2011_pipeline,
+        "_build_lm2011_event_screen_surface_batched",
+        lambda *_, **__: pl.DataFrame({"doc_id": ["d1"]}),
+    )
+
+    def _fail_extended_table_i(*_: object, **kwargs: object) -> pl.DataFrame:
+        sample_end = kwargs.get("sample_end", dt.date(2008, 12, 31))
+        if sample_end == dt.date(2024, 12, 31):
+            raise RuntimeError("extended table i boom")
+        return _stub_table_i_sample_creation_df(unavailable_mda=False)
+
+    monkeypatch.setattr(runner, "build_lm2011_table_i_sample_creation", _fail_extended_table_i)
+    monkeypatch.setattr(runner, "build_lm2011_event_panel", lambda *_, **__: pl.DataFrame({"doc_id": ["d1"]}).lazy())
+    monkeypatch.setattr(runner, "build_lm2011_sue_panel", lambda *_, **__: pl.DataFrame({"doc_id": ["d1"]}).lazy())
+    monkeypatch.setattr(runner, "build_lm2011_return_regression_panel", lambda *_, **__: pl.DataFrame({"doc_id": ["d1"]}).lazy())
+    monkeypatch.setattr(runner, "build_lm2011_sue_regression_panel", lambda *_, **__: pl.DataFrame({"doc_id": ["d1"]}).lazy())
+    empty_table = pl.DataFrame({"table_id": [], "estimate": []}, schema_overrides={"table_id": pl.Utf8, "estimate": pl.Float64})
+    monkeypatch.setattr(runner, "build_lm2011_table_iv_results", lambda *_, **__: empty_table)
+    monkeypatch.setattr(runner, "build_lm2011_table_v_results", lambda *_, **__: empty_table)
+    monkeypatch.setattr(runner, "build_lm2011_table_vi_results", lambda *_, **__: empty_table)
+    monkeypatch.setattr(runner, "build_lm2011_table_viii_results", lambda *_, **__: empty_table)
+    monkeypatch.setattr(runner, "build_lm2011_table_ia_i_results", lambda *_, **__: empty_table)
+    monkeypatch.setattr(runner, "build_lm2011_table_ia_ii_results", lambda *_, **__: empty_table)
+    monkeypatch.setattr(
+        runner,
+        "build_lm2011_trading_strategy_monthly_returns",
+        lambda *_, **__: pl.DataFrame({"portfolio_month": [dt.date(2000, 1, 31)], "sort_signal_name": ["fin_neg_prop"], "long_short_return": [0.01]}).lazy(),
+    )
+
+    with pytest.raises(RuntimeError, match="extended table i boom"):
+        runner.main(
+            [
+                "--sample-root",
+                str(sample_root),
+                "--upstream-run-root",
+                str(upstream_run_root),
+                "--additional-data-dir",
+                str(additional_data_dir),
+                "--output-dir",
+                str(output_dir),
+            ]
+        )
+
+    manifest = json.loads((output_dir / "lm2011_sample_run_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["run_status"] == "failed"
+    assert manifest["failed_stage"] == "table_i_sample_creation_1994_2024"
+    assert manifest["stages"]["sample_backbone"]["status"] == "generated"
+    assert manifest["stages"]["event_screen_surface"]["status"] == "generated"
+    assert manifest["stages"]["table_i_sample_creation"]["status"] == "generated"
+    assert manifest["stages"]["table_i_sample_creation_1994_2024"]["status"] == "failed"
+    assert "event_panel" not in manifest["artifacts"]
 
 
 def test_resolve_paths_honors_colab_style_override_paths(tmp_path: Path) -> None:
@@ -833,6 +1066,7 @@ def test_real_sample_smoke_builds_nonempty_panels_and_empty_tables(tmp_path: Pat
     assert exit_code == 0
 
     manifest = json.loads((output_dir / "lm2011_sample_run_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["stages"]["event_screen_surface"]["status"] == "generated"
     assert manifest["stages"]["table_i_sample_creation"]["status"] == "generated"
     assert manifest["stages"]["table_i_sample_creation_1994_2024"]["status"] == "generated"
     assert manifest["stages"]["event_panel"]["status"] == "generated"

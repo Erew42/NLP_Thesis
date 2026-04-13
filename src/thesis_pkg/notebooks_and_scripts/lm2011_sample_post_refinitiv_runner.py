@@ -5,6 +5,7 @@ import datetime as dt
 import json
 import os
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
@@ -61,6 +62,7 @@ from thesis_pkg.pipelines.lm2011_pipeline import (
     build_lm2011_table_i_sample_creation,
     build_lm2011_trading_strategy_monthly_returns,
 )
+from thesis_pkg.pipelines import lm2011_pipeline
 from thesis_pkg.pipelines.lm2011_regressions import (
     build_lm2011_return_regression_panel,
     build_lm2011_sue_regression_panel,
@@ -152,6 +154,7 @@ STAGE_ARTIFACT_FILENAMES: dict[str, str] = {
     "ff_factors_monthly_with_mom_normalized": "lm2011_ff_factors_monthly_with_mom_normalized.parquet",
     "text_features_full_10k": "lm2011_text_features_full_10k.parquet",
     "text_features_mda": "lm2011_text_features_mda.parquet",
+    "event_screen_surface": "lm2011_event_screen_surface.parquet",
     "table_i_sample_creation": "lm2011_table_i_sample_creation.parquet",
     "table_i_sample_creation_1994_2024": "lm2011_table_i_sample_creation_1994_2024.parquet",
     "event_panel": "lm2011_event_panel.parquet",
@@ -202,6 +205,7 @@ class RunnerPaths:
     ff_monthly_with_mom_path: Path | None
     full_10k_cleaning_contract: str
     text_feature_batch_size: int
+    event_window_doc_batch_size: int
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -247,6 +251,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         type=int,
         default=1000,
         help="Number of rows per batch when scoring LM2011 full-text features.",
+    )
+    parser.add_argument(
+        "--event-window-doc-batch-size",
+        type=int,
+        default=250,
+        help="Number of documents per batch when building LM2011 event-window market surfaces.",
     )
     return parser.parse_args(argv)
 
@@ -304,6 +314,20 @@ def _utc_timestamp() -> str:
     return dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat()
 
 
+def _elapsed_seconds(started_at_utc: str, completed_at_utc: str) -> int | None:
+    try:
+        started_at = dt.datetime.fromisoformat(started_at_utc)
+        completed_at = dt.datetime.fromisoformat(completed_at_utc)
+    except ValueError:
+        return None
+    return max(int((completed_at - started_at).total_seconds()), 0)
+
+
+def _checkpoint_manifest(manifest: dict[str, Any], manifest_path: Path) -> None:
+    manifest["last_checkpoint_at_utc"] = _utc_timestamp()
+    _write_json(manifest_path, manifest)
+
+
 def _resolve_paths(args: argparse.Namespace) -> RunnerPaths:
     sample_root = Path(args.sample_root).resolve()
     upstream_run_root = Path(args.upstream_run_root).resolve()
@@ -311,6 +335,8 @@ def _resolve_paths(args: argparse.Namespace) -> RunnerPaths:
     output_dir = Path(args.output_dir).resolve()
     if int(args.text_feature_batch_size) < 1:
         raise ValueError("--text-feature-batch-size must be >= 1")
+    if int(args.event_window_doc_batch_size) < 1:
+        raise ValueError("--event-window-doc-batch-size must be >= 1")
     year_merged_dir = (
         Path(args.year_merged_dir).resolve()
         if args.year_merged_dir is not None
@@ -420,6 +446,7 @@ def _resolve_paths(args: argparse.Namespace) -> RunnerPaths:
         ff_monthly_with_mom_path=ff_monthly_with_mom_path,
         full_10k_cleaning_contract=str(args.full_10k_cleaning_contract),
         text_feature_batch_size=int(args.text_feature_batch_size),
+        event_window_doc_batch_size=int(args.event_window_doc_batch_size),
     )
 
 
@@ -793,6 +820,7 @@ def _table_i_extra_artifact_paths(output_dir: Path, stage_name: str) -> tuple[Pa
 def _write_table_i_stage(
     manifest: dict[str, Any],
     *,
+    manifest_path: Path,
     output_dir: Path,
     stage_name: str,
     table_df: pl.DataFrame,
@@ -813,6 +841,7 @@ def _write_table_i_stage(
     )
     return _write_stage(
         manifest,
+        manifest_path=manifest_path,
         output_dir=output_dir,
         stage_name=stage_name,
         frame=table_df,
@@ -821,10 +850,34 @@ def _write_table_i_stage(
     )
 
 
+def _make_event_screen_progress_logger(stage_name: str) -> Callable[[dict[str, int]], None]:
+    def _logger(progress: dict[str, int]) -> None:
+        batch_index = progress["batch_index"]
+        total_batches = progress["total_batches"]
+        if batch_index != 1 and batch_index != total_batches and batch_index % 10 != 0:
+            return
+        print(
+            {
+                "stage": stage_name,
+                "progress": f"{batch_index}/{total_batches}",
+                "batch_doc_count": progress["batch_doc_count"],
+                "docs_completed": progress["docs_completed"],
+                "docs_total": progress["docs_total"],
+            }
+        )
+
+    return _logger
+
+
 def _build_manifest(paths: RunnerPaths) -> dict[str, Any]:
+    started_at_utc = _utc_timestamp()
     return {
         "runner_name": "lm2011_sample_post_refinitiv_runner",
-        "generated_at_utc": _utc_timestamp(),
+        "generated_at_utc": started_at_utc,
+        "started_at_utc": started_at_utc,
+        "completed_at_utc": None,
+        "elapsed_seconds": None,
+        "failed_stage": None,
         "run_status": "running",
         "roots": {
             "sample_root": _absolute_path_str(paths.sample_root),
@@ -835,6 +888,7 @@ def _build_manifest(paths: RunnerPaths) -> dict[str, Any]:
         "config": {
             "full_10k_cleaning_contract": paths.full_10k_cleaning_contract,
             "text_feature_batch_size": paths.text_feature_batch_size,
+            "event_window_doc_batch_size": paths.event_window_doc_batch_size,
         },
         "resolved_inputs": {
             "year_merged_dir": _absolute_path_str(paths.year_merged_dir),
@@ -881,6 +935,7 @@ def _record_stage_success(
     warnings: Sequence[str] | None = None,
 ) -> None:
     status = "generated_empty" if row_count == 0 else "generated"
+    completed_at_utc = _utc_timestamp()
     manifest["artifacts"][stage_name] = _absolute_path_str(artifact_path)
     manifest["row_counts"][stage_name] = row_count
     manifest["stages"][stage_name] = {
@@ -894,6 +949,7 @@ def _record_stage_success(
         },
         "source_path": _absolute_path_str(source_path),
         "warnings": list(warnings or []),
+        "completed_at_utc": completed_at_utc,
     }
     print({"stage": stage_name, "status": status, "row_count": row_count, "artifact_path": str(artifact_path)})
 
@@ -904,6 +960,7 @@ def _record_stage_skipped(
     stage_name: str,
     reason: str,
     detail: str,
+    manifest_path: Path | None = None,
 ) -> None:
     artifact_path = _artifact_output_path(Path(manifest["roots"]["output_dir"]), stage_name)
     manifest["stages"][stage_name] = {
@@ -911,8 +968,11 @@ def _record_stage_skipped(
         "artifact_path": _absolute_path_str(artifact_path),
         "row_count": None,
         "reason": detail,
+        "completed_at_utc": _utc_timestamp(),
     }
     print({"stage": stage_name, "status": reason, "reason": detail})
+    if manifest_path is not None:
+        _checkpoint_manifest(manifest, manifest_path)
 
 
 def _record_stage_failed(
@@ -920,6 +980,7 @@ def _record_stage_failed(
     *,
     stage_name: str,
     exc: Exception,
+    manifest_path: Path | None = None,
 ) -> None:
     output_dir = Path(manifest["roots"]["output_dir"])
     manifest["stages"][stage_name] = {
@@ -929,12 +990,16 @@ def _record_stage_failed(
         else None,
         "row_count": None,
         "reason": f"{type(exc).__name__}: {exc}",
+        "completed_at_utc": _utc_timestamp(),
     }
+    if manifest_path is not None:
+        _checkpoint_manifest(manifest, manifest_path)
 
 
 def _write_stage(
     manifest: dict[str, Any],
     *,
+    manifest_path: Path | None,
     output_dir: Path,
     stage_name: str,
     frame: pl.LazyFrame | pl.DataFrame,
@@ -955,6 +1020,8 @@ def _write_stage(
         extra_artifacts=extra_artifacts,
         warnings=warnings,
     )
+    if manifest_path is not None:
+        _checkpoint_manifest(manifest, manifest_path)
     return pl.scan_parquet(written_path)
 
 
@@ -974,6 +1041,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     manifest = _build_manifest(paths)
     manifest_path = paths.output_dir / MANIFEST_FILENAME
     current_stage_name = "initialization"
+    _checkpoint_manifest(manifest, manifest_path)
 
     try:
         dictionary_inputs = load_lm2011_dictionary_inputs(paths.additional_data_dir)
@@ -989,6 +1057,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         ff_factors_monthly_with_mom_lf: pl.LazyFrame | None = None
         text_features_full_10k_lf: pl.LazyFrame | None = None
         text_features_mda_lf: pl.LazyFrame | None = None
+        event_screen_surface_lf: pl.LazyFrame | None = None
         table_i_sample_creation_lf: pl.LazyFrame | None = None
         event_panel_lf: pl.LazyFrame | None = None
         sue_panel_lf: pl.LazyFrame | None = None
@@ -1015,6 +1084,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if paths.sample_backbone_path is not None:
             sample_backbone_lf = _write_stage(
                 manifest,
+                manifest_path=manifest_path,
                 output_dir=paths.output_dir,
                 stage_name="sample_backbone",
                 frame=pl.scan_parquet(paths.sample_backbone_path),
@@ -1028,6 +1098,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         ):
             sample_backbone_lf = _write_stage(
                 manifest,
+                manifest_path=manifest_path,
                 output_dir=paths.output_dir,
                 stage_name="sample_backbone",
                 frame=build_lm2011_sample_backbone(
@@ -1048,6 +1119,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "filingdates": paths.filingdates_path,
                     }
                 ),
+                manifest_path=manifest_path,
             )
 
         current_stage_name = "annual_accounting_panel"
@@ -1067,6 +1139,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             annual_accounting_panel_lf = _write_stage(
                 manifest,
+                manifest_path=manifest_path,
                 output_dir=paths.output_dir,
                 stage_name="annual_accounting_panel",
                 frame=build_annual_accounting_panel(
@@ -1089,6 +1162,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "annual_fiscal_market": paths.annual_fiscal_market_path,
                     }
                 ),
+                manifest_path=manifest_path,
             )
 
         current_stage_name = "quarterly_accounting_panel"
@@ -1099,6 +1173,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         ):
             quarterly_accounting_panel_lf = _write_stage(
                 manifest,
+                manifest_path=manifest_path,
                 output_dir=paths.output_dir,
                 stage_name="quarterly_accounting_panel",
                 frame=build_quarterly_accounting_panel(
@@ -1119,12 +1194,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "quarterly_period_descriptor": paths.quarterly_period_descriptor_path,
                     }
                 ),
+                manifest_path=manifest_path,
             )
 
         current_stage_name = "ff_factors_daily_normalized"
         if paths.ff_daily_csv_path.exists():
             ff_factors_daily_lf = _write_stage(
                 manifest,
+                manifest_path=manifest_path,
                 output_dir=paths.output_dir,
                 stage_name="ff_factors_daily_normalized",
                 frame=_load_ff_factors_daily_lf(paths.ff_daily_csv_path),
@@ -1135,6 +1212,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 stage_name="ff_factors_daily_normalized",
                 reason=SKIPPED_MISSING_OPTIONAL_INPUT,
                 detail="ff_daily_csv_path",
+                manifest_path=manifest_path,
             )
 
         current_stage_name = "ff_factors_monthly_with_mom_normalized"
@@ -1144,6 +1222,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 _require_unique_month_end(monthly_factor_input_lf, "monthly FF+momentum factors")
                 ff_factors_monthly_with_mom_lf = _write_stage(
                     manifest,
+                    manifest_path=manifest_path,
                     output_dir=paths.output_dir,
                     stage_name="ff_factors_monthly_with_mom_normalized",
                     frame=monthly_factor_input_lf,
@@ -1154,10 +1233,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                     stage_name="ff_factors_monthly_with_mom_normalized",
                     reason=SKIPPED_MISSING_OPTIONAL_INPUT,
                     detail="ff_monthly_with_mom_path",
+                    manifest_path=manifest_path,
                 )
         elif paths.ff_monthly_csv_path.exists() and paths.momentum_monthly_csv_path.exists():
             ff_factors_monthly_with_mom_lf = _write_stage(
                 manifest,
+                manifest_path=manifest_path,
                 output_dir=paths.output_dir,
                 stage_name="ff_factors_monthly_with_mom_normalized",
                 frame=_load_ff_factors_monthly_with_mom_lf(
@@ -1176,6 +1257,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "momentum_monthly_csv_path": paths.momentum_monthly_csv_path,
                     }
                 ),
+                manifest_path=manifest_path,
             )
 
         text_year_merged_lf = year_merged_lf
@@ -1195,6 +1277,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if text_year_merged_lf is not None:
             text_features_full_10k_lf = _write_stage(
                 manifest,
+                manifest_path=manifest_path,
                 output_dir=paths.output_dir,
                 stage_name="text_features_full_10k",
                 frame=build_lm2011_text_features_full_10k(
@@ -1213,12 +1296,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 stage_name="text_features_full_10k",
                 reason=SKIPPED_MISSING_OPTIONAL_INPUT,
                 detail="year_merged",
+                manifest_path=manifest_path,
             )
 
         current_stage_name = "text_features_mda"
         if text_items_analysis_lf is not None:
             text_features_mda_lf = _write_stage(
                 manifest,
+                manifest_path=manifest_path,
                 output_dir=paths.output_dir,
                 stage_name="text_features_mda",
                 frame=build_lm2011_text_features_mda(
@@ -1236,11 +1321,53 @@ def main(argv: Sequence[str] | None = None) -> int:
                 stage_name="text_features_mda",
                 reason=SKIPPED_MISSING_SEEDED_UPSTREAM,
                 detail="items_analysis",
+                manifest_path=manifest_path,
+            )
+
+        current_stage_name = "event_screen_surface"
+        if (
+            sample_backbone_lf is not None
+            and annual_accounting_panel_lf is not None
+            and ff_factors_daily_lf is not None
+            and text_features_full_10k_lf is not None
+            and paths.daily_panel_path.exists()
+        ):
+            event_screen_surface_lf = _write_stage(
+                manifest,
+                manifest_path=manifest_path,
+                output_dir=paths.output_dir,
+                stage_name="event_screen_surface",
+                frame=lm2011_pipeline._build_lm2011_event_screen_surface_batched(
+                    sample_backbone_lf,
+                    pl.scan_parquet(paths.daily_panel_path),
+                    annual_accounting_panel_lf,
+                    ff_factors_daily_lf,
+                    text_features_full_10k_lf,
+                    event_window_doc_batch_size=paths.event_window_doc_batch_size,
+                    progress_callback=_make_event_screen_progress_logger("event_screen_surface"),
+                ),
+            )
+        else:
+            _record_stage_skipped(
+                manifest,
+                stage_name="event_screen_surface",
+                reason=SKIPPED_MISSING_OPTIONAL_INPUT,
+                detail=_describe_missing_paths(
+                    {
+                        "sample_backbone": Path(manifest["artifacts"]["sample_backbone"]) if "sample_backbone" in manifest["artifacts"] else None,
+                        "annual_accounting_panel": Path(manifest["artifacts"]["annual_accounting_panel"]) if "annual_accounting_panel" in manifest["artifacts"] else None,
+                        "ff_factors_daily_normalized": Path(manifest["artifacts"]["ff_factors_daily_normalized"]) if "ff_factors_daily_normalized" in manifest["artifacts"] else None,
+                        "text_features_full_10k": Path(manifest["artifacts"]["text_features_full_10k"]) if "text_features_full_10k" in manifest["artifacts"] else None,
+                        "daily_panel_path": paths.daily_panel_path,
+                    }
+                ),
+                manifest_path=manifest_path,
             )
 
         current_stage_name = "table_i_sample_creation"
         if (
-            year_merged_backbone_lf is not None
+            event_screen_surface_lf is not None
+            and year_merged_backbone_lf is not None
             and paths.matched_clean_path.exists()
             and paths.filingdates_path is not None
             and paths.filingdates_path.exists()
@@ -1258,9 +1385,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 text_features_full_10k_lf,
                 ccm_filingdates_lf=pl.scan_parquet(paths.filingdates_path),
                 mda_text_features_lf=text_features_mda_lf,
+                event_window_doc_batch_size=paths.event_window_doc_batch_size,
+                _precomputed_event_screen_surface_lf=event_screen_surface_lf,
             )
             table_i_sample_creation_lf = _write_table_i_stage(
                 manifest,
+                manifest_path=manifest_path,
                 output_dir=paths.output_dir,
                 stage_name="table_i_sample_creation",
                 table_df=table_i_df,
@@ -1277,12 +1407,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "year_merged": paths.year_merged_dir if _parquet_glob_exists(paths.year_merged_dir, YEAR_MERGED_GLOB) else None,
                         "matched_clean": paths.matched_clean_path,
                         "filingdates": paths.filingdates_path,
+                        "event_screen_surface": Path(manifest["artifacts"]["event_screen_surface"]) if "event_screen_surface" in manifest["artifacts"] else None,
                         "annual_accounting_panel": Path(manifest["artifacts"]["annual_accounting_panel"]) if "annual_accounting_panel" in manifest["artifacts"] else None,
                         "ff_factors_daily_normalized": Path(manifest["artifacts"]["ff_factors_daily_normalized"]) if "ff_factors_daily_normalized" in manifest["artifacts"] else None,
                         "text_features_full_10k": Path(manifest["artifacts"]["text_features_full_10k"]) if "text_features_full_10k" in manifest["artifacts"] else None,
                         "daily_panel_path": paths.daily_panel_path,
                     }
                 ),
+                manifest_path=manifest_path,
             )
 
         current_stage_name = "table_i_sample_creation_1994_2024"
@@ -1307,9 +1439,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 mda_text_features_lf=text_features_mda_lf,
                 sample_start=dt.date(1994, 1, 1),
                 sample_end=dt.date(2024, 12, 31),
+                event_window_doc_batch_size=paths.event_window_doc_batch_size,
+                _event_screen_progress_callback=_make_event_screen_progress_logger(
+                    "table_i_sample_creation_1994_2024_event_screen_surface"
+                ),
             )
             _write_table_i_stage(
                 manifest,
+                manifest_path=manifest_path,
                 output_dir=paths.output_dir,
                 stage_name="table_i_sample_creation_1994_2024",
                 table_df=table_i_1994_2024_df,
@@ -1332,19 +1469,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "daily_panel_path": paths.daily_panel_path,
                     }
                 ),
+                manifest_path=manifest_path,
             )
 
         current_stage_name = "event_panel"
         if (
-            sample_backbone_lf is not None
-            and annual_accounting_panel_lf is not None
-            and ff_factors_daily_lf is not None
-            and text_features_full_10k_lf is not None
-            and paths.daily_panel_path.exists()
+            event_screen_surface_lf is not None
             and paths.doc_ownership_path.exists()
         ):
             event_panel_lf = _write_stage(
                 manifest,
+                manifest_path=manifest_path,
                 output_dir=paths.output_dir,
                 stage_name="event_panel",
                 frame=build_lm2011_event_panel(
@@ -1354,6 +1489,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     ff_factors_daily_lf=ff_factors_daily_lf,
                     ownership_lf=pl.scan_parquet(paths.doc_ownership_path),
                     full_10k_text_features_lf=text_features_full_10k_lf,
+                    event_window_doc_batch_size=paths.event_window_doc_batch_size,
+                    _precomputed_event_screen_surface_lf=event_screen_surface_lf,
                 ),
             )
         else:
@@ -1363,6 +1500,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 reason=SKIPPED_MISSING_SEEDED_UPSTREAM,
                 detail=_describe_missing_paths(
                     {
+                        "event_screen_surface": Path(manifest["artifacts"]["event_screen_surface"]) if "event_screen_surface" in manifest["artifacts"] else None,
                         "sample_backbone": Path(manifest["artifacts"]["sample_backbone"]) if "sample_backbone" in manifest["artifacts"] else None,
                         "annual_accounting_panel": Path(manifest["artifacts"]["annual_accounting_panel"]) if "annual_accounting_panel" in manifest["artifacts"] else None,
                         "ff_factors_daily_normalized": Path(manifest["artifacts"]["ff_factors_daily_normalized"]) if "ff_factors_daily_normalized" in manifest["artifacts"] else None,
@@ -1371,6 +1509,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "doc_ownership_path": paths.doc_ownership_path,
                     }
                 ),
+                manifest_path=manifest_path,
             )
 
         current_stage_name = "sue_panel"
@@ -1382,6 +1521,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         ):
             sue_panel_lf = _write_stage(
                 manifest,
+                manifest_path=manifest_path,
                 output_dir=paths.output_dir,
                 stage_name="sue_panel",
                 frame=build_lm2011_sue_panel(
@@ -1404,6 +1544,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "daily_panel_path": paths.daily_panel_path,
                     }
                 ),
+                manifest_path=manifest_path,
             )
 
         can_run_regressions = not _missing_required_paths(
@@ -1416,6 +1557,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if event_panel_lf is not None and text_features_full_10k_lf is not None and can_run_regressions:
             return_regression_panel_full_10k_lf = _write_stage(
                 manifest,
+                manifest_path=manifest_path,
                 output_dir=paths.output_dir,
                 stage_name="return_regression_panel_full_10k",
                 frame=build_lm2011_return_regression_panel(
@@ -1441,12 +1583,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "ff48_siccodes": paths.ff48_siccodes_path,
                     }
                 ),
+                manifest_path=manifest_path,
             )
 
         current_stage_name = "return_regression_panel_mda"
         if event_panel_lf is not None and text_features_mda_lf is not None and can_run_regressions:
             return_regression_panel_mda_lf = _write_stage(
                 manifest,
+                manifest_path=manifest_path,
                 output_dir=paths.output_dir,
                 stage_name="return_regression_panel_mda",
                 frame=build_lm2011_return_regression_panel(
@@ -1472,12 +1616,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "ff48_siccodes": paths.ff48_siccodes_path,
                     }
                 ),
+                manifest_path=manifest_path,
             )
 
         current_stage_name = "sue_regression_panel"
         if sue_panel_lf is not None and text_features_full_10k_lf is not None and can_run_regressions:
             sue_regression_panel_lf = _write_stage(
                 manifest,
+                manifest_path=manifest_path,
                 output_dir=paths.output_dir,
                 stage_name="sue_regression_panel",
                 frame=build_lm2011_sue_regression_panel(
@@ -1502,6 +1648,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "ff48_siccodes": paths.ff48_siccodes_path,
                     }
                 ),
+                manifest_path=manifest_path,
             )
 
         table_stage_specs = (
@@ -1566,6 +1713,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             if should_run:
                 _write_stage(
                     manifest,
+                    manifest_path=manifest_path,
                     output_dir=paths.output_dir,
                     stage_name=stage_name,
                     frame=builder(),
@@ -1577,6 +1725,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     stage_name=stage_name,
                     reason=SKIPPED_MISSING_OPTIONAL_INPUT,
                     detail="missing upstream regression inputs",
+                    manifest_path=manifest_path,
                 )
 
         current_stage_name = "trading_strategy_monthly_returns"
@@ -1588,6 +1737,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         ):
             _write_stage(
                 manifest,
+                manifest_path=manifest_path,
                 output_dir=paths.output_dir,
                 stage_name="trading_strategy_monthly_returns",
                 frame=build_lm2011_trading_strategy_monthly_returns(
@@ -1606,6 +1756,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 stage_name="trading_strategy_monthly_returns",
                 reason=SKIPPED_MISSING_OPTIONAL_INPUT,
                 detail="monthly_stock_path",
+                manifest_path=manifest_path,
             )
 
         current_stage_name = "table_ia_ii_results"
@@ -1618,6 +1769,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         ):
             _write_stage(
                 manifest,
+                manifest_path=manifest_path,
                 output_dir=paths.output_dir,
                 stage_name="table_ia_ii_results",
                 frame=build_lm2011_table_ia_ii_results(
@@ -1648,22 +1800,33 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "year_merged": paths.year_merged_dir if year_merged_lf is not None else None,
                     }
                 ),
+                manifest_path=manifest_path,
             )
 
+        completed_at_utc = _utc_timestamp()
         manifest["run_status"] = "completed"
-        manifest["completed_at_utc"] = _utc_timestamp()
-        _write_json(manifest_path, manifest)
+        manifest["completed_at_utc"] = completed_at_utc
+        manifest["elapsed_seconds"] = _elapsed_seconds(str(manifest["started_at_utc"]), completed_at_utc)
+        manifest["failed_stage"] = None
+        _checkpoint_manifest(manifest, manifest_path)
         return 0
     except Exception as exc:
-        _record_stage_failed(manifest, stage_name=current_stage_name, exc=exc)
+        _record_stage_failed(
+            manifest,
+            stage_name=current_stage_name,
+            exc=exc,
+        )
+        completed_at_utc = _utc_timestamp()
         manifest["run_status"] = "failed"
-        manifest["completed_at_utc"] = _utc_timestamp()
+        manifest["completed_at_utc"] = completed_at_utc
+        manifest["elapsed_seconds"] = _elapsed_seconds(str(manifest["started_at_utc"]), completed_at_utc)
+        manifest["failed_stage"] = current_stage_name
         manifest["error"] = {
             "stage": current_stage_name,
             "type": type(exc).__name__,
             "message": str(exc),
         }
-        _write_json(manifest_path, manifest)
+        _checkpoint_manifest(manifest, manifest_path)
         raise
 
 

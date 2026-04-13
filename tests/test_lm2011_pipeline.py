@@ -22,8 +22,10 @@ from thesis_pkg.pipeline import (
     tokenize_lm2011_text,
 )
 from thesis_pkg.core.ccm.lm2011 import _build_lm2011_sample_backbone_stage_frames
+from thesis_pkg.pipelines import lm2011_pipeline
 from thesis_pkg.pipelines.lm2011_pipeline import (
     _apply_lm2011_regression_transforms,
+    _build_lm2011_event_screen_surface_batched,
     _build_lm2011_table_i_market_stage_frames,
     _ensure_factor_scale,
     _ols_alpha_and_rmse,
@@ -987,6 +989,7 @@ def test_build_lm2011_table_i_market_stage_frames_report_expected_attrition() ->
         inputs["annual_panel"].lazy(),
         inputs["ff"].lazy(),
         inputs["text_features"].lazy(),
+        event_window_doc_batch_size=2,
     )
 
     assert [row_id for row_id, _ in stage_frames] == [
@@ -1000,6 +1003,145 @@ def test_build_lm2011_table_i_market_stage_frames_report_expected_attrition() ->
         "token_count_ge_2000",
     ]
     assert [frame.height for _, frame in stage_frames] == [8, 7, 6, 5, 4, 3, 2, 1]
+
+
+def test_build_lm2011_event_screen_surface_batched_emits_one_row_per_doc_with_required_columns() -> None:
+    inputs = _table_i_market_inputs()
+
+    surface = _build_lm2011_event_screen_surface_batched(
+        inputs["sample_backbone"].lazy(),
+        inputs["daily"].lazy(),
+        inputs["annual_panel"].lazy(),
+        inputs["ff"].lazy(),
+        inputs["text_features"].lazy(),
+        event_window_doc_batch_size=2,
+    )
+
+    assert surface.height == inputs["sample_backbone"].height
+    assert surface.get_column("doc_id").n_unique() == surface.height
+    assert {
+        "doc_id",
+        "filing_trade_date",
+        "pre_filing_trade_date",
+        "pre_filing_price",
+        "size_event",
+        "bm_event",
+        "event_return_day_count",
+        "event_volume_day_count",
+        "pre_turnover_obs",
+        "abnormal_volume_pre_obs",
+        "event_shares",
+        "event_shrcd",
+        "event_exchcd",
+        "pre_alpha_obs",
+        "post_alpha_obs",
+        "filing_period_excess_return",
+        "share_turnover",
+        "abnormal_volume",
+        "pre_ffalpha",
+        "postevent_return_volatility",
+    }.issubset(set(surface.columns))
+
+
+def test_build_lm2011_event_screen_surface_batched_never_exceeds_doc_batch_size(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    inputs = _table_i_market_inputs()
+    observed_doc_batch_sizes: list[int] = []
+    original = lm2011_pipeline._build_window_rows
+
+    def _capture_window_rows(docs_df: pl.DataFrame, daily_df: pl.DataFrame) -> pl.DataFrame:
+        observed_doc_batch_sizes.append(int(docs_df.height))
+        return original(docs_df, daily_df)
+
+    monkeypatch.setattr(lm2011_pipeline, "_build_window_rows", _capture_window_rows)
+
+    surface = _build_lm2011_event_screen_surface_batched(
+        inputs["sample_backbone"].lazy(),
+        inputs["daily"].lazy(),
+        inputs["annual_panel"].lazy(),
+        inputs["ff"].lazy(),
+        inputs["text_features"].lazy(),
+        event_window_doc_batch_size=2,
+    )
+
+    assert surface.height == inputs["sample_backbone"].height
+    assert observed_doc_batch_sizes
+    assert max(observed_doc_batch_sizes) <= 2
+
+
+def test_build_lm2011_event_panel_matches_across_event_window_doc_batch_sizes() -> None:
+    inputs = _table_i_market_inputs()
+    ownership = pl.DataFrame(
+        {
+            "doc_id": inputs["sample_backbone"].get_column("doc_id").to_list(),
+            "institutional_ownership_pct": [44.0] * inputs["sample_backbone"].height,
+        }
+    )
+
+    panel_batch_one = build_lm2011_event_panel(
+        inputs["sample_backbone"].lazy(),
+        inputs["daily"].lazy(),
+        inputs["annual_panel"].lazy(),
+        inputs["ff"].lazy(),
+        ownership.lazy(),
+        inputs["text_features"].lazy(),
+        event_window_doc_batch_size=1,
+    ).collect().sort("doc_id")
+    panel_batch_three = build_lm2011_event_panel(
+        inputs["sample_backbone"].lazy(),
+        inputs["daily"].lazy(),
+        inputs["annual_panel"].lazy(),
+        inputs["ff"].lazy(),
+        ownership.lazy(),
+        inputs["text_features"].lazy(),
+        event_window_doc_batch_size=3,
+    ).collect().sort("doc_id")
+
+    assert panel_batch_one.to_dicts() == panel_batch_three.to_dicts()
+
+
+def test_build_lm2011_table_i_sample_creation_matches_across_event_window_doc_batch_sizes() -> None:
+    inputs = _table_i_market_inputs()
+    filing_date = inputs["sample_backbone"].item(0, "filing_date")
+    sec_parsed = pl.DataFrame(
+        {
+            "doc_id": inputs["sample_backbone"].get_column("doc_id").to_list(),
+            "cik_10": inputs["sample_backbone"].get_column("cik_10").to_list(),
+            "filing_date": [filing_date] * inputs["sample_backbone"].height,
+            "accession_nodash": [str(idx + 1) for idx in range(inputs["sample_backbone"].height)],
+            "document_type_filename": ["10-K"] * inputs["sample_backbone"].height,
+        }
+    )
+    matched_clean = pl.DataFrame(
+        {
+            "doc_id": inputs["sample_backbone"].get_column("doc_id").to_list(),
+            "KYPERMNO": inputs["sample_backbone"].get_column("KYPERMNO").to_list(),
+            "gvkey": inputs["sample_backbone"].get_column("gvkey_int").to_list(),
+            "SRCTYPE": ["10K"] * inputs["sample_backbone"].height,
+        }
+    )
+
+    table_batch_one = build_lm2011_table_i_sample_creation(
+        sec_parsed.lazy(),
+        matched_clean.lazy(),
+        inputs["daily"].lazy(),
+        inputs["annual_panel"].lazy(),
+        inputs["ff"].lazy(),
+        inputs["text_features"].lazy(),
+        event_window_doc_batch_size=1,
+    ).sort("row_order")
+    table_batch_four = build_lm2011_table_i_sample_creation(
+        sec_parsed.lazy(),
+        matched_clean.lazy(),
+        inputs["daily"].lazy(),
+        inputs["annual_panel"].lazy(),
+        inputs["ff"].lazy(),
+        inputs["text_features"].lazy(),
+        event_window_doc_batch_size=4,
+    ).sort("row_order")
+
+    assert table_batch_one.to_dicts() == table_batch_four.to_dicts()
 
 
 def test_build_lm2011_table_i_sample_creation_emits_expected_mda_rows() -> None:
