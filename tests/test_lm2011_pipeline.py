@@ -584,12 +584,14 @@ def test_lm2011_text_feature_builders_match_public_spec_contract() -> None:
         dictionary_lists=dictionary_lists,
         harvard_negative_word_list=_harvard_negative_word_list(),
         master_dictionary_words=_master_dictionary_words(),
+        batch_size=1,
     ).collect().sort("doc_id")
     mda_features = build_lm2011_text_features_mda(
         sec_items.lazy(),
         dictionary_lists=dictionary_lists,
         harvard_negative_word_list=_harvard_negative_word_list(),
         master_dictionary_words=_master_dictionary_words(),
+        batch_size=1,
     ).collect().sort("doc_id")
 
     assert "h4n_inf_tfidf" in full_features.columns
@@ -661,6 +663,7 @@ def test_lm2011_text_feature_builders_use_exact_paper_tfidf_formula() -> None:
         dictionary_lists=_lm_dictionary_lists(),
         harvard_negative_word_list=_harvard_negative_word_list(),
         master_dictionary_words=["loss", "gain"],
+        batch_size=1,
     ).collect().sort("doc_id")
 
     idf_loss = math.log(3.0 / 2.0)

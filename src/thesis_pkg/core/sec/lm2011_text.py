@@ -12,6 +12,7 @@ from thesis_pkg.core.sec.lm2011_cleaning import Full10KCleaningContract
 from thesis_pkg.core.sec.lm2011_cleaning import clean_full_10k_for_lm2011
 
 
+DEFAULT_TEXT_FEATURE_BATCH_SIZE = 1000
 LM2011_DICTIONARY_REQUIRED_LISTS: tuple[str, ...] = (
     "negative",
     "positive",
@@ -100,7 +101,13 @@ def _ensure_normalized_form(df: pl.DataFrame, *, raw_form_col: str) -> pl.DataFr
     )
 
 
-def _collect_text_base_df(
+def _validated_batch_size(batch_size: int) -> int:
+    if batch_size < 1:
+        raise ValueError("batch_size must be >= 1")
+    return batch_size
+
+
+def _iter_text_base_batches(
     lf: pl.LazyFrame,
     *,
     label: str,
@@ -108,11 +115,18 @@ def _collect_text_base_df(
     raw_form_col: str,
     include_item_id: bool = False,
     required_item_id: str | None = None,
-) -> pl.DataFrame:
+    batch_size: int = DEFAULT_TEXT_FEATURE_BATCH_SIZE,
+) -> Iterable[pl.DataFrame]:
     required = ["doc_id", "cik_10", "filing_date", text_col, raw_form_col]
     if include_item_id:
         required.append("item_id")
     _require_columns(lf, tuple(required), label)
+    if not hasattr(lf, "collect_batches"):
+        raise RuntimeError(
+            "Polars LazyFrame.collect_batches is required for memory-safe LM2011 text scoring. "
+            "Upgrade Polars to a version that provides collect_batches."
+        )
+    batch_size = _validated_batch_size(batch_size)
 
     base = lf
     if required_item_id is not None:
@@ -126,12 +140,13 @@ def _collect_text_base_df(
     schema = base.collect_schema()
     if "normalized_form" in schema:
         select_cols.append("normalized_form")
-    df = base.select(*select_cols).collect()
-    return _ensure_normalized_form(df, raw_form_col=raw_form_col)
+    for batch in base.select(*select_cols).collect_batches(chunk_size=batch_size):
+        if batch.height:
+            yield _ensure_normalized_form(batch, raw_form_col=raw_form_col)
 
 
 def _prepare_document_stats(
-    df: pl.DataFrame,
+    batches: Iterable[pl.DataFrame],
     *,
     text_col: str,
     vocabulary: frozenset[str],
@@ -144,22 +159,23 @@ def _prepare_document_stats(
     doc_recognized_word_totals: dict[str, int] = {}
     document_frequency: Counter[str] = Counter()
 
-    for row in df.iter_rows(named=True):
-        row_dict = dict(row)
-        doc_id = str(row_dict["doc_id"])
-        text_value = row_dict.pop(text_col, None)
-        text_input = text_value if isinstance(text_value, str) else None
-        if text_cleaner is not None:
-            text_input = text_cleaner(text_input)
-        tokens = tokenize_lm2011_text(text_input)
-        token_total = len(tokens)
-        recognized_word_total = sum(1 for token in tokens if token in master_dictionary_words)
-        counts = Counter(token for token in tokens if token in vocabulary)
-        base_rows.append(row_dict)
-        doc_token_counts[doc_id] = counts
-        doc_token_totals[doc_id] = token_total
-        doc_recognized_word_totals[doc_id] = recognized_word_total
-        document_frequency.update(counts.keys())
+    for batch in batches:
+        for row in batch.iter_rows(named=True):
+            row_dict = dict(row)
+            doc_id = str(row_dict["doc_id"])
+            text_value = row_dict.pop(text_col, None)
+            text_input = text_value if isinstance(text_value, str) else None
+            if text_cleaner is not None:
+                text_input = text_cleaner(text_input)
+            tokens = tokenize_lm2011_text(text_input)
+            token_total = len(tokens)
+            recognized_word_total = sum(1 for token in tokens if token in master_dictionary_words)
+            counts = Counter(token for token in tokens if token in vocabulary)
+            base_rows.append(row_dict)
+            doc_token_counts[doc_id] = counts
+            doc_token_totals[doc_id] = token_total
+            doc_recognized_word_totals[doc_id] = recognized_word_total
+            document_frequency.update(counts.keys())
 
     num_docs = max(len(base_rows), 1)
     idf_by_token = {
@@ -238,7 +254,7 @@ def _feature_schema(
 
 
 def _build_scored_text_frame(
-    df: pl.DataFrame,
+    batches: Iterable[pl.DataFrame],
     *,
     text_col: str,
     token_count_col: str,
@@ -251,7 +267,7 @@ def _build_scored_text_frame(
     vocabulary = frozenset().union(*(tokens for _, tokens, _ in signal_specs))
     normalized_master_dictionary_words = _normalize_master_dictionary_words(master_dictionary_words)
     base_rows, doc_token_counts, doc_token_totals, doc_recognized_word_totals, idf_by_token = _prepare_document_stats(
-        df,
+        batches,
         text_col=text_col,
         vocabulary=vocabulary,
         master_dictionary_words=normalized_master_dictionary_words,
@@ -313,20 +329,22 @@ def build_lm2011_text_features_full_10k(
     text_col: str = "full_text",
     raw_form_col: str = "document_type_filename",
     cleaning_contract: Full10KCleaningContract = "current",
+    batch_size: int = DEFAULT_TEXT_FEATURE_BATCH_SIZE,
 ) -> pl.LazyFrame:
     normalized_dict = normalize_lm2011_dictionary_lists(dictionary_lists)
     signal_specs = _build_lm2011_signal_specs(
         normalized_dict=normalized_dict,
         harvard_negative_word_list=harvard_negative_word_list,
     )
-    df = _collect_text_base_df(
+    batches = _iter_text_base_batches(
         sec_parsed_lf,
         label="sec_parsed",
         text_col=text_col,
         raw_form_col=raw_form_col,
+        batch_size=batch_size,
     )
     return _build_scored_text_frame(
-        df.select("doc_id", "cik_10", "filing_date", "normalized_form", text_col),
+        batches,
         text_col=text_col,
         token_count_col="token_count_full_10k",
         total_token_count_col="total_token_count_full_10k",
@@ -346,22 +364,24 @@ def build_lm2011_text_features_mda(
     text_col: str = "full_text",
     raw_form_col: str = "document_type_filename",
     required_item_id: str = "7",
+    batch_size: int = DEFAULT_TEXT_FEATURE_BATCH_SIZE,
 ) -> pl.LazyFrame:
     normalized_dict = normalize_lm2011_dictionary_lists(dictionary_lists)
     signal_specs = _build_lm2011_signal_specs(
         normalized_dict=normalized_dict,
         harvard_negative_word_list=harvard_negative_word_list,
     )
-    df = _collect_text_base_df(
+    batches = _iter_text_base_batches(
         sec_item_lf,
         label="sec_items",
         text_col=text_col,
         raw_form_col=raw_form_col,
         include_item_id=True,
         required_item_id=required_item_id,
+        batch_size=batch_size,
     )
     return _build_scored_text_frame(
-        df.select("doc_id", "cik_10", "filing_date", "normalized_form", "item_id", text_col),
+        batches,
         text_col=text_col,
         token_count_col="token_count_mda",
         total_token_count_col="total_token_count_mda",
@@ -380,6 +400,7 @@ def build_lm2011_trading_strategy_signal_frame(
     text_col: str = "full_text",
     raw_form_col: str = "document_type_filename",
     cleaning_contract: Full10KCleaningContract = "current",
+    batch_size: int = DEFAULT_TEXT_FEATURE_BATCH_SIZE,
 ) -> pl.LazyFrame:
     normalized_lm_dict = normalize_lm2011_dictionary_lists(lm_dictionary_lists)
     harvard_tokens = _normalize_dictionary_tokens(harvard_negative_word_list)
@@ -389,14 +410,15 @@ def build_lm2011_trading_strategy_signal_frame(
         ("fin_neg", normalized_lm_dict["negative"], True),
         ("h4n_inf", harvard_tokens, True),
     )
-    df = _collect_text_base_df(
+    batches = _iter_text_base_batches(
         sec_parsed_lf,
         label="sec_parsed",
         text_col=text_col,
         raw_form_col=raw_form_col,
+        batch_size=batch_size,
     )
     return _build_scored_text_frame(
-        df.select("doc_id", "cik_10", "filing_date", "normalized_form", text_col),
+        batches,
         text_col=text_col,
         token_count_col="token_count_full_10k",
         total_token_count_col="total_token_count_full_10k",

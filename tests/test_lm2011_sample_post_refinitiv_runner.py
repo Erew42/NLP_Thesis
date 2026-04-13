@@ -239,6 +239,128 @@ def test_resolve_paths_auto_resolves_sfz_mth_monthly_stock(tmp_path: Path) -> No
     ).resolve()
 
 
+def test_resolve_paths_auto_resolves_prebuilt_sample_backbone(tmp_path: Path) -> None:
+    sample_root, upstream_run_root, additional_data_dir, output_dir = _build_temp_layout(tmp_path)
+    prebuilt = upstream_run_root / "sec_ccm_premerge" / "lm2011_sample_backbone.parquet"
+    _write_parquet(prebuilt, pl.DataFrame({"doc_id": ["d1"]}))
+
+    paths = runner._resolve_paths(
+        runner.parse_args(
+            [
+                "--sample-root",
+                str(sample_root),
+                "--upstream-run-root",
+                str(upstream_run_root),
+                "--additional-data-dir",
+                str(additional_data_dir),
+                "--output-dir",
+                str(output_dir),
+            ]
+        )
+    )
+
+    assert paths.sample_backbone_path == prebuilt.resolve()
+
+
+def test_resolve_paths_explicit_sample_backbone_takes_precedence(tmp_path: Path) -> None:
+    sample_root, upstream_run_root, additional_data_dir, output_dir = _build_temp_layout(tmp_path)
+    auto_prebuilt = upstream_run_root / "sec_ccm_premerge" / "lm2011_sample_backbone.parquet"
+    explicit_prebuilt = tmp_path / "explicit" / "lm2011_sample_backbone.parquet"
+    _write_parquet(auto_prebuilt, pl.DataFrame({"doc_id": ["auto"]}))
+    _write_parquet(explicit_prebuilt, pl.DataFrame({"doc_id": ["explicit"]}))
+
+    paths = runner._resolve_paths(
+        runner.parse_args(
+            [
+                "--sample-root",
+                str(sample_root),
+                "--upstream-run-root",
+                str(upstream_run_root),
+                "--additional-data-dir",
+                str(additional_data_dir),
+                "--output-dir",
+                str(output_dir),
+                "--sample-backbone-path",
+                str(explicit_prebuilt),
+            ]
+        )
+    )
+
+    assert paths.sample_backbone_path == explicit_prebuilt.resolve()
+
+
+def test_prepare_lm2011_sec_backbone_input_excludes_full_text() -> None:
+    out = runner._prepare_lm2011_sec_backbone_input_lf(
+        pl.DataFrame(
+            {
+                "doc_id": ["d1"],
+                "cik_10": ["0000000001"],
+                "accession_nodash": ["000000000100000001"],
+                "file_date_filename": [dt.date(1995, 1, 1)],
+                "document_type_filename": ["10-K"],
+                "full_text": ["large text payload"],
+            }
+        ).lazy()
+    ).collect()
+
+    assert "full_text" not in out.columns
+    assert out.columns == [
+        "doc_id",
+        "cik_10",
+        "accession_nodash",
+        "document_type_filename",
+        "filing_date",
+    ]
+
+
+def test_filter_to_sample_doc_ids_limits_text_universe() -> None:
+    text_lf = pl.DataFrame({"doc_id": ["d1", "d2"], "full_text": ["keep", "drop"]}).lazy()
+    sample_lf = pl.DataFrame({"doc_id": ["d1"]}).lazy()
+
+    out = runner._filter_to_sample_doc_ids_lf(text_lf, sample_lf).collect()
+
+    assert out.get_column("doc_id").to_list() == ["d1"]
+
+
+def test_write_frame_artifact_streams_lazy_frame_without_collect(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def _fail_collect(_: pl.LazyFrame | pl.DataFrame) -> pl.DataFrame:
+        raise AssertionError("Lazy stage writes must not eagerly collect")
+
+    monkeypatch.setattr(runner, "_collect_frame", _fail_collect)
+    output_path, row_count = runner._write_frame_artifact(
+        pl.DataFrame({"x": [1, 2]}).lazy(),
+        tmp_path / "stage.parquet",
+    )
+
+    assert output_path.exists()
+    assert row_count == 2
+    assert pl.read_parquet(output_path).get_column("x").to_list() == [1, 2]
+
+
+def test_write_stage_records_reused_source_path(tmp_path: Path) -> None:
+    source = tmp_path / "source.parquet"
+    output_dir = tmp_path / "output"
+    _write_parquet(source, pl.DataFrame({"doc_id": ["d1"]}))
+    manifest: dict[str, object] = {
+        "roots": {"output_dir": str(output_dir)},
+        "artifacts": {},
+        "row_counts": {},
+        "stages": {},
+    }
+
+    runner._write_stage(
+        manifest,
+        output_dir=output_dir,
+        stage_name="sample_backbone",
+        frame=pl.scan_parquet(source),
+        source_path=source,
+    )
+
+    stage = manifest["stages"]["sample_backbone"]  # type: ignore[index]
+    assert stage["source_path"] == str(source.resolve())
+    assert stage["row_count"] == 1
+
+
 def test_filter_valid_annual_period_descriptor_rows_excludes_invalid_fallback_rows() -> None:
     lf = pl.DataFrame(
         {
@@ -450,6 +572,8 @@ def test_main_writes_expected_artifacts_and_manifest_for_stubbed_run(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     sample_root, upstream_run_root, additional_data_dir, output_dir = _build_temp_layout(tmp_path)
+    prebuilt_backbone = upstream_run_root / "sec_ccm_premerge" / "lm2011_sample_backbone.parquet"
+    _write_parquet(prebuilt_backbone, pl.DataFrame({"doc_id": ["d1"]}))
     captured: dict[str, object] = {}
 
     def _capture_text_features_full_10k(*_: object, **kwargs: object) -> pl.LazyFrame:
@@ -482,7 +606,11 @@ def test_main_writes_expected_artifacts_and_manifest_for_stubbed_run(
             pl.DataFrame({"x": [1]}).lazy(),
         ),
     )
-    monkeypatch.setattr(runner, "build_lm2011_sample_backbone", lambda *_, **__: pl.DataFrame({"doc_id": ["d1"]}).lazy())
+    monkeypatch.setattr(
+        runner,
+        "build_lm2011_sample_backbone",
+        lambda *_, **__: (_ for _ in ()).throw(AssertionError("prebuilt sample backbone should be reused")),
+    )
     monkeypatch.setattr(runner, "build_annual_accounting_panel", lambda *_, **__: pl.DataFrame({"gvkey_int": [1]}).lazy())
     monkeypatch.setattr(runner, "build_quarterly_accounting_panel", lambda *_, **__: pl.DataFrame({"gvkey_int": [1]}).lazy())
     monkeypatch.setattr(
@@ -496,6 +624,9 @@ def test_main_writes_expected_artifacts_and_manifest_for_stubbed_run(
         _capture_text_features_mda,
     )
     def _capture_table_i_sample_creation(*_: object, **kwargs: object) -> pl.DataFrame:
+        sec_input = _[0]
+        if isinstance(sec_input, pl.LazyFrame):
+            captured.setdefault("table_i_sec_columns", []).append(sec_input.collect_schema().names())
         sample_start = kwargs.get("sample_start", dt.date(1994, 1, 1))
         sample_end = kwargs.get("sample_end", dt.date(2008, 12, 31))
         captured.setdefault("table_i_windows", []).append((sample_start, sample_end))
@@ -570,6 +701,7 @@ def test_main_writes_expected_artifacts_and_manifest_for_stubbed_run(
     manifest = json.loads((output_dir / "lm2011_sample_run_manifest.json").read_text(encoding="utf-8"))
     assert manifest["run_status"] == "completed"
     assert manifest["config"]["full_10k_cleaning_contract"] == "lm2011_paper"
+    assert manifest["config"]["text_feature_batch_size"] == 1000
     assert manifest["resolved_inputs"]["ff_monthly_csv_path"].endswith("F-F_Research_Data_Factors.csv")
     assert manifest["resolved_inputs"]["momentum_monthly_csv_path"].endswith("F-F_Momentum_Factor.csv")
     assert manifest["resolved_inputs"]["monthly_stock_path"].endswith("sfz_mth.parquet")
@@ -583,6 +715,7 @@ def test_main_writes_expected_artifacts_and_manifest_for_stubbed_run(
     assert master_resources[0]["name"] == "LM2011_MasterDictionary.txt"
     assert "not provenance-verified" in master_resources[0]["provenance_status"]
     assert manifest["stages"]["sample_backbone"]["status"] == "generated"
+    assert manifest["stages"]["sample_backbone"]["source_path"] == str(prebuilt_backbone.resolve())
     assert manifest["stages"]["table_i_sample_creation"]["status"] == "generated"
     assert set(manifest["stages"]["table_i_sample_creation"]["extra_artifacts"]) == {"csv", "markdown"}
     assert manifest["stages"]["table_i_sample_creation"]["warnings"] == [
@@ -601,12 +734,15 @@ def test_main_writes_expected_artifacts_and_manifest_for_stubbed_run(
     assert manifest["stages"]["table_ia_ii_results"]["status"] == "generated_empty"
     assert manifest["stages"]["table_ia_ii_results"]["reason"] == runner.EMPTY_TABLE_REASON
     assert captured["text_features_full_10k_kwargs"]["cleaning_contract"] == "lm2011_paper"
+    assert captured["text_features_full_10k_kwargs"]["batch_size"] == 1000
     assert captured["text_features_full_10k_kwargs"]["master_dictionary_words"] == ("token", "harvard", "recognized")
+    assert captured["text_features_mda_kwargs"]["batch_size"] == 1000
     assert captured["text_features_mda_kwargs"]["master_dictionary_words"] == ("token", "harvard", "recognized")
     assert captured["table_i_windows"] == [
         (dt.date(1994, 1, 1), dt.date(2008, 12, 31)),
         (dt.date(1994, 1, 1), dt.date(2024, 12, 31)),
     ]
+    assert all("full_text" not in columns for columns in captured["table_i_sec_columns"])
 
 
 def test_resolve_paths_honors_colab_style_override_paths(tmp_path: Path) -> None:
