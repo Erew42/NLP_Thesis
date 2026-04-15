@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+import shutil
 
 import polars as pl
 
 from thesis_pkg.benchmarking.contracts import BucketBatchConfig
 from thesis_pkg.benchmarking.contracts import FinbertBenchmarkRunConfig
+from thesis_pkg.benchmarking.manifest_contracts import file_fingerprint
+from thesis_pkg.benchmarking.manifest_contracts import semantic_file_fingerprint
 from thesis_pkg.benchmarking.finbert_benchmark import run_finbert_benchmark
 
 
@@ -124,6 +128,24 @@ def test_run_finbert_benchmark_reads_manifest_and_writes_artifacts(tmp_path: Pat
         json.dumps(
             {
                 "dataset_tag": "finbert_10k_items_5pct_seed42",
+                "path_semantics": "absolute_legacy_v0",
+                "sentence_universe_contract": {
+                    "contract_version": "sentence_universe_contract_v1",
+                    "sentence_dataset_config": {
+                        "enabled": False,
+                        "sentencizer_backend": "spacy_blank_en_sentencizer",
+                        "spacy_batch_size": 32,
+                        "token_length_batch_size": 1024,
+                        "drop_blank_sentences": True,
+                        "compression": "zstd",
+                    },
+                    "section_universe_contract_fingerprint": "test",
+                    "sections_dataset_fingerprint": file_fingerprint(sections_path, relative_to=manifest_path.parent),
+                    "precomputed_sentences_fingerprint": file_fingerprint(
+                        sentences_path,
+                        relative_to=manifest_path.parent,
+                    ),
+                },
                 "artifacts": {
                     "sections_path": str(sections_path.resolve()),
                     "sentences_path": str(sentences_path.resolve()),
@@ -174,7 +196,8 @@ def test_run_finbert_benchmark_reads_manifest_and_writes_artifacts(tmp_path: Pat
     assert summary["sentence_source"] == "precomputed"
     assert summary["sentence_source_reason"] == "registered_precomputed_sentence_artifact"
     assert summary["sentence_rows"] == 3
-    assert summary["sentence_materialization"]["registered_sentences_path"] == str(sentences_path.resolve())
+    assert summary["validated_sentence_universe_contract"]["sentence_universe_comparable"] is True
+    assert summary["sentence_materialization"]["registered_sentences_path"] == "sentences.parquet"
     assert summary["dataset_manifest_diagnostics"]["warnings"] == []
     assert summary["runtime_environment"]["resolved_device"] == "cpu"
     assert summary["runtime_environment"]["autocast_enabled"] is False
@@ -264,9 +287,122 @@ def test_run_finbert_benchmark_reports_unregistered_sentence_artifact(tmp_path: 
     assert summary["sentence_source"] == "derived_runtime"
     assert summary["sentence_source_reason"] == "no_registered_precomputed_sentence_artifact"
     assert summary["dataset_manifest_diagnostics"]["registered_sentences_path"] is None
-    assert summary["dataset_manifest_diagnostics"]["unregistered_sentence_artifact_path"] == str(
-        sentences_path.resolve()
+    assert summary["dataset_manifest_diagnostics"]["unregistered_sentence_artifact_path"] == (
+        "derived/finbert_10k_item_sentences.parquet"
     )
     assert "unregistered_sentence_artifact_present_but_not_registered" in summary["dataset_manifest_diagnostics"][
         "warnings"
     ]
+
+
+def test_run_finbert_benchmark_accepts_relocated_relative_manifest_with_semantic_v2_contract(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    original_root = tmp_path / "original_dataset"
+    dataset_root = original_root / "dataset_bundle"
+    sections_path = dataset_root / "dataset" / "finbert_10k_item_sections.parquet"
+    sentences_path = dataset_root / "derived" / "finbert_10k_item_sentences.parquet"
+    sections_path.parent.mkdir(parents=True, exist_ok=True)
+    sentences_path.parent.mkdir(parents=True, exist_ok=True)
+
+    pl.DataFrame(
+        {
+            "benchmark_row_id": ["doc1:item_1"],
+            "doc_id": ["doc1"],
+            "filing_date": [None],
+            "filing_year": [2000],
+            "benchmark_item_code": ["item_1"],
+            "full_text": ["First sentence. Second sentence."],
+        }
+    ).write_parquet(sections_path)
+    pl.DataFrame(
+        {
+            "benchmark_sentence_id": ["doc1:item_1:0", "doc1:item_1:1"],
+            "benchmark_row_id": ["doc1:item_1", "doc1:item_1"],
+            "doc_id": ["doc1", "doc1"],
+            "filing_date": [None, None],
+            "filing_year": [2000, 2000],
+            "benchmark_item_code": ["item_1", "item_1"],
+            "sentence_index": [0, 1],
+            "sentence_text": ["First sentence", "Second sentence"],
+            "sentence_char_count": [14, 15],
+            "sentencizer_backend": ["spacy_blank_en_sentencizer"] * 2,
+            "sentencizer_version": ["test"] * 2,
+            "finbert_token_count_512": [6, 6],
+            "finbert_token_bucket_512": ["short", "short"],
+        }
+    ).write_parquet(sentences_path)
+
+    manifest_path = dataset_root / "benchmark_manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "dataset_tag": "finbert_10k_items_1pct_seed42",
+                "path_semantics": "manifest_relative_v1",
+                "sentence_universe_contract": {
+                    "contract_version": "sentence_universe_contract_v2",
+                    "sentence_dataset_config": {
+                        "enabled": False,
+                        "sentencizer_backend": "spacy_blank_en_sentencizer",
+                        "spacy_batch_size": 32,
+                        "token_length_batch_size": 1024,
+                        "drop_blank_sentences": True,
+                        "compression": "zstd",
+                    },
+                    "section_universe_contract_fingerprint": "test",
+                    "sections_dataset_fingerprint": semantic_file_fingerprint(sections_path),
+                    "precomputed_sentences_fingerprint": semantic_file_fingerprint(sentences_path),
+                },
+                "artifacts": {
+                    "sections_path": "dataset/finbert_10k_item_sections.parquet",
+                    "sentences_path": "derived/finbert_10k_item_sentences.parquet",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    moved_root = tmp_path / "moved_dataset"
+    shutil.move(str(dataset_root), moved_root)
+    moved_manifest_path = moved_root / "benchmark_manifest.json"
+    moved_sections_path = moved_root / "dataset" / "finbert_10k_item_sections.parquet"
+    moved_sentences_path = moved_root / "derived" / "finbert_10k_item_sentences.parquet"
+    os.utime(moved_sections_path, None)
+    os.utime(moved_sentences_path, None)
+
+    from thesis_pkg.benchmarking import finbert_benchmark
+
+    monkeypatch.setattr(finbert_benchmark, "_import_torch", lambda: _FakeTorch())
+    monkeypatch.setattr(finbert_benchmark, "load_finbert_tokenizer", lambda authority: _FakeTokenizer())
+    monkeypatch.setattr(finbert_benchmark, "load_finbert_model", lambda authority, runtime: _FakeModel())
+    monkeypatch.setattr(
+        finbert_benchmark,
+        "benchmark_sentence_splitting",
+        lambda sections_df, sentence_cfg, *, runs: {
+            "stage": "sentence_split",
+            "documents": int(sections_df.height),
+            "total_sentences": 2,
+            "median_seconds": 0.01,
+            "docs_per_second": 100.0,
+            "sentences_per_second": 200.0,
+            "sentencizer_backend": sentence_cfg.sentencizer_backend,
+            "sentencizer_version": "test",
+        },
+    )
+
+    artifacts = run_finbert_benchmark(
+        FinbertBenchmarkRunConfig(
+            dataset_manifest_path=moved_manifest_path,
+            out_root=tmp_path / "runs",
+            batch_config=BucketBatchConfig(name="cpu_smoke", short_batch_size=2, medium_batch_size=2, long_batch_size=2),
+            run_name="relocated_manifest_run",
+        )
+    )
+
+    summary = json.loads(artifacts.summary_path.read_text(encoding="utf-8"))
+    assert summary["validated_sentence_universe_contract"]["sentence_universe_comparable"] is True
+    assert summary["validated_sentence_universe_contract"]["declared_contract_version"] == "sentence_universe_contract_v2"
+    assert summary["dataset_manifest_diagnostics"]["registered_sentences_path"] == (
+        "derived/finbert_10k_item_sentences.parquet"
+    )

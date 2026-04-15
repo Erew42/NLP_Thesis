@@ -21,6 +21,14 @@ from thesis_pkg.benchmarking.item_text_cleaning import SCOPE_DIAGNOSTICS_SCHEMA
 from thesis_pkg.benchmarking.item_text_cleaning import build_segment_policy_id
 from thesis_pkg.benchmarking.item_text_cleaning import clean_item_scopes_with_audit
 from thesis_pkg.benchmarking.item_text_cleaning import cleaned_scopes_for_sentence_materialization
+from thesis_pkg.benchmarking.manifest_contracts import MANIFEST_PATH_SEMANTICS_RELATIVE
+from thesis_pkg.benchmarking.manifest_contracts import json_sha256
+from thesis_pkg.benchmarking.manifest_contracts import make_semantic_reuse_guard
+from thesis_pkg.benchmarking.manifest_contracts import parquet_doc_universe_fingerprint
+from thesis_pkg.benchmarking.manifest_contracts import relative_artifact_path
+from thesis_pkg.benchmarking.manifest_contracts import semantic_file_fingerprint
+from thesis_pkg.benchmarking.manifest_contracts import semantic_guard_mismatches
+from thesis_pkg.benchmarking.manifest_contracts import write_manifest_path_value
 from thesis_pkg.benchmarking.run_logging import utc_timestamp
 from thesis_pkg.benchmarking.sentences import SENTENCE_CHUNK_CHAR_LIMIT
 from thesis_pkg.benchmarking.sentences import SENTENCE_SPLIT_AUDIT_SCHEMA
@@ -170,15 +178,49 @@ def _semantic_preprocessing_payload(
         "cleaning": asdict(run_cfg.cleaning),
         "cleaning_policy_id": run_cfg.cleaning.cleaning_policy_id if run_cfg.cleaning.enabled else "raw_item_text",
         "segment_policy_id": segment_policy_id,
-        "source_items_dir": str(run_cfg.source_items_dir.resolve()),
-        "target_doc_universe_path": (
-            str(run_cfg.target_doc_universe_path.resolve())
-            if run_cfg.target_doc_universe_path is not None
-            else None
-        ),
         "year_filter": list(run_cfg.year_filter) if run_cfg.year_filter is not None else None,
     }
     return json.loads(json.dumps(payload))
+
+
+def _accepted_universe_contract_fingerprint(run_cfg: FinbertSentencePreprocessingRunConfig) -> str:
+    return json_sha256(
+        section_universe_contract_payload(
+            run_cfg.section_universe,
+            target_doc_universe_path=run_cfg.target_doc_universe_path,
+        )
+    )
+
+
+def _target_doc_universe_fingerprint(run_cfg: FinbertSentencePreprocessingRunConfig) -> dict[str, Any] | None:
+    if run_cfg.target_doc_universe_path is None:
+        return None
+    return parquet_doc_universe_fingerprint(run_cfg.target_doc_universe_path)
+
+
+def _source_items_fingerprints(year_paths: list[Path]) -> dict[str, dict[str, Any]]:
+    return {
+        path.stem: semantic_file_fingerprint(path)
+        for path in year_paths
+    }
+
+
+def _semantic_preprocessing_guard(
+    run_cfg: FinbertSentencePreprocessingRunConfig,
+    authority: FinbertAuthoritySpec,
+    segment_policy_id: str,
+    *,
+    year_paths: list[Path],
+) -> dict[str, Any]:
+    return make_semantic_reuse_guard(
+        version="sentence_preprocessing_v3",
+        payload=_semantic_preprocessing_payload(run_cfg, authority, segment_policy_id),
+        fingerprints={
+            "accepted_universe_contract_fingerprint": _accepted_universe_contract_fingerprint(run_cfg),
+            "target_doc_universe_fingerprint": _target_doc_universe_fingerprint(run_cfg),
+            "source_items_by_year": _source_items_fingerprints(year_paths),
+        },
+    )
 
 
 def _assert_existing_run_compatible(
@@ -186,17 +228,20 @@ def _assert_existing_run_compatible(
     run_cfg: FinbertSentencePreprocessingRunConfig,
     authority: FinbertAuthoritySpec,
     segment_policy_id: str,
+    *,
+    year_paths: list[Path],
 ) -> None:
     if run_cfg.overwrite or not run_manifest_path.exists():
         return
     manifest = json.loads(run_manifest_path.read_text(encoding="utf-8"))
-    expected = _semantic_preprocessing_payload(run_cfg, authority, segment_policy_id)
+    expected = _semantic_preprocessing_guard(
+        run_cfg,
+        authority,
+        segment_policy_id,
+        year_paths=year_paths,
+    )
     existing = manifest.get("semantic_reuse_guard", {})
-    mismatched = [
-        key
-        for key, expected_value in expected.items()
-        if existing.get(key) != expected_value
-    ]
+    mismatched = semantic_guard_mismatches(existing, expected)
     if mismatched:
         raise ValueError(
             "Existing FinBERT sentence preprocessing artifacts were created with incompatible "
@@ -208,6 +253,7 @@ def _summary_row(
     *,
     filing_year: int,
     status: str,
+    run_dir: Path,
     source_path: Path,
     sentence_path: Path,
     sections_df: pl.DataFrame | None,
@@ -215,7 +261,12 @@ def _summary_row(
     split_audit_df: pl.DataFrame | None,
     cleaning_row_audit_df: pl.DataFrame | None = None,
     flagged_rows_df: pl.DataFrame | None = None,
+    scope_diagnostics_df: pl.DataFrame | None = None,
+    manual_audit_df: pl.DataFrame | None = None,
     existing_summary_row: dict[str, Any] | None = None,
+    source_items_shard_fingerprint: dict[str, Any] | None = None,
+    accepted_universe_contract_fingerprint: str | None = None,
+    target_doc_universe_fingerprint: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     bucket_counts = (
         {
@@ -246,8 +297,8 @@ def _summary_row(
     return {
         "filing_year": filing_year,
         "status": status,
-        "source_path": str(source_path.resolve()),
-        "sentence_dataset_path": str(sentence_path.resolve()),
+        "source_path": relative_artifact_path(source_path, base_path=run_dir),
+        "sentence_dataset_path": relative_artifact_path(sentence_path, base_path=run_dir),
         "section_rows": (
             int(sections_df.height)
             if sections_df is not None
@@ -287,7 +338,107 @@ def _summary_row(
             if existing_summary_row is not None
             else 0
         ),
+        "split_audit_rows": (
+            int(split_audit_df.height)
+            if split_audit_df is not None
+            else int(existing_summary_row.get("split_audit_rows") or 0)
+            if existing_summary_row is not None
+            else 0
+        ),
+        "cleaning_row_audit_rows": (
+            int(cleaning_row_audit_df.height)
+            if cleaning_row_audit_df is not None
+            else int(existing_summary_row.get("cleaning_row_audit_rows") or 0)
+            if existing_summary_row is not None
+            else 0
+        ),
+        "scope_diagnostics_rows": (
+            int(scope_diagnostics_df.height)
+            if scope_diagnostics_df is not None
+            else int(existing_summary_row.get("scope_diagnostics_rows") or 0)
+            if existing_summary_row is not None
+            else 0
+        ),
+        "manual_audit_rows": (
+            int(manual_audit_df.height)
+            if manual_audit_df is not None
+            else int(existing_summary_row.get("manual_audit_rows") or 0)
+            if existing_summary_row is not None
+            else 0
+        ),
+        "source_items_shard_fingerprint": json.dumps(source_items_shard_fingerprint, sort_keys=True)
+        if source_items_shard_fingerprint is not None
+        else existing_summary_row.get("source_items_shard_fingerprint")
+        if existing_summary_row is not None
+        else None,
+        "accepted_universe_contract_fingerprint": (
+            accepted_universe_contract_fingerprint
+            if accepted_universe_contract_fingerprint is not None
+            else existing_summary_row.get("accepted_universe_contract_fingerprint")
+            if existing_summary_row is not None
+            else None
+        ),
+        "target_doc_universe_fingerprint": json.dumps(target_doc_universe_fingerprint, sort_keys=True)
+        if target_doc_universe_fingerprint is not None
+        else existing_summary_row.get("target_doc_universe_fingerprint")
+        if existing_summary_row is not None
+        else None,
     }
+
+
+def _can_reuse_existing_year(
+    *,
+    filing_year: int,
+    year_path: Path,
+    sentence_path: Path,
+    cleaned_scope_path: Path,
+    existing_summary_row: dict[str, Any] | None,
+    split_audit_df: pl.DataFrame,
+    cleaning_year_df: pl.DataFrame,
+    flagged_year_df: pl.DataFrame,
+    scope_diagnostics_year_df: pl.DataFrame,
+    manual_audit_year_df: pl.DataFrame,
+    required_artifact_paths: tuple[Path, ...],
+    accepted_universe_contract_fingerprint: str,
+    target_doc_universe_fingerprint: dict[str, Any] | None,
+) -> bool:
+    if existing_summary_row is None:
+        return False
+    if not sentence_path.exists() or not cleaned_scope_path.exists():
+        return False
+    if any(not path.exists() for path in required_artifact_paths):
+        return False
+
+    expected_source_fingerprint = json.dumps(
+        semantic_file_fingerprint(year_path),
+        sort_keys=True,
+    )
+    if existing_summary_row.get("source_items_shard_fingerprint") != expected_source_fingerprint:
+        return False
+    if (
+        existing_summary_row.get("accepted_universe_contract_fingerprint")
+        != accepted_universe_contract_fingerprint
+    ):
+        return False
+    expected_target_fingerprint = (
+        json.dumps(target_doc_universe_fingerprint, sort_keys=True)
+        if target_doc_universe_fingerprint is not None
+        else None
+    )
+    if existing_summary_row.get("target_doc_universe_fingerprint") != expected_target_fingerprint:
+        return False
+
+    expected_counts = {
+        "split_audit_rows": int(split_audit_df.height),
+        "cleaning_row_audit_rows": int(cleaning_year_df.height),
+        "cleaning_flagged_rows": int(flagged_year_df.height),
+        "scope_diagnostics_rows": int(scope_diagnostics_year_df.height),
+        "manual_audit_rows": int(manual_audit_year_df.height),
+    }
+    for key, expected_count in expected_counts.items():
+        if int(existing_summary_row.get(key) or 0) != expected_count:
+            return False
+    return True
 
 
 def run_finbert_sentence_preprocessing(
@@ -316,7 +467,13 @@ def run_finbert_sentence_preprocessing(
         chunk_char_limit=SENTENCE_CHUNK_CHAR_LIMIT,
     )
 
-    _assert_existing_run_compatible(run_manifest_path, run_cfg, authority, segment_policy_id)
+    _assert_existing_run_compatible(
+        run_manifest_path,
+        run_cfg,
+        authority,
+        segment_policy_id,
+        year_paths=year_paths,
+    )
 
     existing_summary_rows = _load_existing_summary_rows(yearly_summary_path, overwrite=run_cfg.overwrite)
     existing_split_audit_df = _load_existing_split_audit(oversize_sections_path, overwrite=run_cfg.overwrite)
@@ -347,32 +504,65 @@ def run_finbert_sentence_preprocessing(
     processed_scope_diagnostics_chunks: list[pl.DataFrame] = []
     processed_manual_audit_chunks: list[pl.DataFrame] = []
     reused_years: set[int] = set()
+    accepted_universe_contract_fingerprint = _accepted_universe_contract_fingerprint(run_cfg)
+    target_doc_universe_fingerprint = _target_doc_universe_fingerprint(run_cfg)
     for year_path in year_paths:
         filing_year = int(year_path.stem)
         sentence_path = sentence_dataset_dir / f"{filing_year}.parquet"
+        cleaned_scope_path = cleaned_item_scopes_dir / f"{filing_year}.parquet"
         existing_summary_row = existing_summary_rows.get(filing_year)
-        if sentence_path.exists() and not run_cfg.overwrite:
+        split_audit_df = (
+            existing_split_audit_df.filter(pl.col("filing_year") == filing_year)
+            if not existing_split_audit_df.is_empty()
+            else _empty_split_audit_frame()
+        )
+        cleaning_year_df = _filter_existing_years(
+            existing_cleaning_row_audit_df,
+            {filing_year},
+            year_col="calendar_year",
+        )
+        flagged_year_df = _filter_existing_years(
+            existing_flagged_rows_df,
+            {filing_year},
+            year_col="calendar_year",
+        )
+        scope_diagnostics_year_df = _filter_existing_years(
+            existing_scope_diagnostics_df,
+            {filing_year},
+        )
+        manual_audit_year_df = _filter_existing_years(
+            existing_manual_audit_df,
+            {filing_year},
+        )
+        if not run_cfg.overwrite and _can_reuse_existing_year(
+            filing_year=filing_year,
+            year_path=year_path,
+            sentence_path=sentence_path,
+            cleaned_scope_path=cleaned_scope_path,
+            existing_summary_row=existing_summary_row,
+            split_audit_df=split_audit_df,
+            cleaning_year_df=cleaning_year_df,
+            flagged_year_df=flagged_year_df,
+            scope_diagnostics_year_df=scope_diagnostics_year_df,
+            manual_audit_year_df=manual_audit_year_df,
+            required_artifact_paths=(
+                run_manifest_path,
+                cleaning_row_audit_path,
+                cleaning_flagged_rows_path,
+                item_scope_cleaning_diagnostics_path,
+                manual_boundary_audit_sample_path,
+                oversize_sections_path,
+            ),
+            accepted_universe_contract_fingerprint=accepted_universe_contract_fingerprint,
+            target_doc_universe_fingerprint=target_doc_universe_fingerprint,
+        ):
             sentence_df = pl.read_parquet(sentence_path)
             reused_years.add(filing_year)
-            split_audit_df = (
-                existing_split_audit_df.filter(pl.col("filing_year") == filing_year)
-                if not existing_split_audit_df.is_empty()
-                else _empty_split_audit_frame()
-            )
-            cleaning_year_df = _filter_existing_years(
-                existing_cleaning_row_audit_df,
-                {filing_year},
-                year_col="calendar_year",
-            )
-            flagged_year_df = _filter_existing_years(
-                existing_flagged_rows_df,
-                {filing_year},
-                year_col="calendar_year",
-            )
             summary_rows.append(
                 _summary_row(
                     filing_year=filing_year,
                     status="reused_existing",
+                    run_dir=run_dir,
                     source_path=year_path,
                     sentence_path=sentence_path,
                     sections_df=None,
@@ -380,6 +570,8 @@ def run_finbert_sentence_preprocessing(
                     split_audit_df=split_audit_df,
                     cleaning_row_audit_df=cleaning_year_df,
                     flagged_rows_df=flagged_year_df,
+                    scope_diagnostics_df=scope_diagnostics_year_df,
+                    manual_audit_df=manual_audit_year_df,
                     existing_summary_row=existing_summary_row,
                 )
             )
@@ -398,7 +590,6 @@ def run_finbert_sentence_preprocessing(
             run_cfg.cleaning,
             segment_policy_id=segment_policy_id,
         )
-        cleaned_scope_path = cleaned_item_scopes_dir / f"{filing_year}.parquet"
         cleaned_scope_path.parent.mkdir(parents=True, exist_ok=True)
         cleaning_result.cleaned_scope_df.write_parquet(
             cleaned_scope_path,
@@ -421,16 +612,22 @@ def run_finbert_sentence_preprocessing(
         sentence_df.write_parquet(sentence_path, compression=run_cfg.sentence_dataset.compression)
         _warn_on_fallback_split_boundaries(filing_year, split_audit_df)
         summary_rows.append(
-            _summary_row(
-                filing_year=filing_year,
-                status="processed",
-                source_path=year_path,
-                sentence_path=sentence_path,
+                _summary_row(
+                    filing_year=filing_year,
+                    status="processed",
+                    run_dir=run_dir,
+                    source_path=year_path,
+                    sentence_path=sentence_path,
                 sections_df=sections_df,
                 sentence_df=sentence_df,
                 split_audit_df=split_audit_df,
                 cleaning_row_audit_df=cleaning_result.row_audit_df,
                 flagged_rows_df=cleaning_result.flagged_rows_df,
+                scope_diagnostics_df=cleaning_result.scope_diagnostics_df,
+                manual_audit_df=cleaning_result.manual_audit_sample_df,
+                source_items_shard_fingerprint=semantic_file_fingerprint(year_path),
+                accepted_universe_contract_fingerprint=accepted_universe_contract_fingerprint,
+                target_doc_universe_fingerprint=target_doc_universe_fingerprint,
             )
         )
 
@@ -483,6 +680,7 @@ def run_finbert_sentence_preprocessing(
     summary_df.write_csv(yearly_summary_csv_path)
 
     manifest = {
+        "path_semantics": MANIFEST_PATH_SEMANTICS_RELATIVE,
         "runner_name": RUNNER_NAME,
         "run_name": run_name,
         "created_at_utc": utc_timestamp(),
@@ -491,9 +689,13 @@ def run_finbert_sentence_preprocessing(
         "cleaning": asdict(run_cfg.cleaning),
         "cleaning_policy_id": run_cfg.cleaning.cleaning_policy_id if run_cfg.cleaning.enabled else "raw_item_text",
         "segment_policy_id": segment_policy_id,
-        "semantic_reuse_guard": _semantic_preprocessing_payload(run_cfg, authority, segment_policy_id),
+        "semantic_reuse_guard": _semantic_preprocessing_guard(
+            run_cfg,
+            authority,
+            segment_policy_id,
+            year_paths=year_paths,
+        ),
         "section_universe": {
-            "source_items_dir": str(run_cfg.section_universe.source_items_dir.resolve()),
             "form_types": list(run_cfg.section_universe.form_types),
             "target_items": [asdict(item) for item in run_cfg.section_universe.target_items],
             "require_active_items": run_cfg.section_universe.require_active_items,
@@ -504,14 +706,17 @@ def run_finbert_sentence_preprocessing(
             run_cfg.section_universe,
             target_doc_universe_path=run_cfg.target_doc_universe_path,
         ),
-        "target_doc_universe_path": (
-            str(run_cfg.target_doc_universe_path.resolve())
-            if run_cfg.target_doc_universe_path is not None
-            else None
-        ),
         "year_filter": list(run_cfg.year_filter) if run_cfg.year_filter is not None else None,
         "overwrite": run_cfg.overwrite,
         "note": run_cfg.note,
+        "nonportable_diagnostics": {
+            "source_items_dir": str(run_cfg.source_items_dir.resolve()),
+            "target_doc_universe_path": (
+                str(run_cfg.target_doc_universe_path.resolve())
+                if run_cfg.target_doc_universe_path is not None
+                else None
+            ),
+        },
         "counts": {
             "year_count": len(summary_rows),
             "processed_year_count": sum(1 for row in summary_rows if row["status"] == "processed"),
@@ -525,17 +730,61 @@ def run_finbert_sentence_preprocessing(
             "cleaning_flagged_rows": int(summary_df["cleaning_flagged_rows"].sum()) if summary_df.height else 0,
         },
         "artifacts": {
-            "run_dir": str(run_dir.resolve()),
-            "sentence_dataset_dir": str(sentence_dataset_dir.resolve()),
-            "cleaned_item_scopes_dir": str(cleaned_item_scopes_dir.resolve()),
-            "oversize_sections_path": str(oversize_sections_path.resolve()),
-            "cleaning_row_audit_path": str(cleaning_row_audit_path.resolve()),
-            "cleaning_flagged_rows_path": str(cleaning_flagged_rows_path.resolve()),
-            "item_scope_cleaning_diagnostics_path": str(item_scope_cleaning_diagnostics_path.resolve()),
-            "item_scope_cleaning_diagnostics_csv_path": str(item_scope_cleaning_diagnostics_csv_path.resolve()),
-            "manual_boundary_audit_sample_path": str(manual_boundary_audit_sample_path.resolve()),
-            "yearly_summary_path": str(yearly_summary_path.resolve()),
-            "yearly_summary_csv_path": str(yearly_summary_csv_path.resolve()),
+            "run_dir": write_manifest_path_value(
+                run_dir,
+                manifest_path=run_manifest_path,
+                path_semantics=MANIFEST_PATH_SEMANTICS_RELATIVE,
+            ),
+            "sentence_dataset_dir": write_manifest_path_value(
+                sentence_dataset_dir,
+                manifest_path=run_manifest_path,
+                path_semantics=MANIFEST_PATH_SEMANTICS_RELATIVE,
+            ),
+            "cleaned_item_scopes_dir": write_manifest_path_value(
+                cleaned_item_scopes_dir,
+                manifest_path=run_manifest_path,
+                path_semantics=MANIFEST_PATH_SEMANTICS_RELATIVE,
+            ),
+            "oversize_sections_path": write_manifest_path_value(
+                oversize_sections_path,
+                manifest_path=run_manifest_path,
+                path_semantics=MANIFEST_PATH_SEMANTICS_RELATIVE,
+            ),
+            "cleaning_row_audit_path": write_manifest_path_value(
+                cleaning_row_audit_path,
+                manifest_path=run_manifest_path,
+                path_semantics=MANIFEST_PATH_SEMANTICS_RELATIVE,
+            ),
+            "cleaning_flagged_rows_path": write_manifest_path_value(
+                cleaning_flagged_rows_path,
+                manifest_path=run_manifest_path,
+                path_semantics=MANIFEST_PATH_SEMANTICS_RELATIVE,
+            ),
+            "item_scope_cleaning_diagnostics_path": write_manifest_path_value(
+                item_scope_cleaning_diagnostics_path,
+                manifest_path=run_manifest_path,
+                path_semantics=MANIFEST_PATH_SEMANTICS_RELATIVE,
+            ),
+            "item_scope_cleaning_diagnostics_csv_path": write_manifest_path_value(
+                item_scope_cleaning_diagnostics_csv_path,
+                manifest_path=run_manifest_path,
+                path_semantics=MANIFEST_PATH_SEMANTICS_RELATIVE,
+            ),
+            "manual_boundary_audit_sample_path": write_manifest_path_value(
+                manual_boundary_audit_sample_path,
+                manifest_path=run_manifest_path,
+                path_semantics=MANIFEST_PATH_SEMANTICS_RELATIVE,
+            ),
+            "yearly_summary_path": write_manifest_path_value(
+                yearly_summary_path,
+                manifest_path=run_manifest_path,
+                path_semantics=MANIFEST_PATH_SEMANTICS_RELATIVE,
+            ),
+            "yearly_summary_csv_path": write_manifest_path_value(
+                yearly_summary_csv_path,
+                manifest_path=run_manifest_path,
+                path_semantics=MANIFEST_PATH_SEMANTICS_RELATIVE,
+            ),
         },
     }
     _write_json(run_manifest_path, manifest)

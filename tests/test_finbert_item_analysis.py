@@ -463,3 +463,115 @@ def test_finbert_item_analysis_runner_preprocess_only_uses_backbone_path(
     assert exit_code == 0
     run_cfg = captured["run_cfg"]
     assert run_cfg.target_doc_universe_path == backbone_path.resolve()
+
+
+def test_run_finbert_pipeline_analysis_only_reuses_existing_preprocessing(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from thesis_pkg.notebooks_and_scripts import finbert_item_analysis_runner as runner
+
+    source_dir = tmp_path / "items_analysis"
+    source_dir.mkdir(parents=True)
+    sentence_run_dir = tmp_path / "runs" / "_staged_intermediates" / "shared_run_sentence_preprocessing"
+    sentence_dataset_dir = sentence_run_dir / "sentence_dataset" / "by_year"
+    sentence_dataset_dir.mkdir(parents=True, exist_ok=True)
+    (sentence_run_dir / "run_manifest.json").write_text("{}", encoding="utf-8")
+    pl.DataFrame({"benchmark_sentence_id": ["s1"]}).write_parquet(sentence_dataset_dir / "2009.parquet")
+    captured: dict[str, object] = {}
+
+    def _unexpected_preprocess(*_: object, **__: object):
+        raise AssertionError("preprocessing should not rerun when analysis-only mode reuses staged artifacts")
+
+    def _fake_inference(run_cfg):
+        captured["run_cfg"] = run_cfg
+        run_dir = tmp_path / "runs" / "analysis"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        item_features_long_path = run_dir / "item_features_long.parquet"
+        doc_features_wide_path = run_dir / "doc_features_wide.parquet"
+        pl.DataFrame({"doc_id": ["doc1"], "benchmark_item_code": ["item_7"]}).write_parquet(item_features_long_path)
+        pl.DataFrame({"doc_id": ["doc1"]}).write_parquet(doc_features_wide_path)
+        return FinbertSentenceParquetInferenceRunArtifacts(
+            run_dir=run_dir,
+            run_manifest_path=run_dir / "run_manifest.json",
+            item_features_long_path=item_features_long_path,
+            doc_features_wide_path=doc_features_wide_path,
+            coverage_report_path=None,
+            sentence_scores_dir=None,
+            yearly_summary_path=run_dir / "yearly_summary.parquet",
+        )
+
+    monkeypatch.setattr(runner, "run_finbert_sentence_preprocessing", _unexpected_preprocess)
+    monkeypatch.setattr(runner, "run_finbert_sentence_parquet_inference", _fake_inference)
+
+    analysis_cfg = runner.FinbertAnalysisRunConfig(
+        source_items_dir=source_dir,
+        out_root=tmp_path / "runs",
+        batch_config=runner.BATCH_PRESETS["baseline"],
+        section_universe=runner.FinbertSectionUniverseConfig(source_items_dir=source_dir),
+        year_filter=(2009,),
+        run_name="shared_run",
+    )
+    artifacts = runner.run_finbert_pipeline(
+        analysis_cfg,
+        run_preprocess=False,
+        run_analysis=True,
+    )
+
+    assert artifacts.preprocessing_artifacts is not None
+    assert artifacts.analysis_artifacts is not None
+    assert captured["run_cfg"].sentence_dataset_dir == sentence_dataset_dir.resolve()
+
+
+def test_runner_main_analysis_path_delegates_to_shared_pipeline(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from thesis_pkg.notebooks_and_scripts import finbert_item_analysis_runner as runner
+
+    source_dir = tmp_path / "items_analysis"
+    source_dir.mkdir(parents=True)
+    output_dir = tmp_path / "runs"
+    backbone_path = tmp_path / "backbone.parquet"
+    pl.DataFrame({"doc_id": ["doc1"]}).write_parquet(backbone_path)
+    captured: dict[str, object] = {}
+
+    def _fake_pipeline(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        run_dir = tmp_path / "analysis"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        item_features_long_path = run_dir / "item_features_long.parquet"
+        doc_features_wide_path = run_dir / "doc_features_wide.parquet"
+        pl.DataFrame({"doc_id": ["doc1"], "benchmark_item_code": ["item_1"]}).write_parquet(item_features_long_path)
+        pl.DataFrame({"doc_id": ["doc1"]}).write_parquet(doc_features_wide_path)
+        return runner.FinbertPipelineRunArtifacts(
+            preprocessing_artifacts=None,
+            analysis_artifacts=FinbertSentenceParquetInferenceRunArtifacts(
+                run_dir=run_dir,
+                run_manifest_path=run_dir / "run_manifest.json",
+                item_features_long_path=item_features_long_path,
+                doc_features_wide_path=doc_features_wide_path,
+                coverage_report_path=None,
+                sentence_scores_dir=None,
+                yearly_summary_path=run_dir / "yearly_summary.parquet",
+            ),
+        )
+
+    monkeypatch.setattr(runner, "run_finbert_pipeline", _fake_pipeline)
+
+    exit_code = runner.main(
+        [
+            "--data-profile",
+            "EXPLICIT",
+            "--source-items-dir",
+            str(source_dir),
+            "--backbone-path",
+            str(backbone_path),
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    assert exit_code == 0
+    assert captured["kwargs"] == {"run_preprocess": True, "run_analysis": True}

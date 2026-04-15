@@ -19,6 +19,11 @@ from thesis_pkg.benchmarking.contracts import FinbertAuthoritySpec
 from thesis_pkg.benchmarking.contracts import FinbertBenchmarkRunArtifacts
 from thesis_pkg.benchmarking.contracts import FinbertBenchmarkRunConfig
 from thesis_pkg.benchmarking.contracts import FinbertRuntimeConfig
+from thesis_pkg.benchmarking.manifest_contracts import json_sha256
+from thesis_pkg.benchmarking.manifest_contracts import MANIFEST_PATH_SEMANTICS_RELATIVE
+from thesis_pkg.benchmarking.manifest_contracts import resolve_manifest_path
+from thesis_pkg.benchmarking.manifest_contracts import semantic_file_fingerprint
+from thesis_pkg.benchmarking.manifest_contracts import write_manifest_path_value
 from thesis_pkg.benchmarking.run_logging import append_jsonl_record
 from thesis_pkg.benchmarking.run_logging import utc_timestamp
 from thesis_pkg.benchmarking.run_logging import write_frame
@@ -72,7 +77,13 @@ def _inspect_dataset_manifest(
     if not sections_raw:
         raise ValueError(f"Dataset manifest {manifest_path} is missing artifacts.sections_path.")
 
-    sections_path = Path(str(sections_raw))
+    path_semantics = dataset_manifest.get("path_semantics")
+    sections_path = resolve_manifest_path(
+        sections_raw,
+        manifest_path=manifest_path,
+        path_semantics=path_semantics,
+    )
+    assert sections_path is not None
     if not sections_path.exists():
         raise FileNotFoundError(
             f"Dataset manifest {manifest_path} references missing sections parquet: {sections_path}"
@@ -81,7 +92,11 @@ def _inspect_dataset_manifest(
     registered_sentences_path: Path | None = None
     registered_sentences_raw = artifacts.get("sentences_path")
     if registered_sentences_raw:
-        registered_sentences_path = Path(str(registered_sentences_raw))
+        registered_sentences_path = resolve_manifest_path(
+            registered_sentences_raw,
+            manifest_path=manifest_path,
+            path_semantics=path_semantics,
+        )
 
     warnings: list[str] = []
     if registered_sentences_path is not None and not registered_sentences_path.exists():
@@ -95,19 +110,89 @@ def _inspect_dataset_manifest(
             warnings.append("unregistered_sentence_artifact_present_but_not_registered")
 
     return {
-        "manifest_path": str(manifest_path.resolve()),
-        "sections_path": str(sections_path.resolve()),
+        "path_semantics": path_semantics or "absolute_legacy_v0",
+        "sections_path": write_manifest_path_value(
+            sections_path,
+            manifest_path=manifest_path,
+            path_semantics=MANIFEST_PATH_SEMANTICS_RELATIVE,
+        ),
         "registered_sentences_path": (
-            str(registered_sentences_path.resolve()) if registered_sentences_path is not None else None
+            write_manifest_path_value(
+                registered_sentences_path,
+                manifest_path=manifest_path,
+                path_semantics=MANIFEST_PATH_SEMANTICS_RELATIVE,
+            )
+            if registered_sentences_path is not None
+            else None
         ),
         "registered_sentences_available": (
             registered_sentences_path is not None and registered_sentences_path.exists()
         ),
         "unregistered_sentence_artifact_path": (
-            str(unregistered_sentence_path.resolve()) if unregistered_sentence_path is not None else None
+            write_manifest_path_value(
+                unregistered_sentence_path,
+                manifest_path=manifest_path,
+                path_semantics=MANIFEST_PATH_SEMANTICS_RELATIVE,
+            )
+            if unregistered_sentence_path is not None
+            else None
         ),
         "warnings": warnings,
+        "_sections_path_resolved": sections_path,
+        "_registered_sentences_path_resolved": registered_sentences_path,
     }
+
+
+def _portable_manifest_diagnostics(manifest_diagnostics: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in manifest_diagnostics.items()
+        if not key.startswith("_")
+    }
+
+
+def _validated_sentence_universe_contract(
+    dataset_manifest: dict[str, Any],
+    *,
+    manifest_path: Path,
+    manifest_diagnostics: dict[str, Any],
+    run_cfg: FinbertBenchmarkRunConfig,
+) -> dict[str, Any]:
+    declared = dataset_manifest.get("sentence_universe_contract") or {}
+    sections_path = manifest_diagnostics["_sections_path_resolved"]
+    registered_sentences_path = manifest_diagnostics.get("_registered_sentences_path_resolved")
+    declared_contract_version = declared.get("contract_version")
+    recomputed = {
+        "contract_version": "sentence_universe_contract_v2",
+        "sentence_dataset_config": asdict(run_cfg.sentence_dataset),
+        "section_universe_contract_fingerprint": declared.get("section_universe_contract_fingerprint"),
+        "sections_dataset_fingerprint": semantic_file_fingerprint(sections_path),
+        "precomputed_sentences_fingerprint": (
+            semantic_file_fingerprint(registered_sentences_path)
+            if registered_sentences_path is not None and registered_sentences_path.exists()
+            else None
+        ),
+    }
+    mismatches: list[str] = []
+    if not declared:
+        mismatches.append("missing_contract")
+    else:
+        if declared.get("sentence_dataset_config") != recomputed["sentence_dataset_config"]:
+            mismatches.append("sentence_dataset_config")
+        if declared_contract_version == "sentence_universe_contract_v2":
+            if declared.get("sections_dataset_fingerprint") != recomputed["sections_dataset_fingerprint"]:
+                mismatches.append("sections_dataset_fingerprint")
+            if manifest_diagnostics.get("registered_sentences_available"):
+                if (
+                    declared.get("precomputed_sentences_fingerprint")
+                    != recomputed["precomputed_sentences_fingerprint"]
+                ):
+                    mismatches.append("precomputed_sentences_fingerprint")
+    recomputed["sentence_universe_contract_fingerprint"] = json_sha256(recomputed)
+    recomputed["declared_contract_version"] = declared_contract_version
+    recomputed["sentence_universe_comparable"] = not mismatches
+    recomputed["mismatches"] = mismatches
+    return recomputed
 
 
 def _resolve_device(runtime: FinbertRuntimeConfig) -> str:
@@ -724,7 +809,14 @@ def run_finbert_benchmark(
         dataset_manifest,
         manifest_path=run_cfg.dataset_manifest_path,
     )
-    sections_path = Path(manifest_diagnostics["sections_path"])
+    validated_sentence_universe_contract = _validated_sentence_universe_contract(
+        dataset_manifest,
+        manifest_path=run_cfg.dataset_manifest_path,
+        manifest_diagnostics=manifest_diagnostics,
+        run_cfg=run_cfg,
+    )
+    portable_manifest_diagnostics = _portable_manifest_diagnostics(manifest_diagnostics)
+    sections_path = manifest_diagnostics["_sections_path_resolved"]
     sections_df = pl.read_parquet(sections_path)
 
     sentence_stats = benchmark_sentence_splitting(
@@ -733,7 +825,7 @@ def run_finbert_benchmark(
         runs=run_cfg.stage_runs.sentence_split_runs,
     )
 
-    precomputed_sentences = manifest_diagnostics["registered_sentences_path"]
+    precomputed_sentences = manifest_diagnostics["_registered_sentences_path_resolved"]
     sentence_source = "derived_runtime"
     sentence_frame_path: Path | None = None
     sentence_materialization_seconds = 0.0
@@ -741,6 +833,12 @@ def run_finbert_benchmark(
     if run_cfg.sentence_policy == "prefer_precomputed" and precomputed_sentences:
         sentence_frame_path = Path(precomputed_sentences)
         if sentence_frame_path.exists():
+            if not validated_sentence_universe_contract["sentence_universe_comparable"]:
+                raise ValueError(
+                    "Registered precomputed sentence parquet is not semantically comparable to the "
+                    "raw sections universe for this benchmark run. "
+                    f"Mismatches: {validated_sentence_universe_contract['mismatches']}"
+                )
             sentences_df = pl.read_parquet(sentence_frame_path)
             sentence_source = "precomputed"
             sentence_source_reason = "registered_precomputed_sentence_artifact"
@@ -834,10 +932,16 @@ def run_finbert_benchmark(
             )
 
     summary = {
+        "manifest_version": 1,
+        "path_semantics": MANIFEST_PATH_SEMANTICS_RELATIVE,
         "run_name": run_name,
         "created_at_utc": utc_timestamp(),
         "dataset_tag": dataset_tag,
-        "dataset_manifest_path": str(run_cfg.dataset_manifest_path.resolve()),
+        "dataset_manifest_path": write_manifest_path_value(
+            run_cfg.dataset_manifest_path,
+            manifest_path=summary_path,
+            path_semantics=MANIFEST_PATH_SEMANTICS_RELATIVE,
+        ),
         "sections_rows": int(sections_df.height),
         "sentence_rows": int(sentences_df.height),
         "sentence_source": sentence_source,
@@ -851,7 +955,8 @@ def run_finbert_benchmark(
             "registered_sentences_path": manifest_diagnostics["registered_sentences_path"],
             "seconds": sentence_materialization_seconds,
         },
-        "dataset_manifest_diagnostics": manifest_diagnostics,
+        "dataset_manifest_diagnostics": portable_manifest_diagnostics,
+        "validated_sentence_universe_contract": validated_sentence_universe_contract,
         "runtime_environment": runtime_environment,
         "benchmark_scope": benchmark_scope,
         "tokenizer": _stage_summary(tokenizer_df),
@@ -862,9 +967,15 @@ def run_finbert_benchmark(
     write_json(
         run_manifest_path,
         {
+            "manifest_version": 1,
+            "path_semantics": MANIFEST_PATH_SEMANTICS_RELATIVE,
             "run_name": run_name,
             "created_at_utc": utc_timestamp(),
-            "dataset_manifest_path": str(run_cfg.dataset_manifest_path.resolve()),
+            "dataset_manifest_path": write_manifest_path_value(
+                run_cfg.dataset_manifest_path,
+                manifest_path=run_manifest_path,
+                path_semantics=MANIFEST_PATH_SEMANTICS_RELATIVE,
+            ),
             "dataset_tag": dataset_tag,
             "authority": authority.__dict__,
             "runtime": runtime.__dict__,
@@ -875,17 +986,46 @@ def run_finbert_benchmark(
             "sentence_source": sentence_source,
             "sentence_source_reason": sentence_source_reason,
             "sentence_materialization": summary["sentence_materialization"],
-            "dataset_manifest_diagnostics": manifest_diagnostics,
+            "dataset_manifest_diagnostics": portable_manifest_diagnostics,
+            "validated_sentence_universe_contract": validated_sentence_universe_contract,
             "runtime_environment": runtime_environment,
             "benchmark_scope": benchmark_scope,
             "note": run_cfg.note,
             "artifacts": {
-                "records_path": str(records_path.resolve()),
-                "tokenizer_results_path": str(tokenizer_results_path.resolve()),
-                "model_results_path": str(model_results_path.resolve()),
-                "full_pipeline_results_path": str(full_pipeline_results_path.resolve()),
-                "summary_path": str(summary_path.resolve()),
-                "sentence_frame_path": str(sentence_frame_path.resolve()) if sentence_frame_path is not None else None,
+                "records_path": write_manifest_path_value(
+                    records_path,
+                    manifest_path=run_manifest_path,
+                    path_semantics=MANIFEST_PATH_SEMANTICS_RELATIVE,
+                ),
+                "tokenizer_results_path": write_manifest_path_value(
+                    tokenizer_results_path,
+                    manifest_path=run_manifest_path,
+                    path_semantics=MANIFEST_PATH_SEMANTICS_RELATIVE,
+                ),
+                "model_results_path": write_manifest_path_value(
+                    model_results_path,
+                    manifest_path=run_manifest_path,
+                    path_semantics=MANIFEST_PATH_SEMANTICS_RELATIVE,
+                ),
+                "full_pipeline_results_path": write_manifest_path_value(
+                    full_pipeline_results_path,
+                    manifest_path=run_manifest_path,
+                    path_semantics=MANIFEST_PATH_SEMANTICS_RELATIVE,
+                ),
+                "summary_path": write_manifest_path_value(
+                    summary_path,
+                    manifest_path=run_manifest_path,
+                    path_semantics=MANIFEST_PATH_SEMANTICS_RELATIVE,
+                ),
+                "sentence_frame_path": (
+                    write_manifest_path_value(
+                        sentence_frame_path,
+                        manifest_path=run_manifest_path,
+                        path_semantics=MANIFEST_PATH_SEMANTICS_RELATIVE,
+                    )
+                    if sentence_frame_path is not None
+                    else None
+                ),
             },
         },
     )

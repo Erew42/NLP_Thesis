@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
@@ -39,12 +40,16 @@ if str(SRC) not in sys.path:
 
 from thesis_pkg.benchmarking import BucketBatchConfig
 from thesis_pkg.benchmarking import FinbertAnalysisRunConfig
+from thesis_pkg.benchmarking import FinbertSentenceParquetInferenceRunArtifacts
+from thesis_pkg.benchmarking import FinbertSentenceParquetInferenceRunConfig
 from thesis_pkg.benchmarking import FinbertSentencePreprocessingRunConfig
+from thesis_pkg.benchmarking import FinbertSentencePreprocessingRunArtifacts
 from thesis_pkg.benchmarking import FinbertSectionUniverseConfig
 from thesis_pkg.benchmarking import FinbertRuntimeConfig
 from thesis_pkg.benchmarking import SentenceDatasetConfig
-from thesis_pkg.benchmarking import run_finbert_item_analysis
+from thesis_pkg.benchmarking import run_finbert_sentence_parquet_inference
 from thesis_pkg.benchmarking import run_finbert_sentence_preprocessing
+from thesis_pkg.benchmarking.run_logging import utc_timestamp
 
 
 DEFAULT_FULL_DATA_ROOT = ROOT / "full_data_run"
@@ -67,6 +72,7 @@ BATCH_PRESETS: dict[str, BucketBatchConfig] = {
     "baseline": BucketBatchConfig(name="baseline", short_batch_size=64, medium_batch_size=32, long_batch_size=16),
     "large": BucketBatchConfig(name="large", short_batch_size=128, medium_batch_size=64, long_batch_size=32),
 }
+ANALYSIS_RUNNER_NAME = "finbert_item_analysis"
 
 
 def _default_local_sample_backbone_path() -> Path:
@@ -145,39 +151,179 @@ def _resolve_run_config(args: argparse.Namespace) -> FinbertAnalysisRunConfig:
     )
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    args = parse_args(argv)
-    if args.preprocess_only:
-        base_cfg = _resolve_run_config(args)
-        artifacts = run_finbert_sentence_preprocessing(
-            FinbertSentencePreprocessingRunConfig(
-                source_items_dir=base_cfg.source_items_dir,
-                out_root=base_cfg.out_root,
-                section_universe=base_cfg.section_universe,
-                sentence_dataset=base_cfg.sentence_dataset,
-                target_doc_universe_path=base_cfg.backbone_path,
-                year_filter=base_cfg.year_filter,
-                overwrite=base_cfg.overwrite,
-                run_name=base_cfg.run_name,
-                note=base_cfg.note,
+@dataclass(frozen=True)
+class FinbertPipelineRunArtifacts:
+    preprocessing_artifacts: FinbertSentencePreprocessingRunArtifacts | None
+    analysis_artifacts: FinbertSentenceParquetInferenceRunArtifacts | None
+
+
+def _analysis_run_name(run_cfg: FinbertAnalysisRunConfig) -> str:
+    return run_cfg.run_name or f"{ANALYSIS_RUNNER_NAME}_{utc_timestamp().replace(':', '')}"
+
+
+def _analysis_preprocessing_run_config(
+    run_cfg: FinbertAnalysisRunConfig,
+    *,
+    analysis_run_name: str | None,
+) -> FinbertSentencePreprocessingRunConfig:
+    return FinbertSentencePreprocessingRunConfig(
+        source_items_dir=run_cfg.source_items_dir,
+        out_root=run_cfg.out_root / "_staged_intermediates",
+        section_universe=run_cfg.section_universe,
+        sentence_dataset=run_cfg.sentence_dataset,
+        cleaning=run_cfg.cleaning,
+        target_doc_universe_path=run_cfg.backbone_path,
+        year_filter=run_cfg.year_filter,
+        overwrite=run_cfg.overwrite,
+        run_name=(
+            f"{analysis_run_name}_sentence_preprocessing"
+            if analysis_run_name is not None
+            else None
+        ),
+        note=run_cfg.note,
+    )
+
+
+def _resolve_existing_preprocessing_artifacts(
+    run_cfg: FinbertSentencePreprocessingRunConfig,
+) -> FinbertSentencePreprocessingRunArtifacts:
+    if run_cfg.run_name is not None:
+        run_dir = run_cfg.out_root / run_cfg.run_name
+    else:
+        candidates = sorted(
+            path.parent.parent
+            for path in run_cfg.out_root.glob("*/sentence_dataset/by_year")
+            if path.is_dir()
+        )
+        if not candidates:
+            raise FileNotFoundError(
+                f"No existing FinBERT sentence preprocessing runs found under {run_cfg.out_root}"
+            )
+        if len(candidates) > 1:
+            raise ValueError(
+                "Multiple FinBERT sentence preprocessing runs exist; set SEC_CCM_FINBERT_RUN_NAME "
+                "or pass an explicit preprocessing run_name."
+            )
+        run_dir = candidates[0]
+    sentence_dataset_dir = run_dir / "sentence_dataset" / "by_year"
+    run_manifest_path = run_dir / "run_manifest.json"
+    yearly_summary_path = run_dir / "sentence_dataset_yearly_summary.parquet"
+    if not sentence_dataset_dir.exists() or not run_manifest_path.exists():
+        raise FileNotFoundError(
+            f"Expected FinBERT sentence preprocessing artifacts were not found in {run_dir}"
+        )
+    return FinbertSentencePreprocessingRunArtifacts(
+        run_dir=run_dir,
+        run_manifest_path=run_manifest_path,
+        sentence_dataset_dir=sentence_dataset_dir,
+        yearly_summary_path=yearly_summary_path,
+        oversize_sections_path=(run_dir / "oversize_sections.parquet"),
+        cleaned_item_scopes_dir=(run_dir / "cleaned_item_scopes" / "by_year"),
+        cleaning_row_audit_path=(run_dir / "cleaning_row_audit.parquet"),
+        cleaning_flagged_rows_path=(run_dir / "cleaning_flagged_rows.parquet"),
+        item_scope_cleaning_diagnostics_path=(run_dir / "item_scope_cleaning_diagnostics.parquet"),
+        manual_boundary_audit_sample_path=(run_dir / "manual_boundary_audit_sample.parquet"),
+    )
+
+
+def run_finbert_pipeline(
+    analysis_cfg: FinbertAnalysisRunConfig,
+    *,
+    preprocessing_cfg: FinbertSentencePreprocessingRunConfig | None = None,
+    run_preprocess: bool = True,
+    run_analysis: bool = True,
+) -> FinbertPipelineRunArtifacts:
+    if not run_preprocess and not run_analysis:
+        raise ValueError("At least one of run_preprocess or run_analysis must be True.")
+
+    analysis_run_name = _analysis_run_name(analysis_cfg)
+    resolved_preprocessing_cfg = preprocessing_cfg or _analysis_preprocessing_run_config(
+        analysis_cfg,
+        analysis_run_name=(
+            None
+            if run_analysis and not run_preprocess and analysis_cfg.run_name is None
+            else analysis_run_name
+        ),
+    )
+
+    preprocessing_artifacts: FinbertSentencePreprocessingRunArtifacts | None = None
+    if run_preprocess:
+        preprocessing_artifacts = run_finbert_sentence_preprocessing(resolved_preprocessing_cfg)
+    elif run_analysis:
+        preprocessing_artifacts = _resolve_existing_preprocessing_artifacts(
+            resolved_preprocessing_cfg
+        )
+
+    analysis_artifacts: FinbertSentenceParquetInferenceRunArtifacts | None = None
+    if run_analysis:
+        if preprocessing_artifacts is None:
+            raise RuntimeError(
+                "FinBERT analysis requires preprocessing artifacts, but none were resolved."
+            )
+        analysis_artifacts = run_finbert_sentence_parquet_inference(
+            FinbertSentenceParquetInferenceRunConfig(
+                sentence_dataset_dir=preprocessing_artifacts.sentence_dataset_dir,
+                out_root=analysis_cfg.out_root,
+                batch_config=analysis_cfg.batch_config,
+                runtime=analysis_cfg.runtime,
+                bucket_lengths=analysis_cfg.bucket_lengths,
+                backbone_path=analysis_cfg.backbone_path,
+                year_filter=analysis_cfg.year_filter,
+                write_sentence_scores=analysis_cfg.write_sentence_scores,
+                overwrite=analysis_cfg.overwrite,
+                run_name=analysis_run_name,
+                note=analysis_cfg.note,
             )
         )
-        print(f"run_dir={artifacts.run_dir}")
-        print(f"run_manifest={artifacts.run_manifest_path}")
-        print(f"sentence_dataset_dir={artifacts.sentence_dataset_dir}")
-        print(f"yearly_summary={artifacts.yearly_summary_path}")
+
+    return FinbertPipelineRunArtifacts(
+        preprocessing_artifacts=preprocessing_artifacts,
+        analysis_artifacts=analysis_artifacts,
+    )
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = parse_args(argv)
+    run_cfg = _resolve_run_config(args)
+    if args.preprocess_only:
+        artifacts = run_finbert_pipeline(
+            run_cfg,
+            preprocessing_cfg=FinbertSentencePreprocessingRunConfig(
+                source_items_dir=run_cfg.source_items_dir,
+                out_root=run_cfg.out_root,
+                section_universe=run_cfg.section_universe,
+                sentence_dataset=run_cfg.sentence_dataset,
+                cleaning=run_cfg.cleaning,
+                target_doc_universe_path=run_cfg.backbone_path,
+                year_filter=run_cfg.year_filter,
+                overwrite=run_cfg.overwrite,
+                run_name=run_cfg.run_name,
+                note=run_cfg.note,
+            ),
+            run_preprocess=True,
+            run_analysis=False,
+        )
+        preprocessing_artifacts = artifacts.preprocessing_artifacts
+        if preprocessing_artifacts is None:
+            raise RuntimeError("FinBERT preprocessing did not produce artifacts.")
+        print(f"run_dir={preprocessing_artifacts.run_dir}")
+        print(f"run_manifest={preprocessing_artifacts.run_manifest_path}")
+        print(f"sentence_dataset_dir={preprocessing_artifacts.sentence_dataset_dir}")
+        print(f"yearly_summary={preprocessing_artifacts.yearly_summary_path}")
         return 0
 
-    run_cfg = _resolve_run_config(args)
-    artifacts = run_finbert_item_analysis(run_cfg)
-    print(f"run_dir={artifacts.run_dir}")
-    print(f"run_manifest={artifacts.run_manifest_path}")
-    print(f"item_features_long={artifacts.item_features_long_path}")
-    print(f"doc_features_wide={artifacts.doc_features_wide_path}")
-    if artifacts.coverage_report_path is not None:
-        print(f"coverage_report={artifacts.coverage_report_path}")
-    if artifacts.sentence_scores_dir is not None:
-        print(f"sentence_scores_dir={artifacts.sentence_scores_dir}")
+    artifacts = run_finbert_pipeline(run_cfg, run_preprocess=True, run_analysis=True)
+    analysis_artifacts = artifacts.analysis_artifacts
+    if analysis_artifacts is None:
+        raise RuntimeError("FinBERT analysis did not produce artifacts.")
+    print(f"run_dir={analysis_artifacts.run_dir}")
+    print(f"run_manifest={analysis_artifacts.run_manifest_path}")
+    print(f"item_features_long={analysis_artifacts.item_features_long_path}")
+    print(f"doc_features_wide={analysis_artifacts.doc_features_wide_path}")
+    if analysis_artifacts.coverage_report_path is not None:
+        print(f"coverage_report={analysis_artifacts.coverage_report_path}")
+    if analysis_artifacts.sentence_scores_dir is not None:
+        print(f"sentence_scores_dir={analysis_artifacts.sentence_scores_dir}")
     return 0
 
 

@@ -30,6 +30,15 @@ from thesis_pkg.benchmarking.finbert_benchmark import _tokenize_text_batches
 from thesis_pkg.benchmarking.finbert_benchmark import load_finbert_model
 from thesis_pkg.benchmarking.finbert_benchmark import resolve_finbert_label_mapping
 from thesis_pkg.benchmarking.finbert_benchmark import score_sentence_frame
+from thesis_pkg.benchmarking.manifest_contracts import json_sha256
+from thesis_pkg.benchmarking.manifest_contracts import MANIFEST_PATH_SEMANTICS_RELATIVE
+from thesis_pkg.benchmarking.manifest_contracts import make_semantic_reuse_guard
+from thesis_pkg.benchmarking.manifest_contracts import normalize_contract_path
+from thesis_pkg.benchmarking.manifest_contracts import relative_artifact_path
+from thesis_pkg.benchmarking.manifest_contracts import semantic_file_fingerprint
+from thesis_pkg.benchmarking.manifest_contracts import semantic_guard_mismatches
+from thesis_pkg.benchmarking.manifest_contracts import stable_string_fingerprint
+from thesis_pkg.benchmarking.manifest_contracts import write_manifest_path_value
 from thesis_pkg.benchmarking.run_logging import append_jsonl_record
 from thesis_pkg.benchmarking.run_logging import utc_timestamp
 from thesis_pkg.benchmarking.run_logging import write_json
@@ -175,14 +184,26 @@ def _sentence_dataset_manifest_payload(sentence_dataset_dir: Path) -> dict[str, 
         return None
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     payload = {
-        "manifest_path": str(manifest_path.resolve()),
         "cleaning_policy_id": manifest.get("cleaning_policy_id"),
         "cleaning": manifest.get("cleaning"),
         "segment_policy_id": manifest.get("segment_policy_id"),
         "authority": manifest.get("authority"),
         "sentence_dataset": manifest.get("sentence_dataset"),
+        "accepted_universe_contract": manifest.get("accepted_universe_contract"),
+        "year_filter": manifest.get("year_filter"),
     }
     return json.loads(json.dumps(payload))
+
+
+def _sentence_dataset_manifest_path(sentence_dataset_dir: Path) -> Path:
+    return sentence_dataset_dir.parent.parent / "run_manifest.json"
+
+
+def _sentence_year_fingerprints(year_paths: list[Path]) -> dict[str, dict[str, Any]]:
+    return {
+        path.stem: semantic_file_fingerprint(path)
+        for path in year_paths
+    }
 
 
 def _semantic_inference_payload(
@@ -194,8 +215,6 @@ def _semantic_inference_payload(
         "runtime": asdict(run_cfg.runtime),
         "batch_config": asdict(run_cfg.batch_config),
         "bucket_lengths": asdict(run_cfg.bucket_lengths),
-        "sentence_dataset_dir": str(run_cfg.sentence_dataset_dir.resolve()),
-        "backbone_path": str(run_cfg.backbone_path.resolve()) if run_cfg.backbone_path is not None else None,
         "year_filter": list(run_cfg.year_filter) if run_cfg.year_filter is not None else None,
         "sentence_slice_rows": run_cfg.sentence_slice_rows,
         "write_sentence_scores": run_cfg.write_sentence_scores,
@@ -204,21 +223,40 @@ def _semantic_inference_payload(
     return json.loads(json.dumps(payload))
 
 
+def _semantic_inference_guard(
+    run_cfg: FinbertSentenceParquetInferenceRunConfig,
+    authority: FinbertAuthoritySpec,
+    *,
+    year_paths: list[Path],
+) -> dict[str, Any]:
+    source_manifest_payload = _sentence_dataset_manifest_payload(run_cfg.sentence_dataset_dir)
+    return make_semantic_reuse_guard(
+        version="sentence_parquet_inference_v3",
+        payload=_semantic_inference_payload(run_cfg, authority),
+        fingerprints={
+            "source_sentence_dataset_manifest_fingerprint": (
+                json_sha256(source_manifest_payload)
+                if source_manifest_payload is not None
+                else None
+            ),
+            "sentence_dataset_by_year": _sentence_year_fingerprints(year_paths),
+        },
+    )
+
+
 def _assert_existing_inference_run_compatible(
     run_manifest_path: Path,
     run_cfg: FinbertSentenceParquetInferenceRunConfig,
     authority: FinbertAuthoritySpec,
+    *,
+    year_paths: list[Path],
 ) -> None:
     if run_cfg.overwrite or not run_manifest_path.exists():
         return
     manifest = json.loads(run_manifest_path.read_text(encoding="utf-8"))
-    expected = _semantic_inference_payload(run_cfg, authority)
+    expected = _semantic_inference_guard(run_cfg, authority, year_paths=year_paths)
     existing = manifest.get("semantic_reuse_guard", {})
-    mismatched = [
-        key
-        for key, expected_value in expected.items()
-        if existing.get(key) != expected_value
-    ]
+    mismatched = semantic_guard_mismatches(existing, expected)
     if mismatched:
         raise ValueError(
             "Existing FinBERT inference artifacts were created with incompatible semantic settings "
@@ -256,6 +294,7 @@ def _build_bucket_summary(
     filing_year: int,
     source_path: Path,
 ) -> pl.DataFrame:
+    del source_path
     rows: list[dict[str, Any]] = []
     for bucket in _BUCKETS:
         bucket_df = _bucket_frame(sentence_df, bucket)
@@ -276,7 +315,7 @@ def _build_bucket_summary(
                 "sentence_rows": int(bucket_df.height),
                 "token_count_mean": token_mean,
                 "token_count_median": token_median,
-                "sentence_dataset_path": str(source_path.resolve()),
+                "sentence_dataset_path": None,
             }
         )
     return pl.DataFrame(rows).select(_empty_tokenizer_bucket_summary_frame().columns)
@@ -290,6 +329,7 @@ def _profile_tokenizer_runtime_for_year(
     run_cfg: FinbertTokenizerProfileRunConfig,
     authority: FinbertAuthoritySpec,
 ) -> pl.DataFrame:
+    del source_path
     tokenizer = load_finbert_tokenizer(authority)
     rows: list[dict[str, Any]] = []
     for bucket in _BUCKETS:
@@ -312,7 +352,7 @@ def _profile_tokenizer_runtime_for_year(
                     "max_length": max_length,
                     "median_seconds": 0.0,
                     "rows_per_second": None,
-                    "sentence_dataset_path": str(source_path.resolve()),
+                    "sentence_dataset_path": None,
                 }
             )
             continue
@@ -352,18 +392,133 @@ def _profile_tokenizer_runtime_for_year(
                     if median_seconds
                     else None
                 ),
-                "sentence_dataset_path": str(source_path.resolve()),
+                "sentence_dataset_path": None,
             }
         )
     return pl.DataFrame(rows).select(_empty_tokenizer_timing_summary_frame().columns)
 
 
 def _load_backbone_doc_ids(path: Path) -> pl.DataFrame:
-    return (
-        pl.scan_parquet(path)
-        .select(pl.col("doc_id").cast(pl.Utf8, strict=False).alias("doc_id"))
-        .collect()
+    return _load_backbone_doc_ids_for_years(path, year_filter=None)
+
+
+def _load_backbone_doc_ids_for_years(
+    path: Path,
+    *,
+    year_filter: tuple[int, ...] | None,
+) -> pl.DataFrame:
+    lf = pl.scan_parquet(path).select(pl.all())
+    schema = lf.collect_schema()
+    if "doc_id" not in schema:
+        raise ValueError("Backbone parquet must contain a doc_id column for coverage reporting.")
+    if year_filter is not None:
+        if "filing_date" in schema:
+            lf = lf.filter(pl.col("filing_date").cast(pl.Date, strict=False).dt.year().is_in(year_filter))
+        elif "filing_year" in schema:
+            lf = lf.filter(pl.col("filing_year").cast(pl.Int32, strict=False).is_in(year_filter))
+        else:
+            raise ValueError(
+                "Backbone parquet must contain filing_date or filing_year when year_filter is provided."
+            )
+    return lf.select(pl.col("doc_id").cast(pl.Utf8, strict=False).alias("doc_id")).collect()
+
+
+def _effective_year_filter(
+    run_year_filter: tuple[int, ...] | None,
+    source_sentence_manifest: dict[str, Any] | None,
+) -> tuple[int, ...] | None:
+    if run_year_filter is not None:
+        return run_year_filter
+    source_years = source_sentence_manifest.get("year_filter") if source_sentence_manifest else None
+    if source_years is None:
+        return None
+    return tuple(int(year) for year in source_years)
+
+
+def _build_backbone_contract(
+    *,
+    backbone_path: Path | None,
+    effective_year_filter: tuple[int, ...] | None,
+    source_sentence_manifest: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if backbone_path is None:
+        return None
+    backbone_df = _load_backbone_doc_ids_for_years(backbone_path, year_filter=effective_year_filter)
+    accepted_universe_contract = (
+        source_sentence_manifest.get("accepted_universe_contract")
+        if source_sentence_manifest is not None
+        else None
     )
+    return {
+        "contract_version": "backbone_contract_v2",
+        "normalized_relative_backbone_path": normalize_contract_path(backbone_path, base_path=Path.cwd()),
+        "effective_year_filter": list(effective_year_filter) if effective_year_filter is not None else None,
+        "filtered_backbone_doc_count": int(backbone_df["doc_id"].n_unique()) if backbone_df.height else 0,
+        "filtered_backbone_doc_universe_fingerprint": stable_string_fingerprint(
+            backbone_df["doc_id"].to_list() if backbone_df.height else []
+        ),
+        "accepted_universe_contract_fingerprint": (
+            json_sha256(accepted_universe_contract)
+            if accepted_universe_contract is not None
+            else None
+        ),
+    }
+
+
+def _semantic_tokenizer_payload(
+    run_cfg: FinbertTokenizerProfileRunConfig,
+    authority: FinbertAuthoritySpec,
+) -> dict[str, Any]:
+    payload = {
+        "authority": asdict(authority),
+        "batch_config": asdict(run_cfg.batch_config),
+        "bucket_lengths": asdict(run_cfg.bucket_lengths),
+        "profile_row_cap_per_bucket": run_cfg.profile_row_cap_per_bucket,
+        "sample_seed": run_cfg.sample_seed,
+        "year_filter": list(run_cfg.year_filter) if run_cfg.year_filter is not None else None,
+    }
+    return json.loads(json.dumps(payload))
+
+
+def _semantic_tokenizer_guard(
+    run_cfg: FinbertTokenizerProfileRunConfig,
+    authority: FinbertAuthoritySpec,
+    *,
+    year_paths: list[Path],
+) -> dict[str, Any]:
+    source_manifest_payload = _sentence_dataset_manifest_payload(run_cfg.sentence_dataset_dir)
+    return make_semantic_reuse_guard(
+        version="tokenizer_profile_v3",
+        payload=_semantic_tokenizer_payload(run_cfg, authority),
+        fingerprints={
+            "source_sentence_dataset_manifest_fingerprint": (
+                json_sha256(source_manifest_payload)
+                if source_manifest_payload is not None
+                else None
+            ),
+            "sentence_dataset_by_year": _sentence_year_fingerprints(year_paths),
+        },
+    )
+
+
+def _assert_existing_tokenizer_run_compatible(
+    run_manifest_path: Path,
+    run_cfg: FinbertTokenizerProfileRunConfig,
+    authority: FinbertAuthoritySpec,
+    *,
+    year_paths: list[Path],
+) -> None:
+    if run_cfg.overwrite or not run_manifest_path.exists():
+        return
+    manifest = json.loads(run_manifest_path.read_text(encoding="utf-8"))
+    expected = _semantic_tokenizer_guard(run_cfg, authority, year_paths=year_paths)
+    existing = manifest.get("semantic_reuse_guard", {})
+    mismatched = semantic_guard_mismatches(existing, expected)
+    if mismatched:
+        raise ValueError(
+            "Existing FinBERT tokenizer-profile artifacts were created with incompatible semantic settings "
+            f"for {mismatched}. Use a new run_name or set overwrite=True."
+        )
 
 
 def _section_metadata_from_sentence_frame(sentence_df: pl.DataFrame) -> pl.DataFrame:
@@ -431,6 +586,12 @@ def run_finbert_tokenizer_profile(
     timing_summary_path = run_dir / "tokenizer_profile_timing_summary.parquet"
     timing_summary_csv_path = run_dir / "tokenizer_profile_timing_summary.csv"
     run_manifest_path = run_dir / "run_manifest.json"
+    _assert_existing_tokenizer_run_compatible(
+        run_manifest_path,
+        run_cfg,
+        authority,
+        year_paths=year_paths,
+    )
 
     bucket_frames: list[pl.DataFrame] = []
     timing_frames: list[pl.DataFrame] = []
@@ -454,9 +615,9 @@ def run_finbert_tokenizer_profile(
                 {
                     "filing_year": filing_year,
                     "status": "reused_existing",
-                    "sentence_dataset_path": str(year_path.resolve()),
-                    "bucket_summary_path": str(year_bucket_summary_path.resolve()),
-                    "timing_summary_path": str(year_timing_summary_path.resolve()),
+                    "sentence_dataset_path": None,
+                    "bucket_summary_path": relative_artifact_path(year_bucket_summary_path, base_path=run_dir),
+                    "timing_summary_path": relative_artifact_path(year_timing_summary_path, base_path=run_dir),
                 }
             )
             continue
@@ -493,9 +654,9 @@ def run_finbert_tokenizer_profile(
             {
                 "filing_year": filing_year,
                 "status": "processed",
-                "sentence_dataset_path": str(year_path.resolve()),
-                "bucket_summary_path": str(year_bucket_summary_path.resolve()),
-                "timing_summary_path": str(year_timing_summary_path.resolve()),
+                "sentence_dataset_path": None,
+                "bucket_summary_path": relative_artifact_path(year_bucket_summary_path, base_path=run_dir),
+                "timing_summary_path": relative_artifact_path(year_timing_summary_path, base_path=run_dir),
             }
         )
 
@@ -534,11 +695,16 @@ def run_finbert_tokenizer_profile(
     write_json(
         run_manifest_path,
         {
+            "path_semantics": MANIFEST_PATH_SEMANTICS_RELATIVE,
             "runner_name": TOKENIZER_PROFILE_RUNNER_NAME,
             "run_name": run_name,
             "created_at_utc": utc_timestamp(),
             "authority": asdict(authority),
-            "sentence_dataset_dir": str(run_cfg.sentence_dataset_dir.resolve()),
+            "semantic_reuse_guard": _semantic_tokenizer_guard(
+                run_cfg,
+                authority,
+                year_paths=year_paths,
+            ),
             "batch_config": asdict(run_cfg.batch_config),
             "bucket_lengths": asdict(run_cfg.bucket_lengths),
             "year_filter": list(run_cfg.year_filter) if run_cfg.year_filter is not None else None,
@@ -547,6 +713,9 @@ def run_finbert_tokenizer_profile(
             "tokenizer_profile_runs": TOKENIZER_PROFILE_RUNS,
             "overwrite": run_cfg.overwrite,
             "note": run_cfg.note,
+            "nonportable_diagnostics": {
+                "sentence_dataset_dir": str(run_cfg.sentence_dataset_dir.resolve()),
+            },
             "counts": {
                 "requested_year_count": len(year_paths),
                 "processed_year_count": sum(
@@ -560,13 +729,41 @@ def run_finbert_tokenizer_profile(
             },
             "year_results": year_results,
             "artifacts": {
-                "run_dir": str(run_dir.resolve()),
-                "records_path": str(records_path.resolve()),
-                "bucket_summary_path": str(bucket_summary_path.resolve()),
-                "bucket_summary_csv_path": str(bucket_summary_csv_path.resolve()),
-                "timing_summary_path": str(timing_summary_path.resolve()),
-                "timing_summary_csv_path": str(timing_summary_csv_path.resolve()),
-                "by_year_dir": str(bucket_summary_by_year_dir.resolve()),
+                "run_dir": write_manifest_path_value(
+                    run_dir,
+                    manifest_path=run_manifest_path,
+                    path_semantics=MANIFEST_PATH_SEMANTICS_RELATIVE,
+                ),
+                "records_path": write_manifest_path_value(
+                    records_path,
+                    manifest_path=run_manifest_path,
+                    path_semantics=MANIFEST_PATH_SEMANTICS_RELATIVE,
+                ),
+                "bucket_summary_path": write_manifest_path_value(
+                    bucket_summary_path,
+                    manifest_path=run_manifest_path,
+                    path_semantics=MANIFEST_PATH_SEMANTICS_RELATIVE,
+                ),
+                "bucket_summary_csv_path": write_manifest_path_value(
+                    bucket_summary_csv_path,
+                    manifest_path=run_manifest_path,
+                    path_semantics=MANIFEST_PATH_SEMANTICS_RELATIVE,
+                ),
+                "timing_summary_path": write_manifest_path_value(
+                    timing_summary_path,
+                    manifest_path=run_manifest_path,
+                    path_semantics=MANIFEST_PATH_SEMANTICS_RELATIVE,
+                ),
+                "timing_summary_csv_path": write_manifest_path_value(
+                    timing_summary_csv_path,
+                    manifest_path=run_manifest_path,
+                    path_semantics=MANIFEST_PATH_SEMANTICS_RELATIVE,
+                ),
+                "by_year_dir": write_manifest_path_value(
+                    bucket_summary_by_year_dir,
+                    manifest_path=run_manifest_path,
+                    path_semantics=MANIFEST_PATH_SEMANTICS_RELATIVE,
+                ),
             },
         },
     )
@@ -601,7 +798,12 @@ def run_finbert_sentence_parquet_inference(
         if source_sentence_manifest is not None
         else None
     )
-    _assert_existing_inference_run_compatible(run_manifest_path, run_cfg, authority)
+    _assert_existing_inference_run_compatible(
+        run_manifest_path,
+        run_cfg,
+        authority,
+        year_paths=year_paths,
+    )
 
     tokenizer = None
     model = None
@@ -612,6 +814,12 @@ def run_finbert_sentence_parquet_inference(
 
     resolved_device = _resolve_device(run_cfg.runtime)
     runtime_environment = _runtime_environment(run_cfg.runtime, resolved_device)
+    effective_year_filter = _effective_year_filter(run_cfg.year_filter, source_sentence_manifest)
+    backbone_contract = _build_backbone_contract(
+        backbone_path=run_cfg.backbone_path,
+        effective_year_filter=effective_year_filter,
+        source_sentence_manifest=source_sentence_manifest,
+    )
 
     for year_path in year_paths:
         filing_year = int(year_path.stem)
@@ -632,13 +840,13 @@ def run_finbert_sentence_parquet_inference(
                 {
                     "filing_year": filing_year,
                     "status": "reused_existing",
-                    "sentence_dataset_path": str(year_path.resolve()),
+                    "sentence_dataset_path": None,
                     "sentence_rows": sentence_rows,
                     "item_feature_rows": int(item_features_df.height),
                     "doc_rows": int(item_features_df["doc_id"].n_unique()) if item_features_df.height else 0,
-                    "item_features_path": str(year_item_features_path.resolve()),
+                    "item_features_path": relative_artifact_path(year_item_features_path, base_path=run_dir),
                     "sentence_scores_path": (
-                        str(year_sentence_scores_path.resolve())
+                        relative_artifact_path(year_sentence_scores_path, base_path=run_dir)
                         if run_cfg.write_sentence_scores and year_sentence_scores_path.exists()
                         else None
                     ),
@@ -717,13 +925,15 @@ def run_finbert_sentence_parquet_inference(
             {
                 "filing_year": filing_year,
                 "status": "processed" if sentence_df.height else "processed_empty",
-                "sentence_dataset_path": str(year_path.resolve()),
+                "sentence_dataset_path": None,
                 "sentence_rows": int(sentence_df.height),
                 "item_feature_rows": int(item_features_df.height),
                 "doc_rows": int(item_features_df["doc_id"].n_unique()) if item_features_df.height else 0,
-                "item_features_path": str(year_item_features_path.resolve()),
+                "item_features_path": relative_artifact_path(year_item_features_path, base_path=run_dir),
                 "sentence_scores_path": (
-                    str(year_sentence_scores_path.resolve()) if run_cfg.write_sentence_scores else None
+                    relative_artifact_path(year_sentence_scores_path, base_path=run_dir)
+                    if run_cfg.write_sentence_scores
+                    else None
                 ),
             }
         )
@@ -750,7 +960,7 @@ def run_finbert_sentence_parquet_inference(
     if coverage_report_path is not None and run_cfg.backbone_path is not None:
         coverage_report, coverage_summary = build_coverage_report(
             item_features_long,
-            _load_backbone_doc_ids(run_cfg.backbone_path),
+            _load_backbone_doc_ids_for_years(run_cfg.backbone_path, year_filter=effective_year_filter),
         )
         coverage_report.write_parquet(coverage_report_path, compression="zstd")
     elif coverage_report_path is None:
@@ -762,11 +972,16 @@ def run_finbert_sentence_parquet_inference(
     write_json(
         run_manifest_path,
         {
+            "path_semantics": MANIFEST_PATH_SEMANTICS_RELATIVE,
             "runner_name": MODEL_INFERENCE_RUNNER_NAME,
             "run_name": run_name,
             "created_at_utc": utc_timestamp(),
             "authority": asdict(authority),
-            "semantic_reuse_guard": _semantic_inference_payload(run_cfg, authority),
+            "semantic_reuse_guard": _semantic_inference_guard(
+                run_cfg,
+                authority,
+                year_paths=year_paths,
+            ),
             "item_feature_contract": finbert_item_feature_contract_payload(
                 authority,
                 segment_policy_id=source_segment_policy_id or FINBERT_SEGMENT_POLICY_ID,
@@ -778,13 +993,20 @@ def run_finbert_sentence_parquet_inference(
             "source_sentence_dataset_manifest": source_sentence_manifest,
             "batch_config": asdict(run_cfg.batch_config),
             "bucket_lengths": asdict(run_cfg.bucket_lengths),
-            "sentence_dataset_dir": str(run_cfg.sentence_dataset_dir.resolve()),
-            "backbone_path": str(run_cfg.backbone_path.resolve()) if run_cfg.backbone_path is not None else None,
             "year_filter": list(run_cfg.year_filter) if run_cfg.year_filter is not None else None,
+            "backbone_contract": backbone_contract,
             "sentence_slice_rows": run_cfg.sentence_slice_rows,
             "write_sentence_scores": run_cfg.write_sentence_scores,
             "overwrite": run_cfg.overwrite,
             "note": run_cfg.note,
+            "nonportable_diagnostics": {
+                "sentence_dataset_dir": str(run_cfg.sentence_dataset_dir.resolve()),
+                "backbone_path": (
+                    str(run_cfg.backbone_path.resolve())
+                    if run_cfg.backbone_path is not None
+                    else None
+                ),
+            },
             "label_mapping": {str(key): value for key, value in (label_mapping or {}).items()},
             "counts": {
                 "requested_year_count": len(year_paths),
@@ -801,16 +1023,54 @@ def run_finbert_sentence_parquet_inference(
             "year_results": year_results,
             "warnings": warnings,
             "artifacts": {
-                "run_dir": str(run_dir.resolve()),
-                "item_features_by_year_dir": str(item_features_by_year_dir.resolve()),
-                "item_features_long_path": str(item_features_long_path.resolve()),
-                "doc_features_wide_path": str(doc_features_wide_path.resolve()),
-                "coverage_report_path": str(coverage_report_path.resolve()) if coverage_report_path is not None else None,
-                "sentence_scores_dir": (
-                    str(sentence_scores_dir.resolve()) if run_cfg.write_sentence_scores else None
+                "run_dir": write_manifest_path_value(
+                    run_dir,
+                    manifest_path=run_manifest_path,
+                    path_semantics=MANIFEST_PATH_SEMANTICS_RELATIVE,
                 ),
-                "yearly_summary_path": str(yearly_summary_path.resolve()),
-                "yearly_summary_csv_path": str(yearly_summary_csv_path.resolve()),
+                "item_features_by_year_dir": write_manifest_path_value(
+                    item_features_by_year_dir,
+                    manifest_path=run_manifest_path,
+                    path_semantics=MANIFEST_PATH_SEMANTICS_RELATIVE,
+                ),
+                "item_features_long_path": write_manifest_path_value(
+                    item_features_long_path,
+                    manifest_path=run_manifest_path,
+                    path_semantics=MANIFEST_PATH_SEMANTICS_RELATIVE,
+                ),
+                "doc_features_wide_path": write_manifest_path_value(
+                    doc_features_wide_path,
+                    manifest_path=run_manifest_path,
+                    path_semantics=MANIFEST_PATH_SEMANTICS_RELATIVE,
+                ),
+                "coverage_report_path": (
+                    write_manifest_path_value(
+                        coverage_report_path,
+                        manifest_path=run_manifest_path,
+                        path_semantics=MANIFEST_PATH_SEMANTICS_RELATIVE,
+                    )
+                    if coverage_report_path is not None
+                    else None
+                ),
+                "sentence_scores_dir": (
+                    write_manifest_path_value(
+                        sentence_scores_dir,
+                        manifest_path=run_manifest_path,
+                        path_semantics=MANIFEST_PATH_SEMANTICS_RELATIVE,
+                    )
+                    if run_cfg.write_sentence_scores
+                    else None
+                ),
+                "yearly_summary_path": write_manifest_path_value(
+                    yearly_summary_path,
+                    manifest_path=run_manifest_path,
+                    path_semantics=MANIFEST_PATH_SEMANTICS_RELATIVE,
+                ),
+                "yearly_summary_csv_path": write_manifest_path_value(
+                    yearly_summary_csv_path,
+                    manifest_path=run_manifest_path,
+                    path_semantics=MANIFEST_PATH_SEMANTICS_RELATIVE,
+                ),
             },
         },
     )

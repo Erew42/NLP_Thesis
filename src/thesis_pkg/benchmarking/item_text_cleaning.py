@@ -22,6 +22,10 @@ ITEM_SCOPE_BY_BENCHMARK_ITEM_CODE: dict[str, str] = {
 PRIMARY_ACTIVATION_TEXT_SCOPES = frozenset({"item_7_mda", "item_1a_risk_factors"})
 ROBUSTNESS_ONLY_TEXT_SCOPES = frozenset({"item_1_business"})
 DEFAULT_MANUAL_AUDIT_SAMPLE_ROWS_PER_SCOPE_PERIOD = 5
+REVIEW_STATUS_NOT_REQUIRED = "not_required"
+REVIEW_STATUS_REQUIRED_UNREVIEWED = "required_unreviewed"
+REVIEW_STATUS_APPROVED = "approved"
+REVIEW_STATUS_REJECTED = "rejected"
 
 _PAGE_MARKER_RE = re.compile(
     r"""^\s*
@@ -108,6 +112,9 @@ CLEANED_ITEM_SCOPE_SCHEMA: dict[str, pl.DataType] = {
     "dropped_after_cleaning": pl.Boolean,
     "drop_reason": pl.Utf8,
     "segment_policy_id": pl.Utf8,
+    "boundary_authority_status": pl.Utf8,
+    "review_status": pl.Utf8,
+    "production_eligible": pl.Boolean,
 }
 
 CLEANING_ROW_AUDIT_SCHEMA: dict[str, pl.DataType] = {
@@ -127,6 +134,8 @@ CLEANING_ROW_AUDIT_SCHEMA: dict[str, pl.DataType] = {
     "item7_lm_token_floor_failed": pl.Boolean,
     "manual_audit_candidate": pl.Boolean,
     "manual_audit_reason": pl.Utf8,
+    "review_status": pl.Utf8,
+    "production_eligible": pl.Boolean,
     "original_start_snippet": pl.Utf8,
     "cleaned_start_snippet": pl.Utf8,
     "original_end_snippet": pl.Utf8,
@@ -162,6 +171,9 @@ MANUAL_AUDIT_SAMPLE_SCHEMA: dict[str, pl.DataType] = {
     "text_scope": pl.Utf8,
     "benchmark_row_id": pl.Utf8,
     "cleaning_policy_id": pl.Utf8,
+    "boundary_authority_status": pl.Utf8,
+    "review_status": pl.Utf8,
+    "production_eligible": pl.Boolean,
     "original_start_snippet": pl.Utf8,
     "cleaned_start_snippet": pl.Utf8,
     "original_end_snippet": pl.Utf8,
@@ -535,7 +547,27 @@ def _base_row_payload(row: dict[str, Any], *, text_scope: str) -> dict[str, Any]
         "source_year_file": row.get("source_year_file"),
         "source_record_id": row.get("source_record_id"),
         "source_file_row_nr": row.get("source_file_row_nr"),
+        "boundary_authority_status": row.get("boundary_authority_status"),
     }
+
+
+def _review_status(
+    *,
+    manual_audit_candidate: bool,
+    boundary_authority_status: str | None,
+    existing_review_status: str | None = None,
+) -> str:
+    if existing_review_status in {REVIEW_STATUS_APPROVED, REVIEW_STATUS_REJECTED}:
+        return existing_review_status
+    if manual_audit_candidate or boundary_authority_status == "review_needed":
+        return REVIEW_STATUS_REQUIRED_UNREVIEWED
+    if boundary_authority_status in {None, "", "unknown"}:
+        return REVIEW_STATUS_REQUIRED_UNREVIEWED
+    return REVIEW_STATUS_NOT_REQUIRED
+
+
+def _production_eligible(review_status: str) -> bool:
+    return review_status in {REVIEW_STATUS_NOT_REQUIRED, REVIEW_STATUS_APPROVED}
 
 
 def clean_item_scopes_with_audit(
@@ -627,9 +659,22 @@ def clean_item_scopes_with_audit(
         }
         audit_payload["manual_audit_reason"] = _manual_audit_reason(audit_payload)
         audit_payload["manual_audit_candidate"] = audit_payload["manual_audit_reason"] is not None
+        audit_payload["review_status"] = _review_status(
+            manual_audit_candidate=audit_payload["manual_audit_candidate"],
+            boundary_authority_status=common_payload.get("boundary_authority_status"),
+            existing_review_status=row.get("review_status"),
+        )
+        audit_payload["production_eligible"] = _production_eligible(audit_payload["review_status"])
         audit_rows.append(audit_payload)
         if not dropped:
-            cleaned_rows.append({**common_payload, "cleaned_text": cleaned_text})
+            cleaned_rows.append(
+                {
+                    **common_payload,
+                    "cleaned_text": cleaned_text,
+                    "review_status": audit_payload["review_status"],
+                    "production_eligible": audit_payload["production_eligible"],
+                }
+            )
 
     row_audit_df = _align_to_schema(pl.DataFrame(audit_rows), CLEANING_ROW_AUDIT_SCHEMA)
     cleaned_scope_df = (
@@ -655,7 +700,12 @@ def cleaned_scopes_for_sentence_materialization(cleaned_scope_df: pl.DataFrame) 
             pl.lit(None, dtype=pl.Utf8).alias("full_text"),
             pl.lit(None, dtype=pl.Int32).alias("char_count"),
         )
-    return cleaned_scope_df.with_columns(
+    return cleaned_scope_df.filter(
+        pl.col("review_status")
+        .cast(pl.Utf8, strict=False)
+        .is_in([REVIEW_STATUS_NOT_REQUIRED, REVIEW_STATUS_APPROVED])
+        .fill_null(False)
+    ).with_columns(
         pl.col("cleaned_text").alias("full_text"),
         pl.col("cleaned_char_count").cast(pl.Int32, strict=False).alias("char_count"),
     )
@@ -715,7 +765,10 @@ def _build_scope_diagnostics(row_audit_df: pl.DataFrame) -> pl.DataFrame:
                 pl.col("reference_only_stub").cast(pl.Int64).sum().alias("reference_stub_rows"),
                 (pl.col("drop_reason") == "blank_after_cleaning").cast(pl.Int64).sum().alias("empty_after_cleaning_rows"),
                 pl.col("warning_large_removal").cast(pl.Int64).sum().alias("large_removal_warning_rows"),
-                pl.col("manual_audit_candidate").cast(pl.Int64).sum().alias("manual_audit_queue_n"),
+                (pl.col("review_status") == REVIEW_STATUS_REQUIRED_UNREVIEWED)
+                .cast(pl.Int64)
+                .sum()
+                .alias("manual_audit_queue_n"),
             ]
         )
         .with_columns(
@@ -791,6 +844,9 @@ def _build_manual_audit_sample(row_audit_df: pl.DataFrame) -> pl.DataFrame:
                 "text_scope": row["text_scope"],
                 "benchmark_row_id": row["benchmark_row_id"],
                 "cleaning_policy_id": row["cleaning_policy_id"],
+                "boundary_authority_status": row.get("boundary_authority_status"),
+                "review_status": row.get("review_status"),
+                "production_eligible": row.get("production_eligible"),
                 "original_start_snippet": row["original_start_snippet"],
                 "cleaned_start_snippet": row["cleaned_start_snippet"],
                 "original_end_snippet": row["original_end_snippet"],

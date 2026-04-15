@@ -9,7 +9,10 @@ import polars as pl
 
 from thesis_pkg.benchmarking.contracts import DEFAULT_FINBERT_AUTHORITY
 from thesis_pkg.benchmarking.contracts import FinbertAuthoritySpec
+from thesis_pkg.benchmarking.contracts import ItemTextCleaningConfig
 from thesis_pkg.benchmarking.contracts import SentenceDatasetConfig
+from thesis_pkg.benchmarking.item_text_cleaning import benchmark_item_code_to_text_scope
+from thesis_pkg.benchmarking.item_text_cleaning import build_segment_policy_id
 from thesis_pkg.benchmarking.token_lengths import annotate_finbert_token_lengths_in_batches
 
 
@@ -75,6 +78,60 @@ _SECTION_METADATA_COLUMNS: tuple[str, ...] = (
     "cleaning_policy_id",
     "segment_policy_id",
 )
+
+
+def _ensure_sentence_provenance(
+    sections_df: pl.DataFrame,
+    cfg: SentenceDatasetConfig,
+    authority: FinbertAuthoritySpec,
+) -> pl.DataFrame:
+    schema_names = set(sections_df.columns)
+    raw_segment_policy_id = build_segment_policy_id(
+        cfg,
+        ItemTextCleaningConfig(enabled=False, cleaning_policy_id="raw_item_text"),
+        authority,
+        chunk_char_limit=SENTENCE_CHUNK_CHAR_LIMIT,
+    )
+    text_scope_expr = (
+        pl.when(
+            pl.col("text_scope").cast(pl.Utf8, strict=False).is_not_null()
+            if "text_scope" in schema_names
+            else pl.lit(False)
+        )
+        .then(
+            pl.col("text_scope").cast(pl.Utf8, strict=False)
+            if "text_scope" in schema_names
+            else pl.lit(None, dtype=pl.Utf8)
+        )
+        .otherwise(
+            pl.col("benchmark_item_code")
+            .cast(pl.Utf8, strict=False)
+            .map_elements(benchmark_item_code_to_text_scope, return_dtype=pl.Utf8)
+        )
+    )
+    return sections_df.with_columns(
+        text_scope_expr.alias("text_scope"),
+        pl.coalesce(
+            [
+                (
+                    pl.col("cleaning_policy_id").cast(pl.Utf8, strict=False)
+                    if "cleaning_policy_id" in schema_names
+                    else pl.lit(None, dtype=pl.Utf8)
+                ),
+                pl.lit("raw_item_text", dtype=pl.Utf8),
+            ]
+        ).alias("cleaning_policy_id"),
+        pl.coalesce(
+            [
+                (
+                    pl.col("segment_policy_id").cast(pl.Utf8, strict=False)
+                    if "segment_policy_id" in schema_names
+                    else pl.lit(None, dtype=pl.Utf8)
+                ),
+                pl.lit(raw_segment_policy_id, dtype=pl.Utf8),
+            ]
+        ).alias("segment_policy_id"),
+    )
 
 
 def _build_sentencizer(cfg: SentenceDatasetConfig) -> Any:
@@ -281,6 +338,7 @@ def _derive_sentence_frame_with_split_audit(
     nlp = _build_sentencizer(cfg)
     if sections_df.is_empty():
         return _empty_sentence_frame(), _empty_sentence_split_audit_frame()
+    sections_df = _ensure_sentence_provenance(sections_df, cfg, authority)
 
     sentencizer_version = _sentencizer_version()
     sentence_chunks: list[pl.DataFrame] = []

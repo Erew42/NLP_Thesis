@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 import polars as pl
@@ -26,6 +27,88 @@ from .patterns import (
     TOC_MARKER_PATTERN,
 )
 from .utilities import _cik_10, _digits_only, _make_doc_id
+
+
+BOUNDARY_AUTHORITY_STATUS_TRUSTED = "trusted"
+BOUNDARY_AUTHORITY_STATUS_REVIEW_NEEDED = "review_needed"
+BOUNDARY_AUTHORITY_STATUS_UNKNOWN = "unknown"
+BOUNDARY_AUTHORITY_STATUS_VALUES: tuple[str, ...] = (
+    BOUNDARY_AUTHORITY_STATUS_TRUSTED,
+    BOUNDARY_AUTHORITY_STATUS_REVIEW_NEEDED,
+    BOUNDARY_AUTHORITY_STATUS_UNKNOWN,
+)
+
+PUBLIC_BOUNDARY_COLUMN_MAP: dict[str, str] = {
+    "_heading_start": "boundary_heading_start",
+    "_heading_end": "boundary_heading_end",
+    "_content_start": "boundary_content_start",
+    "_content_end": "boundary_content_end",
+    "_heading_line_index": "boundary_heading_line_index",
+    "_heading_offset": "boundary_heading_offset",
+    "_start_candidates_total": "boundary_start_candidates_total",
+    "_start_candidates_toc_rejected": "boundary_start_candidates_toc_rejected",
+    "_start_selection_verified": "boundary_start_selection_verified",
+    "_truncated_successor_heading": "boundary_truncated_successor_heading",
+    "_truncated_part_boundary": "boundary_truncated_part_boundary",
+}
+
+PUBLIC_BOUNDARY_SCHEMA: dict[str, pl.DataType] = {
+    "boundary_heading_start": pl.Int64,
+    "boundary_heading_end": pl.Int64,
+    "boundary_content_start": pl.Int64,
+    "boundary_content_end": pl.Int64,
+    "boundary_heading_line_index": pl.Int64,
+    "boundary_heading_offset": pl.Int64,
+    "boundary_start_candidates_total": pl.Int32,
+    "boundary_start_candidates_toc_rejected": pl.Int32,
+    "boundary_start_selection_verified": pl.Boolean,
+    "boundary_truncated_successor_heading": pl.Boolean,
+    "boundary_truncated_part_boundary": pl.Boolean,
+    "boundary_authority_status": pl.Utf8,
+}
+
+
+def classify_boundary_authority_status(item: Mapping[str, object]) -> str:
+    """Classify persisted boundary authority for extracted-item rows."""
+
+    raw_values = {public_name: item.get(public_name) for public_name in PUBLIC_BOUNDARY_COLUMN_MAP.values()}
+    has_any_authority_signal = any(value is not None for value in raw_values.values())
+    if not has_any_authority_signal:
+        return BOUNDARY_AUTHORITY_STATUS_UNKNOWN
+
+    required_offsets = (
+        raw_values["boundary_heading_start"],
+        raw_values["boundary_heading_end"],
+        raw_values["boundary_content_start"],
+        raw_values["boundary_content_end"],
+    )
+    if any(value is None for value in required_offsets):
+        return BOUNDARY_AUTHORITY_STATUS_REVIEW_NEEDED
+
+    if raw_values["boundary_start_selection_verified"] is not True:
+        return BOUNDARY_AUTHORITY_STATUS_REVIEW_NEEDED
+
+    toc_rejected = raw_values["boundary_start_candidates_toc_rejected"]
+    if toc_rejected is not None and int(toc_rejected) > 0:
+        return BOUNDARY_AUTHORITY_STATUS_REVIEW_NEEDED
+
+    if bool(raw_values["boundary_truncated_successor_heading"]) or bool(
+        raw_values["boundary_truncated_part_boundary"]
+    ):
+        return BOUNDARY_AUTHORITY_STATUS_REVIEW_NEEDED
+
+    return BOUNDARY_AUTHORITY_STATUS_TRUSTED
+
+
+def public_boundary_payload(item: Mapping[str, object]) -> dict[str, object]:
+    """Project extractor diagnostics into the public item-boundary contract."""
+
+    payload = {
+        public_name: item.get(private_name)
+        for private_name, public_name in PUBLIC_BOUNDARY_COLUMN_MAP.items()
+    }
+    payload["boundary_authority_status"] = classify_boundary_authority_status(payload)
+    return payload
 
 
 def parse_filename_minimal(filename: str) -> dict:
@@ -159,4 +242,5 @@ class FilingItemSchema:
         "exists_by_regime": pl.Boolean,
         "item_status": pl.Utf8,
         "full_text": pl.Utf8,
+        **PUBLIC_BOUNDARY_SCHEMA,
     }

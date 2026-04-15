@@ -215,6 +215,9 @@ def test_run_finbert_tokenizer_profile_writes_and_reuses_year_outputs(
     second_artifacts = run_finbert_tokenizer_profile(run_cfg)
     manifest = json.loads(second_artifacts.run_manifest_path.read_text(encoding="utf-8"))
     assert manifest["counts"]["reused_year_count"] == 1
+    assert manifest["path_semantics"] == "manifest_relative_v1"
+    assert manifest["artifacts"]["bucket_summary_path"] == "tokenizer_profile_bucket_summary.parquet"
+    assert manifest["nonportable_diagnostics"]["sentence_dataset_dir"] == str(sentence_dataset_dir.resolve())
 
 
 def test_run_finbert_sentence_parquet_inference_uses_precomputed_sentence_dataset_only(
@@ -273,6 +276,10 @@ def test_run_finbert_sentence_parquet_inference_uses_precomputed_sentence_datase
     assert manifest["counts"]["processed_year_count"] == 1
     assert manifest["item_feature_contract"]["accepted_unit"] == ["doc_id", "benchmark_item_code"]
     assert manifest["item_feature_contract"]["denominator_contract"]["length_weight_column"] == "finbert_token_count_512"
+    assert manifest["path_semantics"] == "manifest_relative_v1"
+    assert manifest["source_sentence_dataset_manifest"] is None
+    assert manifest["artifacts"]["item_features_long_path"] == "item_features_long.parquet"
+    assert manifest["nonportable_diagnostics"]["backbone_path"] == str(backbone_path.resolve())
 
 
 def test_run_finbert_sentence_parquet_inference_rejects_changed_sentence_manifest(
@@ -313,6 +320,7 @@ def test_run_finbert_sentence_parquet_inference_rejects_changed_sentence_manifes
     manifest = json.loads(artifacts.run_manifest_path.read_text(encoding="utf-8"))
     assert manifest["item_feature_contract"]["segment_policy_id"] == "segment_v1"
     assert manifest["source_sentence_dataset_manifest"]["cleaning_policy_id"] == "item_text_clean_v2"
+    assert "manifest_path" not in manifest["source_sentence_dataset_manifest"]
     source_manifest_path.write_text(
         json.dumps(
             {

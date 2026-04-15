@@ -13,6 +13,11 @@ import polars as pl
 from thesis_pkg.benchmarking.contracts import BenchmarkItemSpec
 from thesis_pkg.benchmarking.contracts import FinbertSectionUniverseConfig
 from thesis_pkg.benchmarking.finbert_dataset import load_eligible_section_universe
+from thesis_pkg.benchmarking.finbert_dataset import section_universe_contract_payload
+from thesis_pkg.benchmarking.manifest_contracts import json_sha256
+from thesis_pkg.benchmarking.manifest_contracts import normalize_contract_path
+from thesis_pkg.benchmarking.manifest_contracts import resolve_manifest_path
+from thesis_pkg.benchmarking.manifest_contracts import stable_string_fingerprint
 from thesis_pkg.core.ccm.lm2011 import attach_eligible_quarterly_accounting
 from thesis_pkg.core.ccm.lm2011 import normalize_lm2011_form_value
 from thesis_pkg.core.sec.extraction import extract_filing_items
@@ -506,7 +511,12 @@ def _run_packet_d(
     cfg: Phase0ValidationAuditConfig,
     paths: _ResolvedAuditPaths,
 ) -> _PacketResult:
-    finbert_run_dir = paths.finbert_run_dir or _resolve_latest_valid_finbert_run(paths.finbert_output_root)
+    finbert_run_dir = paths.finbert_run_dir or _resolve_latest_valid_finbert_run(
+        paths.finbert_output_root,
+        sampled_items_analysis_dir=paths.items_analysis_dir,
+        sample_backbone_path=paths.sample_backbone_path,
+        requested_year_filter=cfg.year_filter,
+    )
     if finbert_run_dir is None:
         return _PacketResult(
             status=STATUS_BLOCKED_MISSING_INPUT,
@@ -552,6 +562,7 @@ def _run_packet_d(
         section_cfg,
         selected_year_paths,
         run_manifest,
+        run_manifest_path,
         item_features_long_path,
         sample_backbone_path=paths.sample_backbone_path,
     )
@@ -826,15 +837,124 @@ def _load_backbone_doc_years(
     sample_backbone_path: Path,
     year_filter: tuple[int, ...] | None,
 ) -> pl.DataFrame:
-    return (
-        pl.scan_parquet(sample_backbone_path)
-        .select(
+    lf = pl.scan_parquet(sample_backbone_path)
+    schema = lf.collect_schema()
+    if "filing_date" in schema:
+        year_expr = pl.col("filing_date").cast(pl.Date, strict=False).dt.year().cast(pl.Int32).alias("filing_year")
+    elif "filing_year" in schema:
+        year_expr = pl.col("filing_year").cast(pl.Int32, strict=False).alias("filing_year")
+    else:
+        year_expr = pl.lit(None, dtype=pl.Int32).alias("filing_year")
+
+    out = (
+        lf.select(
             pl.col("doc_id").cast(pl.Utf8, strict=False).alias("doc_id"),
-            pl.col("filing_date").dt.year().cast(pl.Int32).alias("filing_year"),
+            year_expr,
         )
-        .filter(_year_filter_expr("filing_year", year_filter))
         .unique(maintain_order=True)
-        .collect()
+    )
+    if year_filter is not None and ("filing_date" in schema or "filing_year" in schema):
+        out = out.filter(_year_filter_expr("filing_year", year_filter))
+    return out.collect()
+
+
+def _doc_universe_fingerprint(df: pl.DataFrame) -> str:
+    return stable_string_fingerprint(df["doc_id"].to_list() if df.height else [])
+
+
+def _expected_packet_d_contract(
+    *,
+    section_cfg: FinbertSectionUniverseConfig,
+    sample_backbone_path: Path,
+    effective_year_filter: tuple[int, ...] | None,
+) -> dict[str, Any]:
+    sample_backbone_df = _load_backbone_doc_years(sample_backbone_path, effective_year_filter)
+    return {
+        "effective_year_filter": list(effective_year_filter) if effective_year_filter is not None else None,
+        "accepted_universe_contract_fingerprint": json_sha256(
+            section_universe_contract_payload(
+                section_cfg,
+                target_doc_universe_path=sample_backbone_path,
+            )
+        ),
+        "normalized_relative_backbone_path": normalize_contract_path(
+            sample_backbone_path,
+            base_path=Path.cwd(),
+        ),
+        "filtered_backbone_doc_universe_fingerprint": _doc_universe_fingerprint(sample_backbone_df),
+    }
+
+
+def _candidate_backbone_contract(
+    run_manifest: dict[str, Any],
+    *,
+    run_manifest_path: Path | None = None,
+    effective_year_filter: tuple[int, ...] | None,
+    section_cfg: FinbertSectionUniverseConfig | None = None,
+    sample_backbone_path: Path | None = None,
+) -> dict[str, Any] | None:
+    stored_contract = run_manifest.get("backbone_contract")
+    if isinstance(stored_contract, dict):
+        return stored_contract
+
+    backbone_path_raw = run_manifest.get("backbone_path")
+    if not backbone_path_raw:
+        backbone_path_raw = (run_manifest.get("nonportable_diagnostics") or {}).get("backbone_path")
+    if not backbone_path_raw:
+        return None
+    if run_manifest_path is not None:
+        backbone_path = resolve_manifest_path(
+            backbone_path_raw,
+            manifest_path=run_manifest_path,
+            path_semantics=run_manifest.get("path_semantics"),
+        )
+    else:
+        backbone_path = Path(str(backbone_path_raw))
+    if backbone_path is None:
+        return None
+    if not backbone_path.exists():
+        return None
+    manifest_source = run_manifest.get("source_sentence_dataset_manifest") or {}
+    accepted_universe_contract = manifest_source.get("accepted_universe_contract")
+    if accepted_universe_contract is None and section_cfg is not None and sample_backbone_path is not None:
+        accepted_universe_contract = section_universe_contract_payload(
+            section_cfg,
+            target_doc_universe_path=sample_backbone_path,
+        )
+    return {
+        "effective_year_filter": list(effective_year_filter) if effective_year_filter is not None else None,
+        "accepted_universe_contract_fingerprint": (
+            json_sha256(accepted_universe_contract)
+            if accepted_universe_contract is not None
+            else None
+        ),
+        "normalized_relative_backbone_path": normalize_contract_path(
+            backbone_path,
+            base_path=Path.cwd(),
+        ),
+    }
+
+
+def _packet_d_contract_match(
+    candidate_contract: dict[str, Any] | None,
+    *,
+    expected_contract: dict[str, Any],
+) -> bool:
+    if candidate_contract is None:
+        return False
+    if candidate_contract.get("effective_year_filter") != expected_contract["effective_year_filter"]:
+        return False
+    if (
+        candidate_contract.get("accepted_universe_contract_fingerprint")
+        != expected_contract["accepted_universe_contract_fingerprint"]
+    ):
+        return False
+    candidate_filtered_fingerprint = candidate_contract.get("filtered_backbone_doc_universe_fingerprint")
+    if candidate_filtered_fingerprint is not None:
+        return candidate_filtered_fingerprint == expected_contract["filtered_backbone_doc_universe_fingerprint"]
+    return (
+        candidate_contract.get("normalized_relative_backbone_path")
+        == expected_contract["normalized_relative_backbone_path"]
     )
 
 
@@ -2141,13 +2261,33 @@ def _packet_d_coverage_reconciliation(
     section_cfg: FinbertSectionUniverseConfig,
     year_paths: list[Path],
     run_manifest: dict[str, Any],
+    run_manifest_path: Path,
     item_features_long_path: Path,
     *,
     sample_backbone_path: Path,
 ) -> pl.DataFrame:
     reported = run_manifest.get("coverage_summary") or {}
+    effective_year_filter = tuple(sorted(int(path.stem) for path in year_paths)) or None
+    expected_contract = _expected_packet_d_contract(
+        section_cfg=section_cfg,
+        sample_backbone_path=sample_backbone_path,
+        effective_year_filter=effective_year_filter,
+    )
     backbone_path_raw = run_manifest.get("backbone_path")
-    backbone_path = Path(backbone_path_raw).resolve() if backbone_path_raw else None
+    if not backbone_path_raw:
+        backbone_path_raw = (run_manifest.get("nonportable_diagnostics") or {}).get("backbone_path")
+    backbone_path = resolve_manifest_path(
+        backbone_path_raw,
+        manifest_path=run_manifest_path,
+        path_semantics=run_manifest.get("path_semantics"),
+    )
+    candidate_contract = _candidate_backbone_contract(
+        run_manifest,
+        run_manifest_path=run_manifest_path,
+        effective_year_filter=effective_year_filter,
+        section_cfg=section_cfg,
+        sample_backbone_path=sample_backbone_path,
+    )
     actual_filtered_doc_count: int | None = None
     if backbone_path is not None and backbone_path.exists():
         actual_filtered_doc_count = int(
@@ -2187,6 +2327,12 @@ def _packet_d_coverage_reconciliation(
                 "finbert_backbone_path": normalized_finbert_backbone,
                 "sample_backbone_path": normalized_sample_backbone,
                 "finbert_backbone_matches_sample_backbone": (
+                    _packet_d_contract_match(
+                        candidate_contract,
+                        expected_contract=expected_contract,
+                    )
+                ),
+                "finbert_backbone_path_matches_sample_backbone": (
                     normalized_finbert_backbone == normalized_sample_backbone
                     if normalized_finbert_backbone is not None
                     else False
@@ -2288,7 +2434,13 @@ def _packet_d_extraction_regime_comparison(
     return pl.DataFrame(rows).sort("doc_id")
 
 
-def _resolve_latest_valid_finbert_run(finbert_output_root: Path) -> Path | None:
+def _resolve_latest_valid_finbert_run(
+    finbert_output_root: Path,
+    *,
+    sampled_items_analysis_dir: Path,
+    sample_backbone_path: Path,
+    requested_year_filter: tuple[int, ...] | None,
+) -> Path | None:
     if not finbert_output_root.exists():
         return None
     candidate_dirs = sorted(
@@ -2297,11 +2449,29 @@ def _resolve_latest_valid_finbert_run(finbert_output_root: Path) -> Path | None:
         reverse=True,
     )
     for path in candidate_dirs:
-        if (
-            (path / "run_manifest.json").exists()
+        run_manifest_path = path / "run_manifest.json"
+        if not (
+            run_manifest_path.exists()
             and (path / "item_features_long.parquet").exists()
             and (path / "coverage_report.parquet").exists()
         ):
+            continue
+        run_manifest = json.loads(run_manifest_path.read_text(encoding="utf-8"))
+        section_cfg = _section_universe_from_manifest(sampled_items_analysis_dir, run_manifest)
+        effective_year_filter = requested_year_filter or _manifest_year_filter(run_manifest)
+        expected_contract = _expected_packet_d_contract(
+            section_cfg=section_cfg,
+            sample_backbone_path=sample_backbone_path,
+            effective_year_filter=effective_year_filter,
+        )
+        candidate_contract = _candidate_backbone_contract(
+            run_manifest,
+            run_manifest_path=run_manifest_path,
+            effective_year_filter=effective_year_filter,
+            section_cfg=section_cfg,
+            sample_backbone_path=sample_backbone_path,
+        )
+        if _packet_d_contract_match(candidate_contract, expected_contract=expected_contract):
             return path
     return None
 

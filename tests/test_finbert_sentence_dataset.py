@@ -58,6 +58,7 @@ def _write_items_year(
             "item_status": ["active", "active", "active"],
             "exists_by_regime": [True, True, True],
             "filename": [f"{doc_id}_1.htm", f"{doc_id}_1a.htm", f"{doc_id}_7.htm"],
+            "boundary_authority_status": ["trusted", "trusted", "trusted"],
             "full_text": [
                 item_texts.get("1", default_text),
                 item_texts.get("1A", default_text),
@@ -290,6 +291,90 @@ def test_run_finbert_sentence_preprocessing_writes_by_year_artifacts(
     assert manifest["accepted_universe_contract"]["dedupe"]["key"] == ["doc_id", "benchmark_item_code"]
     assert manifest["cleaning_policy_id"] == "item_text_clean_v2"
     assert "item_text_clean_v2" in manifest["segment_policy_id"]
+    assert manifest["path_semantics"] == "manifest_relative_v1"
+    assert manifest["artifacts"]["sentence_dataset_dir"] == "sentence_dataset/by_year"
+    assert manifest["nonportable_diagnostics"]["source_items_dir"] == str(source_dir.resolve())
+
+
+def test_run_finbert_sentence_preprocessing_excludes_unreviewed_unknown_authority_from_sentences(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source_dir = tmp_path / "items_analysis"
+    source_dir.mkdir(parents=True, exist_ok=True)
+    long_text = ("Management analysis remains detailed and stable. " * 80).strip()
+    pl.DataFrame(
+        {
+            "doc_id": ["doc_blocked", "doc_approved"],
+            "cik_10": ["0000000001", "0000000002"],
+            "accession_nodash": ["2006000000000001", "2006000000000002"],
+            "filing_date": ["2006-03-01", "2006-03-02"],
+            "document_type_filename": ["10-K", "10-K"],
+            "item_id": ["7", "7"],
+            "canonical_item": ["II:7_MDA", "II:7_MDA"],
+            "item_part": ["PART II", "PART II"],
+            "item_status": ["active", "active"],
+            "exists_by_regime": [True, True],
+            "filename": ["doc_blocked_7.htm", "doc_approved_7.htm"],
+            "full_text": [long_text, long_text],
+            "boundary_authority_status": ["unknown", "unknown"],
+            "review_status": [None, "approved"],
+        }
+    ).write_parquet(source_dir / "2006.parquet")
+
+    from thesis_pkg.benchmarking import finbert_sentence_preprocessing
+    from thesis_pkg.benchmarking import sentences
+
+    def _fake_derive(sections_df: pl.DataFrame, sentence_cfg, *, authority):
+        del sentence_cfg, authority
+        rows = [
+            {
+                "benchmark_sentence_id": f"{row['benchmark_row_id']}:0",
+                "benchmark_row_id": row["benchmark_row_id"],
+                "doc_id": row["doc_id"],
+                "cik_10": row["cik_10"],
+                "accession_nodash": row["accession_nodash"],
+                "filing_date": row["filing_date"],
+                "filing_year": row["filing_year"],
+                "benchmark_item_code": row["benchmark_item_code"],
+                "benchmark_item_label": row["benchmark_item_label"],
+                "source_year_file": row["source_year_file"],
+                "document_type": row["document_type"],
+                "document_type_raw": row["document_type_raw"],
+                "document_type_normalized": row["document_type_normalized"],
+                "canonical_item": row["canonical_item"],
+                "text_scope": row["text_scope"],
+                "cleaning_policy_id": row["cleaning_policy_id"],
+                "segment_policy_id": row["segment_policy_id"],
+                "sentence_index": 0,
+                "sentence_text": "stub sentence",
+                "sentence_char_count": 13,
+                "sentencizer_backend": "test",
+                "sentencizer_version": "test",
+                "finbert_token_count_512": 5,
+                "finbert_token_bucket_512": "short",
+            }
+            for row in sections_df.iter_rows(named=True)
+        ]
+        return pl.DataFrame(rows), _empty_split_audit(sentences)
+
+    monkeypatch.setattr(finbert_sentence_preprocessing, "_derive_sentence_frame_with_split_audit", _fake_derive)
+
+    artifacts = run_finbert_sentence_preprocessing(
+        FinbertSentencePreprocessingRunConfig(
+            source_items_dir=source_dir,
+            out_root=tmp_path / "runs",
+            section_universe=FinbertSectionUniverseConfig(source_items_dir=source_dir),
+            run_name="sentence_prep_review_gate",
+        )
+    )
+
+    sentence_dataset = pl.read_parquet(artifacts.sentence_dataset_dir / "2006.parquet")
+    audit_df = pl.read_parquet(artifacts.cleaning_row_audit_path)
+
+    assert sentence_dataset["doc_id"].to_list() == ["doc_approved"]
+    assert audit_df.sort("doc_id")["doc_id"].to_list() == ["doc_approved", "doc_blocked"]
+    assert audit_df.sort("doc_id")["review_status"].to_list() == ["approved", "required_unreviewed"]
 
 
 def test_run_finbert_sentence_preprocessing_reuses_existing_outputs(
@@ -641,4 +726,4 @@ def test_run_finbert_sentence_preprocessing_logs_fallback_split_reasons_and_warn
     assert manifest["counts"]["oversize_section_rows"] == 2
     assert manifest["counts"]["chunked_section_rows"] == 2
     assert manifest["counts"]["warning_split_rows"] == 2
-    assert manifest["artifacts"]["oversize_sections_path"] == str(artifacts.oversize_sections_path.resolve())
+    assert manifest["artifacts"]["oversize_sections_path"] == "oversize_sections.parquet"

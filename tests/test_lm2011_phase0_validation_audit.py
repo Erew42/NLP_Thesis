@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import os
 import re
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -282,7 +284,6 @@ def _build_sample_audit_layout(tmp_path: Path) -> _AuditLayout:
         "Word\nloss\ngain\nuncertain\nlawsuit\nmust\nmay\nbusiness\nrisk\nmanagement\nanalysis\nfinancial\n",
     )
 
-    premerge_backbone_path = sample_root / "derived_data" / "final_flagged_data_compdesc_added.sample_5pct_seed42.parquet"
     _write_parquet(
         finbert_run_dir / "item_features_long.parquet",
         pl.DataFrame(
@@ -305,7 +306,7 @@ def _build_sample_audit_layout(tmp_path: Path) -> _AuditLayout:
         finbert_run_dir / "run_manifest.json",
         {
             "run_name": "sample_smoke_2006",
-            "backbone_path": str(premerge_backbone_path),
+            "backbone_path": str(sample_backbone_path),
             "year_filter": [2006],
             "coverage_summary": {
                 "backbone_doc_count": 5,
@@ -347,6 +348,21 @@ def _run_audit(layout: _AuditLayout, packets: tuple[str, ...] = audit.PACKET_CHO
         packets=packets,
     )
     return audit.run_phase0_validation_audit(cfg)
+
+
+def _write_finbert_candidate_run(run_dir: Path, run_manifest: dict[str, object], *, mtime: int) -> None:
+    _write_json(run_dir / "run_manifest.json", run_manifest)
+    _write_parquet(
+        run_dir / "item_features_long.parquet",
+        pl.DataFrame({"doc_id": ["d1"], "benchmark_item_code": ["item_1"]}),
+    )
+    _write_parquet(
+        run_dir / "coverage_report.parquet",
+        pl.DataFrame({"metric": ["backbone_doc_count", "covered_doc_count"], "value": [2, 1]}),
+    )
+    timestamp = float(mtime)
+    for path in (run_dir, run_dir / "run_manifest.json", run_dir / "item_features_long.parquet", run_dir / "coverage_report.parquet"):
+        os.utime(path, (timestamp, timestamp))
 
 
 def test_packet_a_detects_marker_and_threshold_flips(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -455,14 +471,178 @@ def test_packet_d_reconciles_dictionary_and_finbert_universe(tmp_path: Path) -> 
     assert int(reconciliation_df.filter((pl.col("item_id") == "1A") & (pl.col("classification") == "dictionary_only")).item(0, "row_count")) == 1
     assert int(reconciliation_df.filter((pl.col("item_id") == "1") & (pl.col("classification") == "finbert_only")).item(0, "row_count")) == 1
     assert int(coverage_df.item(0, "reported_backbone_doc_count")) == 5
-    assert int(coverage_df.item(0, "actual_filtered_doc_count")) == 3
+    assert int(coverage_df.item(0, "actual_filtered_doc_count")) == 2
     assert int(coverage_df.item(0, "sample_backbone_filtered_doc_count")) == 2
     assert int(coverage_df.item(0, "sample_backbone_denominator_gap")) == 3
-    assert coverage_df.item(0, "finbert_backbone_matches_sample_backbone") is False
+    assert coverage_df.item(0, "finbert_backbone_matches_sample_backbone") is True
     assert int(removal_df.filter(pl.col("stage_name") == "raw_target_items").item(0, "row_count")) > int(
         removal_df.filter(pl.col("stage_name") == "deduped_final").item(0, "row_count")
     )
     assert regime_df.height > 0
+
+
+def test_resolve_latest_valid_finbert_run_prefers_newest_compatible_backbone_contract(tmp_path: Path) -> None:
+    layout = _build_sample_audit_layout(tmp_path)
+    shutil.rmtree(layout.finbert_run_dir)
+    sampled_items_analysis_dir = layout.upstream_run_root / "items_analysis"
+    base_manifest = {
+        "year_filter": [2006],
+        "section_universe": {
+            "form_types": ["10-K", "10-K405"],
+            "require_active_items": True,
+            "require_exists_by_regime": True,
+            "min_char_count": 250,
+            "target_items": [
+                {"benchmark_item_code": "item_1", "item_id": "1", "benchmark_item_label": "Item 1"},
+                {"benchmark_item_code": "item_1a", "item_id": "1A", "benchmark_item_label": "Item 1A"},
+                {"benchmark_item_code": "item_7", "item_id": "7", "benchmark_item_label": "Item 7"},
+            ],
+        },
+    }
+    section_cfg = audit._section_universe_from_manifest(sampled_items_analysis_dir, base_manifest)
+    expected_contract = audit._expected_packet_d_contract(
+        section_cfg=section_cfg,
+        sample_backbone_path=layout.sample_backbone_path,
+        effective_year_filter=(2006,),
+    )
+
+    newer_incompatible_dir = layout.finbert_output_root / "newer_incompatible"
+    older_compatible_dir = layout.finbert_output_root / "older_compatible"
+    _write_finbert_candidate_run(
+        newer_incompatible_dir,
+        {
+            **base_manifest,
+            "run_name": "newer_incompatible",
+            "backbone_path": str(layout.sample_backbone_path),
+            "backbone_contract": {
+                **expected_contract,
+                "contract_version": "backbone_contract_v2",
+                "filtered_backbone_doc_universe_fingerprint": "mismatched_doc_universe",
+            },
+        },
+        mtime=2_000,
+    )
+    _write_finbert_candidate_run(
+        older_compatible_dir,
+        {
+            **base_manifest,
+            "run_name": "older_compatible",
+            "backbone_path": str(layout.sample_backbone_path),
+            "backbone_contract": {
+                **expected_contract,
+                "contract_version": "backbone_contract_v2",
+            },
+        },
+        mtime=1_000,
+    )
+
+    selected = audit._resolve_latest_valid_finbert_run(
+        layout.finbert_output_root,
+        sampled_items_analysis_dir=sampled_items_analysis_dir,
+        sample_backbone_path=layout.sample_backbone_path,
+        requested_year_filter=(2006,),
+    )
+
+    assert selected == older_compatible_dir
+
+
+def test_resolve_latest_valid_finbert_run_accepts_legacy_path_fallback_only_without_filtered_fingerprint(
+    tmp_path: Path,
+) -> None:
+    layout = _build_sample_audit_layout(tmp_path)
+    shutil.rmtree(layout.finbert_run_dir)
+    sampled_items_analysis_dir = layout.upstream_run_root / "items_analysis"
+    base_manifest = {
+        "run_name": "legacy_path_fallback",
+        "backbone_path": str(layout.sample_backbone_path),
+        "year_filter": [2006],
+        "section_universe": {
+            "form_types": ["10-K", "10-K405"],
+            "require_active_items": True,
+            "require_exists_by_regime": True,
+            "min_char_count": 250,
+            "target_items": [
+                {"benchmark_item_code": "item_1", "item_id": "1", "benchmark_item_label": "Item 1"},
+                {"benchmark_item_code": "item_1a", "item_id": "1A", "benchmark_item_label": "Item 1A"},
+                {"benchmark_item_code": "item_7", "item_id": "7", "benchmark_item_label": "Item 7"},
+            ],
+        },
+    }
+    section_cfg = audit._section_universe_from_manifest(sampled_items_analysis_dir, base_manifest)
+    accepted_universe_contract = audit.section_universe_contract_payload(
+        section_cfg,
+        target_doc_universe_path=layout.sample_backbone_path,
+    )
+    legacy_dir = layout.finbert_output_root / "legacy_path_fallback"
+    _write_finbert_candidate_run(
+        legacy_dir,
+        {
+            **base_manifest,
+            "source_sentence_dataset_manifest": {
+                "accepted_universe_contract": accepted_universe_contract,
+            },
+        },
+        mtime=1_000,
+    )
+
+    selected = audit._resolve_latest_valid_finbert_run(
+        layout.finbert_output_root,
+        sampled_items_analysis_dir=sampled_items_analysis_dir,
+        sample_backbone_path=layout.sample_backbone_path,
+        requested_year_filter=(2006,),
+    )
+
+    assert selected == legacy_dir
+
+
+def test_resolve_latest_valid_finbert_run_rejects_incompatible_accepted_universe_contract(tmp_path: Path) -> None:
+    layout = _build_sample_audit_layout(tmp_path)
+    shutil.rmtree(layout.finbert_run_dir)
+    sampled_items_analysis_dir = layout.upstream_run_root / "items_analysis"
+    base_manifest = {
+        "year_filter": [2006],
+        "section_universe": {
+            "form_types": ["10-K", "10-K405"],
+            "require_active_items": True,
+            "require_exists_by_regime": True,
+            "min_char_count": 250,
+            "target_items": [
+                {"benchmark_item_code": "item_1", "item_id": "1", "benchmark_item_label": "Item 1"},
+                {"benchmark_item_code": "item_1a", "item_id": "1A", "benchmark_item_label": "Item 1A"},
+                {"benchmark_item_code": "item_7", "item_id": "7", "benchmark_item_label": "Item 7"},
+            ],
+        },
+    }
+    section_cfg = audit._section_universe_from_manifest(sampled_items_analysis_dir, base_manifest)
+    expected_contract = audit._expected_packet_d_contract(
+        section_cfg=section_cfg,
+        sample_backbone_path=layout.sample_backbone_path,
+        effective_year_filter=(2006,),
+    )
+    incompatible_dir = layout.finbert_output_root / "incompatible_accepted_universe"
+    _write_finbert_candidate_run(
+        incompatible_dir,
+        {
+            **base_manifest,
+            "run_name": "incompatible_accepted_universe",
+            "backbone_path": str(layout.sample_backbone_path),
+            "backbone_contract": {
+                **expected_contract,
+                "contract_version": "backbone_contract_v2",
+                "accepted_universe_contract_fingerprint": "different_contract",
+            },
+        },
+        mtime=1_000,
+    )
+
+    selected = audit._resolve_latest_valid_finbert_run(
+        layout.finbert_output_root,
+        sampled_items_analysis_dir=sampled_items_analysis_dir,
+        sample_backbone_path=layout.sample_backbone_path,
+        requested_year_filter=(2006,),
+    )
+
+    assert selected is None
 
 
 def test_cli_main_writes_report_and_manifest_for_sample_layout(tmp_path: Path) -> None:

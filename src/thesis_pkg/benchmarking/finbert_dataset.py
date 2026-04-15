@@ -19,6 +19,12 @@ from thesis_pkg.benchmarking.contracts import BenchmarkSampleSpec
 from thesis_pkg.benchmarking.contracts import FinbertAuthoritySpec
 from thesis_pkg.benchmarking.contracts import FinbertBenchmarkSuiteConfig
 from thesis_pkg.benchmarking.contracts import FinbertSectionUniverseConfig
+from thesis_pkg.benchmarking.manifest_contracts import file_fingerprint
+from thesis_pkg.benchmarking.manifest_contracts import json_sha256
+from thesis_pkg.benchmarking.manifest_contracts import MANIFEST_PATH_SEMANTICS_RELATIVE
+from thesis_pkg.benchmarking.manifest_contracts import parquet_doc_universe_fingerprint
+from thesis_pkg.benchmarking.manifest_contracts import semantic_file_fingerprint
+from thesis_pkg.benchmarking.manifest_contracts import write_manifest_path_value
 from thesis_pkg.benchmarking.sentences import materialize_sentence_benchmark_dataset
 from thesis_pkg.benchmarking.token_lengths import FINBERT_TOKEN_BUCKET_COLUMN
 from thesis_pkg.benchmarking.token_lengths import annotate_finbert_token_lengths
@@ -47,12 +53,12 @@ def section_universe_contract_payload(
     target_doc_universe_path: Path | None = None,
 ) -> dict[str, Any]:
     return {
+        "contract_version": "accepted_universe_contract_v2",
         "accepted_unit": ["doc_id", "benchmark_item_code"],
         "text_scope_column": "benchmark_item_code",
         "text_source_column": "full_text",
-        "source_items_dir": str(universe.source_items_dir.resolve()),
-        "target_doc_universe_path": (
-            str(target_doc_universe_path.resolve())
+        "target_doc_universe": (
+            parquet_doc_universe_fingerprint(target_doc_universe_path)
             if target_doc_universe_path is not None
             else None
         ),
@@ -78,6 +84,27 @@ def section_universe_contract_payload(
                 "accession_nodash",
             ],
         },
+    }
+
+
+def sentence_universe_contract_payload(
+    *,
+    cfg: FinbertBenchmarkSuiteConfig,
+    manifest_path: Path,
+    sections_path: Path,
+    sentences_path: Path | None,
+    section_universe_contract: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "contract_version": "sentence_universe_contract_v2",
+        "sentence_dataset_config": asdict(cfg.sentence_dataset),
+        "section_universe_contract_fingerprint": json_sha256(section_universe_contract),
+        "sections_dataset_fingerprint": semantic_file_fingerprint(sections_path),
+        "precomputed_sentences_fingerprint": (
+            semantic_file_fingerprint(sentences_path)
+            if sentences_path is not None and sentences_path.exists()
+            else None
+        ),
     }
 
 
@@ -293,6 +320,8 @@ def _load_filtered_section_rows(
             _optional_utf8_expr("canonical_item", schema_names),
             _optional_utf8_expr("item_part", schema_names),
             _optional_utf8_expr("item_status", schema_names),
+            _optional_utf8_expr("boundary_authority_status", schema_names),
+            _optional_utf8_expr("review_status", schema_names),
             pl.col("item_id").cast(pl.Utf8, strict=False).str.to_uppercase().alias("item_id"),
             pl.col("full_text").cast(pl.Utf8, strict=False).alias("full_text"),
             (
@@ -352,6 +381,8 @@ def _load_filtered_section_rows(
                 "item_part",
                 "item_status",
                 "exists_by_regime",
+                "boundary_authority_status",
+                "review_status",
                 "full_text",
                 "char_count",
                 "filename",
@@ -383,6 +414,8 @@ def _dedupe_section_rows(
         "item_part",
         "item_status",
         "exists_by_regime",
+        "boundary_authority_status",
+        "review_status",
         "char_count",
         "source_year_file",
     ]
@@ -415,6 +448,8 @@ def _dedupe_section_rows(
                 "item_part",
                 "item_status",
                 "exists_by_regime",
+                "boundary_authority_status",
+                "review_status",
                 "char_count",
                 "filename",
                 *(
@@ -1695,8 +1730,13 @@ def build_finbert_benchmark_suite(
                     out_path=sentences_path,
                 )
 
+            section_universe_contract = section_universe_contract_payload(
+                cfg.section_universe,
+                target_doc_universe_path=None,
+            )
             manifest = {
-                "spec_version": "1.1",
+                "spec_version": "1.2",
+                "path_semantics": MANIFEST_PATH_SEMANTICS_RELATIVE,
                 "dataset_tag": dataset_tag,
                 "dataset_name": "finbert_10k_items",
                 "created_at_utc": _utc_timestamp(),
@@ -1751,11 +1791,34 @@ def build_finbert_benchmark_suite(
                     "planning_strategy": "skinny_temp_universe_then_parent_materialization",
                     "largest_sample_materialized_directly": parent_sample_name,
                     "nested_child_samples_derived_from_parent": cfg.nested_samples,
-                    "temp_root": str(tmp_root.resolve()),
                 },
+                "nonportable_diagnostics": {
+                    "builder_execution": {
+                        "temp_root": str(tmp_root.resolve()),
+                    }
+                },
+                "sentence_universe_contract": sentence_universe_contract_payload(
+                    cfg=cfg,
+                    manifest_path=manifest_path,
+                    sections_path=dataset_path,
+                    sentences_path=sentences_path,
+                    section_universe_contract=section_universe_contract,
+                ),
                 "artifacts": {
-                    "sections_path": str(dataset_path.resolve()),
-                    "sentences_path": str(sentences_path.resolve()) if sentences_path is not None else None,
+                    "sections_path": write_manifest_path_value(
+                        dataset_path,
+                        manifest_path=manifest_path,
+                        path_semantics=MANIFEST_PATH_SEMANTICS_RELATIVE,
+                    ),
+                    "sentences_path": (
+                        write_manifest_path_value(
+                            sentences_path,
+                            manifest_path=manifest_path,
+                            path_semantics=MANIFEST_PATH_SEMANTICS_RELATIVE,
+                        )
+                        if sentences_path is not None
+                        else None
+                    ),
                 },
             }
             _write_json(manifest_path, manifest)

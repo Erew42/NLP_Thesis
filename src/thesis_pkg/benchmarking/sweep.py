@@ -12,6 +12,8 @@ from thesis_pkg.benchmarking.contracts import FinbertAuthoritySpec
 from thesis_pkg.benchmarking.contracts import FinbertBenchmarkSweepConfig
 from thesis_pkg.benchmarking.contracts import FinbertRuntimeConfig
 from thesis_pkg.benchmarking.finbert_benchmark import run_finbert_benchmark
+from thesis_pkg.benchmarking.manifest_contracts import MANIFEST_PATH_SEMANTICS_RELATIVE
+from thesis_pkg.benchmarking.manifest_contracts import write_manifest_path_value
 from thesis_pkg.benchmarking.run_logging import append_jsonl_record
 from thesis_pkg.benchmarking.run_logging import utc_timestamp
 from thesis_pkg.benchmarking.run_logging import write_frame
@@ -37,6 +39,7 @@ def run_finbert_benchmark_sweep(
         )
         artifacts = run_finbert_benchmark(run_cfg, authority=authority, runtime=runtime)
         summary = json.loads(artifacts.summary_path.read_text(encoding="utf-8"))
+        validated_contract = summary.get("validated_sentence_universe_contract") or {}
         row = {
             "run_name": summary["run_name"],
             "batch_config_name": batch_config.name,
@@ -60,7 +63,11 @@ def run_finbert_benchmark_sweep(
             "full_pipeline_seconds": summary["full_pipeline"]["seconds"],
             "full_pipeline_rows_per_second": summary["full_pipeline"]["rows_per_second"],
             "full_pipeline_peak_vram_gb": summary["full_pipeline"]["peak_vram_gb"],
-            "run_dir": str(artifacts.run_dir.resolve()),
+            "sentence_universe_contract_fingerprint": validated_contract.get(
+                "sentence_universe_contract_fingerprint"
+            ),
+            "sentence_universe_comparable": validated_contract.get("sentence_universe_comparable"),
+            "run_dir": artifacts.run_dir.name,
         }
         rows.append(row)
         append_jsonl_record(records_path, {"created_at_utc": utc_timestamp(), **row})
@@ -71,15 +78,41 @@ def run_finbert_benchmark_sweep(
     write_json(
         sweep_dir / "sweep_manifest.json",
         {
+            "manifest_version": 1,
+            "path_semantics": MANIFEST_PATH_SEMANTICS_RELATIVE,
             "created_at_utc": utc_timestamp(),
-            "dataset_manifest_path": str(cfg.base_run.dataset_manifest_path.resolve()),
+            "dataset_manifest_path": write_manifest_path_value(
+                cfg.base_run.dataset_manifest_path,
+                manifest_path=sweep_dir / "sweep_manifest.json",
+                path_semantics=MANIFEST_PATH_SEMANTICS_RELATIVE,
+            ),
             "authority": authority.__dict__,
             "runtime": runtime.__dict__,
             "batch_configs": [batch_config.__dict__ for batch_config in cfg.batch_configs],
+            "validated_sentence_universe_contracts": [
+                {
+                    "run_name": row["run_name"],
+                    "sentence_universe_contract_fingerprint": row["sentence_universe_contract_fingerprint"],
+                    "sentence_universe_comparable": row["sentence_universe_comparable"],
+                }
+                for row in rows
+            ],
             "artifacts": {
-                "records_path": str(records_path.resolve()),
-                "summary_parquet_path": str((sweep_dir / "sweep_summary.parquet").resolve()),
-                "summary_csv_path": str((sweep_dir / "sweep_summary.csv").resolve()),
+                "records_path": write_manifest_path_value(
+                    records_path,
+                    manifest_path=sweep_dir / "sweep_manifest.json",
+                    path_semantics=MANIFEST_PATH_SEMANTICS_RELATIVE,
+                ),
+                "summary_parquet_path": write_manifest_path_value(
+                    sweep_dir / "sweep_summary.parquet",
+                    manifest_path=sweep_dir / "sweep_manifest.json",
+                    path_semantics=MANIFEST_PATH_SEMANTICS_RELATIVE,
+                ),
+                "summary_csv_path": write_manifest_path_value(
+                    sweep_dir / "sweep_summary.csv",
+                    manifest_path=sweep_dir / "sweep_manifest.json",
+                    path_semantics=MANIFEST_PATH_SEMANTICS_RELATIVE,
+                ),
             },
         },
     )

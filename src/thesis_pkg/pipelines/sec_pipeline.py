@@ -18,6 +18,7 @@ from thesis_pkg.core.sec.filing_text import (
     FilingItemSchema,
     HEADER_SEARCH_LIMIT_DEFAULT,
     ParsedFilingSchema,
+    public_boundary_payload,
     RawTextSchema,
     _digits_only,
     _make_doc_id,
@@ -1021,6 +1022,7 @@ def process_year_parquet_extract_items(
                         period_end=row.get("period_end"),
                         regime=regime,
                         extraction_regime=extraction_regime_norm,
+                        diagnostics=True,
                     )
                 except Exception as exc:
                     print(
@@ -1100,6 +1102,7 @@ def process_year_parquet_extract_items(
                         "exists_by_regime": item.get("exists_by_regime"),
                         "item_status": item.get("item_status"),
                         "full_text": txt,
+                        **public_boundary_payload(item),
                     }
                     records.append(rec)
                     item_rows += 1
