@@ -416,6 +416,36 @@ from thesis_pkg.pipelines.refinitiv.lseg_ledger import LsegResumeCompatibilityEr
 
 LSEG_API_READY = is_lseg_available()
 LOCAL_SAMPLE_FINBERT_YEARS: tuple[int, ...] = (2006, 2007, 2008)
+LM2011_STAGES_REQUIRING_ITEMS_ANALYSIS: frozenset[str] = frozenset(
+    {
+        "text_features_mda",
+        "return_regression_panel_mda",
+        "table_v_results",
+    }
+)
+LM2011_STAGES_REQUIRING_DOC_OWNERSHIP: frozenset[str] = frozenset(
+    {
+        "event_panel",
+        "sue_panel",
+        "return_regression_panel_full_10k",
+        "return_regression_panel_mda",
+        "sue_regression_panel",
+        "table_iv_results",
+        "table_v_results",
+        "table_vi_results",
+        "table_viii_results",
+        "table_ia_i_results",
+        "trading_strategy_monthly_returns",
+        "table_ia_ii_results",
+    }
+)
+LM2011_STAGES_REQUIRING_DOC_ANALYST: frozenset[str] = frozenset(
+    {
+        "sue_panel",
+        "sue_regression_panel",
+        "table_viii_results",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -525,6 +555,10 @@ def _json_value(path: Path, key: str) -> object | None:
 
 def _existing_year_parquet_paths(year_dir: Path, years: list[int]) -> list[Path]:
     return [year_dir / f"{year}.parquet" for year in years if (year_dir / f"{year}.parquet").exists()]
+
+
+def _same_normalized_path(left: Path, right: Path) -> bool:
+    return left.expanduser().resolve() == right.expanduser().resolve()
 
 
 def _write_lm2011_backbone_artifact(
@@ -2468,6 +2502,81 @@ def main() -> None:
             lm2011_ccm_base_dir,
             MONTHLY_STOCK_CANDIDATES,
         )
+        lm2011_enabled_stage_names = sorted(
+            stage_name
+            for stage_name, enabled in LM2011_STAGE_FLAGS.items()
+            if enabled
+        )
+        lm2011_items_year_paths = _existing_year_parquet_paths(lm2011_items_analysis_dir, YEARS)
+        lm2011_items_can_be_built_here = (
+            RUN_GATED_ITEM_EXTRACTION
+            and _same_normalized_path(lm2011_items_analysis_dir, SEC_ITEMS_ANALYSIS_DIR)
+        )
+        lm2011_doc_ownership_path = (
+            REFINITIV_DOC_OWNERSHIP_LM2011_DIR / "refinitiv_lm2011_doc_ownership.parquet"
+        )
+        lm2011_doc_analyst_selected_path = (
+            REFINITIV_DOC_ANALYST_LM2011_DIR / "refinitiv_doc_analyst_selected.parquet"
+        )
+        lm2011_items_required_stages = sorted(
+            stage_name
+            for stage_name in lm2011_enabled_stage_names
+            if stage_name in LM2011_STAGES_REQUIRING_ITEMS_ANALYSIS
+        )
+        lm2011_doc_ownership_required_stages = sorted(
+            stage_name
+            for stage_name in lm2011_enabled_stage_names
+            if stage_name in LM2011_STAGES_REQUIRING_DOC_OWNERSHIP
+        )
+        lm2011_doc_analyst_required_stages = sorted(
+            stage_name
+            for stage_name in lm2011_enabled_stage_names
+            if stage_name in LM2011_STAGES_REQUIRING_DOC_ANALYST
+        )
+        print(
+            {
+                "lm2011_enabled_stages": lm2011_enabled_stage_names,
+                "lm2011_items_analysis_dir": str(lm2011_items_analysis_dir),
+                "lm2011_items_analysis_year_files": len(lm2011_items_year_paths),
+                "lm2011_items_can_be_built_here": lm2011_items_can_be_built_here,
+                "lm2011_doc_ownership_path": str(lm2011_doc_ownership_path),
+                "lm2011_doc_ownership_exists": lm2011_doc_ownership_path.exists(),
+                "lm2011_doc_analyst_selected_path": str(lm2011_doc_analyst_selected_path),
+                "lm2011_doc_analyst_selected_exists": lm2011_doc_analyst_selected_path.exists(),
+            }
+        )
+        if lm2011_items_required_stages and not lm2011_items_year_paths and not lm2011_items_can_be_built_here:
+            raise RuntimeError(
+                "LM2011 downstream stages require extracted yearly items, but no yearly item parquet files were "
+                f"found in {lm2011_items_analysis_dir}.\n"
+                f"Enabled stages blocked by this prerequisite: {lm2011_items_required_stages}\n"
+                "Set SEC_CCM_RUN_GATED_ITEM_EXTRACTION=true to build items_analysis in this run, or point "
+                "SEC_CCM_LM2011_ITEMS_ANALYSIS_DIR to an existing extracted items directory."
+            )
+        if (
+            lm2011_doc_ownership_required_stages
+            and not lm2011_doc_ownership_path.exists()
+            and not RUN_REFINITIV_DOC_OWNERSHIP_LM2011_FINALIZE
+        ):
+            raise RuntimeError(
+                "LM2011 downstream stages require the finalized document-ownership parquet, but it was not found.\n"
+                f"Expected path: {lm2011_doc_ownership_path}\n"
+                f"Enabled stages blocked by this prerequisite: {lm2011_doc_ownership_required_stages}\n"
+                "Set SEC_CCM_RUN_REFINITIV_DOC_OWNERSHIP_LM2011_FINALIZE=true to build it in this run, or place "
+                "the existing parquet at the expected location."
+            )
+        if (
+            lm2011_doc_analyst_required_stages
+            and not lm2011_doc_analyst_selected_path.exists()
+            and not RUN_REFINITIV_DOC_ANALYST_LM2011_SELECT
+        ):
+            raise RuntimeError(
+                "LM2011 downstream stages require the selected document-analyst parquet, but it was not found.\n"
+                f"Expected path: {lm2011_doc_analyst_selected_path}\n"
+                f"Enabled stages blocked by this prerequisite: {lm2011_doc_analyst_required_stages}\n"
+                "Set SEC_CCM_RUN_REFINITIV_DOC_ANALYST_LM2011_SELECT=true to build it in this run, or place the "
+                "existing parquet at the expected location."
+            )
         lm2011_paths = LM2011RunnerPaths(
             sample_root=WORK_ROOT,
             upstream_run_root=RUN_ROOT,
@@ -2479,12 +2588,8 @@ def main() -> None:
             ccm_base_dir=lm2011_ccm_base_dir,
             matched_clean_path=lm2011_matched_clean_path,
             items_analysis_dir=lm2011_items_analysis_dir,
-            doc_ownership_path=(
-                REFINITIV_DOC_OWNERSHIP_LM2011_DIR / "refinitiv_lm2011_doc_ownership.parquet"
-            ),
-            doc_analyst_selected_path=(
-                REFINITIV_DOC_ANALYST_LM2011_DIR / "refinitiv_doc_analyst_selected.parquet"
-            ),
+            doc_ownership_path=lm2011_doc_ownership_path,
+            doc_analyst_selected_path=lm2011_doc_analyst_selected_path,
             filingdates_path=_resolve_optional_ccm_parquet_artifact(
                 lm2011_ccm_base_dir,
                 ("filingdates.parquet",),
@@ -2586,6 +2691,36 @@ def main() -> None:
                 else tuple(YEARS)
             )
         )
+        finbert_source_year_paths = _existing_year_parquet_paths(
+            finbert_source_items_dir,
+            list(finbert_year_filter),
+        )
+        finbert_missing_years = sorted(
+            set(finbert_year_filter) - {int(path.stem) for path in finbert_source_year_paths}
+        )
+        finbert_source_items_can_be_built_here = (
+            RUN_GATED_ITEM_EXTRACTION
+            and _same_normalized_path(finbert_source_items_dir, SEC_ITEMS_ANALYSIS_DIR)
+        )
+        print(
+            {
+                "finbert_source_items_dir": str(finbert_source_items_dir),
+                "finbert_requested_year_count": len(finbert_year_filter),
+                "finbert_available_source_year_files": len(finbert_source_year_paths),
+                "finbert_missing_source_years": finbert_missing_years[:10],
+                "finbert_source_items_can_be_built_here": finbert_source_items_can_be_built_here,
+                "finbert_backbone_path": str(finbert_backbone_path),
+                "finbert_backbone_exists": finbert_backbone_path.exists(),
+            }
+        )
+        if RUN_FINBERT_PREPROCESS and finbert_missing_years and not finbert_source_items_can_be_built_here:
+            raise RuntimeError(
+                "FinBERT preprocessing requires extracted yearly item parquet files for the requested filing years, "
+                f"but they were not found in {finbert_source_items_dir}.\n"
+                f"Missing years (first 10 shown): {finbert_missing_years[:10]}\n"
+                "Set SEC_CCM_RUN_GATED_ITEM_EXTRACTION=true to build items_analysis in this run, or point "
+                "SEC_CCM_FINBERT_SOURCE_ITEMS_DIR to an existing extracted items directory."
+            )
         finbert_analysis_cfg = FinbertAnalysisRunConfig(
             source_items_dir=finbert_source_items_dir,
             out_root=FINBERT_OUTPUT_DIR,
