@@ -463,6 +463,74 @@ def test_finbert_item_analysis_runner_preprocess_only_uses_backbone_path(
     assert exit_code == 0
     run_cfg = captured["run_cfg"]
     assert run_cfg.target_doc_universe_path == backbone_path.resolve()
+    assert run_cfg.sentence_dataset.postprocess_policy == "reference_stitch_protect_v3"
+
+
+def test_finbert_item_analysis_runner_default_sentence_postprocess_policy(
+    tmp_path: Path,
+) -> None:
+    from thesis_pkg.notebooks_and_scripts import finbert_item_analysis_runner as runner
+
+    source_dir = tmp_path / "items_analysis"
+    output_dir = tmp_path / "runs"
+    source_dir.mkdir(parents=True)
+
+    run_cfg = runner._resolve_run_config(
+        runner.parse_args(
+            [
+                "--data-profile",
+                "EXPLICIT",
+                "--source-items-dir",
+                str(source_dir),
+                "--output-dir",
+                str(output_dir),
+            ]
+        )
+    )
+
+    assert run_cfg.sentence_dataset.postprocess_policy == "reference_stitch_protect_v3"
+
+
+def test_finbert_item_analysis_runner_can_override_sentence_postprocess_policy(
+    tmp_path: Path,
+) -> None:
+    from thesis_pkg.notebooks_and_scripts import finbert_item_analysis_runner as runner
+
+    source_dir = tmp_path / "items_analysis"
+    output_dir = tmp_path / "runs"
+    source_dir.mkdir(parents=True)
+
+    run_cfg_none = runner._resolve_run_config(
+        runner.parse_args(
+            [
+                "--data-profile",
+                "EXPLICIT",
+                "--source-items-dir",
+                str(source_dir),
+                "--output-dir",
+                str(output_dir),
+                "--sentence-postprocess-policy",
+                "none",
+            ]
+        )
+    )
+    run_cfg_v2 = runner._resolve_run_config(
+        runner.parse_args(
+            [
+                "--data-profile",
+                "EXPLICIT",
+                "--source-items-dir",
+                str(source_dir),
+                "--output-dir",
+                str(output_dir),
+                "--sentence-postprocess-policy",
+                "item7_reference_stitch_protect_v2",
+            ]
+        )
+    )
+
+    assert run_cfg_none.sentence_dataset.postprocess_policy == "none"
+    assert run_cfg_v2.sentence_dataset.postprocess_policy == "item7_reference_stitch_protect_v2"
 
 
 def test_run_finbert_pipeline_analysis_only_reuses_existing_preprocessing(

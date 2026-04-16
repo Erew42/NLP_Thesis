@@ -11,6 +11,7 @@ try:
 except ImportError:  # pragma: no cover - exercised only when the dependency is missing
     sm = None
 
+from thesis_pkg.core.ccm.sec_ccm_contracts import share_turnover_ratio
 from thesis_pkg.core.ccm.lm2011 import (
     _build_lm2011_sample_backbone_stage_frames,
     attach_eligible_quarterly_accounting,
@@ -449,7 +450,7 @@ def _prepare_table_i_base_frame(
         .with_columns(
             _price_expr_from_available_columns(
                 with_pre_market_schema,
-                candidates=("FINAL_PRC", "PRC"),
+                candidates=("pre_filing_final_prc", "pre_filing_prc"),
                 label="event base frame",
             ).alias("pre_filing_price"),
             pl.col("KYPERMNO").cast(pl.Int32, strict=False),
@@ -877,17 +878,16 @@ def _build_lm2011_event_screen_surface(docs_df: pl.DataFrame, daily_df: pl.DataF
     pre_alpha = pre_alpha.with_columns(pl.col("doc_id").cast(pl.Utf8, strict=False))
     post_alpha = post_alpha.with_columns(pl.col("doc_id").cast(pl.Utf8, strict=False))
 
-    return (
+    surface = (
         docs_df.join(event_summary, on="doc_id", how="left")
         .join(abnormal_event, on="doc_id", how="left")
         .join(pre_alpha, on="doc_id", how="left")
         .join(post_alpha, on="doc_id", how="left")
         .with_columns(
             (pl.col("_event_stock_gross") - pl.col("_event_market_gross")).alias("filing_period_excess_return"),
-            (
-                pl.when(pl.col("event_shares").is_not_null() & (pl.col("event_shares") > 0))
-                .then(pl.col("_turnover_volume_sum") / pl.col("event_shares"))
-                .otherwise(None)
+            share_turnover_ratio(
+                volume=pl.col("_turnover_volume_sum"),
+                shrout=pl.col("event_shares"),
             ).alias("share_turnover"),
             pl.when(pl.col("event_exchcd") == 3)
             .then(pl.lit(1))
@@ -896,6 +896,11 @@ def _build_lm2011_event_screen_surface(docs_df: pl.DataFrame, daily_df: pl.DataF
             .alias("nasdaq_dummy"),
         )
     )
+    return _project_public_event_screen_surface(surface)
+
+
+def _project_public_event_screen_surface(surface_df: pl.DataFrame) -> pl.DataFrame:
+    return surface_df.select(_empty_event_screen_surface_df().columns)
 
 
 def _build_lm2011_event_screen_surface_batched(
@@ -1332,9 +1337,9 @@ def _attach_pre_filing_price_and_prior_month_price(event_panel_df: pl.DataFrame,
     )
     out = out.join(exact_pre_filing, on=["KYPERMNO", "pre_filing_trade_date"], how="left")
     pre_filing_exprs = []
+    pre_filing_exprs.append(pl.col("_joined_pre_filing_price").cast(pl.Float64, strict=False))
     if "pre_filing_price" in event_schema:
         pre_filing_exprs.append(pl.col("pre_filing_price").cast(pl.Float64, strict=False))
-    pre_filing_exprs.append(pl.col("_joined_pre_filing_price").cast(pl.Float64, strict=False))
     out = out.with_columns(pl.coalesce(pre_filing_exprs).alias("pre_filing_price"))
 
     lookup = out.with_columns(

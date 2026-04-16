@@ -46,6 +46,8 @@ from thesis_pkg.benchmarking import FinbertSentencePreprocessingRunConfig
 from thesis_pkg.benchmarking import FinbertSentencePreprocessingRunArtifacts
 from thesis_pkg.benchmarking import FinbertSectionUniverseConfig
 from thesis_pkg.benchmarking import FinbertRuntimeConfig
+from thesis_pkg.benchmarking import ALLOWED_SENTENCE_POSTPROCESS_POLICIES
+from thesis_pkg.benchmarking import DEFAULT_RUNNER_SENTENCE_POSTPROCESS_POLICY
 from thesis_pkg.benchmarking import SentenceDatasetConfig
 from thesis_pkg.benchmarking import run_finbert_sentence_parquet_inference
 from thesis_pkg.benchmarking import run_finbert_sentence_preprocessing
@@ -100,6 +102,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--run-name", type=str, default=None)
     parser.add_argument("--years", type=int, nargs="*", default=None)
     parser.add_argument("--batch-profile", choices=tuple(BATCH_PRESETS), default="baseline")
+    parser.add_argument(
+        "--sentence-postprocess-policy",
+        choices=ALLOWED_SENTENCE_POSTPROCESS_POLICIES,
+        default=DEFAULT_RUNNER_SENTENCE_POSTPROCESS_POLICY,
+    )
     parser.add_argument("--device", type=str, default=None)
     parser.add_argument("--write-sentence-scores", action="store_true")
     parser.add_argument(
@@ -141,7 +148,9 @@ def _resolve_run_config(args: argparse.Namespace) -> FinbertAnalysisRunConfig:
         batch_config=BATCH_PRESETS[args.batch_profile],
         section_universe=FinbertSectionUniverseConfig(source_items_dir=source_items_dir),
         runtime=FinbertRuntimeConfig(device=args.device),
-        sentence_dataset=SentenceDatasetConfig(),
+        sentence_dataset=SentenceDatasetConfig(
+            postprocess_policy=args.sentence_postprocess_policy,
+        ),
         backbone_path=backbone_path,
         year_filter=year_filter,
         write_sentence_scores=args.write_sentence_scores,

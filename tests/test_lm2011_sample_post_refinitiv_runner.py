@@ -744,6 +744,7 @@ def test_main_writes_expected_artifacts_and_manifest_for_stubbed_run(
     assert manifest["elapsed_seconds"] is not None
     assert manifest["failed_stage"] is None
     assert manifest["config"]["full_10k_cleaning_contract"] == "lm2011_paper"
+    assert manifest["config"]["raw_mda_cleaning_policy_id"] == "raw_item_text"
     assert manifest["config"]["text_feature_batch_size"] == 1000
     assert manifest["config"]["event_window_doc_batch_size"] == 250
     assert manifest["resolved_inputs"]["ff_monthly_csv_path"].endswith("F-F_Research_Data_Factors.csv")
@@ -1038,6 +1039,69 @@ def test_resolve_paths_honors_colab_style_override_paths(tmp_path: Path) -> None
     assert paths.items_analysis_dir == items_analysis_dir.resolve()
     assert paths.ccm_base_dir == ccm_base_dir.resolve()
     assert paths.filingdates_path == (ccm_nested / "filingdates.parquet").resolve()
+
+
+def test_main_delegates_to_shared_lm2011_pipeline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    sample_root, upstream_run_root, additional_data_dir, output_dir = _build_temp_layout(tmp_path)
+    captured: dict[str, object] = {}
+
+    def _capture_run(run_cfg: runner.LM2011PostRefinitivRunConfig) -> int:
+        captured["run_cfg"] = run_cfg
+        return 0
+
+    monkeypatch.setattr(runner, "run_lm2011_post_refinitiv_pipeline", _capture_run)
+
+    exit_code = runner.main(
+        [
+            "--sample-root",
+            str(sample_root),
+            "--upstream-run-root",
+            str(upstream_run_root),
+            "--additional-data-dir",
+            str(additional_data_dir),
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    assert exit_code == 0
+    run_cfg = captured["run_cfg"]
+    assert isinstance(run_cfg, runner.LM2011PostRefinitivRunConfig)
+    assert run_cfg.paths.output_dir == output_dir.resolve()
+    assert set(run_cfg.enabled_stages) == set(runner.LM2011_ALL_STAGE_NAMES)
+    assert run_cfg.fail_closed_for_enabled_stages is False
+
+
+def test_shared_lm2011_pipeline_fails_closed_for_enabled_stage(tmp_path: Path) -> None:
+    sample_root, upstream_run_root, additional_data_dir, output_dir = _build_temp_layout(tmp_path)
+    paths = runner._resolve_paths(
+        runner.parse_args(
+            [
+                "--sample-root",
+                str(sample_root),
+                "--upstream-run-root",
+                str(upstream_run_root),
+                "--additional-data-dir",
+                str(additional_data_dir),
+                "--output-dir",
+                str(output_dir),
+            ]
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="LM2011 stage text_features_full_10k"):
+        runner.run_lm2011_post_refinitiv_pipeline(
+            runner.LM2011PostRefinitivRunConfig(
+                paths=runner.RunnerPaths(
+                    **{
+                        **paths.__dict__,
+                        "year_merged_dir": tmp_path / "missing_year_merged",
+                    }
+                ),
+                enabled_stages=("text_features_full_10k",),
+                fail_closed_for_enabled_stages=True,
+            )
+        )
 
 
 @pytest.mark.skipif(

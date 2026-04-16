@@ -8,6 +8,8 @@ from pathlib import Path
 
 import polars as pl
 
+from thesis_pkg.core.ccm.sec_ccm_contracts import event_market_equity_millions
+
 
 GVKEY_DTYPE = pl.Int32
 _MIN_VALID_YEAR = 1900
@@ -80,6 +82,27 @@ def _resolve_first_existing(schema: pl.Schema, candidates: tuple[str, ...], labe
         if candidate in schema:
             return candidate
     raise ValueError(f"{label} missing any of expected columns: {list(candidates)}")
+
+
+def _assert_unique_key_pairs(
+    lf: pl.LazyFrame,
+    *,
+    key_cols: tuple[str, str],
+    label: str,
+) -> None:
+    duplicate_df = (
+        lf.group_by(list(key_cols))
+        .agg(pl.len().alias("_duplicate_count"))
+        .filter(pl.col("_duplicate_count") > 1)
+        .limit(5)
+        .collect()
+    )
+    if duplicate_df.is_empty():
+        return
+    raise ValueError(
+        f"{label} contains duplicate key pairs for {list(key_cols)}. "
+        f"Examples: {duplicate_df.to_dicts()}"
+    )
 
 
 def _float_expr(col_name: str) -> pl.Expr:
@@ -697,7 +720,11 @@ def attach_latest_annual_accounting(
     annual_schema = annual_accounting_panel_lf.collect_schema()
     tie_cols = [name for name in ("KEYSET", "FYYYY", "fyra") if name in annual_schema]
     annual_panel = (
-        annual_accounting_panel_lf.sort("gvkey_int", "accounting_period_end", *tie_cols)
+        annual_accounting_panel_lf.with_columns(
+            pl.col("gvkey_int").cast(GVKEY_DTYPE, strict=False),
+            pl.col("accounting_period_end").cast(pl.Date, strict=False),
+        )
+        .sort("gvkey_int", "accounting_period_end", *tie_cols)
         .unique(subset=["gvkey_int", "accounting_period_end"], keep="first")
     )
     annual_payload_schema = annual_panel.collect_schema()
@@ -1017,11 +1044,7 @@ def attach_pre_filing_market_data(
         ("CALDT", "daily_caldt"),
         "daily_panel",
     )
-    projected_cols = [
-        col
-        for col in ("TCAP", "PRC", "FINAL_PRC", "SHROUT", "VOL", "SHRCD", "EXCHCD")
-        if col in daily_schema
-    ]
+    projected_cols = ("TCAP", "PRC", "FINAL_PRC", "SHROUT", "VOL", "SHRCD", "EXCHCD")
     if "TCAP" not in daily_schema and ("PRC" not in daily_schema or "SHROUT" not in daily_schema):
         raise ValueError("daily_panel must contain TCAP or both PRC and SHROUT for event-date market equity")
 
@@ -1029,10 +1052,21 @@ def attach_pre_filing_market_data(
         daily_lf.select(
             pl.col(daily_permno_col).cast(pl.Int32, strict=False).alias("_daily_permno"),
             pl.col(daily_date_col).cast(pl.Date, strict=False).alias("_daily_trade_date"),
-            *[pl.col(col) for col in projected_cols],
+            *[
+                (
+                    pl.col(col)
+                    if col in daily_schema
+                    else pl.lit(None, dtype=pl.Float64 if col in {"TCAP", "PRC", "FINAL_PRC", "SHROUT", "VOL"} else pl.Int32)
+                ).alias(f"pre_filing_{col.lower()}")
+                for col in projected_cols
+            ],
         )
         .drop_nulls(subset=["_daily_permno", "_daily_trade_date"])
-        .unique(subset=["_daily_permno", "_daily_trade_date"], keep="first")
+    )
+    _assert_unique_key_pairs(
+        daily,
+        key_cols=("_daily_permno", "_daily_trade_date"),
+        label="LM2011 pre-filing daily join input",
     )
 
     filings = filings_lf.drop(
@@ -1052,14 +1086,10 @@ def attach_pre_filing_market_data(
         how="left",
     )
 
-    me_event_expr = pl.coalesce(
-        [
-            pl.col("TCAP").cast(pl.Float64, strict=False),
-            (
-                pl.col("PRC").cast(pl.Float64, strict=False).abs()
-                * pl.col("SHROUT").cast(pl.Float64, strict=False)
-            ),
-        ]
+    me_event_expr = event_market_equity_millions(
+        tcap="pre_filing_tcap",
+        prc="pre_filing_prc",
+        shrout="pre_filing_shrout",
     )
 
     schema = joined.collect_schema()

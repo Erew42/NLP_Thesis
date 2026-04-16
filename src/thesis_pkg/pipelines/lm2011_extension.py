@@ -9,6 +9,7 @@ from pathlib import Path
 import polars as pl
 
 from thesis_pkg.core.sec.lm2011_text import build_lm2011_text_features_mda
+from thesis_pkg.core.sec.lm2011_text import RAW_ITEM_TEXT_CLEANING_POLICY_ID
 from thesis_pkg.pipelines.lm2011_pipeline import _apply_lm2011_regression_transforms
 from thesis_pkg.pipelines.lm2011_pipeline import _require_columns
 from thesis_pkg.pipelines.lm2011_regressions import _attach_ff48_industries
@@ -299,7 +300,12 @@ def build_lm2011_extension_dictionary_features(
         frames.append(
             scored_lf.with_columns(
                 pl.lit(text_scope, dtype=pl.Utf8).alias("text_scope"),
-                pl.lit(None, dtype=pl.Utf8).alias("cleaning_policy_id"),
+                pl.coalesce(
+                    [
+                        pl.col("cleaning_policy_id").cast(pl.Utf8, strict=False),
+                        pl.lit(RAW_ITEM_TEXT_CLEANING_POLICY_ID, dtype=pl.Utf8),
+                    ]
+                ).alias("cleaning_policy_id"),
                 pl.lit(dictionary_family, dtype=pl.Utf8).alias("dictionary_family"),
                 pl.col("total_token_count_mda").cast(pl.Int32, strict=False).alias("total_token_count"),
                 pl.col("token_count_mda").cast(pl.Int32, strict=False).alias("token_count"),
@@ -370,6 +376,12 @@ def build_lm2011_extension_dictionary_features_from_cleaned_scopes(
                         pl.lit(text_scope, dtype=pl.Utf8),
                     ]
                 ).alias("text_scope"),
+                pl.coalesce(
+                    [
+                        pl.col("cleaning_policy_id_right").cast(pl.Utf8, strict=False),
+                        pl.col("cleaning_policy_id").cast(pl.Utf8, strict=False),
+                    ]
+                ).alias("cleaning_policy_id"),
                 pl.lit(dictionary_family, dtype=pl.Utf8).alias("dictionary_family"),
                 pl.col("total_token_count_mda").cast(pl.Int32, strict=False).alias("total_token_count"),
                 pl.col("token_count_mda").cast(pl.Int32, strict=False).alias("token_count"),
@@ -617,12 +629,26 @@ def _has_non_null_column(lf: pl.LazyFrame, column: str) -> bool:
     return bool(lf.select(pl.col(column).is_not_null().any()).collect().item())
 
 
+def _has_cleaned_scope_policy(lf: pl.LazyFrame, column: str) -> bool:
+    schema = lf.collect_schema()
+    if column not in schema:
+        return False
+    return bool(
+        lf.select(
+            (
+                pl.col(column).is_not_null()
+                & pl.col(column).cast(pl.Utf8, strict=False).ne(pl.lit(RAW_ITEM_TEXT_CLEANING_POLICY_ID))
+            ).any()
+        ).collect().item()
+    )
+
+
 def _validate_cleaned_scope_alignment(
     dictionary_surface_lf: pl.LazyFrame,
     model_surface_lf: pl.LazyFrame,
 ) -> None:
-    dictionary_cleaned = _has_non_null_column(dictionary_surface_lf, "cleaning_policy_id")
-    model_cleaned = _has_non_null_column(model_surface_lf, "cleaning_policy_id")
+    dictionary_cleaned = _has_cleaned_scope_policy(dictionary_surface_lf, "cleaning_policy_id")
+    model_cleaned = _has_cleaned_scope_policy(model_surface_lf, "cleaning_policy_id")
     if not dictionary_cleaned and not model_cleaned:
         return
     if not dictionary_cleaned or not model_cleaned:

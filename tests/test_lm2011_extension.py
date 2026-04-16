@@ -112,6 +112,7 @@ def test_extension_dictionary_features_score_item_scopes() -> None:
     assert features.height == 4
     assert set(features.get_column("text_scope").to_list()) == {"item_7_mda", "item_1a_risk_factors"}
     assert features.get_column("dictionary_family").unique().to_list() == ["lm2011_frozen"]
+    assert features["cleaning_policy_id"].unique().to_list() == ["raw_item_text"]
     item_7 = features.filter(
         (pl.col("doc_id") == "doc_owner") & (pl.col("text_scope") == "item_7_mda")
     ).row(0, named=True)

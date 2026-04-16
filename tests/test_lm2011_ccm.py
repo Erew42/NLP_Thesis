@@ -318,10 +318,10 @@ def test_attach_pre_filing_market_data_prefers_tcap_and_falls_back_to_price_time
 
     attached = attach_pre_filing_market_data(filings.lazy(), daily.lazy()).collect().sort("doc_id")
 
-    assert attached.filter(pl.col("doc_id") == "fallback").select("market_equity_me_event").item() == 50.0
-    assert attached.filter(pl.col("doc_id") == "fallback").select("bm_event").item() == 1.0
-    assert attached.filter(pl.col("doc_id") == "preferred").select("market_equity_me_event").item() == 80.0
-    assert attached.filter(pl.col("doc_id") == "preferred").select("bm_event").item() == 0.5
+    assert attached.filter(pl.col("doc_id") == "fallback").select("market_equity_me_event").item() == 0.05
+    assert attached.filter(pl.col("doc_id") == "fallback").select("bm_event").item() == 1000.0
+    assert attached.filter(pl.col("doc_id") == "preferred").select("market_equity_me_event").item() == 0.08
+    assert attached.filter(pl.col("doc_id") == "preferred").select("bm_event").item() == 500.0
 
 
 def test_attach_lm2011_industry_classifications_uses_historical_sic_then_description_fallback(

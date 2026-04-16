@@ -53,6 +53,7 @@ from thesis_pkg.core.sec.lm2011_dictionary import load_lm2011_dictionary_inputs
 from thesis_pkg.core.sec.lm2011_dictionary import load_lm2011_master_dictionary_words
 from thesis_pkg.core.sec.lm2011_dictionary import load_lm2011_word_list
 from thesis_pkg.core.sec.lm2011_text import (
+    RAW_ITEM_TEXT_CLEANING_POLICY_ID,
     build_lm2011_text_features_full_10k,
     build_lm2011_text_features_mda,
 )
@@ -171,6 +172,15 @@ STAGE_ARTIFACT_FILENAMES: dict[str, str] = {
     "table_ia_ii_results": "lm2011_table_ia_ii_results.parquet",
 }
 MANIFEST_FILENAME = "lm2011_sample_run_manifest.json"
+LM2011_ALL_STAGE_NAMES: tuple[str, ...] = tuple(STAGE_ARTIFACT_FILENAMES)
+LM2011_OPTIONAL_STAGE_DEFAULTS_FALSE = frozenset(
+    {
+        "ff_factors_monthly_with_mom_normalized",
+        "trading_strategy_monthly_returns",
+        "table_ia_ii_results",
+    }
+)
+SKIPPED_STAGE_DISABLED = "disabled_by_run_config"
 
 
 @dataclass(frozen=True)
@@ -206,6 +216,18 @@ class RunnerPaths:
     full_10k_cleaning_contract: str
     text_feature_batch_size: int
     event_window_doc_batch_size: int
+
+
+@dataclass(frozen=True)
+class LM2011PostRefinitivRunConfig:
+    paths: RunnerPaths
+    enabled_stages: tuple[str, ...] = LM2011_ALL_STAGE_NAMES
+    fail_closed_for_enabled_stages: bool = False
+
+    def __post_init__(self) -> None:
+        unknown = sorted(set(self.enabled_stages) - set(LM2011_ALL_STAGE_NAMES))
+        if unknown:
+            raise ValueError(f"Unknown LM2011 stage names: {unknown}")
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -887,6 +909,7 @@ def _build_manifest(paths: RunnerPaths) -> dict[str, Any]:
         },
         "config": {
             "full_10k_cleaning_contract": paths.full_10k_cleaning_contract,
+            "raw_mda_cleaning_policy_id": RAW_ITEM_TEXT_CLEANING_POLICY_ID,
             "text_feature_batch_size": paths.text_feature_batch_size,
             "event_window_doc_batch_size": paths.event_window_doc_batch_size,
         },
@@ -1034,9 +1057,52 @@ def _describe_missing_paths(path_map: dict[str, Path | None]) -> str:
     return ", ".join(missing)
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    args = parse_args(argv)
-    paths = _resolve_paths(args)
+def _stage_enabled(run_cfg: LM2011PostRefinitivRunConfig, stage_name: str) -> bool:
+    return stage_name in run_cfg.enabled_stages
+
+
+def _stage_disabled(
+    run_cfg: LM2011PostRefinitivRunConfig,
+    manifest: dict[str, Any],
+    manifest_path: Path,
+    stage_name: str,
+) -> bool:
+    if _stage_enabled(run_cfg, stage_name):
+        return False
+    _record_stage_skipped(
+        manifest,
+        stage_name=stage_name,
+        reason=SKIPPED_STAGE_DISABLED,
+        detail="stage disabled by run configuration",
+        manifest_path=manifest_path,
+    )
+    return True
+
+
+def _skip_or_raise_stage(
+    run_cfg: LM2011PostRefinitivRunConfig,
+    manifest: dict[str, Any],
+    manifest_path: Path,
+    *,
+    stage_name: str,
+    reason: str,
+    detail: str,
+) -> None:
+    if run_cfg.fail_closed_for_enabled_stages:
+        raise RuntimeError(
+            f"LM2011 stage {stage_name} is enabled but missing required inputs: {detail}"
+        )
+    _record_stage_skipped(
+        manifest,
+        stage_name=stage_name,
+        reason=reason,
+        detail=detail,
+        manifest_path=manifest_path,
+    )
+
+
+def run_lm2011_post_refinitiv_pipeline(run_cfg: LM2011PostRefinitivRunConfig) -> int:
+    paths = run_cfg.paths
     paths.output_dir.mkdir(parents=True, exist_ok=True)
     manifest = _build_manifest(paths)
     manifest_path = paths.output_dir / MANIFEST_FILENAME
@@ -1081,7 +1147,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
 
         current_stage_name = "sample_backbone"
-        if paths.sample_backbone_path is not None:
+        if _stage_disabled(run_cfg, manifest, manifest_path, "sample_backbone"):
+            pass
+        elif paths.sample_backbone_path is not None:
             sample_backbone_lf = _write_stage(
                 manifest,
                 manifest_path=manifest_path,
@@ -1108,8 +1176,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 ),
             )
         else:
-            _record_stage_skipped(
+            _skip_or_raise_stage(
+                run_cfg,
                 manifest,
+                manifest_path,
                 stage_name="sample_backbone",
                 reason=SKIPPED_MISSING_SEEDED_UPSTREAM,
                 detail=_describe_missing_paths(
@@ -1119,11 +1189,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "filingdates": paths.filingdates_path,
                     }
                 ),
-                manifest_path=manifest_path,
             )
 
         current_stage_name = "annual_accounting_panel"
-        if not _missing_required_paths(
+        if _stage_disabled(run_cfg, manifest, manifest_path, "annual_accounting_panel"):
+            pass
+        elif not _missing_required_paths(
             paths.annual_balance_sheet_path,
             paths.annual_income_statement_path,
             paths.annual_period_descriptor_path,
@@ -1150,8 +1221,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 ),
             )
         else:
-            _record_stage_skipped(
+            _skip_or_raise_stage(
+                run_cfg,
                 manifest,
+                manifest_path,
                 stage_name="annual_accounting_panel",
                 reason=SKIPPED_MISSING_OPTIONAL_INPUT,
                 detail=_describe_missing_paths(
@@ -1162,11 +1235,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "annual_fiscal_market": paths.annual_fiscal_market_path,
                     }
                 ),
-                manifest_path=manifest_path,
             )
 
         current_stage_name = "quarterly_accounting_panel"
-        if not _missing_required_paths(
+        if _stage_disabled(run_cfg, manifest, manifest_path, "quarterly_accounting_panel"):
+            pass
+        elif not _missing_required_paths(
             paths.quarterly_balance_sheet_path,
             paths.quarterly_income_statement_path,
             paths.quarterly_period_descriptor_path,
@@ -1183,8 +1257,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 ),
             )
         else:
-            _record_stage_skipped(
+            _skip_or_raise_stage(
+                run_cfg,
                 manifest,
+                manifest_path,
                 stage_name="quarterly_accounting_panel",
                 reason=SKIPPED_MISSING_OPTIONAL_INPUT,
                 detail=_describe_missing_paths(
@@ -1194,11 +1270,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "quarterly_period_descriptor": paths.quarterly_period_descriptor_path,
                     }
                 ),
-                manifest_path=manifest_path,
             )
 
         current_stage_name = "ff_factors_daily_normalized"
-        if paths.ff_daily_csv_path.exists():
+        if _stage_disabled(run_cfg, manifest, manifest_path, "ff_factors_daily_normalized"):
+            pass
+        elif paths.ff_daily_csv_path.exists():
             ff_factors_daily_lf = _write_stage(
                 manifest,
                 manifest_path=manifest_path,
@@ -1207,16 +1284,24 @@ def main(argv: Sequence[str] | None = None) -> int:
                 frame=_load_ff_factors_daily_lf(paths.ff_daily_csv_path),
             )
         else:
-            _record_stage_skipped(
+            _skip_or_raise_stage(
+                run_cfg,
                 manifest,
+                manifest_path,
                 stage_name="ff_factors_daily_normalized",
                 reason=SKIPPED_MISSING_OPTIONAL_INPUT,
                 detail="ff_daily_csv_path",
-                manifest_path=manifest_path,
             )
 
         current_stage_name = "ff_factors_monthly_with_mom_normalized"
-        if paths.ff_monthly_with_mom_path is not None:
+        if _stage_disabled(
+            run_cfg,
+            manifest,
+            manifest_path,
+            "ff_factors_monthly_with_mom_normalized",
+        ):
+            pass
+        elif paths.ff_monthly_with_mom_path is not None:
             if paths.ff_monthly_with_mom_path.exists():
                 monthly_factor_input_lf = _scan_ff_factors_monthly_with_mom_lf(paths.ff_monthly_with_mom_path)
                 _require_unique_month_end(monthly_factor_input_lf, "monthly FF+momentum factors")
@@ -1228,12 +1313,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                     frame=monthly_factor_input_lf,
                 )
             else:
-                _record_stage_skipped(
+                _skip_or_raise_stage(
+                    run_cfg,
                     manifest,
+                    manifest_path,
                     stage_name="ff_factors_monthly_with_mom_normalized",
                     reason=SKIPPED_MISSING_OPTIONAL_INPUT,
                     detail="ff_monthly_with_mom_path",
-                    manifest_path=manifest_path,
                 )
         elif paths.ff_monthly_csv_path.exists() and paths.momentum_monthly_csv_path.exists():
             ff_factors_monthly_with_mom_lf = _write_stage(
@@ -1247,8 +1333,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 ),
             )
         else:
-            _record_stage_skipped(
+            _skip_or_raise_stage(
+                run_cfg,
                 manifest,
+                manifest_path,
                 stage_name="ff_factors_monthly_with_mom_normalized",
                 reason=SKIPPED_MISSING_OPTIONAL_INPUT,
                 detail=_describe_missing_paths(
@@ -1257,7 +1345,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "momentum_monthly_csv_path": paths.momentum_monthly_csv_path,
                     }
                 ),
-                manifest_path=manifest_path,
             )
 
         text_year_merged_lf = year_merged_lf
@@ -1274,7 +1361,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
 
         current_stage_name = "text_features_full_10k"
-        if text_year_merged_lf is not None:
+        if _stage_disabled(run_cfg, manifest, manifest_path, "text_features_full_10k"):
+            pass
+        elif text_year_merged_lf is not None:
             text_features_full_10k_lf = _write_stage(
                 manifest,
                 manifest_path=manifest_path,
@@ -1291,16 +1380,19 @@ def main(argv: Sequence[str] | None = None) -> int:
                 warnings=text_stage_warnings,
             )
         else:
-            _record_stage_skipped(
+            _skip_or_raise_stage(
+                run_cfg,
                 manifest,
+                manifest_path,
                 stage_name="text_features_full_10k",
                 reason=SKIPPED_MISSING_OPTIONAL_INPUT,
                 detail="year_merged",
-                manifest_path=manifest_path,
             )
 
         current_stage_name = "text_features_mda"
-        if text_items_analysis_lf is not None:
+        if _stage_disabled(run_cfg, manifest, manifest_path, "text_features_mda"):
+            pass
+        elif text_items_analysis_lf is not None:
             text_features_mda_lf = _write_stage(
                 manifest,
                 manifest_path=manifest_path,
@@ -1316,16 +1408,19 @@ def main(argv: Sequence[str] | None = None) -> int:
                 warnings=text_stage_warnings,
             )
         else:
-            _record_stage_skipped(
+            _skip_or_raise_stage(
+                run_cfg,
                 manifest,
+                manifest_path,
                 stage_name="text_features_mda",
                 reason=SKIPPED_MISSING_SEEDED_UPSTREAM,
                 detail="items_analysis",
-                manifest_path=manifest_path,
             )
 
         current_stage_name = "event_screen_surface"
-        if (
+        if _stage_disabled(run_cfg, manifest, manifest_path, "event_screen_surface"):
+            pass
+        elif (
             sample_backbone_lf is not None
             and annual_accounting_panel_lf is not None
             and ff_factors_daily_lf is not None
@@ -1348,8 +1443,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 ),
             )
         else:
-            _record_stage_skipped(
+            _skip_or_raise_stage(
+                run_cfg,
                 manifest,
+                manifest_path,
                 stage_name="event_screen_surface",
                 reason=SKIPPED_MISSING_OPTIONAL_INPUT,
                 detail=_describe_missing_paths(
@@ -1361,11 +1458,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "daily_panel_path": paths.daily_panel_path,
                     }
                 ),
-                manifest_path=manifest_path,
             )
 
         current_stage_name = "table_i_sample_creation"
-        if (
+        if _stage_disabled(run_cfg, manifest, manifest_path, "table_i_sample_creation"):
+            pass
+        elif (
             event_screen_surface_lf is not None
             and year_merged_backbone_lf is not None
             and paths.matched_clean_path.exists()
@@ -1398,8 +1496,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 sample_end=dt.date(2008, 12, 31),
             )
         else:
-            _record_stage_skipped(
+            _skip_or_raise_stage(
+                run_cfg,
                 manifest,
+                manifest_path,
                 stage_name="table_i_sample_creation",
                 reason=SKIPPED_MISSING_OPTIONAL_INPUT,
                 detail=_describe_missing_paths(
@@ -1414,11 +1514,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "daily_panel_path": paths.daily_panel_path,
                     }
                 ),
-                manifest_path=manifest_path,
             )
 
         current_stage_name = "table_i_sample_creation_1994_2024"
-        if (
+        if _stage_disabled(
+            run_cfg,
+            manifest,
+            manifest_path,
+            "table_i_sample_creation_1994_2024",
+        ):
+            pass
+        elif (
             year_merged_backbone_lf is not None
             and paths.matched_clean_path.exists()
             and paths.filingdates_path is not None
@@ -1454,8 +1560,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 sample_end=dt.date(2024, 12, 31),
             )
         else:
-            _record_stage_skipped(
+            _skip_or_raise_stage(
+                run_cfg,
                 manifest,
+                manifest_path,
                 stage_name="table_i_sample_creation_1994_2024",
                 reason=SKIPPED_MISSING_OPTIONAL_INPUT,
                 detail=_describe_missing_paths(
@@ -1469,11 +1577,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "daily_panel_path": paths.daily_panel_path,
                     }
                 ),
-                manifest_path=manifest_path,
             )
 
         current_stage_name = "event_panel"
-        if (
+        if _stage_disabled(run_cfg, manifest, manifest_path, "event_panel"):
+            pass
+        elif (
             event_screen_surface_lf is not None
             and paths.doc_ownership_path.exists()
         ):
@@ -1494,8 +1603,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 ),
             )
         else:
-            _record_stage_skipped(
+            _skip_or_raise_stage(
+                run_cfg,
                 manifest,
+                manifest_path,
                 stage_name="event_panel",
                 reason=SKIPPED_MISSING_SEEDED_UPSTREAM,
                 detail=_describe_missing_paths(
@@ -1509,11 +1620,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "doc_ownership_path": paths.doc_ownership_path,
                     }
                 ),
-                manifest_path=manifest_path,
             )
 
         current_stage_name = "sue_panel"
-        if (
+        if _stage_disabled(run_cfg, manifest, manifest_path, "sue_panel"):
+            pass
+        elif (
             event_panel_lf is not None
             and quarterly_accounting_panel_lf is not None
             and paths.doc_analyst_selected_path.exists()
@@ -1532,8 +1644,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 ),
             )
         else:
-            _record_stage_skipped(
+            _skip_or_raise_stage(
+                run_cfg,
                 manifest,
+                manifest_path,
                 stage_name="sue_panel",
                 reason=SKIPPED_MISSING_SEEDED_UPSTREAM,
                 detail=_describe_missing_paths(
@@ -1544,7 +1658,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "daily_panel_path": paths.daily_panel_path,
                     }
                 ),
-                manifest_path=manifest_path,
             )
 
         can_run_regressions = not _missing_required_paths(
@@ -1554,7 +1667,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
 
         current_stage_name = "return_regression_panel_full_10k"
-        if event_panel_lf is not None and text_features_full_10k_lf is not None and can_run_regressions:
+        if _stage_disabled(
+            run_cfg,
+            manifest,
+            manifest_path,
+            "return_regression_panel_full_10k",
+        ):
+            pass
+        elif event_panel_lf is not None and text_features_full_10k_lf is not None and can_run_regressions:
             return_regression_panel_full_10k_lf = _write_stage(
                 manifest,
                 manifest_path=manifest_path,
@@ -1570,8 +1690,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 ),
             )
         else:
-            _record_stage_skipped(
+            _skip_or_raise_stage(
+                run_cfg,
                 manifest,
+                manifest_path,
                 stage_name="return_regression_panel_full_10k",
                 reason=SKIPPED_MISSING_OPTIONAL_INPUT,
                 detail=_describe_missing_paths(
@@ -1583,11 +1705,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "ff48_siccodes": paths.ff48_siccodes_path,
                     }
                 ),
-                manifest_path=manifest_path,
             )
 
         current_stage_name = "return_regression_panel_mda"
-        if event_panel_lf is not None and text_features_mda_lf is not None and can_run_regressions:
+        if _stage_disabled(run_cfg, manifest, manifest_path, "return_regression_panel_mda"):
+            pass
+        elif event_panel_lf is not None and text_features_mda_lf is not None and can_run_regressions:
             return_regression_panel_mda_lf = _write_stage(
                 manifest,
                 manifest_path=manifest_path,
@@ -1603,8 +1726,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 ),
             )
         else:
-            _record_stage_skipped(
+            _skip_or_raise_stage(
+                run_cfg,
                 manifest,
+                manifest_path,
                 stage_name="return_regression_panel_mda",
                 reason=SKIPPED_MISSING_OPTIONAL_INPUT,
                 detail=_describe_missing_paths(
@@ -1616,11 +1741,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "ff48_siccodes": paths.ff48_siccodes_path,
                     }
                 ),
-                manifest_path=manifest_path,
             )
 
         current_stage_name = "sue_regression_panel"
-        if sue_panel_lf is not None and text_features_full_10k_lf is not None and can_run_regressions:
+        if _stage_disabled(run_cfg, manifest, manifest_path, "sue_regression_panel"):
+            pass
+        elif sue_panel_lf is not None and text_features_full_10k_lf is not None and can_run_regressions:
             sue_regression_panel_lf = _write_stage(
                 manifest,
                 manifest_path=manifest_path,
@@ -1635,8 +1761,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 ),
             )
         else:
-            _record_stage_skipped(
+            _skip_or_raise_stage(
+                run_cfg,
                 manifest,
+                manifest_path,
                 stage_name="sue_regression_panel",
                 reason=SKIPPED_MISSING_OPTIONAL_INPUT,
                 detail=_describe_missing_paths(
@@ -1648,7 +1776,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "ff48_siccodes": paths.ff48_siccodes_path,
                     }
                 ),
-                manifest_path=manifest_path,
             )
 
         table_stage_specs = (
@@ -1710,6 +1837,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         for stage_name, builder, should_run in table_stage_specs:
             current_stage_name = stage_name
+            if _stage_disabled(run_cfg, manifest, manifest_path, stage_name):
+                continue
             if should_run:
                 _write_stage(
                     manifest,
@@ -1720,16 +1849,24 @@ def main(argv: Sequence[str] | None = None) -> int:
                     empty_reason=EMPTY_TABLE_REASON,
                 )
             else:
-                _record_stage_skipped(
+                _skip_or_raise_stage(
+                    run_cfg,
                     manifest,
+                    manifest_path,
                     stage_name=stage_name,
                     reason=SKIPPED_MISSING_OPTIONAL_INPUT,
                     detail="missing upstream regression inputs",
-                    manifest_path=manifest_path,
                 )
 
         current_stage_name = "trading_strategy_monthly_returns"
-        if (
+        if _stage_disabled(
+            run_cfg,
+            manifest,
+            manifest_path,
+            "trading_strategy_monthly_returns",
+        ):
+            pass
+        elif (
             paths.monthly_stock_path is not None
             and paths.monthly_stock_path.exists()
             and event_panel_lf is not None
@@ -1751,16 +1888,19 @@ def main(argv: Sequence[str] | None = None) -> int:
                 ),
             )
         else:
-            _record_stage_skipped(
+            _skip_or_raise_stage(
+                run_cfg,
                 manifest,
+                manifest_path,
                 stage_name="trading_strategy_monthly_returns",
                 reason=SKIPPED_MISSING_OPTIONAL_INPUT,
                 detail="monthly_stock_path",
-                manifest_path=manifest_path,
             )
 
         current_stage_name = "table_ia_ii_results"
-        if (
+        if _stage_disabled(run_cfg, manifest, manifest_path, "table_ia_ii_results"):
+            pass
+        elif (
             paths.monthly_stock_path is not None
             and paths.monthly_stock_path.exists()
             and ff_factors_monthly_with_mom_lf is not None
@@ -1784,8 +1924,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 empty_reason=EMPTY_TABLE_REASON,
             )
         else:
-            _record_stage_skipped(
+            _skip_or_raise_stage(
+                run_cfg,
                 manifest,
+                manifest_path,
                 stage_name="table_ia_ii_results",
                 reason=SKIPPED_MISSING_OPTIONAL_INPUT,
                 detail=_describe_missing_paths(
@@ -1800,7 +1942,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "year_merged": paths.year_merged_dir if year_merged_lf is not None else None,
                     }
                 ),
-                manifest_path=manifest_path,
             )
 
         completed_at_utc = _utc_timestamp()
@@ -1828,6 +1969,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         }
         _checkpoint_manifest(manifest, manifest_path)
         raise
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = parse_args(argv)
+    return run_lm2011_post_refinitiv_pipeline(
+        LM2011PostRefinitivRunConfig(paths=_resolve_paths(args))
+    )
 
 
 if __name__ == "__main__":

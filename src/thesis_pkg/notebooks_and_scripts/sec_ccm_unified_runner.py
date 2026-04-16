@@ -81,6 +81,16 @@ def _env_path(name: str, default: Path) -> Path:
     return Path(stripped).expanduser()
 
 
+def _env_optional_path(name: str) -> Path | None:
+    value = os.environ.get(name)
+    if value is None:
+        return None
+    stripped = value.strip()
+    if stripped.lower() in {"", "none", "null"}:
+        return None
+    return Path(stripped).expanduser()
+
+
 def _env_bool(name: str, default: bool) -> bool:
     value = os.environ.get(name)
     if value is None:
@@ -125,6 +135,17 @@ def _env_int_list(name: str, default: list[int]) -> list[int]:
     stripped = value.strip()
     if not stripped:
         return default
+    parsed = json.loads(stripped) if stripped.startswith("[") else stripped.split(",")
+    return [int(item) for item in parsed]
+
+
+def _env_optional_int_list(name: str) -> list[int] | None:
+    value = os.environ.get(name)
+    if value is None:
+        return None
+    stripped = value.strip()
+    if stripped.lower() in {"", "none", "null"}:
+        return None
     parsed = json.loads(stripped) if stripped.startswith("[") else stripped.split(",")
     return [int(item) for item in parsed]
 
@@ -226,6 +247,94 @@ def _resolve_ccm_parquet_artifact(base_dir: Path, parquet_name: str) -> Path:
     return _first_existing_path(*candidates)
 
 
+def _resolve_optional_ccm_parquet_artifact(base_dir: Path, parquet_names: tuple[str, ...]) -> Path | None:
+    for parquet_name in parquet_names:
+        try:
+            return _resolve_ccm_parquet_artifact(base_dir, parquet_name)
+        except FileNotFoundError:
+            continue
+    return None
+
+
+def _resolve_lm2011_additional_data_dir(work_root: Path) -> Path:
+    return _env_path(
+        "SEC_CCM_LM2011_ADDITIONAL_DATA_DIR",
+        _first_existing_path(
+            ROOT / "full_data_run" / "LM2011_additional_data",
+            ROOT / "LM2011_additional_data",
+            work_root / "LM2011_additional_data",
+            work_root / "Data" / "LM2011_additional_data",
+        ),
+    )
+
+
+def _resolve_stage_toggle(
+    env_name: str,
+    *,
+    umbrella_enabled: bool,
+    default_when_umbrella: bool,
+) -> bool:
+    explicit = _env_optional_bool(env_name, None)
+    if explicit is not None:
+        return explicit
+    return umbrella_enabled and default_when_umbrella
+
+
+def _resolve_finbert_batch_config(
+    *,
+    profile_name: str,
+    short_batch_size: int | None,
+    medium_batch_size: int | None,
+    long_batch_size: int | None,
+) -> BucketBatchConfig:
+    if profile_name not in FINBERT_BATCH_PRESETS:
+        raise ValueError(
+            f"Unknown SEC_CCM_FINBERT_BATCH_PROFILE={profile_name!r}; "
+            f"expected one of {sorted(FINBERT_BATCH_PRESETS)}"
+        )
+    base = FINBERT_BATCH_PRESETS[profile_name]
+    if short_batch_size is None and medium_batch_size is None and long_batch_size is None:
+        return base
+    return BucketBatchConfig(
+        name=f"{base.name}_custom",
+        short_batch_size=(
+            short_batch_size if short_batch_size is not None else base.short_batch_size
+        ),
+        medium_batch_size=(
+            medium_batch_size if medium_batch_size is not None else base.medium_batch_size
+        ),
+        long_batch_size=(
+            long_batch_size if long_batch_size is not None else base.long_batch_size
+        ),
+    )
+
+
+def _resolve_finbert_bucket_lengths(
+    *,
+    short_max_length: int | None,
+    medium_max_length: int | None,
+    long_max_length: int | None,
+) -> BucketLengthSpec:
+    base = BucketLengthSpec()
+    if (
+        short_max_length is None
+        and medium_max_length is None
+        and long_max_length is None
+    ):
+        return base
+    return BucketLengthSpec(
+        short_max_length=(
+            short_max_length if short_max_length is not None else base.short_max_length
+        ),
+        medium_max_length=(
+            medium_max_length if medium_max_length is not None else base.medium_max_length
+        ),
+        long_max_length=(
+            long_max_length if long_max_length is not None else base.long_max_length
+        ),
+    )
+
+
 ROOT = _resolve_repo_root()
 SRC = ROOT / "src"
 if SRC.exists() and str(SRC) not in sys.path:
@@ -233,6 +342,14 @@ if SRC.exists() and str(SRC) not in sys.path:
 
 import polars as pl
 
+from thesis_pkg.benchmarking import BucketBatchConfig
+from thesis_pkg.benchmarking import BucketLengthSpec
+from thesis_pkg.benchmarking import DEFAULT_RUNNER_SENTENCE_POSTPROCESS_POLICY
+from thesis_pkg.benchmarking import FinbertAnalysisRunConfig
+from thesis_pkg.benchmarking import FinbertSectionUniverseConfig
+from thesis_pkg.benchmarking import FinbertRuntimeConfig
+from thesis_pkg.benchmarking import FinbertSentencePreprocessingRunConfig
+from thesis_pkg.benchmarking import SentenceDatasetConfig
 from thesis_pkg.core.sec.suspicious_boundary_diagnostics import (
     DiagnosticsConfig,
     parse_focus_items,
@@ -282,10 +399,23 @@ from thesis_pkg.pipeline import (
     run_refinitiv_step1_bridge_pipeline,
     run_sec_ccm_premerge_pipeline,
 )
+from thesis_pkg.notebooks_and_scripts.finbert_item_analysis_runner import (
+    BATCH_PRESETS as FINBERT_BATCH_PRESETS,
+    run_finbert_pipeline,
+)
+from thesis_pkg.notebooks_and_scripts.lm2011_sample_post_refinitiv_runner import (
+    LM2011_ALL_STAGE_NAMES,
+    LM2011_OPTIONAL_STAGE_DEFAULTS_FALSE,
+    LM2011PostRefinitivRunConfig,
+    MONTHLY_STOCK_CANDIDATES,
+    RunnerPaths as LM2011RunnerPaths,
+    run_lm2011_post_refinitiv_pipeline,
+)
 from thesis_pkg.pipelines.refinitiv.doc_ownership import _build_lm2011_doc_ownership_universe_diagnostics
 from thesis_pkg.pipelines.refinitiv.lseg_ledger import LsegResumeCompatibilityError
 
 LSEG_API_READY = is_lseg_available()
+LOCAL_SAMPLE_FINBERT_YEARS: tuple[int, ...] = (2006, 2007, 2008)
 
 
 @dataclass(frozen=True)
@@ -815,6 +945,26 @@ def main() -> None:
     RUN_NO_ITEM_DIAGNOSTICS = _env_bool("SEC_CCM_RUN_NO_ITEM_DIAGNOSTICS", False)
     RUN_BOUNDARY_DIAGNOSTICS = _env_bool("SEC_CCM_RUN_BOUNDARY_DIAGNOSTICS", False)
     RUN_VALIDATION_CHECKS = _env_bool("SEC_CCM_RUN_VALIDATION_CHECKS", False)
+    RUN_LM2011_POST_REFINITIV = _env_bool("SEC_CCM_RUN_LM2011_POST_REFINITIV", False)
+    LM2011_STAGE_FLAGS = {
+        stage_name: _resolve_stage_toggle(
+            f"SEC_CCM_RUN_LM2011_{stage_name.upper()}",
+            umbrella_enabled=RUN_LM2011_POST_REFINITIV,
+            default_when_umbrella=stage_name not in LM2011_OPTIONAL_STAGE_DEFAULTS_FALSE,
+        )
+        for stage_name in LM2011_ALL_STAGE_NAMES
+    }
+    RUN_FINBERT = _env_bool("SEC_CCM_RUN_FINBERT", False)
+    RUN_FINBERT_PREPROCESS = _resolve_stage_toggle(
+        "SEC_CCM_RUN_FINBERT_PREPROCESS",
+        umbrella_enabled=RUN_FINBERT,
+        default_when_umbrella=True,
+    )
+    RUN_FINBERT_ANALYSIS = _resolve_stage_toggle(
+        "SEC_CCM_RUN_FINBERT_ANALYSIS",
+        umbrella_enabled=RUN_FINBERT,
+        default_when_umbrella=True,
+    )
 
     SEC_PARSE_MODE = _env_str("SEC_CCM_SEC_PARSE_MODE", "parsed")
     YEARS = _env_int_list("SEC_CCM_YEARS", available_years)
@@ -868,6 +1018,68 @@ def main() -> None:
         "SEC_CCM_REFINITIV_DOC_ANALYST_LM2011_DIR",
         RUN_ROOT / "refinitiv_doc_analyst_lm2011",
     )
+    LM2011_POST_REFINITIV_DIR = _env_path(
+        "SEC_CCM_LM2011_OUTPUT_DIR",
+        RUN_ROOT / "lm2011_post_refinitiv",
+    )
+    LM2011_ADDITIONAL_DATA_DIR = _resolve_lm2011_additional_data_dir(WORK_ROOT)
+    LM2011_SAMPLE_BACKBONE_PATH = _env_optional_path("SEC_CCM_LM2011_SAMPLE_BACKBONE_PATH")
+    LM2011_MATCHED_CLEAN_PATH = _env_optional_path("SEC_CCM_LM2011_MATCHED_CLEAN_PATH")
+    LM2011_DAILY_PANEL_PATH = _env_optional_path("SEC_CCM_LM2011_DAILY_PANEL_PATH")
+    LM2011_ITEMS_ANALYSIS_DIR = _env_optional_path("SEC_CCM_LM2011_ITEMS_ANALYSIS_DIR")
+    LM2011_CCM_BASE_DIR = _env_optional_path("SEC_CCM_LM2011_CCM_BASE_DIR")
+    LM2011_YEAR_MERGED_DIR = _env_optional_path("SEC_CCM_LM2011_YEAR_MERGED_DIR")
+    LM2011_MONTHLY_STOCK_PATH = _env_optional_path("SEC_CCM_LM2011_MONTHLY_STOCK_PATH")
+    LM2011_FF_MONTHLY_WITH_MOM_PATH = _env_optional_path("SEC_CCM_LM2011_FF_MONTHLY_WITH_MOM_PATH")
+    LM2011_FULL_10K_CLEANING_CONTRACT = _env_str(
+        "SEC_CCM_LM2011_FULL_10K_CLEANING_CONTRACT",
+        "current",
+    )
+    LM2011_TEXT_FEATURE_BATCH_SIZE = _env_int(
+        "SEC_CCM_LM2011_TEXT_FEATURE_BATCH_SIZE",
+        1000,
+    )
+    LM2011_EVENT_WINDOW_DOC_BATCH_SIZE = _env_int(
+        "SEC_CCM_LM2011_EVENT_WINDOW_DOC_BATCH_SIZE",
+        250,
+    )
+    FINBERT_OUTPUT_DIR = _env_path(
+        "SEC_CCM_FINBERT_OUTPUT_DIR",
+        RUN_ROOT / "finbert_item_analysis",
+    )
+    FINBERT_SOURCE_ITEMS_DIR = _env_optional_path("SEC_CCM_FINBERT_SOURCE_ITEMS_DIR")
+    FINBERT_BACKBONE_PATH = _env_optional_path("SEC_CCM_FINBERT_BACKBONE_PATH")
+    FINBERT_YEARS = _env_optional_int_list("SEC_CCM_FINBERT_YEARS")
+    FINBERT_RUN_NAME = _env_optional_str("SEC_CCM_FINBERT_RUN_NAME", None)
+    FINBERT_DEVICE = _env_optional_str("SEC_CCM_FINBERT_DEVICE", None)
+    FINBERT_WRITE_SENTENCE_SCORES = _env_bool(
+        "SEC_CCM_FINBERT_WRITE_SENTENCE_SCORES",
+        False,
+    )
+    FINBERT_SENTENCE_POSTPROCESS_POLICY = _env_str(
+        "SEC_CCM_FINBERT_SENTENCE_POSTPROCESS_POLICY",
+        DEFAULT_RUNNER_SENTENCE_POSTPROCESS_POLICY,
+    )
+    FINBERT_OVERWRITE = _env_bool("SEC_CCM_FINBERT_OVERWRITE", False)
+    FINBERT_NOTE = _env_str("SEC_CCM_FINBERT_NOTE", "")
+    FINBERT_BATCH_PROFILE = _env_str("SEC_CCM_FINBERT_BATCH_PROFILE", "baseline")
+    FINBERT_SHORT_BATCH_SIZE = _env_optional_int("SEC_CCM_FINBERT_SHORT_BATCH_SIZE", None)
+    FINBERT_MEDIUM_BATCH_SIZE = _env_optional_int("SEC_CCM_FINBERT_MEDIUM_BATCH_SIZE", None)
+    FINBERT_LONG_BATCH_SIZE = _env_optional_int("SEC_CCM_FINBERT_LONG_BATCH_SIZE", None)
+    FINBERT_SHORT_MAX_LENGTH = _env_optional_int("SEC_CCM_FINBERT_SHORT_MAX_LENGTH", None)
+    FINBERT_MEDIUM_MAX_LENGTH = _env_optional_int("SEC_CCM_FINBERT_MEDIUM_MAX_LENGTH", None)
+    FINBERT_LONG_MAX_LENGTH = _env_optional_int("SEC_CCM_FINBERT_LONG_MAX_LENGTH", None)
+    FINBERT_BATCH_CONFIG = _resolve_finbert_batch_config(
+        profile_name=FINBERT_BATCH_PROFILE,
+        short_batch_size=FINBERT_SHORT_BATCH_SIZE,
+        medium_batch_size=FINBERT_MEDIUM_BATCH_SIZE,
+        long_batch_size=FINBERT_LONG_BATCH_SIZE,
+    )
+    FINBERT_BUCKET_LENGTHS = _resolve_finbert_bucket_lengths(
+        short_max_length=FINBERT_SHORT_MAX_LENGTH,
+        medium_max_length=FINBERT_MEDIUM_MAX_LENGTH,
+        long_max_length=FINBERT_LONG_MAX_LENGTH,
+    )
 
     if IN_COLAB:
         default_local_tmp = Path("/content/_tmp_zip")
@@ -901,6 +1113,8 @@ def main() -> None:
         REFINITIV_ANALYST_COMMON_STOCK_DIR,
         REFINITIV_DOC_OWNERSHIP_LM2011_DIR,
         REFINITIV_DOC_ANALYST_LM2011_DIR,
+        LM2011_POST_REFINITIV_DIR,
+        FINBERT_OUTPUT_DIR,
         LOCAL_TMP,
         LOCAL_WORK,
         LOCAL_ITEM_WORK,
@@ -990,6 +1204,27 @@ def main() -> None:
             "REFINITIV_MAX_WORKERS": REFINITIV_MAX_WORKERS,
             "RUN_GATED_ITEM_EXTRACTION": RUN_GATED_ITEM_EXTRACTION,
             "RUN_VALIDATION_CHECKS": RUN_VALIDATION_CHECKS,
+            "RUN_LM2011_POST_REFINITIV": RUN_LM2011_POST_REFINITIV,
+            "LM2011_ENABLED_STAGE_COUNT": sum(1 for enabled in LM2011_STAGE_FLAGS.values() if enabled),
+            "LM2011_POST_REFINITIV_DIR": str(LM2011_POST_REFINITIV_DIR),
+            "LM2011_FULL_10K_CLEANING_CONTRACT": LM2011_FULL_10K_CLEANING_CONTRACT,
+            "LM2011_TEXT_FEATURE_BATCH_SIZE": LM2011_TEXT_FEATURE_BATCH_SIZE,
+            "LM2011_EVENT_WINDOW_DOC_BATCH_SIZE": LM2011_EVENT_WINDOW_DOC_BATCH_SIZE,
+            "RUN_FINBERT": RUN_FINBERT,
+            "RUN_FINBERT_PREPROCESS": RUN_FINBERT_PREPROCESS,
+            "RUN_FINBERT_ANALYSIS": RUN_FINBERT_ANALYSIS,
+            "FINBERT_OUTPUT_DIR": str(FINBERT_OUTPUT_DIR),
+            "FINBERT_BATCH_PROFILE": FINBERT_BATCH_PROFILE,
+            "FINBERT_BATCH_CONFIG": {
+                "short": FINBERT_BATCH_CONFIG.short_batch_size,
+                "medium": FINBERT_BATCH_CONFIG.medium_batch_size,
+                "long": FINBERT_BATCH_CONFIG.long_batch_size,
+            },
+            "FINBERT_BUCKET_LENGTHS": {
+                "short": FINBERT_BUCKET_LENGTHS.short_max_length,
+                "medium": FINBERT_BUCKET_LENGTHS.medium_max_length,
+                "long": FINBERT_BUCKET_LENGTHS.long_max_length,
+            },
             "SEC_PARSE_MODE": SEC_PARSE_MODE,
             "ITEM_EXTRACTION_REGIME": ITEM_EXTRACTION_REGIME,
             "year_count": len(YEARS),
@@ -1185,11 +1420,22 @@ def main() -> None:
     refinitiv_doc_analyst_anchor_paths: dict[str, Path] | None = None
     refinitiv_doc_analyst_select_paths: dict[str, Path] | None = None
     refinitiv_artifact_stages: list[_ArtifactStage] = []
+    downstream_artifact_stages: list[_ArtifactStage] = []
 
     def _record_refinitiv_stage(stage: str, paths: dict[str, Path] | None) -> None:
         if paths is None:
             return
         refinitiv_artifact_stages.append(
+            _ArtifactStage(
+                name=stage,
+                paths={key: Path(value) for key, value in paths.items()},
+            )
+        )
+
+    def _record_downstream_stage(stage: str, paths: dict[str, Path] | None) -> None:
+        if paths is None:
+            return
+        downstream_artifact_stages.append(
             _ArtifactStage(
                 name=stage,
                 paths={key: Path(value) for key, value in paths.items()},
@@ -2196,6 +2442,222 @@ def main() -> None:
             )
             print({"diagnostic_year_files": len(diagnostic_item_paths)})
 
+    if any(LM2011_STAGE_FLAGS.values()):
+        lm2011_ccm_base_dir = LM2011_CCM_BASE_DIR or CCM_BASE_DIR
+        lm2011_year_merged_dir = LM2011_YEAR_MERGED_DIR or SEC_YEAR_MERGED_DIR
+        lm2011_sample_backbone_path = LM2011_SAMPLE_BACKBONE_PATH
+        if lm2011_sample_backbone_path is None:
+            if lm2011_backbone_path is not None:
+                lm2011_sample_backbone_path = lm2011_backbone_path
+            else:
+                candidate = SEC_CCM_OUTPUT_DIR / "lm2011_sample_backbone.parquet"
+                if candidate.exists():
+                    lm2011_sample_backbone_path = candidate
+        lm2011_matched_clean_path = LM2011_MATCHED_CLEAN_PATH or (
+            Path(sec_ccm_paths["sec_ccm_matched_clean"])
+            if sec_ccm_paths is not None and "sec_ccm_matched_clean" in sec_ccm_paths
+            else SEC_CCM_OUTPUT_DIR / "sec_ccm_matched_clean.parquet"
+        )
+        lm2011_daily_panel_path = LM2011_DAILY_PANEL_PATH or (
+            Path(sec_ccm_paths["final_flagged_data"])
+            if sec_ccm_paths is not None and "final_flagged_data" in sec_ccm_paths
+            else SEC_CCM_OUTPUT_DIR / "final_flagged_data.parquet"
+        )
+        lm2011_items_analysis_dir = LM2011_ITEMS_ANALYSIS_DIR or SEC_ITEMS_ANALYSIS_DIR
+        lm2011_monthly_stock_path = LM2011_MONTHLY_STOCK_PATH or _resolve_optional_ccm_parquet_artifact(
+            lm2011_ccm_base_dir,
+            MONTHLY_STOCK_CANDIDATES,
+        )
+        lm2011_paths = LM2011RunnerPaths(
+            sample_root=WORK_ROOT,
+            upstream_run_root=RUN_ROOT,
+            additional_data_dir=LM2011_ADDITIONAL_DATA_DIR,
+            output_dir=LM2011_POST_REFINITIV_DIR,
+            year_merged_dir=lm2011_year_merged_dir,
+            sample_backbone_path=lm2011_sample_backbone_path,
+            daily_panel_path=lm2011_daily_panel_path,
+            ccm_base_dir=lm2011_ccm_base_dir,
+            matched_clean_path=lm2011_matched_clean_path,
+            items_analysis_dir=lm2011_items_analysis_dir,
+            doc_ownership_path=(
+                REFINITIV_DOC_OWNERSHIP_LM2011_DIR / "refinitiv_lm2011_doc_ownership.parquet"
+            ),
+            doc_analyst_selected_path=(
+                REFINITIV_DOC_ANALYST_LM2011_DIR / "refinitiv_doc_analyst_selected.parquet"
+            ),
+            filingdates_path=_resolve_optional_ccm_parquet_artifact(
+                lm2011_ccm_base_dir,
+                ("filingdates.parquet",),
+            ),
+            quarterly_balance_sheet_path=_resolve_optional_ccm_parquet_artifact(
+                lm2011_ccm_base_dir,
+                ("balancesheetquarterly.parquet",),
+            ),
+            quarterly_income_statement_path=_resolve_optional_ccm_parquet_artifact(
+                lm2011_ccm_base_dir,
+                ("incomestatementquarterly.parquet",),
+            ),
+            quarterly_period_descriptor_path=_resolve_optional_ccm_parquet_artifact(
+                lm2011_ccm_base_dir,
+                ("perioddescriptorquarterly.parquet",),
+            ),
+            annual_balance_sheet_path=_resolve_optional_ccm_parquet_artifact(
+                lm2011_ccm_base_dir,
+                ("balancesheetindustrialannual.parquet",),
+            ),
+            annual_income_statement_path=_resolve_optional_ccm_parquet_artifact(
+                lm2011_ccm_base_dir,
+                ("incomestatementindustrialannual.parquet",),
+            ),
+            annual_period_descriptor_path=_resolve_optional_ccm_parquet_artifact(
+                lm2011_ccm_base_dir,
+                ("perioddescriptorannual.parquet",),
+            ),
+            annual_fiscal_market_path=_resolve_optional_ccm_parquet_artifact(
+                lm2011_ccm_base_dir,
+                ("fiscalmarketdataannual.parquet",),
+            ),
+            company_history_path=_resolve_optional_ccm_parquet_artifact(
+                lm2011_ccm_base_dir,
+                ("companyhistory.parquet",),
+            ),
+            company_description_path=_resolve_optional_ccm_parquet_artifact(
+                lm2011_ccm_base_dir,
+                ("companydescription.parquet",),
+            ),
+            ff_daily_csv_path=LM2011_ADDITIONAL_DATA_DIR / "F-F_Research_Data_Factors_daily.csv",
+            ff_monthly_csv_path=LM2011_ADDITIONAL_DATA_DIR / "F-F_Research_Data_Factors.csv",
+            momentum_monthly_csv_path=LM2011_ADDITIONAL_DATA_DIR / "F-F_Momentum_Factor.csv",
+            ff48_siccodes_path=LM2011_ADDITIONAL_DATA_DIR / "FF_Siccodes_48_Industries.txt",
+            monthly_stock_path=lm2011_monthly_stock_path,
+            ff_monthly_with_mom_path=LM2011_FF_MONTHLY_WITH_MOM_PATH,
+            full_10k_cleaning_contract=LM2011_FULL_10K_CLEANING_CONTRACT,
+            text_feature_batch_size=LM2011_TEXT_FEATURE_BATCH_SIZE,
+            event_window_doc_batch_size=LM2011_EVENT_WINDOW_DOC_BATCH_SIZE,
+        )
+        run_lm2011_post_refinitiv_pipeline(
+            LM2011PostRefinitivRunConfig(
+                paths=lm2011_paths,
+                enabled_stages=tuple(
+                    stage_name
+                    for stage_name, enabled in LM2011_STAGE_FLAGS.items()
+                    if enabled
+                ),
+                fail_closed_for_enabled_stages=True,
+            )
+        )
+        _record_downstream_stage(
+            "lm2011_post_refinitiv",
+            {
+                "lm2011_post_refinitiv_output_dir": LM2011_POST_REFINITIV_DIR,
+                "lm2011_post_refinitiv_manifest_json": (
+                    LM2011_POST_REFINITIV_DIR / "lm2011_sample_run_manifest.json"
+                ),
+            },
+        )
+        print(
+            {
+                "lm2011_post_refinitiv_output_dir": str(LM2011_POST_REFINITIV_DIR),
+                "lm2011_enabled_stages": sorted(
+                    stage_name
+                    for stage_name, enabled in LM2011_STAGE_FLAGS.items()
+                    if enabled
+                ),
+            }
+        )
+
+    if RUN_FINBERT_PREPROCESS or RUN_FINBERT_ANALYSIS:
+        finbert_source_items_dir = FINBERT_SOURCE_ITEMS_DIR or SEC_ITEMS_ANALYSIS_DIR
+        finbert_backbone_path = FINBERT_BACKBONE_PATH
+        if finbert_backbone_path is None:
+            if lm2011_backbone_path is not None:
+                finbert_backbone_path = lm2011_backbone_path
+            else:
+                candidate = SEC_CCM_OUTPUT_DIR / "lm2011_sample_backbone.parquet"
+                finbert_backbone_path = (
+                    candidate if candidate.exists() else SEC_CCM_OUTPUT_DIR / "final_flagged_data.parquet"
+                )
+        finbert_year_filter = (
+            tuple(FINBERT_YEARS)
+            if FINBERT_YEARS is not None
+            else (
+                LOCAL_SAMPLE_FINBERT_YEARS
+                if DATA_PROFILE == "LOCAL_SAMPLE"
+                else tuple(YEARS)
+            )
+        )
+        finbert_analysis_cfg = FinbertAnalysisRunConfig(
+            source_items_dir=finbert_source_items_dir,
+            out_root=FINBERT_OUTPUT_DIR,
+            batch_config=FINBERT_BATCH_CONFIG,
+            bucket_lengths=FINBERT_BUCKET_LENGTHS,
+            section_universe=FinbertSectionUniverseConfig(
+                source_items_dir=finbert_source_items_dir
+            ),
+            runtime=FinbertRuntimeConfig(device=FINBERT_DEVICE),
+            sentence_dataset=SentenceDatasetConfig(
+                postprocess_policy=FINBERT_SENTENCE_POSTPROCESS_POLICY,
+            ),
+            backbone_path=finbert_backbone_path,
+            year_filter=finbert_year_filter,
+            write_sentence_scores=FINBERT_WRITE_SENTENCE_SCORES,
+            overwrite=FINBERT_OVERWRITE,
+            run_name=FINBERT_RUN_NAME,
+            note=FINBERT_NOTE,
+        )
+        finbert_preprocessing_cfg = (
+            FinbertSentencePreprocessingRunConfig(
+                source_items_dir=finbert_analysis_cfg.source_items_dir,
+                out_root=finbert_analysis_cfg.out_root,
+                section_universe=finbert_analysis_cfg.section_universe,
+                sentence_dataset=finbert_analysis_cfg.sentence_dataset,
+                cleaning=finbert_analysis_cfg.cleaning,
+                target_doc_universe_path=finbert_analysis_cfg.backbone_path,
+                year_filter=finbert_analysis_cfg.year_filter,
+                overwrite=finbert_analysis_cfg.overwrite,
+                run_name=finbert_analysis_cfg.run_name,
+                note=finbert_analysis_cfg.note,
+            )
+            if RUN_FINBERT_PREPROCESS and not RUN_FINBERT_ANALYSIS
+            else None
+        )
+        finbert_artifacts = run_finbert_pipeline(
+            finbert_analysis_cfg,
+            preprocessing_cfg=finbert_preprocessing_cfg,
+            run_preprocess=RUN_FINBERT_PREPROCESS,
+            run_analysis=RUN_FINBERT_ANALYSIS,
+        )
+        finbert_stage_paths = {
+            "finbert_output_dir": FINBERT_OUTPUT_DIR,
+        }
+        if finbert_artifacts.preprocessing_artifacts is not None:
+            finbert_stage_paths.update(
+                {
+                    "finbert_preprocessing_run_dir": finbert_artifacts.preprocessing_artifacts.run_dir,
+                    "finbert_preprocessing_manifest_json": (
+                        finbert_artifacts.preprocessing_artifacts.run_manifest_path
+                    ),
+                }
+            )
+        if finbert_artifacts.analysis_artifacts is not None:
+            finbert_stage_paths.update(
+                {
+                    "finbert_analysis_run_dir": finbert_artifacts.analysis_artifacts.run_dir,
+                    "finbert_analysis_manifest_json": (
+                        finbert_artifacts.analysis_artifacts.run_manifest_path
+                    ),
+                }
+            )
+        _record_downstream_stage("finbert", finbert_stage_paths)
+        print(
+            {
+                "finbert_output_dir": str(FINBERT_OUTPUT_DIR),
+                "finbert_run_preprocess": RUN_FINBERT_PREPROCESS,
+                "finbert_run_analysis": RUN_FINBERT_ANALYSIS,
+                "finbert_sentence_postprocess_policy": FINBERT_SENTENCE_POSTPROCESS_POLICY,
+            }
+        )
+
     # ## 7) No-item diagnostics + boundary diagnostics
     analysis_no_item: list[tuple[str, Path, Path]] = []
     if RUN_NO_ITEM_DIAGNOSTICS and RUN_GATED_ITEM_EXTRACTION:
@@ -2382,6 +2844,9 @@ def main() -> None:
     for stage in refinitiv_artifact_stages:
         for key in sorted(stage.paths):
             _add(stage.name, key, stage.paths[key])
+    for stage in downstream_artifact_stages:
+        for key in sorted(stage.paths):
+            _add(stage.name, key, stage.paths[key])
     if sec_ccm_paths is not None:
         for key in sorted(sec_ccm_paths):
             _add("sec_ccm", key, Path(sec_ccm_paths[key]))
@@ -2406,38 +2871,43 @@ def main() -> None:
     _print_rows_table(artifact_rows, sort_by=["stage", "artifact"], empty_message="No artifacts indexed")
 
     if refinitiv_artifact_stages:
-        refinitiv_manifest_path = REFINITIV_STEP1_OUT_DIR / "refinitiv_step1_manifest.json"
+        refinitiv_manifest_path = REFINITIV_STEP1_OUT_DIR / "refinitiv_step1_runner_manifest.json"
         doc_ownership_preflight_summary_path = (
             REFINITIV_DOC_OWNERSHIP_LM2011_DIR / "refinitiv_lm2011_doc_ownership_preflight_summary.json"
         )
         doc_ownership_postfinal_summary_path = (
             REFINITIV_DOC_OWNERSHIP_LM2011_DIR / "refinitiv_lm2011_doc_ownership_postfinal_summary.json"
         )
+        manual_inputs = {
+            "filled_extended_lookup_workbook": (
+                REFINITIV_STEP1_OUT_DIR / "refinitiv_ric_lookup_handoff_common_stock_extended_filled_in.xlsx"
+            ),
+            "filled_ownership_universe_workbook": (
+                REFINITIV_OWNERSHIP_UNIVERSE_DIR
+                / "refinitiv_ownership_universe_handoff_common_stock_filled_in.xlsx"
+            ),
+            "reviewed_ticker_allowlist_parquet": (
+                REFINITIV_OWNERSHIP_AUTHORITY_DIR / "refinitiv_permno_ownership_ticker_allowlist.parquet"
+            ),
+            "analyst_normalized_panel_parquet": (
+                REFINITIV_ANALYST_COMMON_STOCK_DIR / "refinitiv_analyst_normalized_panel.parquet"
+            ),
+            "filled_doc_ownership_exact_workbook": (
+                REFINITIV_DOC_OWNERSHIP_LM2011_DIR / "refinitiv_lm2011_doc_ownership_exact_handoff_filled_in.xlsx"
+            ),
+            "filled_doc_ownership_fallback_workbook": (
+                REFINITIV_DOC_OWNERSHIP_LM2011_DIR
+                / "refinitiv_lm2011_doc_ownership_fallback_handoff_filled_in.xlsx"
+            ),
+        }
         refinitiv_manifest_payload = {
-            "pipeline_name": "refinitiv_step1",
+            "pipeline_name": "refinitiv_step1_runner",
             "artifact_version": "v3",
             "generated_at_utc": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "manual_inputs": {
-                "filled_extended_lookup_workbook": str(
-                    REFINITIV_STEP1_OUT_DIR / "refinitiv_ric_lookup_handoff_common_stock_extended_filled_in.xlsx"
-                ),
-                "filled_ownership_universe_workbook": str(
-                    REFINITIV_OWNERSHIP_UNIVERSE_DIR
-                    / "refinitiv_ownership_universe_handoff_common_stock_filled_in.xlsx"
-                ),
-                "reviewed_ticker_allowlist_parquet": str(
-                    REFINITIV_OWNERSHIP_AUTHORITY_DIR / "refinitiv_permno_ownership_ticker_allowlist.parquet"
-                ),
-                "analyst_normalized_panel_parquet": str(
-                    REFINITIV_ANALYST_COMMON_STOCK_DIR / "refinitiv_analyst_normalized_panel.parquet"
-                ),
-                "filled_doc_ownership_exact_workbook": str(
-                    REFINITIV_DOC_OWNERSHIP_LM2011_DIR / "refinitiv_lm2011_doc_ownership_exact_handoff_filled_in.xlsx"
-                ),
-                "filled_doc_ownership_fallback_workbook": str(
-                    REFINITIV_DOC_OWNERSHIP_LM2011_DIR
-                    / "refinitiv_lm2011_doc_ownership_fallback_handoff_filled_in.xlsx"
-                ),
+                key: str(path)
+                for key, path in manual_inputs.items()
+                if path.exists()
             },
             "counts": {
                 "bridge_rows": _row_count(REFINITIV_STEP1_OUT_DIR / "refinitiv_bridge_universe.parquet"),

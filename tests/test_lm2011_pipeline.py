@@ -610,6 +610,7 @@ def test_lm2011_text_feature_builders_match_public_spec_contract() -> None:
     assert full_features.filter(pl.col("doc_id") == "d1").row(0, named=True)["total_token_count_full_10k"] == 6
     assert mda_features.filter(pl.col("doc_id") == "d1").row(0, named=True)["token_count_mda"] == 2
     assert mda_features.filter(pl.col("doc_id") == "d1").row(0, named=True)["total_token_count_mda"] == 2
+    assert mda_features["cleaning_policy_id"].unique().to_list() == ["raw_item_text"]
 
 
 def test_tokenize_lm2011_text_matches_appendix_contract() -> None:
@@ -739,7 +740,7 @@ def test_build_lm2011_event_panel_uses_prc_when_final_prc_is_missing() -> None:
         .filter(pl.col("_relative_day").is_between(-252, -6, closed="both"))
         .get_column("VOL")
         .sum()
-        / 10.0
+        / (10.0 * 1_000.0)
     )
     assert panel.item(0, "share_turnover") == pytest.approx(expected_turnover)
 
@@ -1041,6 +1042,10 @@ def test_build_lm2011_event_screen_surface_batched_emits_one_row_per_doc_with_re
         "pre_ffalpha",
         "postevent_return_volatility",
     }.issubset(set(surface.columns))
+    assert all(not column.startswith("_") for column in surface.columns)
+    assert "full_text" not in surface.columns
+    assert "passes_all_filters" not in surface.columns
+    assert not any(column.startswith("filter_") for column in surface.columns)
 
 
 def test_build_lm2011_event_screen_surface_batched_never_exceeds_doc_batch_size(

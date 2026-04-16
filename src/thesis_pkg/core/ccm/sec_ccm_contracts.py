@@ -6,12 +6,114 @@ from enum import Enum
 from pathlib import Path
 from typing import Literal
 
-from thesis_pkg.core.ccm.transforms import CCM_DAILY_PHASE_B_SURFACE_COLUMNS
+import polars as pl
 
 
-SEC_CCM_PHASE_B_DAILY_FEATURE_COLUMNS: tuple[str, ...] = tuple(
-    name for name in CCM_DAILY_PHASE_B_SURFACE_COLUMNS if name not in {"KYPERMNO", "CALDT"}
+SEC_CCM_PHASE_B_DAILY_FEATURE_COLUMNS: tuple[str, ...] = (
+    "RET",
+    "RETX",
+    "PRC",
+    "FINAL_PRC",
+    "BIDLO",
+    "ASKHI",
+    "VOL",
+    "TCAP",
+    "SHROUT",
+    "TICKER",
+    "SHRCD",
+    "EXCHCD",
 )
+
+
+@dataclass(frozen=True)
+class DailyMarketUnitContract:
+    """Shared daily-market unit contract used across SEC-CCM and LM2011.
+
+    Attributes:
+        version: Contract version tag.
+        raw_tcap_unit: Raw daily ``TCAP`` unit.
+        raw_shrout_unit: Raw daily ``SHROUT`` unit.
+        raw_vol_unit: Raw daily ``VOL`` unit.
+        annual_book_equity_unit: Annual ``book_equity_be`` unit.
+        normalized_event_market_equity_unit: LM2011 event-date market-equity unit.
+        normalized_turnover_denominator_unit: Turnover denominator unit after normalization.
+        sec_ccm_non_microcap_threshold_usd: SEC-CCM non-microcap screen in USD.
+        sec_ccm_non_microcap_threshold_raw_tcap: Equivalent raw ``TCAP`` threshold under
+            the contract's daily-market units.
+    """
+
+    version: str = "daily_market_units_v1"
+    raw_tcap_unit: str = "thousands_usd"
+    raw_shrout_unit: str = "thousands_shares"
+    raw_vol_unit: str = "shares"
+    annual_book_equity_unit: str = "millions_usd"
+    normalized_event_market_equity_unit: str = "millions_usd"
+    normalized_turnover_denominator_unit: str = "shares"
+    sec_ccm_non_microcap_threshold_usd: float = 50_000_000.0
+    sec_ccm_non_microcap_threshold_raw_tcap: float = 50_000.0
+
+
+DEFAULT_DAILY_MARKET_UNIT_CONTRACT = DailyMarketUnitContract()
+
+
+def _as_expr(value: pl.Expr | str) -> pl.Expr:
+    if isinstance(value, pl.Expr):
+        return value
+    return pl.col(value)
+
+
+def event_market_equity_millions(
+    *,
+    tcap: pl.Expr | str = "TCAP",
+    prc: pl.Expr | str = "PRC",
+    shrout: pl.Expr | str = "SHROUT",
+    contract: DailyMarketUnitContract = DEFAULT_DAILY_MARKET_UNIT_CONTRACT,
+) -> pl.Expr:
+    """Build an event-date market-equity expression in millions of USD.
+
+    Raw daily ``TCAP`` and ``PRC * SHROUT`` are both interpreted on the contract's
+    CRSP-style thousands-of-USD scale. The returned expression is normalized to
+    millions of USD for compatibility with Compustat annual book equity.
+    """
+
+    del contract
+    raw_tcap_thousands = pl.coalesce(
+        [
+            _as_expr(tcap).cast(pl.Float64, strict=False),
+            _as_expr(prc).cast(pl.Float64, strict=False).abs()
+            * _as_expr(shrout).cast(pl.Float64, strict=False),
+        ]
+    )
+    return raw_tcap_thousands / pl.lit(1_000.0)
+
+
+def share_turnover_ratio(
+    *,
+    volume: pl.Expr | str,
+    shrout: pl.Expr | str,
+    contract: DailyMarketUnitContract = DEFAULT_DAILY_MARKET_UNIT_CONTRACT,
+) -> pl.Expr:
+    """Build a turnover ratio using volume in shares and ``SHROUT`` in thousands."""
+
+    del contract
+    normalized_shares = _as_expr(shrout).cast(pl.Float64, strict=False) * pl.lit(1_000.0)
+    volume_expr = _as_expr(volume).cast(pl.Float64, strict=False)
+    return pl.when(normalized_shares.is_not_null() & (normalized_shares > pl.lit(0.0))).then(
+        volume_expr / normalized_shares
+    ).otherwise(pl.lit(None, dtype=pl.Float64))
+
+
+def sec_ccm_non_microcap_pass(
+    *,
+    tcap: pl.Expr | str = "TCAP",
+    contract: DailyMarketUnitContract = DEFAULT_DAILY_MARKET_UNIT_CONTRACT,
+) -> pl.Expr:
+    """Build the SEC-CCM non-microcap pass expression under the shared unit contract."""
+
+    return (
+        _as_expr(tcap).cast(pl.Float64, strict=False).fill_null(0.0)
+        >= pl.lit(contract.sec_ccm_non_microcap_threshold_raw_tcap)
+    ).fill_null(False)
 
 
 class MatchReasonCode(str, Enum):

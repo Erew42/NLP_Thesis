@@ -66,20 +66,47 @@ def test_analyst_step1_stage_order_precedes_doc_analyst_stages() -> None:
     assert source.index(doc_anchor_marker) < source.index(doc_select_marker)
 
 
-def test_new_analyst_step1_booleans_exist_and_default_false() -> None:
+def test_notebook_defaults_match_script_defaults_for_refinitiv_stage_plan() -> None:
     runner_path = Path("src/thesis_pkg/notebooks_and_scripts/sec_ccm_unified_runner.py")
     source = runner_path.read_text(encoding="utf-8")
+    notebook_source = Path(
+        "src/thesis_pkg/notebooks_and_scripts/sec_ccm_unified_runner.ipynb"
+    ).read_text(encoding="utf-8")
 
-    expected_defaults = [
-        'RUN_REFINITIV_INSTRUMENT_AUTHORITY = _env_bool(\n        "SEC_CCM_RUN_REFINITIV_INSTRUMENT_AUTHORITY",\n        True,',
-        'RUN_REFINITIV_ANALYST_REQUEST_GROUPS = _env_bool(\n        "SEC_CCM_RUN_REFINITIV_ANALYST_REQUEST_GROUPS",\n        False,',
-        'RUN_REFINITIV_ANALYST_ACTUALS = _env_bool(\n        "SEC_CCM_RUN_REFINITIV_ANALYST_ACTUALS",\n        False,',
-        'RUN_REFINITIV_ANALYST_ESTIMATES_MONTHLY = _env_bool(\n        "SEC_CCM_RUN_REFINITIV_ANALYST_ESTIMATES_MONTHLY",\n        False,',
-        'RUN_REFINITIV_ANALYST_NORMALIZE = _env_bool(\n        "SEC_CCM_RUN_REFINITIV_ANALYST_NORMALIZE",\n        False,',
+    expected_true_flags = [
+        "RUN_REFINITIV_STEP1",
+        "RUN_REFINITIV_STEP1_RESOLUTION",
+        "RUN_REFINITIV_OWNERSHIP_UNIVERSE_HANDOFF",
+        "RUN_REFINITIV_OWNERSHIP_UNIVERSE_RESULTS",
+        "RUN_REFINITIV_OWNERSHIP_AUTHORITY",
+        "RUN_REFINITIV_DOC_OWNERSHIP_LM2011_EXACT_HANDOFF",
+        "RUN_REFINITIV_DOC_OWNERSHIP_LM2011_FALLBACK_HANDOFF",
+        "RUN_REFINITIV_DOC_OWNERSHIP_LM2011_FINALIZE",
+        "RUN_REFINITIV_DOC_ANALYST_LM2011_ANCHORS",
+        "RUN_REFINITIV_DOC_ANALYST_LM2011_SELECT",
+        "RUN_REFINITIV_INSTRUMENT_AUTHORITY",
+        "RUN_REFINITIV_ANALYST_REQUEST_GROUPS",
+        "RUN_REFINITIV_ANALYST_ACTUALS",
+        "RUN_REFINITIV_ANALYST_ESTIMATES_MONTHLY",
+        "RUN_REFINITIV_ANALYST_NORMALIZE",
+    ]
+    expected_false_flags = [
+        "RUN_SEC_CCM_PREMERGE",
     ]
 
-    for snippet in expected_defaults:
-        assert snippet in source
+    for flag_name in expected_true_flags:
+        assert f'{flag_name} = _env_bool(' in source
+        assert f'"{flag_name} = True\\n",' in notebook_source
+        env_flag_name = flag_name.removeprefix("RUN_")
+        assert f'SEC_CCM_RUN_{env_flag_name}' in notebook_source
+        assert f'": {flag_name},\\n"' in notebook_source
+
+    for flag_name in expected_false_flags:
+        assert f'{flag_name} = _env_bool(' in source
+        assert f'"{flag_name} = False\\n",' in notebook_source
+        env_flag_name = flag_name.removeprefix("RUN_")
+        assert f'SEC_CCM_RUN_{env_flag_name}' in notebook_source
+        assert f'": {flag_name},\\n"' in notebook_source
 
 
 def test_runner_references_expected_analyst_output_artifacts() -> None:
@@ -197,6 +224,23 @@ def test_notebook_config_exports_lseg_request_bound_env_keys() -> None:
     assert '"    \\"SEC_CCM_LSEG_REQUEST_MAX_DATE\\": LSEG_REQUEST_MAX_DATE,\\n"' in source
 
 
+def test_runner_exposes_finbert_sentence_postprocess_policy_env() -> None:
+    runner_path = Path("src/thesis_pkg/notebooks_and_scripts/sec_ccm_unified_runner.py")
+    source = runner_path.read_text(encoding="utf-8")
+
+    assert 'SEC_CCM_FINBERT_SENTENCE_POSTPROCESS_POLICY' in source
+    assert 'FINBERT_SENTENCE_POSTPROCESS_POLICY = _env_str(' in source
+    assert 'postprocess_policy=FINBERT_SENTENCE_POSTPROCESS_POLICY' in source
+
+
+def test_notebook_config_exports_finbert_sentence_postprocess_policy_env_key() -> None:
+    notebook_path = Path("src/thesis_pkg/notebooks_and_scripts/sec_ccm_unified_runner.ipynb")
+    source = notebook_path.read_text(encoding="utf-8")
+
+    assert 'FINBERT_SENTENCE_POSTPROCESS_POLICY = \\"reference_stitch_protect_v3\\"' in source
+    assert '"    \\"SEC_CCM_FINBERT_SENTENCE_POSTPROCESS_POLICY\\": FINBERT_SENTENCE_POSTPROCESS_POLICY,\\n"' in source
+
+
 def test_print_rows_table_uses_tabular_ascii_output(capsys) -> None:
     rows = [{"stage": "lookup", "artifact": "out", "path": "C:/tmp/out.parquet"}]
 
@@ -223,6 +267,7 @@ def test_sec_ccm_unified_runner_notebook_bootstrap_is_valid() -> None:
     assert 'SEC_CCM_WORK_ROOT' in config_cell
     assert 'SEC_CCM_RUN_SEC_PARSE' in config_cell
     assert 'SEC_CCM_OUTPUT_DIR' in config_cell
+    assert 'SEC_CCM_FINBERT_SENTENCE_POSTPROCESS_POLICY' in config_cell
     assert "from thesis_pkg.notebooks_and_scripts.sec_ccm_unified_runner import main" in run_cell
     assert "main()" in run_cell
 
@@ -756,3 +801,95 @@ def test_main_doc_analyst_anchors_use_canonical_lm2011_backbone(
     runner.main()
 
     assert captured["doc_ids"] == ["doc_1", "doc_2"]
+
+
+def test_resolve_stage_toggle_prefers_explicit_flag_over_umbrella(monkeypatch: MonkeyPatch) -> None:
+    monkeypatch.setenv("TEST_STAGE_FLAG", "false")
+
+    assert (
+        runner._resolve_stage_toggle(
+            "TEST_STAGE_FLAG",
+            umbrella_enabled=True,
+            default_when_umbrella=True,
+        )
+        is False
+    )
+
+
+def test_resolve_finbert_batch_config_prefers_raw_overrides() -> None:
+    batch_cfg = runner._resolve_finbert_batch_config(
+        profile_name="baseline",
+        short_batch_size=7,
+        medium_batch_size=None,
+        long_batch_size=3,
+    )
+
+    assert batch_cfg.short_batch_size == 7
+    assert batch_cfg.medium_batch_size == runner.FINBERT_BATCH_PRESETS["baseline"].medium_batch_size
+    assert batch_cfg.long_batch_size == 3
+
+
+def test_main_runs_downstream_pipelines_and_indexes_manifests(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    paths = _configure_minimal_main_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("SEC_CCM_RUN_LM2011_POST_REFINITIV", "true")
+    monkeypatch.setenv("SEC_CCM_RUN_FINBERT", "true")
+    monkeypatch.setenv("SEC_CCM_FINBERT_SHORT_BATCH_SIZE", "5")
+    monkeypatch.setenv("SEC_CCM_FINBERT_RUN_NAME", "shared_finbert")
+    monkeypatch.setenv("SEC_CCM_FINBERT_SENTENCE_POSTPROCESS_POLICY", "none")
+
+    captured: dict[str, object] = {}
+
+    def _lm2011_stub(run_cfg):
+        captured["lm2011_run_cfg"] = run_cfg
+        run_cfg.paths.output_dir.mkdir(parents=True, exist_ok=True)
+        (run_cfg.paths.output_dir / "lm2011_sample_run_manifest.json").write_text(
+            "{}",
+            encoding="utf-8",
+        )
+        return 0
+
+    def _finbert_stub(*args, **kwargs):
+        captured["finbert_args"] = args
+        captured["finbert_kwargs"] = kwargs
+        analysis_cfg = args[0]
+        pre_run_dir = analysis_cfg.out_root / "_staged_intermediates" / "shared_finbert_sentence_preprocessing"
+        pre_run_dir.mkdir(parents=True, exist_ok=True)
+        (pre_run_dir / "run_manifest.json").write_text("{}", encoding="utf-8")
+        analysis_run_dir = analysis_cfg.out_root / "shared_finbert"
+        analysis_run_dir.mkdir(parents=True, exist_ok=True)
+        (analysis_run_dir / "run_manifest.json").write_text("{}", encoding="utf-8")
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            preprocessing_artifacts=SimpleNamespace(
+                run_dir=pre_run_dir,
+                run_manifest_path=pre_run_dir / "run_manifest.json",
+            ),
+            analysis_artifacts=SimpleNamespace(
+                run_dir=analysis_run_dir,
+                run_manifest_path=analysis_run_dir / "run_manifest.json",
+            ),
+        )
+
+    monkeypatch.setattr(runner, "run_lm2011_post_refinitiv_pipeline", _lm2011_stub)
+    monkeypatch.setattr(runner, "run_finbert_pipeline", _finbert_stub)
+
+    runner.main()
+
+    output = capsys.readouterr().out
+    lm2011_run_cfg = captured["lm2011_run_cfg"]
+    finbert_analysis_cfg = captured["finbert_args"][0]
+
+    assert lm2011_run_cfg.fail_closed_for_enabled_stages is True
+    assert "sample_backbone" in lm2011_run_cfg.enabled_stages
+    assert "ff_factors_monthly_with_mom_normalized" not in lm2011_run_cfg.enabled_stages
+    assert finbert_analysis_cfg.batch_config.short_batch_size == 5
+    assert finbert_analysis_cfg.sentence_dataset.postprocess_policy == "none"
+    assert finbert_analysis_cfg.year_filter == runner.LOCAL_SAMPLE_FINBERT_YEARS
+    assert captured["finbert_kwargs"] == {"preprocessing_cfg": None, "run_preprocess": True, "run_analysis": True}
+    assert "lm2011_post_refinitiv_manifest_json" in output
+    assert "finbert_analysis_manifest_json" in output

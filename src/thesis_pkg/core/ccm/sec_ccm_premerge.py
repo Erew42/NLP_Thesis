@@ -42,6 +42,27 @@ def _resolve_first_existing(schema: pl.Schema, candidates: tuple[str, ...], labe
     raise ValueError(f"{label} missing any of expected columns: {list(candidates)}")
 
 
+def _assert_unique_key_pairs(
+    lf: pl.LazyFrame,
+    *,
+    key_cols: tuple[str, str],
+    label: str,
+) -> None:
+    duplicate_df = (
+        lf.group_by(list(key_cols))
+        .agg(pl.len().alias("_duplicate_count"))
+        .filter(pl.col("_duplicate_count") > 1)
+        .limit(5)
+        .collect()
+    )
+    if duplicate_df.is_empty():
+        return
+    raise ValueError(
+        f"{label} contains duplicate key pairs for {list(key_cols)}. "
+        f"Examples: {duplicate_df.to_dicts()}"
+    )
+
+
 def _normalized_cik10_expr(col_name: str) -> pl.Expr:
     """Normalize a CIK-like column to a 10-digit zero-padded string."""
     digits = (
@@ -94,15 +115,20 @@ def _normalize_daily_join_input(daily_lf: pl.LazyFrame, join_spec: SecCcmJoinSpe
             selected_features.append(col)
             seen_features.add(col)
 
-    return (
+    normalized = (
         daily_lf.select(
             pl.col(perm_col).cast(pl.Int32, strict=False).alias("kypermno"),
             pl.col(date_col).cast(pl.Date, strict=False).alias("daily_caldt"),
             *[pl.col(col) for col in selected_features],
         )
         .drop_nulls(subset=["kypermno", "daily_caldt"])
-        .unique(subset=["kypermno", "daily_caldt"], keep="first")
     )
+    _assert_unique_key_pairs(
+        normalized,
+        key_cols=("kypermno", "daily_caldt"),
+        label="SEC-CCM daily join input",
+    )
+    return normalized
 
 
 def normalize_sec_filings_phase_a(sec_filings_lf: pl.LazyFrame) -> pl.LazyFrame:

@@ -23,6 +23,7 @@ LM2011_DICTIONARY_REQUIRED_LISTS: tuple[str, ...] = (
 )
 _LINEBREAK_HYPHEN_RE = re.compile(r"([A-Za-z])-\s*(?:\r?\n)\s*([A-Za-z])")
 _TOKEN_RE = re.compile(r"[A-Za-z]{2,}(?:[-'][A-Za-z]+)*")
+RAW_ITEM_TEXT_CLEANING_POLICY_ID = "raw_item_text"
 
 
 def _require_columns(lf: pl.LazyFrame, required: tuple[str, ...], label: str) -> None:
@@ -232,6 +233,7 @@ def _build_feature_rows(
 def _feature_schema(
     *,
     include_item_id: bool,
+    include_cleaning_policy_id: bool,
     token_count_col: str,
     total_token_count_col: str,
     signal_specs: tuple[tuple[str, frozenset[str], bool], ...],
@@ -246,6 +248,8 @@ def _feature_schema(
     }
     if include_item_id:
         schema["item_id"] = pl.Utf8
+    if include_cleaning_policy_id:
+        schema["cleaning_policy_id"] = pl.Utf8
     for signal_stem, _, include_tfidf in signal_specs:
         schema[f"{signal_stem}_prop"] = pl.Float64
         if include_tfidf:
@@ -260,6 +264,7 @@ def _build_scored_text_frame(
     token_count_col: str,
     total_token_count_col: str,
     include_item_id: bool,
+    cleaning_policy_id: str | None = None,
     signal_specs: tuple[tuple[str, frozenset[str], bool], ...],
     master_dictionary_words: Iterable[str],
     text_cleaner: Callable[[str | None], str | None] | None = None,
@@ -285,18 +290,21 @@ def _build_scored_text_frame(
     )
     schema = _feature_schema(
         include_item_id=include_item_id,
+        include_cleaning_policy_id=cleaning_policy_id is not None,
         token_count_col=token_count_col,
         total_token_count_col=total_token_count_col,
         signal_specs=signal_specs,
     )
-    return (
+    df = (
         pl.DataFrame(rows, schema_overrides=schema)
         .with_columns(
             pl.col(total_token_count_col).cast(pl.Int32, strict=False),
             pl.col(token_count_col).cast(pl.Int32, strict=False),
         )
-        .lazy()
     )
+    if cleaning_policy_id is not None:
+        df = df.with_columns(pl.lit(cleaning_policy_id, dtype=pl.Utf8).alias("cleaning_policy_id"))
+    return df.lazy()
 
 
 def _build_lm2011_signal_specs(
@@ -386,6 +394,7 @@ def build_lm2011_text_features_mda(
         token_count_col="token_count_mda",
         total_token_count_col="total_token_count_mda",
         include_item_id=True,
+        cleaning_policy_id=RAW_ITEM_TEXT_CLEANING_POLICY_ID,
         signal_specs=signal_specs,
         master_dictionary_words=master_dictionary_words,
     )

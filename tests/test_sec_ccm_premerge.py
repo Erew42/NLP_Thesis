@@ -610,13 +610,13 @@ def test_apply_concept_filter_flags_doc_sets_flags_with_complete_inputs():
         {
             "doc_id": ["pass", "fail"],
             "data_status": [0, 0],
-            "PRC": [10.0, 0.5],
-            "SHRCD": [10, 12],
-            "EXCHCD": [1, 4],
-            "VOL": [1000.0, 0.0],
-            "TCAP": [100_000_000.0, 10_000_000.0],
-        }
-    )
+                "PRC": [10.0, 0.5],
+                "SHRCD": [10, 12],
+                "EXCHCD": [1, 4],
+                "VOL": [1000.0, 0.0],
+                "TCAP": [100_000_000.0, 10_000.0],
+            }
+        )
     out = apply_concept_filter_flags_doc(base.lazy()).collect().sort("doc_id")
 
     assert out.select("passes_all_filters").to_series().to_list() == [False, True]

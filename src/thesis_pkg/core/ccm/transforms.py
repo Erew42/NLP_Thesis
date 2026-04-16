@@ -6,6 +6,7 @@ from enum import IntFlag
 import polars as pl
 
 from thesis_pkg.core.ccm.canonical_links import normalize_canonical_link_table
+from thesis_pkg.core.ccm.sec_ccm_contracts import sec_ccm_non_microcap_pass
 
 
 STATUS_DTYPE = pl.UInt64
@@ -413,9 +414,7 @@ def apply_concept_filter_flags_doc(final_doc_lf: pl.LazyFrame) -> pl.LazyFrame:
     common_stock_ok = common_stock_pass_expr(shrcd_col)
     major_exchange_ok = major_exchange_pass_expr(exchcd_col)
     liquidity_ok = (pl.col(vol_col).cast(pl.Float64, strict=False).fill_null(0.0) > pl.lit(0.0)).fill_null(False)
-    non_microcap_ok = (
-        pl.col(market_cap_col).cast(pl.Float64, strict=False).fill_null(0.0) >= pl.lit(50_000_000.0)
-    ).fill_null(False)
+    non_microcap_ok = sec_ccm_non_microcap_pass(tcap=pl.col(market_cap_col))
     passes_all = price_ok & common_stock_ok & major_exchange_ok & liquidity_ok & non_microcap_ok
 
     status = _update_data_status(
