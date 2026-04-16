@@ -12,6 +12,15 @@ from thesis_pkg.benchmarking.item_text_cleaning import clean_item_text
 from thesis_pkg.benchmarking.item_text_cleaning import cleaned_scopes_for_sentence_materialization
 
 
+def test_build_segment_policy_id_includes_sentence_postprocess_policy() -> None:
+    segment_policy_id = build_segment_policy_id(
+        SentenceDatasetConfig(postprocess_policy="item7_reference_stitch_protect_v1"),
+        ItemTextCleaningConfig(),
+    )
+
+    assert "__post_item7_reference_stitch_protect_v1__" in segment_policy_id
+
+
 def test_clean_item_text_removes_layout_artifacts_but_preserves_inline_references() -> None:
     text = "\n".join(
         [
@@ -75,6 +84,185 @@ def test_clean_item_text_truncates_item_aware_tail_without_exhibit_prose_false_p
     assert result.tail_truncated is True
     assert exhibit_reference in result.cleaned_text
     assert "This should not survive" not in result.cleaned_text
+
+
+def test_clean_item_text_default_table_drop_removes_single_numeric_line() -> None:
+    text = "\n".join(
+        [
+            "Management overview remains ordinary prose.",
+            "Loss expense reserves 100 200 300 400",
+            "Closing prose resumes.",
+        ]
+    )
+
+    result = clean_item_text(
+        text,
+        "item_7_mda",
+        ItemTextCleaningConfig(drop_table_like_lines=True),
+    )
+
+    assert "Loss expense reserves 100 200 300 400" not in result.cleaned_text
+    assert result.table_like_lines_removed == 1
+
+
+def test_clean_item_text_block_table_drop_preserves_isolated_numeric_prose_and_removes_table_block() -> None:
+    text = "\n".join(
+        [
+            "Management overview remains ordinary prose.",
+            "from January 1, 2007 to December 31, 2007",
+            "",
+            "CONSOLIDATED STATEMENTS OF CASH FLOWS",
+            "Loss expense reserves 100 200 300 400",
+            "Policy reserves 50 60 70 80 90",
+            "",
+            "Closing prose resumes.",
+        ]
+    )
+    cfg = ItemTextCleaningConfig(
+        drop_table_like_lines=True,
+        table_like_min_consecutive_lines=2,
+        table_like_drop_header_context=True,
+    )
+
+    result = clean_item_text(text, "item_7_mda", cfg)
+
+    assert "from January 1, 2007 to December 31, 2007" in result.cleaned_text
+    assert "CONSOLIDATED STATEMENTS OF CASH FLOWS" not in result.cleaned_text
+    assert "Loss expense reserves 100 200 300 400" not in result.cleaned_text
+    assert "Policy reserves 50 60 70 80 90" not in result.cleaned_text
+    assert result.table_like_lines_removed == 3
+
+
+def test_clean_item_text_block_table_drop_scope_allowlist_skips_item_1a() -> None:
+    text = "\n".join(
+        [
+            "Risk factors remain extensive.",
+            "CONSOLIDATED STATEMENTS OF CASH FLOWS",
+            "Loss expense reserves 100 200 300 400",
+            "Policy reserves 50 60 70 80 90",
+            "Risk prose continues.",
+        ]
+    )
+    cfg = ItemTextCleaningConfig(
+        drop_table_like_lines=True,
+        table_like_min_consecutive_lines=2,
+        table_like_drop_header_context=True,
+        table_like_target_text_scopes=("item_7_mda", "item_1_business"),
+    )
+
+    result = clean_item_text(text, "item_1a_risk_factors", cfg)
+
+    assert "CONSOLIDATED STATEMENTS OF CASH FLOWS" in result.cleaned_text
+    assert "Loss expense reserves 100 200 300 400" in result.cleaned_text
+    assert "Policy reserves 50 60 70 80 90" in result.cleaned_text
+    assert result.table_like_lines_removed == 0
+
+
+def test_clean_item_text_block_table_drop_allows_single_numeric_line_only_with_header() -> None:
+    text = "\n".join(
+        [
+            "Management overview remains ordinary prose.",
+            "CONSOLIDATED STATEMENTS OF CASH FLOWS",
+            "Loss expense reserves 100 200 300 400",
+            "",
+            "from January 1, 2007 to December 31, 2007",
+            "Loss expense reserves 500 600 700 800",
+            "Closing prose resumes.",
+        ]
+    )
+    cfg = ItemTextCleaningConfig(
+        drop_table_like_lines=True,
+        table_like_min_consecutive_lines=2,
+        table_like_drop_header_context=True,
+        table_like_allow_single_line_with_header=True,
+    )
+
+    result = clean_item_text(text, "item_7_mda", cfg)
+
+    assert "CONSOLIDATED STATEMENTS OF CASH FLOWS" not in result.cleaned_text
+    assert "Loss expense reserves 100 200 300 400" not in result.cleaned_text
+    assert "from January 1, 2007 to December 31, 2007" in result.cleaned_text
+    assert "Loss expense reserves 500 600 700 800" in result.cleaned_text
+    assert result.table_like_lines_removed == 2
+
+
+def test_clean_item_text_block_table_drop_removes_title_and_unit_header_block() -> None:
+    text = "\n".join(
+        [
+            "Management overview remains ordinary prose.",
+            "CONSOLIDATED RESULTS OF OPERATIONS",
+            "Year ended December 31 - dollars in millions",
+            "",
+            "Closing prose resumes.",
+        ]
+    )
+    cfg = ItemTextCleaningConfig(
+        drop_table_like_lines=True,
+        table_like_min_consecutive_lines=2,
+        table_like_drop_header_context=True,
+        table_like_target_text_scopes=("item_7_mda", "item_1_business"),
+    )
+
+    result = clean_item_text(text, "item_7_mda", cfg)
+
+    assert "CONSOLIDATED RESULTS OF OPERATIONS" not in result.cleaned_text
+    assert "Year ended December 31 - dollars in millions" not in result.cleaned_text
+    assert "Closing prose resumes." in result.cleaned_text
+    assert result.table_like_lines_removed == 2
+
+
+def test_clean_item_text_block_table_drop_removes_intro_line_only_with_table_support() -> None:
+    text = "\n".join(
+        [
+            "Management overview remains ordinary prose.",
+            "The following table summarizes the components of our development revenues for the",
+            "years ended December 31, 2006, 2005, and 2004:",
+            "Dollars in thousands",
+            "Development revenues 10 20 30 40",
+            "",
+            "Closing prose resumes.",
+        ]
+    )
+    cfg = ItemTextCleaningConfig(
+        drop_table_like_lines=True,
+        table_like_min_consecutive_lines=2,
+        table_like_drop_header_context=True,
+        table_like_allow_single_line_with_header=False,
+        table_like_target_text_scopes=("item_7_mda",),
+    )
+
+    result = clean_item_text(text, "item_7_mda", cfg)
+
+    assert "The following table summarizes" not in result.cleaned_text
+    assert "years ended December 31, 2006, 2005, and 2004:" not in result.cleaned_text
+    assert "Dollars in thousands" not in result.cleaned_text
+    assert "Development revenues 10 20 30 40" not in result.cleaned_text
+    assert "Closing prose resumes." in result.cleaned_text
+    assert result.table_like_lines_removed == 4
+
+
+def test_clean_item_text_block_table_drop_preserves_split_narrative_table_intro_sentence() -> None:
+    text = "\n".join(
+        [
+            "Management overview remains ordinary prose.",
+            "Results of Operations The following table presents certain amounts included in our consolidated statements of income, the relative percentage that those amounts represent to revenues, and the percentage change in those amounts from year to",
+            "year. This information should be read along with the consolidated financial statements and accompanying notes.",
+            "",
+            "Closing prose resumes.",
+        ]
+    )
+    cfg = ItemTextCleaningConfig(
+        drop_table_like_lines=True,
+        table_like_min_consecutive_lines=2,
+        table_like_drop_header_context=True,
+        table_like_target_text_scopes=("item_7_mda",),
+    )
+
+    result = clean_item_text(text, "item_7_mda", cfg)
+
+    assert "Results of Operations The following table presents" in result.cleaned_text
+    assert "year. This information should be read" in result.cleaned_text
+    assert result.table_like_lines_removed == 0
 
 
 def test_clean_item_scopes_enforces_item7_token_floor_and_keeps_char_warning_diagnostic_only() -> None:

@@ -3,10 +3,12 @@ from __future__ import annotations
 from thesis_pkg.benchmarking.contracts import BenchmarkBuildArtifacts
 from thesis_pkg.benchmarking.contracts import BenchmarkItemSpec
 from thesis_pkg.benchmarking.contracts import BenchmarkSampleSpec
+from thesis_pkg.benchmarking.contracts import ALLOWED_SENTENCE_POSTPROCESS_POLICIES
 from thesis_pkg.benchmarking.contracts import BucketBatchConfig
 from thesis_pkg.benchmarking.contracts import BucketLengthSpec
 from thesis_pkg.benchmarking.contracts import DEFAULT_FINBERT_10K_ITEMS
 from thesis_pkg.benchmarking.contracts import DEFAULT_FINBERT_AUTHORITY
+from thesis_pkg.benchmarking.contracts import DEFAULT_RUNNER_SENTENCE_POSTPROCESS_POLICY
 from thesis_pkg.benchmarking.contracts import FinbertAnalysisRunArtifacts
 from thesis_pkg.benchmarking.contracts import FinbertAnalysisRunConfig
 from thesis_pkg.benchmarking.contracts import FinbertAuthoritySpec
@@ -57,10 +59,12 @@ __all__ = [
     "BenchmarkBuildArtifacts",
     "BenchmarkItemSpec",
     "BenchmarkSampleSpec",
+    "ALLOWED_SENTENCE_POSTPROCESS_POLICIES",
     "BucketBatchConfig",
     "BucketLengthSpec",
     "DEFAULT_FINBERT_10K_ITEMS",
     "DEFAULT_FINBERT_AUTHORITY",
+    "DEFAULT_RUNNER_SENTENCE_POSTPROCESS_POLICY",
     "FinbertAnalysisRunArtifacts",
     "FinbertAnalysisRunConfig",
     "FinbertAuthoritySpec",

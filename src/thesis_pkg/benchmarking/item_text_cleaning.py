@@ -50,6 +50,40 @@ _TOC_LIKE_LINE_RE = re.compile(
 )
 _NUMERIC_TOKEN_RE = re.compile(r"(?<![A-Za-z])(?:\$?\(?\d[\d,]*\.?\d*%?\)?)(?![A-Za-z])")
 _WORD_TOKEN_RE = re.compile(r"[A-Za-z]{2,}")
+_YEAR_TOKEN_RE = re.compile(r"\b(?:19|20)\d{2}\b")
+_MONTH_NAME_RE = re.compile(
+    r"\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\b",
+    re.IGNORECASE,
+)
+_PROSE_DATE_RANGE_RE = re.compile(r"\bfrom\b.*\bto\b", re.IGNORECASE)
+_PROSE_NUMERIC_VERB_RE = re.compile(
+    r"\b(?:we|our|was|were|incurred|expensed|increased|decreased|approximately|respectively|totaled)\b",
+    re.IGNORECASE,
+)
+_TABLE_HEADER_KEYWORD_RE = re.compile(
+    r"\b(?:"
+    r"consolidated|statement(?:s)?|balance\s+sheets?|cash\s+flows?|segment|line\s+of\s+business|"
+    r"less\s+than|more\s+than|years?\s+ended|as\s+of|payments\s+due\s+by\s+period|"
+    r"selected\s+financial\s+data|notes?\s+to\s+consolidated"
+    r")\b",
+    re.IGNORECASE,
+)
+_TABLE_INTRO_RE = re.compile(
+    r"\b(?:the\s+)?(?:following|below)\s+table\b.*\b(?:summar(?:y|ies|ize[sd]?)|present[sed]?|show[sn]?|reflect[sed]?|provide[sd]?)\b"
+    r"|\bsummarized\s+as\s+follows\b"
+    r"|\bset\s+forth\s+in\s+the\s+table\s+below\b",
+    re.IGNORECASE,
+)
+_TABLE_UNIT_LINE_RE = re.compile(
+    r"^\s*\(?\s*(?:dollars?\s+in\s+)?(?:millions?|thousands?)\s*\)?\s*$"
+    r"|^\s*\(?\s*(?:in\s+)?(?:millions?|thousands?)\s+of\s+dollars?\s*\)?\s*$",
+    re.IGNORECASE,
+)
+_TABLE_YEARS_ONLY_RE = re.compile(
+    r"^\s*(?:years?\s+(?:ended|ending|shown|later|compared|through)|year\s+ended|year\s+ending|as\s+of)\b.*$"
+    r"|^\s*(?:19|20)\d{2}(?:\s+(?:19|20)\d{2})+\s*$",
+    re.IGNORECASE,
+)
 _REFERENCE_ONLY_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bincorporated\s+by\s+reference\b", re.IGNORECASE),
     re.compile(r"^\s*reference\s+is\s+made\s+to\b", re.IGNORECASE),
@@ -234,6 +268,7 @@ def build_segment_policy_id(
     cleaning_policy = cleaning_cfg.cleaning_policy_id if cleaning_cfg.enabled else "raw_item_text"
     return (
         f"{sentence_cfg.sentencizer_backend}"
+        f"__post_{sentence_cfg.postprocess_policy}"
         f"__clean_{cleaning_policy}"
         "__heading_none"
         f"__maxpos{authority.token_count_max_length}"
@@ -297,7 +332,45 @@ def _is_table_like_line(line: str) -> bool:
         return False
     numeric_count = len(_NUMERIC_TOKEN_RE.findall(stripped))
     word_count = len(_WORD_TOKEN_RE.findall(stripped))
+    if _MONTH_NAME_RE.search(stripped) and (
+        _PROSE_DATE_RANGE_RE.search(stripped) or _PROSE_NUMERIC_VERB_RE.search(stripped)
+    ):
+        return False
     return numeric_count >= 4 and (word_count <= 3 or numeric_count >= max(4, word_count))
+
+
+def _is_table_header_like_line(line: str) -> bool:
+    stripped = line.strip()
+    if len(stripped) < 20:
+        return False
+    if not _TABLE_HEADER_KEYWORD_RE.search(stripped):
+        return False
+    letter_count = sum(char.isalpha() for char in stripped)
+    year_count = len(_YEAR_TOKEN_RE.findall(stripped))
+    return letter_count >= 8 and (stripped.upper() == stripped or year_count >= 2 or ":" in stripped)
+
+
+def _is_strong_table_title_line(line: str) -> bool:
+    stripped = line.strip()
+    if len(stripped) < 15:
+        return False
+    if not _TABLE_HEADER_KEYWORD_RE.search(stripped):
+        return False
+    return stripped.upper() == stripped
+
+
+def _is_table_intro_line(line: str) -> bool:
+    stripped = line.strip()
+    return bool(
+        stripped
+        and _TABLE_INTRO_RE.search(stripped)
+        and (stripped.endswith(":") or len(stripped) <= 140)
+    )
+
+
+def _is_table_support_header_line(line: str) -> bool:
+    stripped = line.strip()
+    return bool(stripped and (_TABLE_UNIT_LINE_RE.match(stripped) or _TABLE_YEARS_ONLY_RE.match(stripped)))
 
 
 def _is_toc_like_line(line: str) -> bool:
@@ -346,12 +419,95 @@ def _trim_early_toc_prefix(
 
 def _line_remove(
     text: str,
+    text_scope: str,
     cfg: ItemTextCleaningConfig,
     *,
     remove_layout_lines: bool,
     remove_table_like_lines: bool,
 ) -> tuple[str, Counter[str]]:
     counts: Counter[str] = Counter()
+    table_scope_enabled = (
+        cfg.table_like_target_text_scopes is None
+        or text_scope in cfg.table_like_target_text_scopes
+    )
+    if remove_table_like_lines and cfg.drop_table_like_lines and not table_scope_enabled:
+        return "\n".join(line.rstrip() for line in text.split("\n")), counts
+    if remove_table_like_lines and cfg.drop_table_like_lines and table_scope_enabled:
+        kept_lines: list[str] = []
+        block_lines: list[tuple[str, bool, bool, bool, bool, bool]] = []
+
+        def flush_block() -> None:
+            nonlocal block_lines
+            if not block_lines:
+                return
+            table_like_count = sum(1 for _line, is_table_like, *_rest in block_lines if is_table_like)
+            header_like_count = sum(1 for _line, _is_table_like, is_header, *_rest in block_lines if is_header)
+            strong_title_count = sum(
+                1 for _line, _is_table_like, _is_header, _is_intro, is_strong_title, _is_support in block_lines if is_strong_title
+            )
+            intro_like_count = sum(
+                1 for _line, _is_table_like, _is_header, is_intro, _is_strong_title, _is_support in block_lines if is_intro
+            )
+            support_like_count = sum(
+                1 for _line, _is_table_like, _is_header, _is_intro, _is_strong_title, is_support in block_lines if is_support
+            )
+            unit_like_count = sum(
+                1
+                for raw_line, _is_table_like, _is_header, _is_intro, _is_strong_title, _is_support in block_lines
+                if _TABLE_UNIT_LINE_RE.match(raw_line.strip())
+            )
+            drop_block = table_like_count >= cfg.table_like_min_consecutive_lines
+            if (
+                not drop_block
+                and cfg.table_like_allow_single_line_with_header
+                and header_like_count > 0
+                and table_like_count >= 1
+            ):
+                drop_block = True
+            if (
+                not drop_block
+                and cfg.table_like_drop_header_context
+                and table_like_count == 0
+                and len(block_lines) >= 2
+            ):
+                if strong_title_count > 0 and support_like_count > 0:
+                    drop_block = True
+                elif intro_like_count > 0 and unit_like_count > 0 and support_like_count > unit_like_count:
+                    drop_block = True
+            for raw_line, is_table_like, is_header_like, is_intro_like, is_strong_title, is_support_like in block_lines:
+                if drop_block and (
+                    is_table_like
+                    or (cfg.table_like_drop_header_context and (is_header_like or is_intro_like or is_support_like or is_strong_title))
+                ):
+                    counts["table_like"] += 1
+                    continue
+                kept_lines.append(raw_line.rstrip())
+            block_lines = []
+
+        for line in text.split("\n"):
+            stripped = line.strip()
+            is_table_like = _is_table_like_line(stripped)
+            is_header_like = _is_table_header_like_line(stripped)
+            is_intro_like = _is_table_intro_line(stripped)
+            is_strong_title = _is_strong_table_title_line(stripped)
+            is_support_like = _is_table_support_header_line(stripped)
+            if is_table_like or is_header_like or is_intro_like or is_support_like:
+                block_lines.append(
+                    (
+                        line,
+                        is_table_like,
+                        is_header_like,
+                        is_intro_like,
+                        is_strong_title,
+                        is_support_like,
+                    )
+                )
+                continue
+            flush_block()
+            kept_lines.append(line.rstrip())
+        flush_block()
+        return "\n".join(kept_lines), counts
+
     kept_lines: list[str] = []
     for line in text.split("\n"):
         stripped = line.strip()
@@ -452,6 +608,7 @@ def clean_item_text(
 
     without_lines, line_counts = _line_remove(
         normalized,
+        text_scope,
         cfg,
         remove_layout_lines=True,
         remove_table_like_lines=False,
@@ -461,6 +618,7 @@ def clean_item_text(
     reference_only_stub = _is_reference_only_stub(_collapse_blank_runs(without_tail), cfg)
     without_tables, table_counts = _line_remove(
         without_tail,
+        text_scope,
         cfg,
         remove_layout_lines=False,
         remove_table_like_lines=True,

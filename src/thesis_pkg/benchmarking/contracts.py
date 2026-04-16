@@ -70,6 +70,14 @@ class FinbertAuthoritySpec:
 
 DEFAULT_FINBERT_AUTHORITY = FinbertAuthoritySpec()
 
+ALLOWED_SENTENCE_POSTPROCESS_POLICIES: tuple[str, ...] = (
+    "none",
+    "item7_reference_stitch_protect_v1",
+    "item7_reference_stitch_protect_v2",
+    "reference_stitch_protect_v3",
+)
+DEFAULT_RUNNER_SENTENCE_POSTPROCESS_POLICY = "reference_stitch_protect_v3"
+
 
 @dataclass(frozen=True)
 class ItemTextCleaningConfig:
@@ -82,6 +90,10 @@ class ItemTextCleaningConfig:
     truncate_item_aware_tail_bleed: bool = True
     drop_reference_only_stubs: bool = True
     drop_table_like_lines: bool = False
+    table_like_min_consecutive_lines: int = 1
+    table_like_drop_header_context: bool = False
+    table_like_allow_single_line_with_header: bool = False
+    table_like_target_text_scopes: tuple[str, ...] | None = None
     toc_scan_char_window: int = 2000
     toc_min_matching_lines: int = 2
     tail_scan_fraction: float = 0.35
@@ -98,6 +110,8 @@ class ItemTextCleaningConfig:
     def __post_init__(self) -> None:
         if not self.cleaning_policy_id:
             raise ValueError("cleaning_policy_id must be non-empty.")
+        if self.table_like_min_consecutive_lines < 1:
+            raise ValueError("table_like_min_consecutive_lines must be positive.")
         if self.toc_scan_char_window < 0:
             raise ValueError("toc_scan_char_window must be non-negative.")
         if self.toc_min_matching_lines < 1:
@@ -114,16 +128,35 @@ class ItemTextCleaningConfig:
             raise ValueError("warn_below_clean_char_count must be non-negative.")
         if not (0.0 <= self.large_removal_warning_threshold <= 1.0):
             raise ValueError("large_removal_warning_threshold must be between 0 and 1.")
+        if self.table_like_target_text_scopes is not None:
+            normalized_scopes = tuple(
+                scope.strip()
+                for scope in self.table_like_target_text_scopes
+                if str(scope).strip()
+            )
+            object.__setattr__(
+                self,
+                "table_like_target_text_scopes",
+                normalized_scopes or None,
+            )
 
 
 @dataclass(frozen=True)
 class SentenceDatasetConfig:
     enabled: bool = False
     sentencizer_backend: str = "spacy_blank_en_sentencizer"
+    postprocess_policy: str = "none"
     spacy_batch_size: int = 32
     token_length_batch_size: int = 1024
     drop_blank_sentences: bool = True
     compression: str = "zstd"
+
+    def __post_init__(self) -> None:
+        if self.postprocess_policy not in ALLOWED_SENTENCE_POSTPROCESS_POLICIES:
+            raise ValueError(
+                f"postprocess_policy must be one of {list(ALLOWED_SENTENCE_POSTPROCESS_POLICIES)!r}, "
+                f"got {self.postprocess_policy!r}."
+            )
 
 
 @dataclass(frozen=True)

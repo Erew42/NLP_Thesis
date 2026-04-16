@@ -64,6 +64,50 @@ _DOUBLE_NEWLINE_BOUNDARY_RE = re.compile(r"\n\s*\n+")
 _NEWLINE_BOUNDARY_RE = re.compile(r"\n+")
 _SENTENCE_PUNCT_BOUNDARY_RE = re.compile(r"""[.!?][)"'\]]*\s+""")
 _WHITESPACE_BOUNDARY_RE = re.compile(r"\s+")
+_NORMALIZED_WHITESPACE_RE = re.compile(r"\s+")
+_REFERENCE_STUB_END_RE = re.compile(r"\b(?:SFAS|SAB|FIN|FASB|ASC|EITF)\s+No\.$", re.IGNORECASE)
+_GENERIC_REFERENCE_NO_END_RE = re.compile(r"\bNo\.$", re.IGNORECASE)
+_SEPARATOR_ONLY_RE = re.compile(r"^[-_=*]{3,}$")
+_UNIT_HEADER_RE = re.compile(r"^\(?DOLLARS IN (?:THOUSANDS|MILLIONS)\)?$", re.IGNORECASE)
+_NOTE_CONTINUED_RE = re.compile(r"^(?:NOTE|ITEM)\b.*\((?:CONTINUED|UNAUDITED)\)\.?$", re.IGNORECASE)
+_CITATION_PREFIX_ONLY_RE = re.compile(
+    r"^(?:\d+[A-Za-z](?:\s*\([A-Za-z]\))?(?:-\d+)?"
+    r"|\d+\s*\([A-Za-z]\)(?:-\d+)?"
+    r"|\d+-\d+)"
+    r"\s*[),.]*(?:\s*\))?\s*$",
+    re.IGNORECASE,
+)
+_CITATION_CONTINUATION_START_RE = re.compile(
+    r"^(?:(?:FSP\s+)?(?:SFAS|SAB|FIN|FASB|ASC|EITF)\s+No\."
+    r"|(?:statement|opinion|interpretation|position)\s+No\."
+    r"|\d+(?:[A-Za-z]|\s*\([A-Za-z]+\)|-\d+|,|\.))",
+    re.IGNORECASE,
+)
+_V3_CITATION_CONTINUATION_START_RE = re.compile(
+    r"^(?:(?:FSP\s+)?(?:SFAS|SAB|FIN|FASB|ASC|EITF)\s+No\."
+    r"|(?:statement|opinion|interpretation|position)\s+No\."
+    r"|\d+(?:[A-Za-z]|\s*\([A-Za-z]+\)|-\d+|,|\.|\)|\s))",
+    re.IGNORECASE,
+)
+_HEADER_KEYWORD_RE = re.compile(
+    r"\b(?:CONSOLIDATED|STATEMENTS?|BALANCE SHEETS?|CASH FLOWS?|OPERATIONS|CHANGES IN|"
+    r"REPORTABLE SEGMENTS|AND SUBSIDIARIES|PAYMENTS DUE BY PERIOD)\b",
+    re.IGNORECASE,
+)
+_ITEM7_ARTIFACT_CLEANUP_POLICIES = frozenset(
+    {
+        "item7_reference_stitch_protect_v1",
+        "item7_reference_stitch_protect_v2",
+        "reference_stitch_protect_v3",
+    }
+)
+_V3_REFERENCE_STITCH_SCOPES = frozenset(
+    {
+        "item_1_business",
+        "item_1a_risk_factors",
+        "item_7_mda",
+    }
+)
 
 _SECTION_METADATA_COLUMNS: tuple[str, ...] = (
     "cik_10",
@@ -143,6 +187,10 @@ def _build_sentencizer(cfg: SentenceDatasetConfig) -> Any:
             "Install thesis_pkg[benchmark] before enabling sentence artifact generation."
         ) from exc
 
+    # Keep the simple sentencizer backend here. The remaining quality issues in this
+    # project are mostly citation-continuation stitching and upstream structure leakage,
+    # not punctuation tuning, and the official spaCy Sentencizer config surface does
+    # not address those problems directly.
     nlp = spacy.blank("en")
     if "sentencizer" not in nlp.pipe_names:
         nlp.add_pipe("sentencizer")
@@ -255,6 +303,193 @@ def _expand_chunked_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any
     return expanded_rows, pl.DataFrame(audit_rows, schema=SENTENCE_SPLIT_AUDIT_SCHEMA)
 
 
+def _normalize_sentence_key(text: str) -> str:
+    return _NORMALIZED_WHITESPACE_RE.sub(" ", str(text)).strip()
+
+
+def _ends_with_reference_stub(text: str) -> bool:
+    return bool(_REFERENCE_STUB_END_RE.search(_normalize_sentence_key(text)))
+
+
+def _ends_with_generic_reference_no(text: str) -> bool:
+    return bool(_GENERIC_REFERENCE_NO_END_RE.search(_normalize_sentence_key(text)))
+
+
+def _is_citation_prefix_only_line(line: str) -> bool:
+    return bool(_CITATION_PREFIX_ONLY_RE.fullmatch(line.strip()))
+
+
+def _looks_like_citation_continuation(text: str) -> bool:
+    return bool(_CITATION_CONTINUATION_START_RE.search(_normalize_sentence_key(text)))
+
+
+def _looks_like_citation_continuation_v3(text: str) -> bool:
+    return bool(_V3_CITATION_CONTINUATION_START_RE.search(_normalize_sentence_key(text)))
+
+
+def _is_separator_line(line: str) -> bool:
+    return bool(_SEPARATOR_ONLY_RE.fullmatch(line.strip()))
+
+
+def _is_header_like_line(line: str) -> bool:
+    stripped = line.strip()
+    if not stripped:
+        return True
+    if _is_citation_prefix_only_line(stripped):
+        return False
+    if _is_separator_line(stripped):
+        return True
+    if _UNIT_HEADER_RE.fullmatch(stripped):
+        return True
+    if _NOTE_CONTINUED_RE.fullmatch(stripped):
+        return True
+    if _HEADER_KEYWORD_RE.search(stripped) and stripped.upper() == stripped:
+        return True
+    letters = [char for char in stripped if char.isalpha()]
+    if not letters:
+        return False
+    if any(char.islower() for char in letters):
+        return False
+    if len(stripped) > 140:
+        return False
+    return True
+
+
+def _strip_leading_artifact_lines(text: str) -> str:
+    lines = [line.strip() for line in str(text).splitlines()]
+    if not lines:
+        return ""
+    kept_start = 0
+    while kept_start < len(lines) and _is_header_like_line(lines[kept_start]):
+        kept_start += 1
+    if kept_start >= len(lines):
+        return ""
+    return "\n".join(line for line in lines[kept_start:] if line)
+
+
+def _is_artifact_only_sentence(text: str) -> bool:
+    lines = [line.strip() for line in str(text).splitlines() if line.strip()]
+    if not lines:
+        return True
+    return all(_is_header_like_line(line) for line in lines)
+
+
+def _join_sentence_fragments(current: str, next_text: str) -> str:
+    left = current.rstrip()
+    right = next_text.lstrip()
+    if not left:
+        return right
+    if not right:
+        return left
+    if left.endswith("-") and right[:1].islower():
+        return f"{left}{right}"
+    return f"{left} {right}"
+
+
+def _should_stitch_item7_sentence(current: str, next_text: str) -> bool:
+    next_clean = next_text.strip()
+    if not next_clean:
+        return False
+    if _ends_with_reference_stub(current):
+        return True
+    return current.rstrip().endswith("-") and next_clean[:1].islower()
+
+
+def _should_stitch_item7_sentence_v2(current: str, next_text: str) -> bool:
+    next_clean = next_text.strip()
+    if not next_clean:
+        return False
+    if _should_stitch_item7_sentence(current, next_clean):
+        return True
+    return _ends_with_generic_reference_no(current) and _looks_like_citation_continuation(next_clean)
+
+
+def _should_stitch_reference_sentence_v3(current: str, next_text: str) -> bool:
+    next_clean = next_text.strip()
+    if not next_clean:
+        return False
+    if _should_stitch_item7_sentence(current, next_clean):
+        return True
+    return _ends_with_generic_reference_no(current) and _looks_like_citation_continuation_v3(next_clean)
+
+
+def _should_apply_item7_artifact_cleanup(*, policy: str, text_scope: str | None) -> bool:
+    return text_scope == "item_7_mda" and policy in _ITEM7_ARTIFACT_CLEANUP_POLICIES
+
+
+def _citation_stitcher_for_policy(policy: str):
+    if policy == "item7_reference_stitch_protect_v1":
+        return _should_stitch_item7_sentence
+    if policy == "item7_reference_stitch_protect_v2":
+        return _should_stitch_item7_sentence_v2
+    if policy == "reference_stitch_protect_v3":
+        return _should_stitch_reference_sentence_v3
+    return None
+
+
+def _should_apply_reference_stitching(*, policy: str, text_scope: str | None) -> bool:
+    stitcher = _citation_stitcher_for_policy(policy)
+    if stitcher is None or text_scope is None:
+        return False
+    if policy == "reference_stitch_protect_v3":
+        return text_scope in _V3_REFERENCE_STITCH_SCOPES
+    return text_scope == "item_7_mda"
+
+
+def _postprocess_sentence_texts(
+    sentence_texts: list[str],
+    *,
+    text_scope: str | None,
+    cfg: SentenceDatasetConfig,
+) -> list[str]:
+    if cfg.postprocess_policy == "none":
+        return sentence_texts
+
+    artifact_cleanup = _should_apply_item7_artifact_cleanup(
+        policy=cfg.postprocess_policy,
+        text_scope=text_scope,
+    )
+    reference_stitching = _should_apply_reference_stitching(
+        policy=cfg.postprocess_policy,
+        text_scope=text_scope,
+    )
+    if not artifact_cleanup and not reference_stitching:
+        return sentence_texts
+
+    normalized_texts = (
+        [_strip_leading_artifact_lines(text) for text in sentence_texts]
+        if artifact_cleanup
+        else list(sentence_texts)
+    )
+    stitcher = _citation_stitcher_for_policy(cfg.postprocess_policy)
+    processed: list[str] = []
+    idx = 0
+    while idx < len(normalized_texts):
+        current = normalized_texts[idx].strip()
+        if not current:
+            idx += 1
+            continue
+        next_idx = idx + 1
+        while next_idx < len(normalized_texts):
+            while next_idx < len(normalized_texts) and not normalized_texts[next_idx].strip():
+                next_idx += 1
+            if next_idx >= len(normalized_texts):
+                break
+            next_text = normalized_texts[next_idx].strip()
+            if not reference_stitching or stitcher is None or not stitcher(current, next_text):
+                break
+            current = _join_sentence_fragments(current, next_text)
+            idx = next_idx
+            next_idx = idx + 1
+        if artifact_cleanup and _is_artifact_only_sentence(current):
+            idx += 1
+            continue
+        if current:
+            processed.append(current)
+        idx += 1
+    return processed
+
+
 def _derive_sentence_batch(
     batch_df: pl.DataFrame,
     cfg: SentenceDatasetConfig,
@@ -282,8 +517,13 @@ def _derive_sentence_batch(
     for row, doc in zip(expanded_rows, nlp.pipe(texts, batch_size=cfg.spacy_batch_size)):
         benchmark_row_id = str(row["benchmark_row_id"])
         sentence_index = sentence_index_by_row_id.get(benchmark_row_id, 0)
-        for sent in doc.sents:
-            sentence_text = sent.text.strip()
+        raw_sentence_texts = [sent.text.strip() for sent in doc.sents]
+        sentence_texts = _postprocess_sentence_texts(
+            raw_sentence_texts,
+            text_scope=row.get("text_scope"),
+            cfg=cfg,
+        )
+        for sentence_text in sentence_texts:
             if cfg.drop_blank_sentences and not sentence_text:
                 continue
             records.append(

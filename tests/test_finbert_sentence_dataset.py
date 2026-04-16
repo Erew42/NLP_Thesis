@@ -727,3 +727,227 @@ def test_run_finbert_sentence_preprocessing_logs_fallback_split_reasons_and_warn
     assert manifest["counts"]["chunked_section_rows"] == 2
     assert manifest["counts"]["warning_split_rows"] == 2
     assert manifest["artifacts"]["oversize_sections_path"] == "oversize_sections.parquet"
+
+
+def test_postprocess_sentence_texts_merges_item7_reference_stub_chain() -> None:
+    from thesis_pkg.benchmarking import sentences
+
+    cfg = SentenceDatasetConfig(postprocess_policy="item7_reference_stitch_protect_v1")
+    result = sentences._postprocess_sentence_texts(
+        [
+            "The above referenced transaction is accounted for under SFAS No.",
+            '133, "Accounting for Derivative Instruments and Certain Hedging Activities" and SFAS No.',
+            '138, "Accounting for Certain Derivative Instruments and Certain Hedging Activities, an Amendment of SFAS No.',
+            '133."',
+        ],
+        text_scope="item_7_mda",
+        cfg=cfg,
+    )
+
+    assert result == [
+        'The above referenced transaction is accounted for under SFAS No. 133, "Accounting for Derivative Instruments and Certain Hedging Activities" and SFAS No. 138, "Accounting for Certain Derivative Instruments and Certain Hedging Activities, an Amendment of SFAS No. 133."'
+    ]
+
+
+def test_postprocess_sentence_texts_strips_leading_item7_artifact_lines() -> None:
+    from thesis_pkg.benchmarking import sentences
+
+    cfg = SentenceDatasetConfig(postprocess_policy="item7_reference_stitch_protect_v1")
+    result = sentences._postprocess_sentence_texts(
+        [
+            "NOTE E - INCOME TAXES (CONTINUED)\n---------------\nThe Company recorded deferred tax expense.",
+        ],
+        text_scope="item_7_mda",
+        cfg=cfg,
+    )
+
+    assert result == ["The Company recorded deferred tax expense."]
+
+
+def test_postprocess_sentence_texts_drops_pure_item7_header_artifacts() -> None:
+    from thesis_pkg.benchmarking import sentences
+
+    cfg = SentenceDatasetConfig(postprocess_policy="item7_reference_stitch_protect_v1")
+    result = sentences._postprocess_sentence_texts(
+        [
+            "CONSOLIDATED STATEMENTS OF CASH FLOWS",
+            "The Company generated cash from operations.",
+        ],
+        text_scope="item_7_mda",
+        cfg=cfg,
+    )
+
+    assert result == ["The Company generated cash from operations."]
+
+
+def test_postprocess_sentence_texts_leaves_non_item7_scopes_unchanged() -> None:
+    from thesis_pkg.benchmarking import sentences
+
+    cfg = SentenceDatasetConfig(postprocess_policy="item7_reference_stitch_protect_v1")
+    original = ["SFAS No.", "123R requires liability classification."]
+    result = sentences._postprocess_sentence_texts(
+        original,
+        text_scope="item_1_business",
+        cfg=cfg,
+    )
+
+    assert result == original
+
+
+def test_postprocess_sentence_texts_item7_v2_preserves_citation_prefix_lines() -> None:
+    from thesis_pkg.benchmarking import sentences
+
+    cfg = SentenceDatasetConfig(postprocess_policy="item7_reference_stitch_protect_v2")
+    result = sentences._postprocess_sentence_texts(
+        [
+            "In December 2004, the FASB issued SFAS No.",
+            "123(R),\n Accounting for Stock-Based Compensation SFAS No.",
+            "123(R) ).",
+            "SFAS No.",
+            "123(R) establishes standards for the accounting for transactions in which an entity exchanges its equity instruments for goods or services.",
+        ],
+        text_scope="item_7_mda",
+        cfg=cfg,
+    )
+
+    assert result == [
+        "In December 2004, the FASB issued SFAS No. 123(R),\nAccounting for Stock-Based Compensation SFAS No. 123(R) ).",
+        "SFAS No. 123(R) establishes standards for the accounting for transactions in which an entity exchanges its equity instruments for goods or services.",
+    ]
+
+
+def test_postprocess_sentence_texts_item7_v2_stitches_generic_statement_no_chain() -> None:
+    from thesis_pkg.benchmarking import sentences
+
+    cfg = SentenceDatasetConfig(postprocess_policy="item7_reference_stitch_protect_v2")
+    result = sentences._postprocess_sentence_texts(
+        [
+            "In December 2004, the Financial Accounting Standards Board issued revised Statement of Financial Accounting Standards No.",
+            "123, Share-Based Payment (SFAS No.",
+            "123R).",
+            "SFAS 123R clarifies and expands Statement 123 s guidance in several areas.",
+        ],
+        text_scope="item_7_mda",
+        cfg=cfg,
+    )
+
+    assert result == [
+        "In December 2004, the Financial Accounting Standards Board issued revised Statement of Financial Accounting Standards No. 123, Share-Based Payment (SFAS No. 123R).",
+        "SFAS 123R clarifies and expands Statement 123 s guidance in several areas.",
+    ]
+
+
+def test_postprocess_sentence_texts_item7_v2_skips_blank_artifacts_between_stitches() -> None:
+    from thesis_pkg.benchmarking import sentences
+
+    cfg = SentenceDatasetConfig(postprocess_policy="item7_reference_stitch_protect_v2")
+    result = sentences._postprocess_sentence_texts(
+        [
+            "FSP SFAS No.",
+            "---------------",
+            "141(R)-1, Accounting for Assets Acquired and Liabilities Assumed in a Business Combination That Arise from Contingencies FSP SFAS No.",
+            "141(R)-1 ).",
+        ],
+        text_scope="item_7_mda",
+        cfg=cfg,
+    )
+
+    assert result == [
+        "FSP SFAS No. 141(R)-1, Accounting for Assets Acquired and Liabilities Assumed in a Business Combination That Arise from Contingencies FSP SFAS No. 141(R)-1 ).",
+    ]
+
+
+def test_postprocess_sentence_texts_v3_stitches_item1_reference_continuation() -> None:
+    from thesis_pkg.benchmarking import sentences
+
+    cfg = SentenceDatasetConfig(postprocess_policy="reference_stitch_protect_v3")
+    result = sentences._postprocess_sentence_texts(
+        [
+            "Management believes that the disclosures required by Statement No.",
+            "130 are unnecessary in light of the current presentation.",
+        ],
+        text_scope="item_1_business",
+        cfg=cfg,
+    )
+
+    assert result == [
+        "Management believes that the disclosures required by Statement No. 130 are unnecessary in light of the current presentation.",
+    ]
+
+
+def test_postprocess_sentence_texts_v3_stitches_item1a_reference_continuation() -> None:
+    from thesis_pkg.benchmarking import sentences
+
+    cfg = SentenceDatasetConfig(postprocess_policy="reference_stitch_protect_v3")
+    result = sentences._postprocess_sentence_texts(
+        [
+            "Under Accounting Standard Codification (ASC) 715, formerly SFAS No.",
+            "158), we recorded an after-tax charge to shareholders equity.",
+        ],
+        text_scope="item_1a_risk_factors",
+        cfg=cfg,
+    )
+
+    assert result == [
+        "Under Accounting Standard Codification (ASC) 715, formerly SFAS No. 158), we recorded an after-tax charge to shareholders equity.",
+    ]
+
+
+def test_postprocess_sentence_texts_v3_retains_item7_v2_behavior() -> None:
+    from thesis_pkg.benchmarking import sentences
+
+    cfg = SentenceDatasetConfig(postprocess_policy="reference_stitch_protect_v3")
+    result = sentences._postprocess_sentence_texts(
+        [
+            "In December 2004, the Financial Accounting Standards Board issued revised Statement of Financial Accounting Standards No.",
+            "123, Share-Based Payment (SFAS No.",
+            "123R).",
+            "SFAS 123R clarifies and expands Statement 123 s guidance in several areas.",
+        ],
+        text_scope="item_7_mda",
+        cfg=cfg,
+    )
+
+    assert result == [
+        "In December 2004, the Financial Accounting Standards Board issued revised Statement of Financial Accounting Standards No. 123, Share-Based Payment (SFAS No. 123R).",
+        "SFAS 123R clarifies and expands Statement 123 s guidance in several areas.",
+    ]
+
+
+def test_postprocess_sentence_texts_v3_does_not_strip_non_item7_heading_lines() -> None:
+    from thesis_pkg.benchmarking import sentences
+
+    cfg = SentenceDatasetConfig(postprocess_policy="reference_stitch_protect_v3")
+    business = ["BUSINESS.\nThe Company operates worldwide."]
+    risk_factors = ["RISK FACTORS.\nOur business is exposed to market volatility."]
+
+    assert (
+        sentences._postprocess_sentence_texts(
+            business,
+            text_scope="item_1_business",
+            cfg=cfg,
+        )
+        == business
+    )
+    assert (
+        sentences._postprocess_sentence_texts(
+            risk_factors,
+            text_scope="item_1a_risk_factors",
+            cfg=cfg,
+        )
+        == risk_factors
+    )
+
+
+def test_postprocess_sentence_texts_v3_leaves_numeric_enumerator_fragments_unchanged() -> None:
+    from thesis_pkg.benchmarking import sentences
+
+    cfg = SentenceDatasetConfig(postprocess_policy="reference_stitch_protect_v3")
+    original = ["3.", "Agreement continues with substantive text."]
+    result = sentences._postprocess_sentence_texts(
+        original,
+        text_scope="item_1_business",
+        cfg=cfg,
+    )
+
+    assert result == original
