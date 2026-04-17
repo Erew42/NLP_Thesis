@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
 import datetime as dt
+import gc
 import math
 from pathlib import Path
 import shutil
@@ -399,12 +400,12 @@ def _price_expr_from_available_columns(
     return pl.coalesce(exprs)
 
 
-def _prepare_table_i_base_frame(
+def _prepare_table_i_base_lf(
     sample_backbone_lf: pl.LazyFrame,
     daily_lf: pl.LazyFrame,
     annual_accounting_panel_lf: pl.LazyFrame,
     full_10k_text_features_lf: pl.LazyFrame | None,
-) -> pl.DataFrame:
+) -> pl.LazyFrame:
     if full_10k_text_features_lf is None:
         raise ValueError(
             "full_10k_text_features_lf is required; fail-closed external_input_policy forbids LM2011 clean panels without token-count text features"
@@ -459,8 +460,51 @@ def _prepare_table_i_base_frame(
             pl.col("KYPERMNO").cast(pl.Int32, strict=False),
             pl.col("gvkey_int").cast(pl.Int32, strict=False),
         )
-        .collect()
     )
+
+
+def _prepare_table_i_base_frame(
+    sample_backbone_lf: pl.LazyFrame,
+    daily_lf: pl.LazyFrame,
+    annual_accounting_panel_lf: pl.LazyFrame,
+    full_10k_text_features_lf: pl.LazyFrame | None,
+) -> pl.DataFrame:
+    return _prepare_table_i_base_lf(
+        sample_backbone_lf,
+        daily_lf,
+        annual_accounting_panel_lf,
+        full_10k_text_features_lf,
+    ).collect()
+
+
+def _build_event_doc_manifest(docs_base: pl.LazyFrame | pl.DataFrame) -> pl.DataFrame:
+    if isinstance(docs_base, pl.DataFrame):
+        manifest = docs_base.select(
+            pl.col("doc_id").cast(pl.Utf8, strict=False).alias("doc_id"),
+            pl.col("filing_date").cast(pl.Date, strict=False).alias("filing_date"),
+            pl.col("KYPERMNO").cast(pl.Int32, strict=False).alias("KYPERMNO"),
+        )
+    else:
+        manifest = docs_base.select(
+            pl.col("doc_id").cast(pl.Utf8, strict=False).alias("doc_id"),
+            pl.col("filing_date").cast(pl.Date, strict=False).alias("filing_date"),
+            pl.col("KYPERMNO").cast(pl.Int32, strict=False).alias("KYPERMNO"),
+        ).collect()
+    manifest = manifest.sort("filing_date", "KYPERMNO", "doc_id")
+    duplicate_doc_ids = (
+        manifest.group_by("doc_id")
+        .len()
+        .filter(pl.col("len") > 1)
+        .get_column("doc_id")
+        .to_list()
+    )
+    if duplicate_doc_ids:
+        raise ValueError(f"LM2011 event-screen docs must be unique on doc_id: {duplicate_doc_ids[:10]}")
+    return manifest
+
+
+def _collect_event_doc_batch(docs_df: pl.DataFrame, *, batch_start: int, batch_size: int) -> pl.DataFrame:
+    return docs_df.slice(batch_start, batch_size)
 
 
 def _prepare_daily_event_source_lf(
@@ -919,12 +963,16 @@ def write_lm2011_event_screen_surface_parquet(
     temp_root: Path | None = None,
     cleanup_on_success: bool = True,
 ) -> int:
-    docs_df = _prepare_table_i_base_frame(
+    docs_base_lf = _prepare_table_i_base_lf(
         sample_backbone_lf,
         daily_lf,
         annual_accounting_panel_lf,
         full_10k_text_features_lf,
     )
+    # Materialize the doc base once here so the heavy upstream joins are not rerun for
+    # every event-window shard.
+    docs_df = docs_base_lf.collect().sort("filing_date", "KYPERMNO", "doc_id")
+    docs_manifest = _build_event_doc_manifest(docs_df)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     resolved_temp_root = temp_root or output_path.parent / f".{output_path.stem}_tmp"
     if resolved_temp_root.exists():
@@ -934,7 +982,7 @@ def write_lm2011_event_screen_surface_parquet(
     shard_dir.mkdir(parents=True, exist_ok=True)
 
     try:
-        if docs_df.height == 0:
+        if docs_manifest.height == 0:
             _empty_event_screen_surface_df().write_parquet(
                 output_path,
                 compression=_STREAMING_PARQUET_COMPRESSION,
@@ -944,15 +992,18 @@ def write_lm2011_event_screen_surface_parquet(
             return 0
 
         batch_size = _validated_event_window_doc_batch_size(event_window_doc_batch_size)
-        docs_sorted = docs_df.sort("filing_date", "KYPERMNO", "doc_id")
         daily_source_lf = _prepare_daily_event_source_lf(daily_lf)
         factors_df = _prepare_daily_factor_frame(ff_factors_daily_lf)
-        total_docs = docs_sorted.height
+        total_docs = docs_manifest.height
         total_batches = int(math.ceil(total_docs / batch_size))
         shard_paths: list[Path] = []
 
         for batch_start in range(0, total_docs, batch_size):
-            docs_batch = docs_sorted.slice(batch_start, batch_size)
+            docs_batch = _collect_event_doc_batch(
+                docs_df,
+                batch_start=batch_start,
+                batch_size=batch_size,
+            )
             daily_batch_df = _collect_daily_event_batch(daily_source_lf, factors_df, docs_batch)
             surface_batch = _build_lm2011_event_screen_surface(docs_batch, daily_batch_df)
             if not surface_batch.is_empty():
@@ -970,6 +1021,10 @@ def write_lm2011_event_screen_surface_parquet(
                         "docs_total": total_docs,
                     }
                 )
+            del docs_batch
+            del daily_batch_df
+            del surface_batch
+            gc.collect()
 
         if output_path.exists():
             output_path.unlink()
@@ -1001,25 +1056,32 @@ def _build_lm2011_event_screen_surface_batched(
     event_window_doc_batch_size: int = DEFAULT_EVENT_WINDOW_DOC_BATCH_SIZE,
     progress_callback: Callable[[dict[str, int]], None] | None = None,
 ) -> pl.DataFrame:
-    docs_df = _prepare_table_i_base_frame(
+    docs_base_lf = _prepare_table_i_base_lf(
         sample_backbone_lf,
         daily_lf,
         annual_accounting_panel_lf,
         full_10k_text_features_lf,
     )
-    if docs_df.height == 0:
+    # The batched builder keeps a single eager doc base so batch iteration does not
+    # repeatedly rerun the upstream backbone/accounting/pre-market join graph.
+    docs_df = docs_base_lf.collect().sort("filing_date", "KYPERMNO", "doc_id")
+    docs_manifest = _build_event_doc_manifest(docs_df)
+    if docs_manifest.height == 0:
         return _empty_event_screen_surface_df()
 
     batch_size = _validated_event_window_doc_batch_size(event_window_doc_batch_size)
-    docs_sorted = docs_df.sort("filing_date", "KYPERMNO", "doc_id")
     daily_source_lf = _prepare_daily_event_source_lf(daily_lf)
     factors_df = _prepare_daily_factor_frame(ff_factors_daily_lf)
     batch_frames: list[pl.DataFrame] = []
-    total_docs = docs_sorted.height
+    total_docs = docs_manifest.height
     total_batches = int(math.ceil(total_docs / batch_size))
 
     for batch_start in range(0, total_docs, batch_size):
-        docs_batch = docs_sorted.slice(batch_start, batch_size)
+        docs_batch = _collect_event_doc_batch(
+            docs_df,
+            batch_start=batch_start,
+            batch_size=batch_size,
+        )
         daily_batch_df = _collect_daily_event_batch(daily_source_lf, factors_df, docs_batch)
         batch_frames.append(_build_lm2011_event_screen_surface(docs_batch, daily_batch_df))
         if progress_callback is not None:
@@ -1033,6 +1095,9 @@ def _build_lm2011_event_screen_surface_batched(
                     "docs_total": total_docs,
                 }
             )
+        del docs_batch
+        del daily_batch_df
+        gc.collect()
 
     if not batch_frames:
         return _empty_event_screen_surface_df()
@@ -1447,16 +1512,10 @@ def _attach_pre_filing_price_and_prior_month_price(event_panel_df: pl.DataFrame,
     )
 
 
-def build_lm2011_sue_panel(
+def _prepare_lm2011_sue_docs_base_lf(
     event_panel_lf: pl.LazyFrame,
     quarterly_accounting_panel_lf: pl.LazyFrame,
-    ibes_unadjusted_earnings_lf: pl.LazyFrame | None,
-    daily_lf: pl.LazyFrame,
 ) -> pl.LazyFrame:
-    if ibes_unadjusted_earnings_lf is None:
-        raise ValueError(
-            "ibes_unadjusted_earnings_lf is required; fail-closed external_input_policy forbids SUE panels without I/B/E/S"
-        )
     _require_columns(
         event_panel_lf,
         (
@@ -1474,40 +1533,58 @@ def build_lm2011_sue_panel(
         ),
         "event_panel",
     )
-    docs_df = (
+    return (
         attach_eligible_quarterly_accounting(
             event_panel_lf.with_columns(pl.col("gvkey_int").cast(pl.Int32, strict=False).alias("_lm2011_gvkey_int")),
             quarterly_accounting_panel_lf.with_columns(pl.col("gvkey_int").cast(pl.Int32, strict=False).alias("gvkey_int")),
             filing_gvkey_col="_lm2011_gvkey_int",
         )
-        .with_columns(pl.col("_lm2011_gvkey_int").cast(pl.Int32, strict=False).alias("gvkey_int"))
-        .collect()
+        .with_columns(
+            pl.col("_lm2011_gvkey_int").cast(pl.Int32, strict=False).alias("gvkey_int"),
+            pl.coalesce(
+                [
+                    pl.col("APDEDATEQ").cast(pl.Date, strict=False),
+                    pl.col("PDATEQ").cast(pl.Date, strict=False),
+                ]
+            ).alias("_quarter_fiscal_period_end"),
+        )
+        .filter(pl.col("quarter_report_date").is_not_null())
     )
-    docs_df = docs_df.filter(pl.col("quarter_report_date").is_not_null())
-    if docs_df.height == 0:
-        return _empty_sue_panel_df().lazy()
 
-    docs_df = docs_df.with_columns(
-        pl.coalesce(
-            [
-                pl.col("APDEDATEQ").cast(pl.Date, strict=False),
-                pl.col("PDATEQ").cast(pl.Date, strict=False),
-            ]
-        ).alias("_quarter_fiscal_period_end")
-    )
-    relevant_gvkeys = [
-        int(value)
-        for value in docs_df.get_column("gvkey_int").drop_nulls().unique().to_list()
-    ]
-    if not relevant_gvkeys:
-        return _empty_sue_panel_df().lazy()
-    announcement_min = docs_df.select(pl.col("quarter_report_date").min()).item()
-    announcement_max = docs_df.select(pl.col("quarter_report_date").max()).item()
+
+def _resolve_lm2011_sue_global_fiscal_window_policy(
+    docs_df: pl.DataFrame,
+) -> tuple[bool, dt.date | None, dt.date | None]:
+    if docs_df.height == 0:
+        return False, None, None
     fiscal_min = docs_df.select(pl.col("_quarter_fiscal_period_end").min()).item()
     fiscal_max = docs_df.select(pl.col("_quarter_fiscal_period_end").max()).item()
     require_exact_fiscal_window = bool(
         docs_df.select(pl.col("_quarter_fiscal_period_end").is_not_null().all()).item()
     )
+    return require_exact_fiscal_window, fiscal_min, fiscal_max
+
+
+def _build_lm2011_sue_panel_batch_df(
+    docs_df: pl.DataFrame,
+    *,
+    ibes_unadjusted_earnings_lf: pl.LazyFrame,
+    daily_lf: pl.LazyFrame,
+    global_require_exact_fiscal_window: bool,
+    global_fiscal_min: dt.date | None,
+    global_fiscal_max: dt.date | None,
+) -> pl.DataFrame:
+    if docs_df.height == 0:
+        return _empty_sue_panel_df()
+
+    relevant_gvkeys = [
+        int(value)
+        for value in docs_df.get_column("gvkey_int").drop_nulls().unique().to_list()
+    ]
+    if not relevant_gvkeys:
+        return _empty_sue_panel_df()
+    announcement_min = docs_df.select(pl.col("quarter_report_date").min()).item()
+    announcement_max = docs_df.select(pl.col("quarter_report_date").max()).item()
 
     docs_df = _attach_pre_filing_price_and_prior_month_price(docs_df, daily_lf)
     _require_columns(
@@ -1545,11 +1622,11 @@ def build_lm2011_sue_panel(
         )
         & (
             pl.col("fiscal_period_end").cast(pl.Date, strict=False).is_between(
-                fiscal_min,
-                fiscal_max,
+                global_fiscal_min,
+                global_fiscal_max,
                 closed="both",
             )
-            if require_exact_fiscal_window and fiscal_min is not None and fiscal_max is not None
+            if global_require_exact_fiscal_window and global_fiscal_min is not None and global_fiscal_max is not None
             else pl.lit(True)
         )
     ).collect().unique(maintain_order=True)
@@ -1569,7 +1646,7 @@ def build_lm2011_sue_panel(
         & pl.col("analyst_revisions").is_not_null()
     )
     if out.height == 0:
-        return _empty_sue_panel_df().lazy()
+        return _empty_sue_panel_df()
 
     return out.select(
         "doc_id",
@@ -1586,7 +1663,118 @@ def build_lm2011_sue_panel(
         "pre_ffalpha",
         "institutional_ownership",
         "nasdaq_dummy",
+    )
+
+
+def build_lm2011_sue_panel(
+    event_panel_lf: pl.LazyFrame,
+    quarterly_accounting_panel_lf: pl.LazyFrame,
+    ibes_unadjusted_earnings_lf: pl.LazyFrame | None,
+    daily_lf: pl.LazyFrame,
+) -> pl.LazyFrame:
+    if ibes_unadjusted_earnings_lf is None:
+        raise ValueError(
+            "ibes_unadjusted_earnings_lf is required; fail-closed external_input_policy forbids SUE panels without I/B/E/S"
+        )
+    docs_df = _prepare_lm2011_sue_docs_base_lf(
+        event_panel_lf,
+        quarterly_accounting_panel_lf,
+    ).collect()
+    global_require_exact_fiscal_window, global_fiscal_min, global_fiscal_max = (
+        _resolve_lm2011_sue_global_fiscal_window_policy(docs_df)
+    )
+    return _build_lm2011_sue_panel_batch_df(
+        docs_df,
+        ibes_unadjusted_earnings_lf=ibes_unadjusted_earnings_lf,
+        daily_lf=daily_lf,
+        global_require_exact_fiscal_window=global_require_exact_fiscal_window,
+        global_fiscal_min=global_fiscal_min,
+        global_fiscal_max=global_fiscal_max,
     ).lazy()
+
+
+def write_lm2011_sue_panel_parquet(
+    event_panel_lf: pl.LazyFrame,
+    quarterly_accounting_panel_lf: pl.LazyFrame,
+    ibes_unadjusted_earnings_lf: pl.LazyFrame | None,
+    daily_lf: pl.LazyFrame,
+    *,
+    output_path: Path,
+    doc_batch_size: int = DEFAULT_EVENT_WINDOW_DOC_BATCH_SIZE,
+    cleanup_on_success: bool = True,
+) -> int:
+    if ibes_unadjusted_earnings_lf is None:
+        raise ValueError(
+            "ibes_unadjusted_earnings_lf is required; fail-closed external_input_policy forbids SUE panels without I/B/E/S"
+        )
+    docs_base_lf = _prepare_lm2011_sue_docs_base_lf(
+        event_panel_lf,
+        quarterly_accounting_panel_lf,
+    )
+    # Materialize the joined doc-quarter base once here so the accounting/event graph
+    # is reused across SUE shards instead of being recollected per batch.
+    docs_df = docs_base_lf.collect().sort("quarter_report_date", "filing_date", "doc_id")
+    global_require_exact_fiscal_window, global_fiscal_min, global_fiscal_max = (
+        _resolve_lm2011_sue_global_fiscal_window_policy(docs_df)
+    )
+    docs_manifest = (
+        docs_df.select(
+            pl.col("doc_id").cast(pl.Utf8, strict=False).alias("doc_id"),
+            pl.col("quarter_report_date").cast(pl.Date, strict=False).alias("quarter_report_date"),
+            pl.col("filing_date").cast(pl.Date, strict=False).alias("filing_date"),
+        )
+        .sort("quarter_report_date", "filing_date", "doc_id")
+    )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    resolved_temp_root = output_path.parent / f".{output_path.stem}_tmp"
+    if resolved_temp_root.exists():
+        shutil.rmtree(resolved_temp_root)
+    resolved_temp_root.mkdir(parents=True, exist_ok=True)
+    shard_dir = resolved_temp_root / "shards"
+    shard_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        if docs_manifest.height == 0:
+            _empty_sue_panel_df().write_parquet(output_path, compression=_STREAMING_PARQUET_COMPRESSION)
+            if cleanup_on_success and resolved_temp_root.exists():
+                shutil.rmtree(resolved_temp_root)
+            return 0
+
+        batch_size = _validated_event_window_doc_batch_size(doc_batch_size)
+        shard_paths: list[Path] = []
+        for batch_start in range(0, docs_manifest.height, batch_size):
+            docs_batch = docs_df.slice(batch_start, batch_size)
+            sue_batch = _build_lm2011_sue_panel_batch_df(
+                docs_batch,
+                ibes_unadjusted_earnings_lf=ibes_unadjusted_earnings_lf,
+                daily_lf=daily_lf,
+                global_require_exact_fiscal_window=global_require_exact_fiscal_window,
+                global_fiscal_min=global_fiscal_min,
+                global_fiscal_max=global_fiscal_max,
+            )
+            if not sue_batch.is_empty():
+                shard_path = shard_dir / f"{int(batch_start / batch_size) + 1:06d}.parquet"
+                sue_batch.write_parquet(shard_path, compression=_STREAMING_PARQUET_COMPRESSION)
+                shard_paths.append(shard_path)
+            del docs_batch
+            del sue_batch
+            gc.collect()
+
+        if output_path.exists():
+            output_path.unlink()
+        if shard_paths:
+            pl.scan_parquet([str(path) for path in shard_paths]).sink_parquet(
+                output_path,
+                compression=_STREAMING_PARQUET_COMPRESSION,
+            )
+        else:
+            _empty_sue_panel_df().write_parquet(output_path, compression=_STREAMING_PARQUET_COMPRESSION)
+        row_count = int(pl.scan_parquet(output_path).select(pl.len()).collect().item())
+        if cleanup_on_success and resolved_temp_root.exists():
+            shutil.rmtree(resolved_temp_root)
+        return row_count
+    except Exception:
+        raise
 
 
 def _prepare_monthly_stock_frame(
@@ -1975,6 +2163,7 @@ __all__ = [
     "build_lm2011_table_i_sample_creation",
     "build_lm2011_event_panel",
     "build_lm2011_sue_panel",
+    "write_lm2011_sue_panel_parquet",
     "build_lm2011_trading_strategy_monthly_returns",
     "build_lm2011_trading_strategy_ff4_summary",
 ]

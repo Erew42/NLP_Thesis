@@ -10,6 +10,7 @@ import os
 import sys
 import json
 import datetime as dt
+import gc
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -248,11 +249,46 @@ def _kb_to_gib(value_kb: int | None) -> float | None:
     return round(float(value_kb) / 1024.0 / 1024.0, 3)
 
 
+def _bytes_to_gib(value_bytes: int | None) -> float | None:
+    if value_bytes is None:
+        return None
+    return round(float(value_bytes) / 1024.0 / 1024.0 / 1024.0, 3)
+
+
+def _read_optional_int(path: Path) -> int | None:
+    if not path.exists():
+        return None
+    raw_value = path.read_text(encoding="utf-8").strip()
+    if raw_value == "" or raw_value.lower() == "max":
+        return None
+    try:
+        return int(raw_value)
+    except ValueError:
+        return None
+
+
+def _read_cgroup_memory_bytes() -> dict[str, int | None]:
+    v2_limit_path = Path("/sys/fs/cgroup/memory.max")
+    v2_current_path = Path("/sys/fs/cgroup/memory.current")
+    if v2_limit_path.exists() and v2_current_path.exists():
+        return {
+            "cgroup_limit_bytes": _read_optional_int(v2_limit_path),
+            "cgroup_used_bytes": _read_optional_int(v2_current_path),
+        }
+    v1_limit_path = Path("/sys/fs/cgroup/memory/memory.limit_in_bytes")
+    v1_current_path = Path("/sys/fs/cgroup/memory/memory.usage_in_bytes")
+    return {
+        "cgroup_limit_bytes": _read_optional_int(v1_limit_path),
+        "cgroup_used_bytes": _read_optional_int(v1_current_path),
+    }
+
+
 def _ram_snapshot(label: str) -> dict[str, object]:
     payload: dict[str, object] = {"label": label}
     meminfo = _read_proc_kb_map(Path("/proc/meminfo"))
     status = _read_proc_kb_map(Path("/proc/self/status"))
-    if not meminfo and not status:
+    cgroup = _read_cgroup_memory_bytes()
+    if not meminfo and not status and all(value is None for value in cgroup.values()):
         payload["ram_stats_unavailable"] = True
         return payload
     mem_total_kb = meminfo.get("MemTotal")
@@ -263,6 +299,12 @@ def _ram_snapshot(label: str) -> dict[str, object]:
     payload["system_available_gb"] = _kb_to_gib(mem_available_kb)
     if mem_total_kb is not None and mem_available_kb is not None:
         payload["system_used_gb"] = _kb_to_gib(max(mem_total_kb - mem_available_kb, 0))
+    cgroup_limit_bytes = cgroup.get("cgroup_limit_bytes")
+    cgroup_used_bytes = cgroup.get("cgroup_used_bytes")
+    payload["cgroup_limit_gb"] = _bytes_to_gib(cgroup_limit_bytes)
+    payload["cgroup_used_gb"] = _bytes_to_gib(cgroup_used_bytes)
+    if cgroup_limit_bytes is not None and cgroup_used_bytes is not None:
+        payload["cgroup_available_gb"] = _bytes_to_gib(max(cgroup_limit_bytes - cgroup_used_bytes, 0))
     return payload
 
 
@@ -478,6 +520,8 @@ from thesis_pkg.notebooks_and_scripts.finbert_item_analysis_runner import (
 from thesis_pkg.notebooks_and_scripts.lm2011_sample_post_refinitiv_runner import (
     DEFAULT_LM2011_EVENT_WINDOW_DOC_BATCH_SIZE,
     DEFAULT_LM2011_FULL_10K_CLEANING_CONTRACT,
+    DEFAULT_LM2011_FULL_10K_TEXT_FEATURE_BATCH_SIZE,
+    DEFAULT_LM2011_MDA_TEXT_FEATURE_BATCH_SIZE,
     DEFAULT_LM2011_TEXT_FEATURE_BATCH_SIZE,
     LM2011_ALL_STAGE_NAMES,
     LM2011_OPTIONAL_STAGE_DEFAULTS_FALSE,
@@ -1144,9 +1188,25 @@ def main() -> None:
         "SEC_CCM_LM2011_FULL_10K_CLEANING_CONTRACT",
         DEFAULT_LM2011_FULL_10K_CLEANING_CONTRACT,
     )
-    LM2011_TEXT_FEATURE_BATCH_SIZE = _env_int(
+    LEGACY_LM2011_TEXT_FEATURE_BATCH_SIZE = _env_optional_int(
         "SEC_CCM_LM2011_TEXT_FEATURE_BATCH_SIZE",
-        DEFAULT_LM2011_TEXT_FEATURE_BATCH_SIZE,
+        None,
+    )
+    LM2011_FULL_10K_TEXT_FEATURE_BATCH_SIZE = _env_int(
+        "SEC_CCM_LM2011_FULL_10K_TEXT_FEATURE_BATCH_SIZE",
+        (
+            LEGACY_LM2011_TEXT_FEATURE_BATCH_SIZE
+            if LEGACY_LM2011_TEXT_FEATURE_BATCH_SIZE is not None
+            else DEFAULT_LM2011_FULL_10K_TEXT_FEATURE_BATCH_SIZE
+        ),
+    )
+    LM2011_MDA_TEXT_FEATURE_BATCH_SIZE = _env_int(
+        "SEC_CCM_LM2011_MDA_TEXT_FEATURE_BATCH_SIZE",
+        (
+            LEGACY_LM2011_TEXT_FEATURE_BATCH_SIZE
+            if LEGACY_LM2011_TEXT_FEATURE_BATCH_SIZE is not None
+            else DEFAULT_LM2011_MDA_TEXT_FEATURE_BATCH_SIZE
+        ),
     )
     LM2011_EVENT_WINDOW_DOC_BATCH_SIZE = _env_int(
         "SEC_CCM_LM2011_EVENT_WINDOW_DOC_BATCH_SIZE",
@@ -1322,7 +1382,8 @@ def main() -> None:
             "LM2011_ENABLED_STAGE_COUNT": sum(1 for enabled in LM2011_STAGE_FLAGS.values() if enabled),
             "LM2011_POST_REFINITIV_DIR": str(LM2011_POST_REFINITIV_DIR),
             "LM2011_FULL_10K_CLEANING_CONTRACT": LM2011_FULL_10K_CLEANING_CONTRACT,
-            "LM2011_TEXT_FEATURE_BATCH_SIZE": LM2011_TEXT_FEATURE_BATCH_SIZE,
+            "LM2011_FULL_10K_TEXT_FEATURE_BATCH_SIZE": LM2011_FULL_10K_TEXT_FEATURE_BATCH_SIZE,
+            "LM2011_MDA_TEXT_FEATURE_BATCH_SIZE": LM2011_MDA_TEXT_FEATURE_BATCH_SIZE,
             "LM2011_EVENT_WINDOW_DOC_BATCH_SIZE": LM2011_EVENT_WINDOW_DOC_BATCH_SIZE,
             "PRINT_RAM_STATS": PRINT_RAM_STATS,
             "RAM_LOG_INTERVAL_BATCHES": RAM_LOG_INTERVAL_BATCHES,
@@ -2720,12 +2781,15 @@ def main() -> None:
             monthly_stock_path=lm2011_monthly_stock_path,
             ff_monthly_with_mom_path=LM2011_FF_MONTHLY_WITH_MOM_PATH,
             full_10k_cleaning_contract=LM2011_FULL_10K_CLEANING_CONTRACT,
-            text_feature_batch_size=LM2011_TEXT_FEATURE_BATCH_SIZE,
+            full_10k_text_feature_batch_size=LM2011_FULL_10K_TEXT_FEATURE_BATCH_SIZE,
+            mda_text_feature_batch_size=LM2011_MDA_TEXT_FEATURE_BATCH_SIZE,
             event_window_doc_batch_size=LM2011_EVENT_WINDOW_DOC_BATCH_SIZE,
             print_ram_stats=PRINT_RAM_STATS,
             ram_log_interval_batches=RAM_LOG_INTERVAL_BATCHES,
         )
         _print_ram_snapshot("sec_ccm_unified_runner_before_lm2011", enabled=PRINT_RAM_STATS)
+        gc.collect()
+        _print_ram_snapshot("sec_ccm_unified_runner_after_pre_lm2011_gc", enabled=PRINT_RAM_STATS)
         run_lm2011_post_refinitiv_pipeline(
             LM2011PostRefinitivRunConfig(
                 paths=lm2011_paths,

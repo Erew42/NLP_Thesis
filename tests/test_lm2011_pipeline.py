@@ -35,6 +35,7 @@ from thesis_pkg.pipelines.lm2011_pipeline import (
     _ols_alpha_and_rmse,
     _ols_coefficients_and_r2,
     write_lm2011_event_screen_surface_parquet,
+    write_lm2011_sue_panel_parquet,
 )
 
 
@@ -830,6 +831,43 @@ def test_write_lm2011_text_features_full_10k_parquet_emits_progress_callback(tmp
     ]
 
 
+def test_write_lm2011_text_features_full_10k_parquet_stages_source_once_before_microbatching(
+    tmp_path: Path,
+) -> None:
+    observed: dict[str, int] = {"rows": 0}
+
+    def _track_text(value: str | None) -> str | None:
+        observed["rows"] += 1
+        return value
+
+    sec_parsed_lf = pl.DataFrame(
+        {
+            "doc_id": ["d1", "d2", "d3"],
+            "cik_10": ["0001", "0002", "0003"],
+            "filing_date": [dt.date(2023, 1, 1), dt.date(2023, 1, 2), dt.date(2023, 1, 3)],
+            "document_type_filename": ["10-K", "10-K", "10-K"],
+            "full_text": ["gain loss", "uncertain may", "lawsuit must"],
+        }
+    ).lazy().with_columns(
+        pl.col("full_text")
+        .map_elements(_track_text, return_dtype=pl.Utf8)
+        .alias("full_text")
+    )
+
+    output_path = tmp_path / "full_10k_staged_source.parquet"
+    row_count = write_lm2011_text_features_full_10k_parquet(
+        sec_parsed_lf,
+        output_path=output_path,
+        dictionary_lists=_lm_dictionary_lists(),
+        harvard_negative_word_list=_harvard_negative_word_list(),
+        master_dictionary_words=_master_dictionary_words(),
+        batch_size=1,
+    )
+
+    assert row_count == 3
+    assert observed["rows"] == 3
+
+
 def test_write_lm2011_text_features_mda_parquet_emits_progress_callback(tmp_path: Path) -> None:
     sec_items = pl.DataFrame(
         {
@@ -860,6 +898,40 @@ def test_write_lm2011_text_features_mda_parquet_emits_progress_callback(tmp_path
         {"batch_index": 2, "batch_doc_count": 1, "docs_completed": 2},
         {"batch_index": 3, "batch_doc_count": 1, "docs_completed": 3},
     ]
+
+
+def test_write_lm2011_text_features_full_10k_parquet_handles_large_docs_with_microbatching(tmp_path: Path) -> None:
+    large_text = " ".join((["loss"] * 40_000) + (["gain"] * 20_000) + (["uncertain"] * 10_000))
+    sec_parsed = pl.DataFrame(
+        {
+            "doc_id": ["d1", "d2"],
+            "cik_10": ["0001", "0002"],
+            "filing_date": [dt.date(2023, 1, 1), dt.date(2023, 1, 2)],
+            "document_type_filename": ["10-K", "10-K"],
+            "full_text": [large_text, large_text.replace("loss", "lawsuit")],
+        }
+    )
+
+    output_path = tmp_path / "full_10k_large_docs.parquet"
+    row_count = write_lm2011_text_features_full_10k_parquet(
+        sec_parsed.lazy(),
+        output_path=output_path,
+        dictionary_lists=_lm_dictionary_lists(),
+        harvard_negative_word_list=_harvard_negative_word_list(),
+        master_dictionary_words=_master_dictionary_words(),
+        batch_size=1,
+    )
+
+    out = pl.read_parquet(output_path).sort("doc_id")
+    assert row_count == 2
+    assert out.columns[0:5] == [
+        "doc_id",
+        "cik_10",
+        "filing_date",
+        "document_type_filename",
+        "normalized_form",
+    ]
+    assert out.get_column("total_token_count_full_10k").to_list() == [70_000, 70_000]
 
 
 def test_build_lm2011_event_panel_uses_prc_when_final_prc_is_missing() -> None:
@@ -1257,6 +1329,45 @@ def test_write_lm2011_event_screen_surface_parquet_matches_batched_builder(tmp_p
 
     assert row_count == eager.height
     _assert_frames_equal_with_float_tolerance(eager, streamed, sort_by=["doc_id"])
+
+
+def test_write_lm2011_event_screen_surface_parquet_materializes_doc_base_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    inputs = _table_i_market_inputs()
+    docs_df = lm2011_pipeline._prepare_table_i_base_lf(
+        inputs["sample_backbone"].lazy(),
+        inputs["daily"].lazy(),
+        inputs["annual_panel"].lazy(),
+        inputs["text_features"].lazy(),
+    ).collect()
+    observed: dict[str, int] = {"rows": 0}
+
+    def _track_doc_id(value: str | None) -> str | None:
+        observed["rows"] += 1
+        return value
+
+    tracked_docs_lf = docs_df.lazy().with_columns(
+        pl.col("doc_id")
+        .map_elements(_track_doc_id, return_dtype=pl.Utf8)
+        .alias("doc_id")
+    )
+    monkeypatch.setattr(lm2011_pipeline, "_prepare_table_i_base_lf", lambda *args, **kwargs: tracked_docs_lf)
+
+    output_path = tmp_path / "event_surface_materialized_once.parquet"
+    row_count = write_lm2011_event_screen_surface_parquet(
+        inputs["sample_backbone"].lazy(),
+        inputs["daily"].lazy(),
+        inputs["annual_panel"].lazy(),
+        inputs["ff"].lazy(),
+        inputs["text_features"].lazy(),
+        output_path=output_path,
+        event_window_doc_batch_size=2,
+    )
+
+    assert row_count == docs_df.height
+    assert observed["rows"] == docs_df.height
 
 
 def test_build_lm2011_event_panel_matches_across_event_window_doc_batch_sizes() -> None:
@@ -1760,6 +1871,232 @@ def test_build_lm2011_sue_panel_keeps_nullable_revision_only_in_upstream_artifac
     ).collect()
 
     assert sue_panel.height == 0
+
+
+def test_write_lm2011_sue_panel_parquet_matches_eager_builder(tmp_path: Path) -> None:
+    event_panel = pl.DataFrame(
+        {
+            "doc_id": ["exact_doc", "fallback_doc"],
+            "gvkey_int": [1000, 1001],
+            "KYPERMNO": [1, 2],
+            "filing_date": [dt.date(2023, 9, 18), dt.date(2023, 9, 18)],
+            "pre_filing_trade_date": [dt.date(2023, 9, 17), dt.date(2023, 9, 17)],
+            "size_event": [100.0, 120.0],
+            "bm_event": [1.5, 1.8],
+            "share_turnover": [10.0, 12.0],
+            "pre_ffalpha": [0.02, 0.03],
+            "institutional_ownership": [55.0, 60.0],
+            "nasdaq_dummy": [1, 0],
+        }
+    )
+    quarterly_panel = pl.DataFrame(
+        {
+            "gvkey_int": [1000, 1001],
+            "quarter_report_date": [dt.date(2023, 10, 15), dt.date(2023, 10, 20)],
+            "APDEDATEQ": [dt.date(2023, 9, 30), None],
+            "PDATEQ": [dt.date(2023, 9, 30), None],
+        }
+    )
+    ibes = pl.DataFrame(
+        {
+            "gvkey_int": [1000, 1001],
+            "announcement_date": [dt.date(2023, 10, 15), dt.date(2023, 10, 20)],
+            "fiscal_period_end": [dt.date(2023, 9, 30), dt.date(2023, 9, 25)],
+            "actual_eps": [1.5, 2.0],
+            "forecast_consensus_mean": [1.0, 1.5],
+            "forecast_dispersion": [0.2, 0.3],
+            "forecast_revision_4m": [0.24, 0.18],
+        }
+    )
+    daily = pl.DataFrame(
+        {
+            "KYPERMNO": [1, 1, 2, 2],
+            "CALDT": [dt.date(2023, 8, 31), dt.date(2023, 9, 17), dt.date(2023, 8, 31), dt.date(2023, 9, 17)],
+            "PRC": [8.0, 10.0, 6.0, 12.0],
+        }
+    )
+
+    eager = build_lm2011_sue_panel(
+        event_panel.lazy(),
+        quarterly_panel.lazy(),
+        ibes.lazy(),
+        daily.lazy(),
+    ).collect()
+    output_path = tmp_path / "sue_panel.parquet"
+    row_count = write_lm2011_sue_panel_parquet(
+        event_panel.lazy(),
+        quarterly_panel.lazy(),
+        ibes.lazy(),
+        daily.lazy(),
+        output_path=output_path,
+        doc_batch_size=1,
+    )
+    streamed = pl.read_parquet(output_path)
+
+    assert row_count == eager.height
+    _assert_frames_equal_with_float_tolerance(eager, streamed, sort_by=["doc_id"])
+
+
+def test_write_lm2011_sue_panel_parquet_matches_eager_builder_for_mixed_global_fiscal_window_policy(
+    tmp_path: Path,
+) -> None:
+    event_panel = pl.DataFrame(
+        {
+            "doc_id": ["fallback_nonnull_doc", "null_window_doc"],
+            "gvkey_int": [1000, 1001],
+            "KYPERMNO": [1, 2],
+            "filing_date": [dt.date(2023, 9, 18), dt.date(2023, 9, 18)],
+            "pre_filing_trade_date": [dt.date(2023, 9, 17), dt.date(2023, 9, 17)],
+            "size_event": [100.0, 120.0],
+            "bm_event": [1.5, 1.8],
+            "share_turnover": [10.0, 12.0],
+            "pre_ffalpha": [0.02, 0.03],
+            "institutional_ownership": [55.0, 60.0],
+            "nasdaq_dummy": [1, 0],
+        }
+    )
+    quarterly_panel = pl.DataFrame(
+        {
+            "gvkey_int": [1000, 1001],
+            "quarter_report_date": [dt.date(2023, 10, 15), dt.date(2023, 10, 20)],
+            "APDEDATEQ": [dt.date(2023, 9, 30), None],
+            "PDATEQ": [dt.date(2023, 9, 30), None],
+        }
+    )
+    ibes = pl.DataFrame(
+        {
+            "gvkey_int": [1000, 1001],
+            "announcement_date": [dt.date(2023, 10, 15), dt.date(2023, 10, 20)],
+            "fiscal_period_end": [dt.date(2023, 8, 31), dt.date(2023, 9, 25)],
+            "actual_eps": [1.5, 2.0],
+            "forecast_consensus_mean": [1.0, 1.5],
+            "forecast_dispersion": [0.2, 0.3],
+            "forecast_revision_4m": [0.24, 0.18],
+        }
+    )
+    daily = pl.DataFrame(
+        {
+            "KYPERMNO": [1, 1, 2, 2],
+            "CALDT": [dt.date(2023, 8, 31), dt.date(2023, 9, 17), dt.date(2023, 8, 31), dt.date(2023, 9, 17)],
+            "PRC": [8.0, 10.0, 6.0, 12.0],
+        }
+    )
+
+    eager = build_lm2011_sue_panel(
+        event_panel.lazy(),
+        quarterly_panel.lazy(),
+        ibes.lazy(),
+        daily.lazy(),
+    ).collect().sort("doc_id")
+    assert eager.get_column("doc_id").to_list() == ["fallback_nonnull_doc", "null_window_doc"]
+
+    output_path_batch_one = tmp_path / "sue_panel_mixed_policy_batch1.parquet"
+    row_count_batch_one = write_lm2011_sue_panel_parquet(
+        event_panel.lazy(),
+        quarterly_panel.lazy(),
+        ibes.lazy(),
+        daily.lazy(),
+        output_path=output_path_batch_one,
+        doc_batch_size=1,
+    )
+    streamed_batch_one = pl.read_parquet(output_path_batch_one).sort("doc_id")
+
+    output_path_batch_two = tmp_path / "sue_panel_mixed_policy_batch2.parquet"
+    row_count_batch_two = write_lm2011_sue_panel_parquet(
+        event_panel.lazy(),
+        quarterly_panel.lazy(),
+        ibes.lazy(),
+        daily.lazy(),
+        output_path=output_path_batch_two,
+        doc_batch_size=2,
+    )
+    streamed_batch_two = pl.read_parquet(output_path_batch_two).sort("doc_id")
+
+    assert row_count_batch_one == eager.height
+    assert row_count_batch_two == eager.height
+    _assert_frames_equal_with_float_tolerance(eager, streamed_batch_one, sort_by=["doc_id"])
+    _assert_frames_equal_with_float_tolerance(eager, streamed_batch_two, sort_by=["doc_id"])
+    _assert_frames_equal_with_float_tolerance(streamed_batch_one, streamed_batch_two, sort_by=["doc_id"])
+
+
+def test_write_lm2011_sue_panel_parquet_materializes_doc_base_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event_panel = pl.DataFrame(
+        {
+            "doc_id": ["exact_doc", "fallback_doc"],
+            "gvkey_int": [1000, 1001],
+            "KYPERMNO": [1, 2],
+            "filing_date": [dt.date(2023, 9, 18), dt.date(2023, 9, 18)],
+            "pre_filing_trade_date": [dt.date(2023, 9, 17), dt.date(2023, 9, 17)],
+            "size_event": [100.0, 120.0],
+            "bm_event": [1.5, 1.8],
+            "share_turnover": [10.0, 12.0],
+            "pre_ffalpha": [0.02, 0.03],
+            "institutional_ownership": [55.0, 60.0],
+            "nasdaq_dummy": [1, 0],
+        }
+    )
+    quarterly_panel = pl.DataFrame(
+        {
+            "gvkey_int": [1000, 1001],
+            "quarter_report_date": [dt.date(2023, 10, 15), dt.date(2023, 10, 20)],
+            "APDEDATEQ": [dt.date(2023, 9, 30), None],
+            "PDATEQ": [dt.date(2023, 9, 30), None],
+        }
+    )
+    ibes = pl.DataFrame(
+        {
+            "gvkey_int": [1000, 1001],
+            "announcement_date": [dt.date(2023, 10, 15), dt.date(2023, 10, 20)],
+            "fiscal_period_end": [dt.date(2023, 9, 30), dt.date(2023, 9, 25)],
+            "actual_eps": [1.5, 2.0],
+            "forecast_consensus_mean": [1.0, 1.5],
+            "forecast_dispersion": [0.2, 0.3],
+            "forecast_revision_4m": [0.24, 0.18],
+        }
+    )
+    daily = pl.DataFrame(
+        {
+            "KYPERMNO": [1, 1, 2, 2],
+            "CALDT": [dt.date(2023, 8, 31), dt.date(2023, 9, 17), dt.date(2023, 8, 31), dt.date(2023, 9, 17)],
+            "PRC": [8.0, 10.0, 6.0, 12.0],
+        }
+    )
+    docs_df = lm2011_pipeline._prepare_lm2011_sue_docs_base_lf(
+        event_panel.lazy(),
+        quarterly_panel.lazy(),
+    ).collect()
+    observed: dict[str, int] = {"rows": 0}
+
+    def _track_doc_id(value: str | None) -> str | None:
+        observed["rows"] += 1
+        return value
+
+    tracked_docs_lf = docs_df.lazy().with_columns(
+        pl.col("doc_id")
+        .map_elements(_track_doc_id, return_dtype=pl.Utf8)
+        .alias("doc_id")
+    )
+    monkeypatch.setattr(
+        lm2011_pipeline,
+        "_prepare_lm2011_sue_docs_base_lf",
+        lambda *args, **kwargs: tracked_docs_lf,
+    )
+
+    output_path = tmp_path / "sue_panel_materialized_once.parquet"
+    row_count = write_lm2011_sue_panel_parquet(
+        event_panel.lazy(),
+        quarterly_panel.lazy(),
+        ibes.lazy(),
+        daily.lazy(),
+        output_path=output_path,
+        doc_batch_size=1,
+    )
+
+    assert row_count == 2
+    assert observed["rows"] == docs_df.height
 
 
 def test_build_lm2011_trading_strategy_monthly_returns_pin_direction_and_support_weighting_modes() -> None:

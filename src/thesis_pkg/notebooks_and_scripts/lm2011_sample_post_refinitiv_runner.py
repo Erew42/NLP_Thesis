@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import gc
 import json
 import os
 import sys
@@ -65,6 +66,8 @@ from thesis_pkg.core.sec.lm2011_dictionary import load_lm2011_dictionary_inputs
 from thesis_pkg.core.sec.lm2011_dictionary import load_lm2011_master_dictionary_words
 from thesis_pkg.core.sec.lm2011_dictionary import load_lm2011_word_list
 from thesis_pkg.core.sec.lm2011_text import (
+    DEFAULT_PRODUCTION_FULL_10K_MICROBATCH_SIZE,
+    DEFAULT_PRODUCTION_MDA_MICROBATCH_SIZE,
     RAW_ITEM_TEXT_CLEANING_POLICY_ID,
     build_lm2011_text_features_full_10k,
     build_lm2011_text_features_mda,
@@ -76,6 +79,7 @@ from thesis_pkg.pipelines.lm2011_pipeline import (
     build_lm2011_sue_panel,
     build_lm2011_table_i_sample_creation,
     build_lm2011_trading_strategy_monthly_returns,
+    write_lm2011_sue_panel_parquet,
 )
 from thesis_pkg.pipelines import lm2011_pipeline
 from thesis_pkg.pipelines.lm2011_regressions import (
@@ -173,7 +177,9 @@ EMPTY_TABLE_REASON = "insufficient_sample_size_for_estimable_quarterly_fama_macb
 SKIPPED_MISSING_SEEDED_UPSTREAM = "skipped_missing_seeded_upstream"
 SKIPPED_MISSING_OPTIONAL_INPUT = "skipped_missing_optional_input"
 DEFAULT_LM2011_FULL_10K_CLEANING_CONTRACT = "lm2011_paper"
-DEFAULT_LM2011_TEXT_FEATURE_BATCH_SIZE = 10
+DEFAULT_LM2011_FULL_10K_TEXT_FEATURE_BATCH_SIZE = DEFAULT_PRODUCTION_FULL_10K_MICROBATCH_SIZE
+DEFAULT_LM2011_MDA_TEXT_FEATURE_BATCH_SIZE = DEFAULT_PRODUCTION_MDA_MICROBATCH_SIZE
+DEFAULT_LM2011_TEXT_FEATURE_BATCH_SIZE = DEFAULT_LM2011_FULL_10K_TEXT_FEATURE_BATCH_SIZE
 DEFAULT_LM2011_EVENT_WINDOW_DOC_BATCH_SIZE = 50
 DEFAULT_RAM_LOG_INTERVAL_BATCHES = 10
 
@@ -244,7 +250,8 @@ class RunnerPaths:
     monthly_stock_path: Path | None
     ff_monthly_with_mom_path: Path | None
     full_10k_cleaning_contract: str
-    text_feature_batch_size: int
+    full_10k_text_feature_batch_size: int
+    mda_text_feature_batch_size: int
     event_window_doc_batch_size: int
     print_ram_stats: bool
     ram_log_interval_batches: int
@@ -301,10 +308,22 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="Full-10-K cleaning contract for paper-faithful sample reruns.",
     )
     parser.add_argument(
+        "--full-10k-text-feature-batch-size",
+        type=int,
+        default=None,
+        help="Maximum number of documents per microbatch when scoring LM2011 full-10-K text features.",
+    )
+    parser.add_argument(
+        "--mda-text-feature-batch-size",
+        type=int,
+        default=None,
+        help="Maximum number of documents per microbatch when scoring LM2011 MD&A text features.",
+    )
+    parser.add_argument(
         "--text-feature-batch-size",
         type=int,
-        default=DEFAULT_LM2011_TEXT_FEATURE_BATCH_SIZE,
-        help="Number of rows per batch when scoring LM2011 full-text features.",
+        default=None,
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--event-window-doc-batch-size",
@@ -412,11 +431,46 @@ def _kb_to_gib(value_kb: int | None) -> float | None:
     return round(float(value_kb) / 1024.0 / 1024.0, 3)
 
 
+def _bytes_to_gib(value_bytes: int | None) -> float | None:
+    if value_bytes is None:
+        return None
+    return round(float(value_bytes) / 1024.0 / 1024.0 / 1024.0, 3)
+
+
+def _read_optional_int(path: Path) -> int | None:
+    if not path.exists():
+        return None
+    raw_value = path.read_text(encoding="utf-8").strip()
+    if raw_value == "" or raw_value.lower() == "max":
+        return None
+    try:
+        return int(raw_value)
+    except ValueError:
+        return None
+
+
+def _read_cgroup_memory_bytes() -> dict[str, int | None]:
+    v2_limit_path = Path("/sys/fs/cgroup/memory.max")
+    v2_current_path = Path("/sys/fs/cgroup/memory.current")
+    if v2_limit_path.exists() and v2_current_path.exists():
+        return {
+            "cgroup_limit_bytes": _read_optional_int(v2_limit_path),
+            "cgroup_used_bytes": _read_optional_int(v2_current_path),
+        }
+    v1_limit_path = Path("/sys/fs/cgroup/memory/memory.limit_in_bytes")
+    v1_current_path = Path("/sys/fs/cgroup/memory/memory.usage_in_bytes")
+    return {
+        "cgroup_limit_bytes": _read_optional_int(v1_limit_path),
+        "cgroup_used_bytes": _read_optional_int(v1_current_path),
+    }
+
+
 def _ram_snapshot(label: str) -> dict[str, object]:
     payload: dict[str, object] = {"label": label}
     meminfo = _read_proc_kb_map(Path("/proc/meminfo"))
     status = _read_proc_kb_map(Path("/proc/self/status"))
-    if not meminfo and not status:
+    cgroup = _read_cgroup_memory_bytes()
+    if not meminfo and not status and all(value is None for value in cgroup.values()):
         payload["ram_stats_unavailable"] = True
         return payload
 
@@ -428,6 +482,12 @@ def _ram_snapshot(label: str) -> dict[str, object]:
     payload["system_available_gb"] = _kb_to_gib(mem_available_kb)
     if mem_total_kb is not None and mem_available_kb is not None:
         payload["system_used_gb"] = _kb_to_gib(max(mem_total_kb - mem_available_kb, 0))
+    cgroup_limit_bytes = cgroup.get("cgroup_limit_bytes")
+    cgroup_used_bytes = cgroup.get("cgroup_used_bytes")
+    payload["cgroup_limit_gb"] = _bytes_to_gib(cgroup_limit_bytes)
+    payload["cgroup_used_gb"] = _bytes_to_gib(cgroup_used_bytes)
+    if cgroup_limit_bytes is not None and cgroup_used_bytes is not None:
+        payload["cgroup_available_gb"] = _bytes_to_gib(max(cgroup_limit_bytes - cgroup_used_bytes, 0))
     return payload
 
 
@@ -435,6 +495,12 @@ def _print_ram_snapshot(label: str, *, enabled: bool) -> None:
     if not enabled:
         return
     print(_ram_snapshot(label))
+
+
+def _gc_cleanup(label: str, *, enabled: bool) -> None:
+    _print_ram_snapshot(f"{label}_before_gc", enabled=enabled)
+    gc.collect()
+    _print_ram_snapshot(f"{label}_after_gc", enabled=enabled)
 
 
 def _should_log_periodic_batch(
@@ -460,8 +526,33 @@ def _resolve_paths(args: argparse.Namespace) -> RunnerPaths:
     upstream_run_root = Path(args.upstream_run_root).resolve()
     additional_data_dir = Path(args.additional_data_dir).resolve()
     output_dir = Path(args.output_dir).resolve()
-    if int(args.text_feature_batch_size) < 1:
-        raise ValueError("--text-feature-batch-size must be >= 1")
+    legacy_text_feature_batch_size = (
+        int(args.text_feature_batch_size)
+        if args.text_feature_batch_size is not None
+        else None
+    )
+    full_10k_text_feature_batch_size = int(
+        args.full_10k_text_feature_batch_size
+        if args.full_10k_text_feature_batch_size is not None
+        else (
+            legacy_text_feature_batch_size
+            if legacy_text_feature_batch_size is not None
+            else DEFAULT_LM2011_FULL_10K_TEXT_FEATURE_BATCH_SIZE
+        )
+    )
+    mda_text_feature_batch_size = int(
+        args.mda_text_feature_batch_size
+        if args.mda_text_feature_batch_size is not None
+        else (
+            legacy_text_feature_batch_size
+            if legacy_text_feature_batch_size is not None
+            else DEFAULT_LM2011_MDA_TEXT_FEATURE_BATCH_SIZE
+        )
+    )
+    if full_10k_text_feature_batch_size < 1:
+        raise ValueError("--full-10k-text-feature-batch-size must be >= 1")
+    if mda_text_feature_batch_size < 1:
+        raise ValueError("--mda-text-feature-batch-size must be >= 1")
     if int(args.event_window_doc_batch_size) < 1:
         raise ValueError("--event-window-doc-batch-size must be >= 1")
     if int(args.ram_log_interval_batches) < 1:
@@ -594,7 +685,8 @@ def _resolve_paths(args: argparse.Namespace) -> RunnerPaths:
         monthly_stock_path=monthly_stock_path,
         ff_monthly_with_mom_path=ff_monthly_with_mom_path,
         full_10k_cleaning_contract=str(args.full_10k_cleaning_contract),
-        text_feature_batch_size=int(args.text_feature_batch_size),
+        full_10k_text_feature_batch_size=full_10k_text_feature_batch_size,
+        mda_text_feature_batch_size=mda_text_feature_batch_size,
         event_window_doc_batch_size=int(args.event_window_doc_batch_size),
         print_ram_stats=bool(args.print_ram_stats),
         ram_log_interval_batches=int(args.ram_log_interval_batches),
@@ -1076,7 +1168,9 @@ def _build_manifest(paths: RunnerPaths) -> dict[str, Any]:
         "config": {
             "full_10k_cleaning_contract": paths.full_10k_cleaning_contract,
             "raw_mda_cleaning_policy_id": RAW_ITEM_TEXT_CLEANING_POLICY_ID,
-            "text_feature_batch_size": paths.text_feature_batch_size,
+            "text_feature_batch_size": paths.full_10k_text_feature_batch_size,
+            "full_10k_text_feature_batch_size": paths.full_10k_text_feature_batch_size,
+            "mda_text_feature_batch_size": paths.mda_text_feature_batch_size,
             "event_window_doc_batch_size": paths.event_window_doc_batch_size,
             "print_ram_stats": paths.print_ram_stats,
             "ram_log_interval_batches": paths.ram_log_interval_batches,
@@ -1305,6 +1399,41 @@ def _write_event_screen_surface_stage(
         manifest,
         manifest_path=manifest_path,
         stage_name="event_screen_surface",
+        artifact_path=artifact_path,
+    )
+
+
+def _write_sue_panel_stage(
+    manifest: dict[str, Any],
+    *,
+    manifest_path: Path | None,
+    output_dir: Path,
+    event_panel_lf: pl.LazyFrame,
+    quarterly_accounting_panel_lf: pl.LazyFrame,
+    ibes_unadjusted_earnings_lf: pl.LazyFrame,
+    daily_lf: pl.LazyFrame,
+    doc_batch_size: int,
+    print_ram_stats: bool = False,
+) -> pl.LazyFrame:
+    artifact_path = _artifact_output_path(output_dir, "sue_panel")
+    _print_ram_snapshot("sue_panel_start", enabled=print_ram_stats)
+    try:
+        write_lm2011_sue_panel_parquet(
+            event_panel_lf,
+            quarterly_accounting_panel_lf,
+            ibes_unadjusted_earnings_lf,
+            daily_lf,
+            output_path=artifact_path,
+            doc_batch_size=doc_batch_size,
+        )
+    except Exception:
+        _print_ram_snapshot("sue_panel_failed", enabled=print_ram_stats)
+        raise
+    _print_ram_snapshot("sue_panel_end", enabled=print_ram_stats)
+    return _record_existing_stage_artifact(
+        manifest,
+        manifest_path=manifest_path,
+        stage_name="sue_panel",
         artifact_path=artifact_path,
     )
 
@@ -1626,6 +1755,7 @@ def run_lm2011_post_refinitiv_pipeline(run_cfg: LM2011PostRefinitivRunConfig) ->
         if _stage_disabled(run_cfg, manifest, manifest_path, "text_features_full_10k"):
             pass
         elif text_year_merged_lf is not None:
+            _gc_cleanup("text_features_full_10k_pre", enabled=paths.print_ram_stats)
             text_features_full_10k_lf = _write_streaming_text_feature_stage(
                 manifest,
                 manifest_path=manifest_path,
@@ -1638,7 +1768,7 @@ def run_lm2011_post_refinitiv_pipeline(run_cfg: LM2011PostRefinitivRunConfig) ->
                     harvard_negative_word_list=harvard_negative_word_list,
                     master_dictionary_words=master_dictionary_words,
                     cleaning_contract=paths.full_10k_cleaning_contract,
-                    batch_size=paths.text_feature_batch_size,
+                    batch_size=paths.full_10k_text_feature_batch_size,
                     progress_callback=_make_text_feature_progress_logger(
                         "text_features_full_10k",
                         print_ram_stats=paths.print_ram_stats,
@@ -1648,6 +1778,7 @@ def run_lm2011_post_refinitiv_pipeline(run_cfg: LM2011PostRefinitivRunConfig) ->
                 warnings=text_stage_warnings,
                 print_ram_stats=paths.print_ram_stats,
             )
+            _gc_cleanup("text_features_full_10k_post", enabled=paths.print_ram_stats)
         else:
             _skip_or_raise_stage(
                 run_cfg,
@@ -1673,7 +1804,7 @@ def run_lm2011_post_refinitiv_pipeline(run_cfg: LM2011PostRefinitivRunConfig) ->
                     dictionary_lists=dictionary_lists,
                     harvard_negative_word_list=harvard_negative_word_list,
                     master_dictionary_words=master_dictionary_words,
-                    batch_size=paths.text_feature_batch_size,
+                    batch_size=paths.mda_text_feature_batch_size,
                     progress_callback=_make_text_feature_progress_logger(
                         "text_features_mda",
                         print_ram_stats=paths.print_ram_stats,
@@ -1683,6 +1814,7 @@ def run_lm2011_post_refinitiv_pipeline(run_cfg: LM2011PostRefinitivRunConfig) ->
                 warnings=text_stage_warnings,
                 print_ram_stats=paths.print_ram_stats,
             )
+            _gc_cleanup("text_features_mda_post", enabled=paths.print_ram_stats)
         else:
             _skip_or_raise_stage(
                 run_cfg,
@@ -1720,6 +1852,7 @@ def run_lm2011_post_refinitiv_pipeline(run_cfg: LM2011PostRefinitivRunConfig) ->
                 ),
                 print_ram_stats=paths.print_ram_stats,
             )
+            _gc_cleanup("event_screen_surface_post", enabled=paths.print_ram_stats)
         else:
             _skip_or_raise_stage(
                 run_cfg,
@@ -1897,6 +2030,9 @@ def run_lm2011_post_refinitiv_pipeline(run_cfg: LM2011PostRefinitivRunConfig) ->
                     }
                 ),
             )
+        if event_screen_surface_lf is not None:
+            event_screen_surface_lf = None
+        _gc_cleanup("event_panel_post", enabled=paths.print_ram_stats)
 
         current_stage_name = "sue_panel"
         if _stage_disabled(run_cfg, manifest, manifest_path, "sue_panel"):
@@ -1907,18 +2043,18 @@ def run_lm2011_post_refinitiv_pipeline(run_cfg: LM2011PostRefinitivRunConfig) ->
             and paths.doc_analyst_selected_path.exists()
             and paths.daily_panel_path.exists()
         ):
-            sue_panel_lf = _write_stage(
+            sue_panel_lf = _write_sue_panel_stage(
                 manifest,
                 manifest_path=manifest_path,
                 output_dir=paths.output_dir,
-                stage_name="sue_panel",
-                frame=build_lm2011_sue_panel(
-                    event_panel_lf=event_panel_lf,
-                    quarterly_accounting_panel_lf=quarterly_accounting_panel_lf,
-                    ibes_unadjusted_earnings_lf=_prepare_doc_analyst_sue_input_lf(paths.doc_analyst_selected_path),
-                    daily_lf=pl.scan_parquet(paths.daily_panel_path),
-                ),
+                event_panel_lf=event_panel_lf,
+                quarterly_accounting_panel_lf=quarterly_accounting_panel_lf,
+                ibes_unadjusted_earnings_lf=_prepare_doc_analyst_sue_input_lf(paths.doc_analyst_selected_path),
+                daily_lf=pl.scan_parquet(paths.daily_panel_path),
+                doc_batch_size=paths.event_window_doc_batch_size,
+                print_ram_stats=paths.print_ram_stats,
             )
+            _gc_cleanup("sue_panel_post", enabled=paths.print_ram_stats)
         else:
             _skip_or_raise_stage(
                 run_cfg,

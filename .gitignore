@@ -33,6 +33,7 @@ reports/
 core_paper/
 replication_plan/
 repo_review/
+output/
 # Agent ephemeral state and memory
 .agent/logs/
 .agent/cache/

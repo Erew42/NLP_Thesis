@@ -244,13 +244,16 @@ def test_runner_and_notebook_share_lm2011_memory_hardened_defaults() -> None:
     )
 
     assert "DEFAULT_LM2011_FULL_10K_CLEANING_CONTRACT" in runner_source
-    assert "DEFAULT_LM2011_TEXT_FEATURE_BATCH_SIZE" in runner_source
+    assert "DEFAULT_LM2011_FULL_10K_TEXT_FEATURE_BATCH_SIZE" in runner_source
+    assert "DEFAULT_LM2011_MDA_TEXT_FEATURE_BATCH_SIZE" in runner_source
     assert "DEFAULT_LM2011_EVENT_WINDOW_DOC_BATCH_SIZE" in runner_source
     assert 'LM2011_FULL_10K_CLEANING_CONTRACT = _env_str(\n        "SEC_CCM_LM2011_FULL_10K_CLEANING_CONTRACT",\n        DEFAULT_LM2011_FULL_10K_CLEANING_CONTRACT,' in runner_source
-    assert 'LM2011_TEXT_FEATURE_BATCH_SIZE = _env_int(\n        "SEC_CCM_LM2011_TEXT_FEATURE_BATCH_SIZE",\n        DEFAULT_LM2011_TEXT_FEATURE_BATCH_SIZE,' in runner_source
+    assert 'LM2011_FULL_10K_TEXT_FEATURE_BATCH_SIZE = _env_int(\n        "SEC_CCM_LM2011_FULL_10K_TEXT_FEATURE_BATCH_SIZE",' in runner_source
+    assert 'LM2011_MDA_TEXT_FEATURE_BATCH_SIZE = _env_int(\n        "SEC_CCM_LM2011_MDA_TEXT_FEATURE_BATCH_SIZE",' in runner_source
     assert 'LM2011_EVENT_WINDOW_DOC_BATCH_SIZE = _env_int(\n        "SEC_CCM_LM2011_EVENT_WINDOW_DOC_BATCH_SIZE",\n        DEFAULT_LM2011_EVENT_WINDOW_DOC_BATCH_SIZE,' in runner_source
     assert 'LM2011_FULL_10K_CLEANING_CONTRACT = \\"lm2011_paper\\"' in notebook_source
-    assert 'LM2011_TEXT_FEATURE_BATCH_SIZE = 10' in notebook_source
+    assert 'LM2011_FULL_10K_TEXT_FEATURE_BATCH_SIZE = 4' in notebook_source
+    assert 'LM2011_MDA_TEXT_FEATURE_BATCH_SIZE = 20' in notebook_source
     assert 'LM2011_EVENT_WINDOW_DOC_BATCH_SIZE = 50' in notebook_source
 
 
@@ -289,6 +292,14 @@ def test_ram_snapshot_reports_linux_style_values(monkeypatch: MonkeyPatch) -> No
         return {"VmRSS": 512 * 1024, "VmHWM": 768 * 1024}
 
     monkeypatch.setattr(runner, "_read_proc_kb_map", _fake_read_proc)
+    monkeypatch.setattr(
+        runner,
+        "_read_cgroup_memory_bytes",
+        lambda: {
+            "cgroup_limit_bytes": 6 * 1024 * 1024 * 1024,
+            "cgroup_used_bytes": 2 * 1024 * 1024 * 1024,
+        },
+    )
 
     snapshot = runner._ram_snapshot("unit_test")
 
@@ -299,6 +310,9 @@ def test_ram_snapshot_reports_linux_style_values(monkeypatch: MonkeyPatch) -> No
         "system_total_gb": 8.0,
         "system_available_gb": 3.0,
         "system_used_gb": 5.0,
+        "cgroup_limit_gb": 6.0,
+        "cgroup_used_gb": 2.0,
+        "cgroup_available_gb": 4.0,
     }
 
 
@@ -325,6 +339,8 @@ def test_sec_ccm_unified_runner_notebook_bootstrap_is_valid() -> None:
     assert 'SEC_CCM_FINBERT_SENTENCE_POSTPROCESS_POLICY' in config_cell
     assert 'SEC_CCM_PRINT_RAM_STATS' in config_cell
     assert 'SEC_CCM_RAM_LOG_INTERVAL_BATCHES' in config_cell
+    assert 'SEC_CCM_LM2011_FULL_10K_TEXT_FEATURE_BATCH_SIZE' in config_cell
+    assert 'SEC_CCM_LM2011_MDA_TEXT_FEATURE_BATCH_SIZE' in config_cell
     assert 'ram_snapshot' in config_cell
     assert 'print_ram_snapshot("notebook_before_main")' in run_cell
     assert 'main = reload(module).main' in run_cell
@@ -1002,5 +1018,6 @@ def test_main_lm2011_contract_env_override_wins(monkeypatch: MonkeyPatch, tmp_pa
 
     lm2011_run_cfg = captured["run_cfg"]
     assert lm2011_run_cfg.paths.full_10k_cleaning_contract == "current"
-    assert lm2011_run_cfg.paths.text_feature_batch_size == 7
+    assert lm2011_run_cfg.paths.full_10k_text_feature_batch_size == 7
+    assert lm2011_run_cfg.paths.mda_text_feature_batch_size == 7
     assert lm2011_run_cfg.paths.event_window_doc_batch_size == 9

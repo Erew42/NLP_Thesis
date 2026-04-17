@@ -391,7 +391,7 @@ def run_lm2011_quarterly_fama_macbeth(
     )
     _require_columns(panel_lf, required_columns, "lm2011_regression_panel")
 
-    selected = (
+    selected_lf = (
         panel_lf.select(
             pl.col(filing_date_col).cast(pl.Date, strict=False).alias(filing_date_col),
             pl.col(dependent_variable).cast(pl.Float64, strict=False).alias(dependent_variable),
@@ -403,16 +403,20 @@ def run_lm2011_quarterly_fama_macbeth(
             ],
         )
         .drop_nulls(subset=list(required_columns))
+    )
+    # Collect the narrowed panel once so the same lazy regression plan is not rerun
+    # separately for every quarter-level specification.
+    with_quarters_df = (
+        selected_lf.with_columns(
+            pl.col(filing_date_col)
+            .map_elements(_quarter_start, return_dtype=pl.Date)
+            .alias("_quarter_start")
+        )
+        .sort("_quarter_start", filing_date_col)
         .collect()
     )
-    if selected.height == 0:
+    if with_quarters_df.height == 0:
         return _empty_lm2011_table_results_df()
-
-    with_quarters = selected.with_columns(
-        pl.col(filing_date_col)
-        .map_elements(_quarter_start, return_dtype=pl.Date)
-        .alias("_quarter_start")
-    ).sort("_quarter_start", filing_date_col)
 
     regressor_columns = (signal_column, *ordered_controls)
     coefficient_time_series: dict[str, list[float]] = {
@@ -421,7 +425,7 @@ def run_lm2011_quarterly_fama_macbeth(
     quarter_sizes: list[float] = []
     retained_quarters = 0
 
-    for quarter_df in with_quarters.partition_by("_quarter_start", maintain_order=True):
+    for quarter_df in with_quarters_df.partition_by("_quarter_start", maintain_order=True):
         quarter_start = quarter_df.item(0, "_quarter_start")
         fit = _fit_cross_sectional_ols(
             quarter_df,
@@ -440,6 +444,7 @@ def run_lm2011_quarterly_fama_macbeth(
         quarter_sizes.append(float(n_obs))
         for name in coefficient_time_series:
             coefficient_time_series[name].append(coefficients[name])
+        del quarter_df
 
     if retained_quarters == 0:
         return _empty_lm2011_table_results_df()

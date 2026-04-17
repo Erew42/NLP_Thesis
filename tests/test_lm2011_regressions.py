@@ -379,6 +379,47 @@ def test_run_lm2011_quarterly_fama_macbeth_weights_quarters_and_hides_industry_d
     assert all(not row["coefficient_name"].startswith("_industry_dummy_") for row in results.to_dicts())
 
 
+def test_run_lm2011_quarterly_fama_macbeth_collects_narrowed_panel_once() -> None:
+    rows: list[dict[str, object]] = []
+    for filing_date, slope, x_values in (
+        (dt.date(2021, 2, 15), 1.0, [0.0, 1.0]),
+        (dt.date(2021, 5, 15), 3.0, [0.0, 1.0, 2.0]),
+    ):
+        for industry_id in (1, 12):
+            for x_value in x_values:
+                rows.append(
+                    {
+                        "filing_date": filing_date,
+                        "ff48_industry_id": industry_id,
+                        "signal": x_value,
+                        "dependent": 1.0 + slope * x_value + (5.0 if industry_id == 12 else 0.0),
+                    }
+                )
+    observed: dict[str, int] = {"rows": 0}
+
+    def _track_signal(value: float | None) -> float | None:
+        observed["rows"] += 1
+        return value
+
+    panel_lf = pl.DataFrame(rows).lazy().with_columns(
+        pl.col("signal")
+        .map_elements(_track_signal, return_dtype=pl.Float64)
+        .alias("signal")
+    )
+
+    results = run_lm2011_quarterly_fama_macbeth(
+        panel_lf,
+        table_id="unit_test_table",
+        text_scope="full_10k",
+        dependent_variable="dependent",
+        signal_column="signal",
+        control_columns=(),
+    )
+
+    assert results.height > 0
+    assert observed["rows"] == len(rows)
+
+
 def test_run_lm2011_quarterly_fama_macbeth_raises_on_rank_deficient_quarter() -> None:
     rows: list[dict[str, object]] = []
     filing_date = dt.date(2021, 2, 15)

@@ -284,7 +284,9 @@ def test_parse_args_uses_memory_hardened_defaults() -> None:
     args = runner.parse_args([])
 
     assert args.full_10k_cleaning_contract == runner.DEFAULT_LM2011_FULL_10K_CLEANING_CONTRACT
-    assert args.text_feature_batch_size == runner.DEFAULT_LM2011_TEXT_FEATURE_BATCH_SIZE
+    assert args.full_10k_text_feature_batch_size is None
+    assert args.mda_text_feature_batch_size is None
+    assert args.text_feature_batch_size is None
     assert args.event_window_doc_batch_size == runner.DEFAULT_LM2011_EVENT_WINDOW_DOC_BATCH_SIZE
     assert args.print_ram_stats is False
     assert args.ram_log_interval_batches == runner.DEFAULT_RAM_LOG_INTERVAL_BATCHES
@@ -315,6 +317,30 @@ def test_resolve_paths_explicit_sample_backbone_takes_precedence(tmp_path: Path)
     )
 
     assert paths.sample_backbone_path == explicit_prebuilt.resolve()
+
+
+def test_resolve_paths_legacy_text_feature_batch_size_applies_to_both_text_stages(tmp_path: Path) -> None:
+    sample_root, upstream_run_root, additional_data_dir, output_dir = _build_temp_layout(tmp_path)
+
+    paths = runner._resolve_paths(
+        runner.parse_args(
+            [
+                "--sample-root",
+                str(sample_root),
+                "--upstream-run-root",
+                str(upstream_run_root),
+                "--additional-data-dir",
+                str(additional_data_dir),
+                "--output-dir",
+                str(output_dir),
+                "--text-feature-batch-size",
+                "7",
+            ]
+        )
+    )
+
+    assert paths.full_10k_text_feature_batch_size == 7
+    assert paths.mda_text_feature_batch_size == 7
 
 
 def test_prepare_lm2011_sec_backbone_input_excludes_full_text() -> None:
@@ -691,7 +717,11 @@ def test_main_writes_expected_artifacts_and_manifest_for_stubbed_run(
         return pl.DataFrame({"doc_id": ["d1"]}).lazy()
 
     monkeypatch.setattr(runner, "build_lm2011_event_panel", _capture_event_panel)
-    monkeypatch.setattr(runner, "build_lm2011_sue_panel", lambda *_, **__: pl.DataFrame({"doc_id": ["d1"]}).lazy())
+    monkeypatch.setattr(
+        runner,
+        "write_lm2011_sue_panel_parquet",
+        lambda *_, **kwargs: pl.DataFrame({"doc_id": ["d1"]}).write_parquet(Path(kwargs["output_path"])) or 1,
+    )
     monkeypatch.setattr(
         runner,
         "build_lm2011_return_regression_panel",
@@ -757,7 +787,9 @@ def test_main_writes_expected_artifacts_and_manifest_for_stubbed_run(
     assert manifest["failed_stage"] is None
     assert manifest["config"]["full_10k_cleaning_contract"] == "lm2011_paper"
     assert manifest["config"]["raw_mda_cleaning_policy_id"] == "raw_item_text"
-    assert manifest["config"]["text_feature_batch_size"] == 10
+    assert manifest["config"]["text_feature_batch_size"] == 4
+    assert manifest["config"]["full_10k_text_feature_batch_size"] == 4
+    assert manifest["config"]["mda_text_feature_batch_size"] == 20
     assert manifest["config"]["event_window_doc_batch_size"] == 50
     assert manifest["config"]["print_ram_stats"] is False
     assert manifest["config"]["ram_log_interval_batches"] == runner.DEFAULT_RAM_LOG_INTERVAL_BATCHES
@@ -794,10 +826,10 @@ def test_main_writes_expected_artifacts_and_manifest_for_stubbed_run(
     assert manifest["stages"]["table_ia_ii_results"]["status"] == "generated_empty"
     assert manifest["stages"]["table_ia_ii_results"]["reason"] == runner.EMPTY_TABLE_REASON
     assert captured["text_features_full_10k_kwargs"]["cleaning_contract"] == "lm2011_paper"
-    assert captured["text_features_full_10k_kwargs"]["batch_size"] == 10
+    assert captured["text_features_full_10k_kwargs"]["batch_size"] == 4
     assert callable(captured["text_features_full_10k_kwargs"]["progress_callback"])
     assert captured["text_features_full_10k_kwargs"]["master_dictionary_words"] == ("token", "harvard", "recognized")
-    assert captured["text_features_mda_kwargs"]["batch_size"] == 10
+    assert captured["text_features_mda_kwargs"]["batch_size"] == 20
     assert callable(captured["text_features_mda_kwargs"]["progress_callback"])
     assert captured["text_features_mda_kwargs"]["master_dictionary_words"] == ("token", "harvard", "recognized")
     assert captured["table_i_windows"] == [
@@ -882,7 +914,11 @@ def test_runner_builds_event_screen_surface_twice_and_reuses_default_surface(
         return pl.DataFrame({"doc_id": ["d1"]}).lazy()
 
     monkeypatch.setattr(runner, "build_lm2011_event_panel", _capture_event_panel)
-    monkeypatch.setattr(runner, "build_lm2011_sue_panel", lambda *_, **__: pl.DataFrame({"doc_id": ["d1"]}).lazy())
+    monkeypatch.setattr(
+        runner,
+        "write_lm2011_sue_panel_parquet",
+        lambda *_, **kwargs: pl.DataFrame({"doc_id": ["d1"]}).write_parquet(Path(kwargs["output_path"])) or 1,
+    )
     empty_table = pl.DataFrame({"table_id": [], "estimate": []}, schema_overrides={"table_id": pl.Utf8, "estimate": pl.Float64})
     monkeypatch.setattr(runner, "build_lm2011_return_regression_panel", lambda *_, **__: pl.DataFrame({"doc_id": ["d1"]}).lazy())
     monkeypatch.setattr(runner, "build_lm2011_sue_regression_panel", lambda *_, **__: pl.DataFrame({"doc_id": ["d1"]}).lazy())
@@ -962,7 +998,11 @@ def test_runner_failure_manifest_preserves_completed_stages_before_extended_tabl
 
     monkeypatch.setattr(runner, "build_lm2011_table_i_sample_creation", _fail_extended_table_i)
     monkeypatch.setattr(runner, "build_lm2011_event_panel", lambda *_, **__: pl.DataFrame({"doc_id": ["d1"]}).lazy())
-    monkeypatch.setattr(runner, "build_lm2011_sue_panel", lambda *_, **__: pl.DataFrame({"doc_id": ["d1"]}).lazy())
+    monkeypatch.setattr(
+        runner,
+        "write_lm2011_sue_panel_parquet",
+        lambda *_, **kwargs: pl.DataFrame({"doc_id": ["d1"]}).write_parquet(Path(kwargs["output_path"])) or 1,
+    )
     monkeypatch.setattr(runner, "build_lm2011_return_regression_panel", lambda *_, **__: pl.DataFrame({"doc_id": ["d1"]}).lazy())
     monkeypatch.setattr(runner, "build_lm2011_sue_regression_panel", lambda *_, **__: pl.DataFrame({"doc_id": ["d1"]}).lazy())
     empty_table = pl.DataFrame({"table_id": [], "estimate": []}, schema_overrides={"table_id": pl.Utf8, "estimate": pl.Float64})
@@ -1094,7 +1134,8 @@ def test_main_delegates_to_shared_lm2011_pipeline(tmp_path: Path, monkeypatch: p
     assert set(run_cfg.enabled_stages) == set(runner.LM2011_ALL_STAGE_NAMES)
     assert run_cfg.fail_closed_for_enabled_stages is False
     assert run_cfg.paths.full_10k_cleaning_contract == runner.DEFAULT_LM2011_FULL_10K_CLEANING_CONTRACT
-    assert run_cfg.paths.text_feature_batch_size == runner.DEFAULT_LM2011_TEXT_FEATURE_BATCH_SIZE
+    assert run_cfg.paths.full_10k_text_feature_batch_size == runner.DEFAULT_LM2011_FULL_10K_TEXT_FEATURE_BATCH_SIZE
+    assert run_cfg.paths.mda_text_feature_batch_size == runner.DEFAULT_LM2011_MDA_TEXT_FEATURE_BATCH_SIZE
     assert run_cfg.paths.event_window_doc_batch_size == runner.DEFAULT_LM2011_EVENT_WINDOW_DOC_BATCH_SIZE
     assert run_cfg.paths.print_ram_stats is False
     assert run_cfg.paths.ram_log_interval_batches == runner.DEFAULT_RAM_LOG_INTERVAL_BATCHES
