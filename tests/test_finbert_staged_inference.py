@@ -60,8 +60,9 @@ class _FakeTorch:
 
 
 class _FakeTensor:
-    def __init__(self, rows: int) -> None:
-        self.rows = rows
+    def __init__(self, texts: list[str]) -> None:
+        self.texts = list(texts)
+        self.rows = len(self.texts)
 
     def to(self, device: str):
         del device
@@ -72,8 +73,8 @@ class _FakeTokenizer:
     def __call__(self, texts, **kwargs):
         del kwargs
         return {
-            "input_ids": _FakeTensor(len(texts)),
-            "attention_mask": _FakeTensor(len(texts)),
+            "input_ids": _FakeTensor(list(texts)),
+            "attention_mask": _FakeTensor(list(texts)),
         }
 
 
@@ -97,13 +98,16 @@ class _FakeModel:
         return self
 
     def __call__(self, **kwargs):
-        rows = kwargs["input_ids"].rows
-        patterns = (
-            [3.0, 1.0, 0.5],
-            [0.5, 3.0, 1.0],
-            [0.5, 1.0, 3.0],
-        )
-        return _FakeOutput([list(patterns[idx % len(patterns)]) for idx in range(rows)])
+        logits: list[list[float]] = []
+        for text in kwargs["input_ids"].texts:
+            lowered = text.lower()
+            if "second business" in lowered:
+                logits.append([0.5, 3.0, 1.0])
+            elif "mda" in lowered:
+                logits.append([3.0, 1.0, 0.5])
+            else:
+                logits.append([3.0, 1.0, 0.5])
+        return _FakeOutput(logits)
 
 
 def _write_sentence_year(path: Path, *, year: int) -> None:
@@ -248,7 +252,7 @@ def test_run_finbert_sentence_parquet_inference_uses_precomputed_sentence_datase
             out_root=tmp_path / "runs",
             batch_config=BucketBatchConfig(name="baseline", short_batch_size=2, medium_batch_size=1, long_batch_size=1),
             backbone_path=backbone_path,
-            sentence_slice_rows=2,
+            sentence_slice_rows=1,
             write_sentence_scores=True,
             run_name="sentence_parquet_inference_smoke",
         )
@@ -274,12 +278,47 @@ def test_run_finbert_sentence_parquet_inference_uses_precomputed_sentence_datase
     assert sentence_scores.height == 3
     assert sentence_scores["predicted_label"].to_list() == ["negative", "neutral", "negative"]
     assert manifest["counts"]["processed_year_count"] == 1
+    assert manifest["sentence_slice_rows"] == 1
     assert manifest["item_feature_contract"]["accepted_unit"] == ["doc_id", "benchmark_item_code"]
     assert manifest["item_feature_contract"]["denominator_contract"]["length_weight_column"] == "finbert_token_count_512"
     assert manifest["path_semantics"] == "manifest_relative_v1"
     assert manifest["source_sentence_dataset_manifest"] is None
     assert manifest["artifacts"]["item_features_long_path"] == "item_features_long.parquet"
     assert manifest["nonportable_diagnostics"]["backbone_path"] == str(backbone_path.resolve())
+
+
+def test_run_finbert_sentence_parquet_inference_can_skip_sentence_score_artifacts(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    sentence_dataset_dir = tmp_path / "sentence_dataset" / "by_year"
+    _write_sentence_year(sentence_dataset_dir / "2006.parquet", year=2006)
+
+    from thesis_pkg.benchmarking import finbert_benchmark
+    from thesis_pkg.benchmarking import finbert_staged_inference
+
+    monkeypatch.setattr(finbert_benchmark, "_import_torch", lambda: _FakeTorch())
+    monkeypatch.setattr(finbert_staged_inference, "load_finbert_tokenizer", lambda authority: _FakeTokenizer())
+    monkeypatch.setattr(finbert_staged_inference, "load_finbert_model", lambda authority, runtime: _FakeModel())
+
+    artifacts = run_finbert_sentence_parquet_inference(
+        FinbertSentenceParquetInferenceRunConfig(
+            sentence_dataset_dir=sentence_dataset_dir,
+            out_root=tmp_path / "runs",
+            batch_config=BucketBatchConfig(name="baseline", short_batch_size=2, medium_batch_size=1, long_batch_size=1),
+            sentence_slice_rows=1,
+            write_sentence_scores=False,
+            run_name="sentence_parquet_inference_no_scores",
+        )
+    )
+
+    manifest = json.loads(artifacts.run_manifest_path.read_text(encoding="utf-8"))
+    item_features = pl.read_parquet(artifacts.item_features_long_path)
+
+    assert artifacts.sentence_scores_dir is None
+    assert item_features.height == 2
+    assert manifest["write_sentence_scores"] is False
+    assert manifest["artifacts"]["sentence_scores_dir"] is None
 
 
 def test_run_finbert_sentence_parquet_inference_rejects_changed_sentence_manifest(

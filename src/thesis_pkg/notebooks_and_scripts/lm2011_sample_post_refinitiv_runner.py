@@ -68,6 +68,8 @@ from thesis_pkg.core.sec.lm2011_text import (
     RAW_ITEM_TEXT_CLEANING_POLICY_ID,
     build_lm2011_text_features_full_10k,
     build_lm2011_text_features_mda,
+    write_lm2011_text_features_full_10k_parquet,
+    write_lm2011_text_features_mda_parquet,
 )
 from thesis_pkg.pipelines.lm2011_pipeline import (
     build_lm2011_event_panel,
@@ -295,13 +297,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--text-feature-batch-size",
         type=int,
-        default=1000,
+        default=100,
         help="Number of rows per batch when scoring LM2011 full-text features.",
     )
     parser.add_argument(
         "--event-window-doc-batch-size",
         type=int,
-        default=250,
+        default=100,
         help="Number of documents per batch when building LM2011 event-window market surfaces.",
     )
     return parser.parse_args(argv)
@@ -1092,6 +1094,85 @@ def _write_stage(
     return pl.scan_parquet(written_path)
 
 
+def _record_existing_stage_artifact(
+    manifest: dict[str, Any],
+    *,
+    manifest_path: Path | None,
+    stage_name: str,
+    artifact_path: Path,
+    empty_reason: str | None = None,
+    source_path: Path | None = None,
+    extra_artifacts: dict[str, Path] | None = None,
+    warnings: Sequence[str] | None = None,
+) -> pl.LazyFrame:
+    row_count = int(pl.scan_parquet(artifact_path).select(pl.len()).collect().item())
+    _record_stage_success(
+        manifest,
+        stage_name=stage_name,
+        artifact_path=artifact_path,
+        row_count=row_count,
+        empty_reason=empty_reason,
+        source_path=source_path,
+        extra_artifacts=extra_artifacts,
+        warnings=warnings,
+    )
+    if manifest_path is not None:
+        _checkpoint_manifest(manifest, manifest_path)
+    return pl.scan_parquet(artifact_path)
+
+
+def _write_streaming_text_feature_stage(
+    manifest: dict[str, Any],
+    *,
+    manifest_path: Path | None,
+    output_dir: Path,
+    stage_name: str,
+    writer: Callable[[], int],
+    warnings: Sequence[str] | None = None,
+) -> pl.LazyFrame:
+    artifact_path = _artifact_output_path(output_dir, stage_name)
+    writer()
+    return _record_existing_stage_artifact(
+        manifest,
+        manifest_path=manifest_path,
+        stage_name=stage_name,
+        artifact_path=artifact_path,
+        warnings=warnings,
+    )
+
+
+def _write_event_screen_surface_stage(
+    manifest: dict[str, Any],
+    *,
+    manifest_path: Path | None,
+    output_dir: Path,
+    sample_backbone_lf: pl.LazyFrame,
+    annual_accounting_panel_lf: pl.LazyFrame,
+    ff_factors_daily_lf: pl.LazyFrame,
+    text_features_full_10k_lf: pl.LazyFrame,
+    daily_panel_path: Path,
+    event_window_doc_batch_size: int,
+    progress_callback: Callable[[dict[str, int]], None] | None = None,
+) -> pl.LazyFrame:
+    artifact_path = _artifact_output_path(output_dir, "event_screen_surface")
+    lm2011_pipeline.write_lm2011_event_screen_surface_parquet(
+        sample_backbone_lf,
+        pl.scan_parquet(daily_panel_path),
+        annual_accounting_panel_lf,
+        ff_factors_daily_lf,
+        text_features_full_10k_lf,
+        output_path=artifact_path,
+        event_window_doc_batch_size=event_window_doc_batch_size,
+        progress_callback=progress_callback,
+    )
+    return _record_existing_stage_artifact(
+        manifest,
+        manifest_path=manifest_path,
+        stage_name="event_screen_surface",
+        artifact_path=artifact_path,
+    )
+
+
 def _missing_required_paths(*paths: Path | None) -> bool:
     return any(path is None or not path.exists() for path in paths)
 
@@ -1408,13 +1489,14 @@ def run_lm2011_post_refinitiv_pipeline(run_cfg: LM2011PostRefinitivRunConfig) ->
         if _stage_disabled(run_cfg, manifest, manifest_path, "text_features_full_10k"):
             pass
         elif text_year_merged_lf is not None:
-            text_features_full_10k_lf = _write_stage(
+            text_features_full_10k_lf = _write_streaming_text_feature_stage(
                 manifest,
                 manifest_path=manifest_path,
                 output_dir=paths.output_dir,
                 stage_name="text_features_full_10k",
-                frame=build_lm2011_text_features_full_10k(
+                writer=lambda: write_lm2011_text_features_full_10k_parquet(
                     text_year_merged_lf,
+                    output_path=_artifact_output_path(paths.output_dir, "text_features_full_10k"),
                     dictionary_lists=dictionary_lists,
                     harvard_negative_word_list=harvard_negative_word_list,
                     master_dictionary_words=master_dictionary_words,
@@ -1437,13 +1519,14 @@ def run_lm2011_post_refinitiv_pipeline(run_cfg: LM2011PostRefinitivRunConfig) ->
         if _stage_disabled(run_cfg, manifest, manifest_path, "text_features_mda"):
             pass
         elif text_items_analysis_lf is not None:
-            text_features_mda_lf = _write_stage(
+            text_features_mda_lf = _write_streaming_text_feature_stage(
                 manifest,
                 manifest_path=manifest_path,
                 output_dir=paths.output_dir,
                 stage_name="text_features_mda",
-                frame=build_lm2011_text_features_mda(
+                writer=lambda: write_lm2011_text_features_mda_parquet(
                     text_items_analysis_lf,
+                    output_path=_artifact_output_path(paths.output_dir, "text_features_mda"),
                     dictionary_lists=dictionary_lists,
                     harvard_negative_word_list=harvard_negative_word_list,
                     master_dictionary_words=master_dictionary_words,
@@ -1471,20 +1554,17 @@ def run_lm2011_post_refinitiv_pipeline(run_cfg: LM2011PostRefinitivRunConfig) ->
             and text_features_full_10k_lf is not None
             and paths.daily_panel_path.exists()
         ):
-            event_screen_surface_lf = _write_stage(
+            event_screen_surface_lf = _write_event_screen_surface_stage(
                 manifest,
                 manifest_path=manifest_path,
                 output_dir=paths.output_dir,
-                stage_name="event_screen_surface",
-                frame=lm2011_pipeline._build_lm2011_event_screen_surface_batched(
-                    sample_backbone_lf,
-                    pl.scan_parquet(paths.daily_panel_path),
-                    annual_accounting_panel_lf,
-                    ff_factors_daily_lf,
-                    text_features_full_10k_lf,
-                    event_window_doc_batch_size=paths.event_window_doc_batch_size,
-                    progress_callback=_make_event_screen_progress_logger("event_screen_surface"),
-                ),
+                sample_backbone_lf=sample_backbone_lf,
+                annual_accounting_panel_lf=annual_accounting_panel_lf,
+                ff_factors_daily_lf=ff_factors_daily_lf,
+                text_features_full_10k_lf=text_features_full_10k_lf,
+                daily_panel_path=paths.daily_panel_path,
+                event_window_doc_batch_size=paths.event_window_doc_batch_size,
+                progress_callback=_make_event_screen_progress_logger("event_screen_surface"),
             )
         else:
             _skip_or_raise_stage(

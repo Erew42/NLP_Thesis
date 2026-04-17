@@ -597,25 +597,27 @@ def test_main_writes_expected_artifacts_and_manifest_for_stubbed_run(
     _write_parquet(prebuilt_backbone, pl.DataFrame({"doc_id": ["d1"]}))
     captured: dict[str, object] = {}
 
-    def _capture_text_features_full_10k(*_: object, **kwargs: object) -> pl.LazyFrame:
+    def _capture_text_features_full_10k(*_: object, **kwargs: object) -> int:
         captured["text_features_full_10k_kwargs"] = kwargs
-        return pl.DataFrame(
+        pl.DataFrame(
             {
                 "doc_id": ["d1"],
                 "token_count_full_10k": [2500],
                 "total_token_count_full_10k": [2500],
             }
-        ).lazy()
+        ).write_parquet(Path(kwargs["output_path"]))
+        return 1
 
-    def _capture_text_features_mda(*_: object, **kwargs: object) -> pl.LazyFrame:
+    def _capture_text_features_mda(*_: object, **kwargs: object) -> int:
         captured["text_features_mda_kwargs"] = kwargs
-        return pl.DataFrame(
+        pl.DataFrame(
             {
                 "doc_id": ["d1"],
                 "token_count_mda": [300],
                 "total_token_count_mda": [300],
             }
-        ).lazy()
+        ).write_parquet(Path(kwargs["output_path"]))
+        return 1
 
     monkeypatch.setattr(
         runner,
@@ -636,19 +638,19 @@ def test_main_writes_expected_artifacts_and_manifest_for_stubbed_run(
     monkeypatch.setattr(runner, "build_quarterly_accounting_panel", lambda *_, **__: pl.DataFrame({"gvkey_int": [1]}).lazy())
     monkeypatch.setattr(
         runner,
-        "build_lm2011_text_features_full_10k",
+        "write_lm2011_text_features_full_10k_parquet",
         _capture_text_features_full_10k,
     )
     monkeypatch.setattr(
         runner,
-        "build_lm2011_text_features_mda",
+        "write_lm2011_text_features_mda_parquet",
         _capture_text_features_mda,
     )
 
     monkeypatch.setattr(
         runner.lm2011_pipeline,
-        "_build_lm2011_event_screen_surface_batched",
-        lambda *_, **__: pl.DataFrame({"doc_id": ["d1"]}),
+        "write_lm2011_event_screen_surface_parquet",
+        lambda *_, **kwargs: pl.DataFrame({"doc_id": ["d1"]}).write_parquet(Path(kwargs["output_path"])) or 1,
     )
 
     def _capture_table_i_sample_creation(*_: object, **kwargs: object) -> pl.DataFrame:
@@ -745,8 +747,8 @@ def test_main_writes_expected_artifacts_and_manifest_for_stubbed_run(
     assert manifest["failed_stage"] is None
     assert manifest["config"]["full_10k_cleaning_contract"] == "lm2011_paper"
     assert manifest["config"]["raw_mda_cleaning_policy_id"] == "raw_item_text"
-    assert manifest["config"]["text_feature_batch_size"] == 1000
-    assert manifest["config"]["event_window_doc_batch_size"] == 250
+    assert manifest["config"]["text_feature_batch_size"] == 100
+    assert manifest["config"]["event_window_doc_batch_size"] == 100
     assert manifest["resolved_inputs"]["ff_monthly_csv_path"].endswith("F-F_Research_Data_Factors.csv")
     assert manifest["resolved_inputs"]["momentum_monthly_csv_path"].endswith("F-F_Momentum_Factor.csv")
     assert manifest["resolved_inputs"]["monthly_stock_path"].endswith("sfz_mth.parquet")
@@ -780,9 +782,9 @@ def test_main_writes_expected_artifacts_and_manifest_for_stubbed_run(
     assert manifest["stages"]["table_ia_ii_results"]["status"] == "generated_empty"
     assert manifest["stages"]["table_ia_ii_results"]["reason"] == runner.EMPTY_TABLE_REASON
     assert captured["text_features_full_10k_kwargs"]["cleaning_contract"] == "lm2011_paper"
-    assert captured["text_features_full_10k_kwargs"]["batch_size"] == 1000
+    assert captured["text_features_full_10k_kwargs"]["batch_size"] == 100
     assert captured["text_features_full_10k_kwargs"]["master_dictionary_words"] == ("token", "harvard", "recognized")
-    assert captured["text_features_mda_kwargs"]["batch_size"] == 1000
+    assert captured["text_features_mda_kwargs"]["batch_size"] == 100
     assert captured["text_features_mda_kwargs"]["master_dictionary_words"] == ("token", "harvard", "recognized")
     assert captured["table_i_windows"] == [
         (dt.date(1994, 1, 1), dt.date(2008, 12, 31)),
@@ -817,13 +819,13 @@ def test_runner_builds_event_screen_surface_twice_and_reuses_default_surface(
     monkeypatch.setattr(runner, "build_quarterly_accounting_panel", lambda *_, **__: pl.DataFrame({"gvkey_int": [1]}).lazy())
     monkeypatch.setattr(
         runner,
-        "build_lm2011_text_features_full_10k",
-        lambda *_, **__: pl.DataFrame({"doc_id": ["d1"], "total_token_count_full_10k": [2500]}).lazy(),
+        "write_lm2011_text_features_full_10k_parquet",
+        lambda *_, **kwargs: pl.DataFrame({"doc_id": ["d1"], "total_token_count_full_10k": [2500]}).write_parquet(Path(kwargs["output_path"])) or 1,
     )
     monkeypatch.setattr(
         runner,
-        "build_lm2011_text_features_mda",
-        lambda *_, **__: pl.DataFrame({"doc_id": ["d1"], "total_token_count_mda": [300]}).lazy(),
+        "write_lm2011_text_features_mda_parquet",
+        lambda *_, **kwargs: pl.DataFrame({"doc_id": ["d1"], "total_token_count_mda": [300]}).write_parquet(Path(kwargs["output_path"])) or 1,
     )
 
     def _capture_surface(*_: object, **kwargs: object) -> pl.DataFrame:
@@ -831,6 +833,13 @@ def test_runner_builds_event_screen_surface_twice_and_reuses_default_surface(
         captured.setdefault("surface_progress_callbacks", []).append(kwargs.get("progress_callback") is not None)
         return pl.DataFrame({"doc_id": ["d1"]})
 
+    def _capture_surface_write(*_: object, **kwargs: object) -> int:
+        captured["surface_calls"] = int(captured["surface_calls"]) + 1
+        captured.setdefault("surface_progress_callbacks", []).append(kwargs.get("progress_callback") is not None)
+        pl.DataFrame({"doc_id": ["d1"]}).write_parquet(Path(kwargs["output_path"]))
+        return 1
+
+    monkeypatch.setattr(runner.lm2011_pipeline, "write_lm2011_event_screen_surface_parquet", _capture_surface_write)
     monkeypatch.setattr(runner.lm2011_pipeline, "_build_lm2011_event_screen_surface_batched", _capture_surface)
 
     def _capture_table_i(*_: object, **kwargs: object) -> pl.DataFrame:
@@ -917,18 +926,18 @@ def test_runner_failure_manifest_preserves_completed_stages_before_extended_tabl
     monkeypatch.setattr(runner, "build_quarterly_accounting_panel", lambda *_, **__: pl.DataFrame({"gvkey_int": [1]}).lazy())
     monkeypatch.setattr(
         runner,
-        "build_lm2011_text_features_full_10k",
-        lambda *_, **__: pl.DataFrame({"doc_id": ["d1"], "total_token_count_full_10k": [2500]}).lazy(),
+        "write_lm2011_text_features_full_10k_parquet",
+        lambda *_, **kwargs: pl.DataFrame({"doc_id": ["d1"], "total_token_count_full_10k": [2500]}).write_parquet(Path(kwargs["output_path"])) or 1,
     )
     monkeypatch.setattr(
         runner,
-        "build_lm2011_text_features_mda",
-        lambda *_, **__: pl.DataFrame({"doc_id": ["d1"], "total_token_count_mda": [300]}).lazy(),
+        "write_lm2011_text_features_mda_parquet",
+        lambda *_, **kwargs: pl.DataFrame({"doc_id": ["d1"], "total_token_count_mda": [300]}).write_parquet(Path(kwargs["output_path"])) or 1,
     )
     monkeypatch.setattr(
         runner.lm2011_pipeline,
-        "_build_lm2011_event_screen_surface_batched",
-        lambda *_, **__: pl.DataFrame({"doc_id": ["d1"]}),
+        "write_lm2011_event_screen_surface_parquet",
+        lambda *_, **kwargs: pl.DataFrame({"doc_id": ["d1"]}).write_parquet(Path(kwargs["output_path"])) or 1,
     )
 
     def _fail_extended_table_i(*_: object, **kwargs: object) -> pl.DataFrame:

@@ -4,6 +4,7 @@ from dataclasses import asdict
 from importlib import metadata
 import json
 from pathlib import Path
+import shutil
 from typing import Any
 
 import polars as pl
@@ -70,6 +71,7 @@ _OPTIONAL_SENTENCE_METADATA_COLUMNS: tuple[str, ...] = (
     "cleaning_policy_id",
     "segment_policy_id",
 )
+_STREAMING_PARQUET_COMPRESSION = "zstd"
 
 
 def _empty_tokenizer_bucket_summary_frame() -> pl.DataFrame:
@@ -140,6 +142,50 @@ def _concat_aligned_frames(
         [_align_frame_to_schema(frame, schema) for frame in frames],
         how="vertical_relaxed",
     )
+
+
+def _empty_frame(schema: pl.Schema) -> pl.DataFrame:
+    return pl.DataFrame(schema=schema)
+
+
+def _scan_aligned_frame(path: Path, schema: pl.Schema) -> pl.LazyFrame:
+    lf = pl.scan_parquet(path)
+    schema_names = set(lf.collect_schema().names())
+    return lf.select(
+        [
+            (
+                pl.col(name).cast(dtype, strict=False).alias(name)
+                if name in schema_names
+                else pl.lit(None, dtype=dtype).alias(name)
+            )
+            for name, dtype in schema.items()
+        ]
+    )
+
+
+def _sink_parquet_from_paths(
+    paths: list[Path],
+    *,
+    output_path: Path,
+    schema: pl.Schema,
+    compression: str,
+) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if output_path.exists():
+        output_path.unlink()
+    if not paths:
+        _empty_frame(schema).write_parquet(output_path, compression=compression)
+        return
+    if len(paths) == 1:
+        _align_frame_to_schema(pl.read_parquet(paths[0]), schema).write_parquet(
+            output_path,
+            compression=compression,
+        )
+        return
+    pl.concat(
+        [_scan_aligned_frame(path, schema) for path in paths],
+        how="vertical_relaxed",
+    ).sink_parquet(output_path, compression=compression)
 
 
 def _resolve_sentence_year_paths(sentence_dataset_dir: Path) -> list[Path]:
@@ -271,6 +317,19 @@ def _validate_sentence_frame_columns(
     source_path: Path,
 ) -> None:
     missing = sorted(set(required_columns) - set(sentence_df.columns))
+    if missing:
+        raise ValueError(
+            f"Sentence dataset {source_path} is missing required columns: {missing}"
+        )
+
+
+def _validate_sentence_frame_schema(
+    sentence_schema: pl.Schema,
+    *,
+    required_columns: tuple[str, ...],
+    source_path: Path,
+) -> None:
+    missing = sorted(set(required_columns) - set(sentence_schema.names()))
     if missing:
         raise ValueError(
             f"Sentence dataset {source_path} is missing required columns: {missing}"
@@ -571,6 +630,144 @@ def _score_sentence_frame_in_slices(
     ).sort(["filing_year", "benchmark_row_id", "sentence_index"])
 
 
+def _lazy_section_metadata_from_sentence_dataset(sentence_path: Path) -> pl.LazyFrame:
+    sentence_lf = pl.scan_parquet(sentence_path)
+    schema_names = set(sentence_lf.collect_schema().names())
+    selected_columns = [
+        pl.col("benchmark_row_id").cast(pl.Utf8, strict=False).alias("benchmark_row_id"),
+        pl.col("doc_id").cast(pl.Utf8, strict=False).alias("doc_id"),
+        pl.col("cik_10").cast(pl.Utf8, strict=False).alias("cik_10"),
+        pl.col("accession_nodash").cast(pl.Utf8, strict=False).alias("accession_nodash"),
+        pl.col("filing_date").cast(pl.Date, strict=False).alias("filing_date"),
+        pl.col("filing_year").cast(pl.Int32, strict=False).alias("filing_year"),
+        pl.col("source_year_file").cast(pl.Int32, strict=False).alias("source_year_file"),
+        pl.col("document_type").cast(pl.Utf8, strict=False).alias("document_type"),
+        pl.col("document_type_raw").cast(pl.Utf8, strict=False).alias("document_type_raw"),
+        pl.col("document_type_normalized").cast(pl.Utf8, strict=False).alias("document_type_normalized"),
+        pl.col("benchmark_item_code").cast(pl.Utf8, strict=False).alias("benchmark_item_code"),
+        pl.col("benchmark_item_label").cast(pl.Utf8, strict=False).alias("benchmark_item_label"),
+        (
+            pl.col("text_scope").cast(pl.Utf8, strict=False)
+            if "text_scope" in schema_names
+            else pl.col("benchmark_item_code").cast(pl.Utf8, strict=False)
+        ).alias("text_scope"),
+        (
+            pl.col("cleaning_policy_id").cast(pl.Utf8, strict=False)
+            if "cleaning_policy_id" in schema_names
+            else pl.lit(None, dtype=pl.Utf8)
+        ).alias("cleaning_policy_id"),
+        (
+            pl.col("segment_policy_id").cast(pl.Utf8, strict=False)
+            if "segment_policy_id" in schema_names
+            else pl.lit(FINBERT_SEGMENT_POLICY_ID, dtype=pl.Utf8)
+        ).alias("segment_policy_id"),
+    ]
+    return (
+        sentence_lf.select(selected_columns)
+        .unique(subset=["benchmark_row_id"], keep="first")
+        .sort(["filing_year", "doc_id", "benchmark_item_code"])
+    )
+
+
+def _lazy_item_features_from_sentence_score_paths(
+    score_paths: list[Path],
+    *,
+    sentence_path: Path,
+    authority: FinbertAuthoritySpec,
+) -> pl.LazyFrame:
+    metadata_lf = _lazy_section_metadata_from_sentence_dataset(sentence_path)
+    if not score_paths:
+        return (
+            metadata_lf.with_columns(
+                [
+                    pl.lit(0, dtype=pl.Int32).alias("sentence_count"),
+                    pl.lit(None, dtype=pl.Float64).alias("negative_prob_mean"),
+                    pl.lit(None, dtype=pl.Float64).alias("neutral_prob_mean"),
+                    pl.lit(None, dtype=pl.Float64).alias("positive_prob_mean"),
+                    pl.lit(None, dtype=pl.Float64).alias("argmax_share_negative"),
+                    pl.lit(None, dtype=pl.Float64).alias("argmax_share_neutral"),
+                    pl.lit(None, dtype=pl.Float64).alias("argmax_share_positive"),
+                    pl.lit(None, dtype=pl.Float64).alias("sentiment_balance_mean"),
+                    pl.lit(0, dtype=pl.Int32).alias("finbert_segment_count"),
+                    pl.lit(0, dtype=pl.Int64).alias("finbert_token_count_512_sum"),
+                    pl.lit(None, dtype=pl.Float64).alias("finbert_neg_prob_lenw_mean"),
+                    pl.lit(None, dtype=pl.Float64).alias("finbert_pos_prob_lenw_mean"),
+                    pl.lit(None, dtype=pl.Float64).alias("finbert_neu_prob_lenw_mean"),
+                    pl.lit(None, dtype=pl.Float64).alias("finbert_net_negative_lenw_mean"),
+                    pl.lit(None, dtype=pl.Float64).alias("finbert_neg_dominant_share"),
+                    pl.lit(authority.model_name, dtype=pl.Utf8).alias("model_name"),
+                    pl.lit(authority.model_revision, dtype=pl.Utf8).alias("model_version"),
+                ]
+            )
+            .select(_empty_item_features_long_frame().columns)
+        )
+
+    score_lf = pl.concat(
+        [_scan_aligned_frame(path, _empty_sentence_score_frame().schema) for path in score_paths],
+        how="vertical_relaxed",
+    )
+    token_weight = (
+        pl.when(pl.col(FINBERT_TOKEN_COUNT_COLUMN).cast(pl.Float64, strict=False) > 0.0)
+        .then(pl.col(FINBERT_TOKEN_COUNT_COLUMN).cast(pl.Float64, strict=False))
+        .otherwise(pl.lit(0.0))
+    )
+
+    def _length_weighted_mean(value: pl.Expr, alias: str) -> pl.Expr:
+        denominator = token_weight.sum()
+        return (
+            pl.when(denominator > 0.0)
+            .then((value * token_weight).sum() / denominator)
+            .otherwise(pl.lit(None, dtype=pl.Float64))
+            .alias(alias)
+        )
+
+    aggregated_lf = (
+        score_lf.group_by("benchmark_row_id")
+        .agg(
+            [
+                pl.len().cast(pl.Int32).alias("sentence_count"),
+                pl.col("negative_prob").mean().alias("negative_prob_mean"),
+                pl.col("neutral_prob").mean().alias("neutral_prob_mean"),
+                pl.col("positive_prob").mean().alias("positive_prob_mean"),
+                (pl.col("predicted_label") == "negative").mean().alias("argmax_share_negative"),
+                (pl.col("predicted_label") == "neutral").mean().alias("argmax_share_neutral"),
+                (pl.col("predicted_label") == "positive").mean().alias("argmax_share_positive"),
+                pl.len().cast(pl.Int32).alias("finbert_segment_count"),
+                token_weight.sum().round(0).cast(pl.Int64).alias("finbert_token_count_512_sum"),
+                _length_weighted_mean(pl.col("negative_prob"), "finbert_neg_prob_lenw_mean"),
+                _length_weighted_mean(pl.col("positive_prob"), "finbert_pos_prob_lenw_mean"),
+                _length_weighted_mean(pl.col("neutral_prob"), "finbert_neu_prob_lenw_mean"),
+                _length_weighted_mean(
+                    pl.col("negative_prob") - pl.col("positive_prob"),
+                    "finbert_net_negative_lenw_mean",
+                ),
+                (pl.col("predicted_label") == "negative").mean().alias("finbert_neg_dominant_share"),
+            ]
+        )
+        .with_columns(
+            (pl.col("positive_prob_mean") - pl.col("negative_prob_mean")).alias("sentiment_balance_mean")
+        )
+    )
+    return (
+        metadata_lf.join(aggregated_lf, on="benchmark_row_id", how="left")
+        .with_columns(
+            [
+                pl.col("sentence_count").fill_null(0).cast(pl.Int32),
+                pl.coalesce(
+                    [
+                        pl.col("segment_policy_id").cast(pl.Utf8, strict=False),
+                        pl.lit(FINBERT_SEGMENT_POLICY_ID, dtype=pl.Utf8),
+                    ]
+                ).alias("segment_policy_id"),
+                pl.lit(authority.model_name, dtype=pl.Utf8).alias("model_name"),
+                pl.lit(authority.model_revision, dtype=pl.Utf8).alias("model_version"),
+            ]
+        )
+        .select(_empty_item_features_long_frame().columns)
+        .sort(["filing_year", "doc_id", "benchmark_item_code"])
+    )
+
+
 def run_finbert_tokenizer_profile(
     run_cfg: FinbertTokenizerProfileRunConfig,
     *,
@@ -810,7 +1007,6 @@ def run_finbert_sentence_parquet_inference(
     label_mapping: dict[int, str] | None = None
     warnings: list[str] = []
     year_results: list[dict[str, Any]] = []
-    item_feature_frames: list[pl.DataFrame] = []
 
     resolved_device = _resolve_device(run_cfg.runtime)
     runtime_environment = _runtime_environment(run_cfg.runtime, resolved_device)
@@ -820,49 +1016,17 @@ def run_finbert_sentence_parquet_inference(
         effective_year_filter=effective_year_filter,
         source_sentence_manifest=source_sentence_manifest,
     )
+    run_dir.mkdir(parents=True, exist_ok=True)
+    sentence_score_schema = _empty_sentence_score_frame().schema
+    item_feature_schema = _empty_item_features_long_frame().schema
 
     for year_path in year_paths:
         filing_year = int(year_path.stem)
         year_item_features_path = item_features_by_year_dir / f"{filing_year}.parquet"
         year_sentence_scores_path = sentence_scores_dir / f"{filing_year}.parquet"
-        can_reuse = (
-            year_item_features_path.exists()
-            and not run_cfg.overwrite
-            and (not run_cfg.write_sentence_scores or year_sentence_scores_path.exists())
-        )
-        if can_reuse:
-            item_features_df = pl.read_parquet(year_item_features_path)
-            item_feature_frames.append(item_features_df)
-            sentence_rows = int(
-                pl.scan_parquet(year_path).select(pl.len()).collect().item()
-            )
-            year_results.append(
-                {
-                    "filing_year": filing_year,
-                    "status": "reused_existing",
-                    "sentence_dataset_path": None,
-                    "sentence_rows": sentence_rows,
-                    "item_feature_rows": int(item_features_df.height),
-                    "doc_rows": int(item_features_df["doc_id"].n_unique()) if item_features_df.height else 0,
-                    "item_features_path": relative_artifact_path(year_item_features_path, base_path=run_dir),
-                    "sentence_scores_path": (
-                        relative_artifact_path(year_sentence_scores_path, base_path=run_dir)
-                        if run_cfg.write_sentence_scores and year_sentence_scores_path.exists()
-                        else None
-                    ),
-                }
-            )
-            continue
-
-        if tokenizer is None:
-            tokenizer = load_finbert_tokenizer(authority)
-        if model is None:
-            model = load_finbert_model(authority, run_cfg.runtime)
-            label_mapping = resolve_finbert_label_mapping(model)
-
-        sentence_df = pl.read_parquet(year_path)
-        _validate_sentence_frame_columns(
-            sentence_df,
+        sentence_schema = pl.scan_parquet(year_path).collect_schema()
+        _validate_sentence_frame_schema(
+            sentence_schema,
             required_columns=(
                 "benchmark_sentence_id",
                 "benchmark_row_id",
@@ -887,48 +1051,120 @@ def run_finbert_sentence_parquet_inference(
             ),
             source_path=year_path,
         )
+        sentence_rows = int(pl.scan_parquet(year_path).select(pl.len()).collect().item())
+        can_reuse = (
+            year_item_features_path.exists()
+            and not run_cfg.overwrite
+            and (not run_cfg.write_sentence_scores or year_sentence_scores_path.exists())
+        )
+        if can_reuse:
+            item_feature_rows = int(pl.scan_parquet(year_item_features_path).select(pl.len()).collect().item())
+            doc_rows = int(
+                pl.scan_parquet(year_item_features_path)
+                .select(pl.col("doc_id").n_unique())
+                .collect()
+                .item()
+            )
+            year_results.append(
+                {
+                    "filing_year": filing_year,
+                    "status": "reused_existing",
+                    "sentence_dataset_path": None,
+                    "sentence_rows": sentence_rows,
+                    "item_feature_rows": item_feature_rows,
+                    "doc_rows": doc_rows,
+                    "item_features_path": relative_artifact_path(year_item_features_path, base_path=run_dir),
+                    "sentence_scores_path": (
+                        relative_artifact_path(year_sentence_scores_path, base_path=run_dir)
+                        if run_cfg.write_sentence_scores and year_sentence_scores_path.exists()
+                        else None
+                    ),
+                }
+            )
+            continue
 
-        if sentence_df.is_empty():
-            sentence_scores_df = _empty_sentence_score_frame()
-            item_features_df = _empty_item_features_long_frame()
+        if tokenizer is None:
+            tokenizer = load_finbert_tokenizer(authority)
+        if model is None:
+            model = load_finbert_model(authority, run_cfg.runtime)
+            label_mapping = resolve_finbert_label_mapping(model)
+
+        score_shard_dir = run_dir / "_temp_sentence_score_shards" / f"{filing_year}"
+        if score_shard_dir.exists():
+            shutil.rmtree(score_shard_dir)
+
+        score_shard_paths: list[Path] = []
+        if sentence_rows == 0:
+            _empty_item_features_long_frame().write_parquet(
+                year_item_features_path,
+                compression=_STREAMING_PARQUET_COMPRESSION,
+            )
+            if run_cfg.write_sentence_scores:
+                year_sentence_scores_path.parent.mkdir(parents=True, exist_ok=True)
+                _empty_sentence_score_frame().write_parquet(
+                    year_sentence_scores_path,
+                    compression=_STREAMING_PARQUET_COMPRESSION,
+                )
         else:
-            sentence_scores_df = _score_sentence_frame_in_slices(
-                sentence_df,
-                tokenizer,
-                model,
-                run_cfg,
+            batch_iter = pl.scan_parquet(year_path).collect_batches(
+                chunk_size=max(run_cfg.sentence_slice_rows, 1)
             )
-            item_features_df = aggregate_sentence_scores_to_item_features(
-                sentence_scores_df,
-                _section_metadata_from_sentence_frame(sentence_df),
-            ).with_columns(
-                [
-                    pl.lit(authority.model_name, dtype=pl.Utf8).alias("model_name"),
-                    pl.lit(authority.model_revision, dtype=pl.Utf8).alias("model_version"),
-                    pl.coalesce(
-                        [
-                            pl.col("segment_policy_id").cast(pl.Utf8, strict=False),
-                            pl.lit(FINBERT_SEGMENT_POLICY_ID, dtype=pl.Utf8),
-                        ]
-                    ).alias("segment_policy_id"),
-                ]
+            for batch_index, batch in enumerate(batch_iter, start=1):
+                sentence_batch = batch if isinstance(batch, pl.DataFrame) else pl.DataFrame(batch)
+                if sentence_batch.is_empty():
+                    continue
+                sentence_scores_df = _score_sentence_frame_in_slices(
+                    sentence_batch,
+                    tokenizer,
+                    model,
+                    run_cfg,
+                )
+                if sentence_scores_df.is_empty():
+                    continue
+                shard_path = score_shard_dir / f"{batch_index:06d}.parquet"
+                shard_path.parent.mkdir(parents=True, exist_ok=True)
+                sentence_scores_df.write_parquet(
+                    shard_path,
+                    compression=_STREAMING_PARQUET_COMPRESSION,
+                )
+                score_shard_paths.append(shard_path)
+
+            year_item_features_path.parent.mkdir(parents=True, exist_ok=True)
+            if year_item_features_path.exists():
+                year_item_features_path.unlink()
+            _lazy_item_features_from_sentence_score_paths(
+                score_shard_paths,
+                sentence_path=year_path,
+                authority=authority,
+            ).sink_parquet(
+                year_item_features_path,
+                compression=_STREAMING_PARQUET_COMPRESSION,
             )
+            if run_cfg.write_sentence_scores:
+                _sink_parquet_from_paths(
+                    score_shard_paths,
+                    output_path=year_sentence_scores_path,
+                    schema=sentence_score_schema,
+                    compression=_STREAMING_PARQUET_COMPRESSION,
+                )
+        if score_shard_dir.exists():
+            shutil.rmtree(score_shard_dir)
 
-        year_item_features_path.parent.mkdir(parents=True, exist_ok=True)
-        item_features_df.write_parquet(year_item_features_path, compression="zstd")
-        if run_cfg.write_sentence_scores:
-            year_sentence_scores_path.parent.mkdir(parents=True, exist_ok=True)
-            sentence_scores_df.write_parquet(year_sentence_scores_path, compression="zstd")
-
-        item_feature_frames.append(item_features_df)
+        item_feature_rows = int(pl.scan_parquet(year_item_features_path).select(pl.len()).collect().item())
+        doc_rows = int(
+            pl.scan_parquet(year_item_features_path)
+            .select(pl.col("doc_id").n_unique())
+            .collect()
+            .item()
+        )
         year_results.append(
             {
                 "filing_year": filing_year,
-                "status": "processed" if sentence_df.height else "processed_empty",
+                "status": "processed" if sentence_rows else "processed_empty",
                 "sentence_dataset_path": None,
-                "sentence_rows": int(sentence_df.height),
-                "item_feature_rows": int(item_features_df.height),
-                "doc_rows": int(item_features_df["doc_id"].n_unique()) if item_features_df.height else 0,
+                "sentence_rows": sentence_rows,
+                "item_feature_rows": item_feature_rows,
+                "doc_rows": doc_rows,
                 "item_features_path": relative_artifact_path(year_item_features_path, base_path=run_dir),
                 "sentence_scores_path": (
                     relative_artifact_path(year_sentence_scores_path, base_path=run_dir)
@@ -943,18 +1179,27 @@ def run_finbert_sentence_parquet_inference(
         empty_schema=_empty_model_yearly_summary_frame(),
     ).sort("filing_year")
 
-    run_dir.mkdir(parents=True, exist_ok=True)
     yearly_summary_df.write_parquet(yearly_summary_path, compression="zstd")
     yearly_summary_df.write_csv(yearly_summary_csv_path)
 
-    item_features_long = _concat_aligned_frames(
-        item_feature_frames,
-        empty_schema=_empty_item_features_long_frame(),
-    ).sort(["filing_year", "doc_id", "benchmark_item_code"])
-    item_features_long.write_parquet(item_features_long_path, compression="zstd")
+    year_item_feature_paths = [
+        item_features_by_year_dir / f"{int(path.stem)}.parquet"
+        for path in year_paths
+        if (item_features_by_year_dir / f"{int(path.stem)}.parquet").exists()
+    ]
+    _sink_parquet_from_paths(
+        year_item_feature_paths,
+        output_path=item_features_long_path,
+        schema=item_feature_schema,
+        compression=_STREAMING_PARQUET_COMPRESSION,
+    )
+    item_features_long = pl.read_parquet(item_features_long_path).sort(
+        ["filing_year", "doc_id", "benchmark_item_code"]
+    )
+    item_features_long.write_parquet(item_features_long_path, compression=_STREAMING_PARQUET_COMPRESSION)
 
     doc_features_wide = pivot_item_features_to_doc_wide(item_features_long)
-    doc_features_wide.write_parquet(doc_features_wide_path, compression="zstd")
+    doc_features_wide.write_parquet(doc_features_wide_path, compression=_STREAMING_PARQUET_COMPRESSION)
 
     coverage_summary: dict[str, int] | None = None
     if coverage_report_path is not None and run_cfg.backbone_path is not None:
@@ -962,7 +1207,7 @@ def run_finbert_sentence_parquet_inference(
             item_features_long,
             _load_backbone_doc_ids_for_years(run_cfg.backbone_path, year_filter=effective_year_filter),
         )
-        coverage_report.write_parquet(coverage_report_path, compression="zstd")
+        coverage_report.write_parquet(coverage_report_path, compression=_STREAMING_PARQUET_COMPRESSION)
     elif coverage_report_path is None:
         warnings.append("backbone_path_not_provided")
 

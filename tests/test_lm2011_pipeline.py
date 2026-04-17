@@ -21,6 +21,10 @@ from thesis_pkg.pipeline import (
     build_lm2011_trading_strategy_monthly_returns,
     tokenize_lm2011_text,
 )
+from thesis_pkg.core.sec.lm2011_text import (
+    write_lm2011_text_features_full_10k_parquet,
+    write_lm2011_text_features_mda_parquet,
+)
 from thesis_pkg.core.ccm.lm2011 import _build_lm2011_sample_backbone_stage_frames
 from thesis_pkg.pipelines import lm2011_pipeline
 from thesis_pkg.pipelines.lm2011_pipeline import (
@@ -30,6 +34,7 @@ from thesis_pkg.pipelines.lm2011_pipeline import (
     _ensure_factor_scale,
     _ols_alpha_and_rmse,
     _ols_coefficients_and_r2,
+    write_lm2011_event_screen_surface_parquet,
 )
 
 
@@ -328,6 +333,26 @@ def _build_strategy_inputs() -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame, 
         }
     )
     return event_panel, sec_parsed, monthly_stock, monthly_factors
+
+
+def _assert_frames_equal_with_float_tolerance(
+    left: pl.DataFrame,
+    right: pl.DataFrame,
+    *,
+    sort_by: list[str],
+) -> None:
+    left_sorted = left.sort(sort_by)
+    right_sorted = right.sort(sort_by)
+    assert left_sorted.columns == right_sorted.columns
+    assert left_sorted.height == right_sorted.height
+    for column in left_sorted.columns:
+        left_values = left_sorted.get_column(column).to_list()
+        right_values = right_sorted.get_column(column).to_list()
+        dtype = left_sorted.schema[column]
+        if dtype in {pl.Float32, pl.Float64}:
+            assert right_values == pytest.approx(left_values)
+        else:
+            assert right_values == left_values
 
 
 def test_build_lm2011_normalized_filing_feeds_and_sample_backbone_apply_raw_form_rules() -> None:
@@ -705,6 +730,73 @@ def test_build_lm2011_text_features_full_10k_exports_total_and_recognized_token_
     assert features.item(0, "token_count_full_10k") == 2
 
 
+def test_write_lm2011_text_features_full_10k_parquet_matches_eager_builder(tmp_path: Path) -> None:
+    sec_parsed = pl.DataFrame(
+        {
+            "doc_id": ["d1", "d2"],
+            "cik_10": ["0001", "0002"],
+            "filing_date": [dt.date(2023, 1, 1), dt.date(2023, 1, 2)],
+            "document_type_filename": ["10-K", "10-K405"],
+            "full_text": ["gain gain loss may must uncertain", "gain lawsuit"],
+        }
+    )
+    eager = build_lm2011_text_features_full_10k(
+        sec_parsed.lazy(),
+        dictionary_lists=_lm_dictionary_lists(),
+        harvard_negative_word_list=_harvard_negative_word_list(),
+        master_dictionary_words=_master_dictionary_words(),
+        batch_size=1,
+    ).collect()
+
+    output_path = tmp_path / "full_10k.parquet"
+    row_count = write_lm2011_text_features_full_10k_parquet(
+        sec_parsed.lazy(),
+        output_path=output_path,
+        dictionary_lists=_lm_dictionary_lists(),
+        harvard_negative_word_list=_harvard_negative_word_list(),
+        master_dictionary_words=_master_dictionary_words(),
+        batch_size=1,
+    )
+    streamed = pl.read_parquet(output_path)
+
+    assert row_count == eager.height
+    _assert_frames_equal_with_float_tolerance(eager, streamed, sort_by=["doc_id"])
+
+
+def test_write_lm2011_text_features_mda_parquet_matches_eager_builder(tmp_path: Path) -> None:
+    sec_items = pl.DataFrame(
+        {
+            "doc_id": ["d1", "d1", "d2"],
+            "cik_10": ["0001", "0001", "0002"],
+            "filing_date": [dt.date(2023, 1, 1)] * 3,
+            "document_type_filename": ["10-K", "10-K", "10-K405"],
+            "item_id": ["7", "8", "7"],
+            "full_text": ["loss may", "ignored text", "gain must lawsuit"],
+        }
+    )
+    eager = build_lm2011_text_features_mda(
+        sec_items.lazy(),
+        dictionary_lists=_lm_dictionary_lists(),
+        harvard_negative_word_list=_harvard_negative_word_list(),
+        master_dictionary_words=_master_dictionary_words(),
+        batch_size=1,
+    ).collect()
+
+    output_path = tmp_path / "mda.parquet"
+    row_count = write_lm2011_text_features_mda_parquet(
+        sec_items.lazy(),
+        output_path=output_path,
+        dictionary_lists=_lm_dictionary_lists(),
+        harvard_negative_word_list=_harvard_negative_word_list(),
+        master_dictionary_words=_master_dictionary_words(),
+        batch_size=1,
+    )
+    streamed = pl.read_parquet(output_path)
+
+    assert row_count == eager.height
+    _assert_frames_equal_with_float_tolerance(eager, streamed, sort_by=["doc_id"])
+
+
 def test_build_lm2011_event_panel_uses_prc_when_final_prc_is_missing() -> None:
     inputs = _base_event_inputs(include_final_prc=False)
     panel = build_lm2011_event_panel(
@@ -1073,6 +1165,33 @@ def test_build_lm2011_event_screen_surface_batched_never_exceeds_doc_batch_size(
     assert surface.height == inputs["sample_backbone"].height
     assert observed_doc_batch_sizes
     assert max(observed_doc_batch_sizes) <= 2
+
+
+def test_write_lm2011_event_screen_surface_parquet_matches_batched_builder(tmp_path: Path) -> None:
+    inputs = _table_i_market_inputs()
+    eager = _build_lm2011_event_screen_surface_batched(
+        inputs["sample_backbone"].lazy(),
+        inputs["daily"].lazy(),
+        inputs["annual_panel"].lazy(),
+        inputs["ff"].lazy(),
+        inputs["text_features"].lazy(),
+        event_window_doc_batch_size=2,
+    )
+
+    output_path = tmp_path / "event_screen_surface.parquet"
+    row_count = write_lm2011_event_screen_surface_parquet(
+        inputs["sample_backbone"].lazy(),
+        inputs["daily"].lazy(),
+        inputs["annual_panel"].lazy(),
+        inputs["ff"].lazy(),
+        inputs["text_features"].lazy(),
+        output_path=output_path,
+        event_window_doc_batch_size=2,
+    )
+    streamed = pl.read_parquet(output_path)
+
+    assert row_count == eager.height
+    _assert_frames_equal_with_float_tolerance(eager, streamed, sort_by=["doc_id"])
 
 
 def test_build_lm2011_event_panel_matches_across_event_window_doc_batch_sizes() -> None:

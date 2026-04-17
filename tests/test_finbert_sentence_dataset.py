@@ -253,6 +253,7 @@ def test_run_finbert_sentence_preprocessing_writes_by_year_artifacts(
             source_items_dir=source_dir,
             out_root=tmp_path / "runs",
             section_universe=FinbertSectionUniverseConfig(source_items_dir=source_dir),
+            section_collect_batch_size=1,
             run_name="sentence_prep",
         )
     )
@@ -291,6 +292,7 @@ def test_run_finbert_sentence_preprocessing_writes_by_year_artifacts(
     assert manifest["accepted_universe_contract"]["dedupe"]["key"] == ["doc_id", "benchmark_item_code"]
     assert manifest["cleaning_policy_id"] == "item_text_clean_v2"
     assert "item_text_clean_v2" in manifest["segment_policy_id"]
+    assert manifest["semantic_reuse_guard"]["payload"]["section_collect_batch_size"] == 1
     assert manifest["path_semantics"] == "manifest_relative_v1"
     assert manifest["artifacts"]["sentence_dataset_dir"] == "sentence_dataset/by_year"
     assert manifest["nonportable_diagnostics"]["source_items_dir"] == str(source_dir.resolve())
@@ -500,6 +502,75 @@ def test_run_finbert_sentence_preprocessing_rejects_stale_cleaning_manifest(
     )
     with pytest.raises(ValueError, match="incompatible semantic settings"):
         run_finbert_sentence_preprocessing(stale_cfg)
+
+
+def test_run_finbert_sentence_preprocessing_rejects_changed_section_collect_batch_size(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source_dir = tmp_path / "items_analysis"
+    _write_items_year(source_dir / "2006.parquet", year=2006)
+
+    from thesis_pkg.benchmarking import finbert_sentence_preprocessing
+    from thesis_pkg.benchmarking import sentences
+
+    def _fake_derive(sections_df: pl.DataFrame, sentence_cfg, *, authority):
+        del sentence_cfg, authority
+        sentence_df = (
+            sections_df.head(1)
+            .select(
+                "benchmark_row_id",
+                "doc_id",
+                "cik_10",
+                "accession_nodash",
+                "filing_date",
+                "filing_year",
+                "benchmark_item_code",
+                "benchmark_item_label",
+                "source_year_file",
+                "document_type",
+                "document_type_raw",
+                "document_type_normalized",
+                "canonical_item",
+                "text_scope",
+                "cleaning_policy_id",
+                "segment_policy_id",
+            )
+            .with_columns(
+                [
+                    pl.concat_str([pl.col("benchmark_row_id"), pl.lit(":0")]).alias("benchmark_sentence_id"),
+                    pl.lit(0, dtype=pl.Int32).alias("sentence_index"),
+                    pl.lit("stub sentence", dtype=pl.Utf8).alias("sentence_text"),
+                    pl.lit(13, dtype=pl.Int32).alias("sentence_char_count"),
+                    pl.lit("test", dtype=pl.Utf8).alias("sentencizer_backend"),
+                    pl.lit("test", dtype=pl.Utf8).alias("sentencizer_version"),
+                    pl.lit(5, dtype=pl.Int32).alias("finbert_token_count_512"),
+                    pl.lit("short", dtype=pl.Utf8).alias("finbert_token_bucket_512"),
+                ]
+            )
+        )
+        return sentence_df, _empty_split_audit(sentences)
+
+    monkeypatch.setattr(finbert_sentence_preprocessing, "_derive_sentence_frame_with_split_audit", _fake_derive)
+
+    base_cfg = FinbertSentencePreprocessingRunConfig(
+        source_items_dir=source_dir,
+        out_root=tmp_path / "runs",
+        section_universe=FinbertSectionUniverseConfig(source_items_dir=source_dir),
+        section_collect_batch_size=1,
+        run_name="sentence_prep",
+    )
+    run_finbert_sentence_preprocessing(base_cfg)
+
+    changed_cfg = FinbertSentencePreprocessingRunConfig(
+        source_items_dir=source_dir,
+        out_root=tmp_path / "runs",
+        section_universe=FinbertSectionUniverseConfig(source_items_dir=source_dir),
+        section_collect_batch_size=2,
+        run_name="sentence_prep",
+    )
+    with pytest.raises(ValueError, match="incompatible semantic settings"):
+        run_finbert_sentence_preprocessing(changed_cfg)
 
 
 def test_run_finbert_sentence_preprocessing_filters_to_target_doc_universe(

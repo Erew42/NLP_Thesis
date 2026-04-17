@@ -4,6 +4,7 @@ import json
 import warnings
 from dataclasses import asdict
 from pathlib import Path
+import shutil
 from typing import Any
 
 import polars as pl
@@ -15,6 +16,7 @@ from thesis_pkg.benchmarking.contracts import FinbertSentencePreprocessingRunCon
 from thesis_pkg.benchmarking.finbert_dataset import _resolve_year_paths
 from thesis_pkg.benchmarking.finbert_dataset import load_eligible_section_universe
 from thesis_pkg.benchmarking.finbert_dataset import section_universe_contract_payload
+from thesis_pkg.benchmarking.item_text_cleaning import CLEANED_ITEM_SCOPE_SCHEMA
 from thesis_pkg.benchmarking.item_text_cleaning import CLEANING_ROW_AUDIT_SCHEMA
 from thesis_pkg.benchmarking.item_text_cleaning import MANUAL_AUDIT_SAMPLE_SCHEMA
 from thesis_pkg.benchmarking.item_text_cleaning import SCOPE_DIAGNOSTICS_SCHEMA
@@ -31,6 +33,7 @@ from thesis_pkg.benchmarking.manifest_contracts import semantic_guard_mismatches
 from thesis_pkg.benchmarking.manifest_contracts import write_manifest_path_value
 from thesis_pkg.benchmarking.run_logging import utc_timestamp
 from thesis_pkg.benchmarking.sentences import SENTENCE_CHUNK_CHAR_LIMIT
+from thesis_pkg.benchmarking.sentences import SENTENCE_FRAME_SCHEMA
 from thesis_pkg.benchmarking.sentences import SENTENCE_SPLIT_AUDIT_SCHEMA
 from thesis_pkg.benchmarking.sentences import _derive_sentence_frame_with_split_audit
 from thesis_pkg.benchmarking.token_lengths import FINBERT_TOKEN_BUCKET_COLUMN
@@ -81,6 +84,65 @@ def _concat_frames(frames: list[pl.DataFrame], schema: dict[str, pl.DataType]) -
         [_align_frame_to_schema(frame, schema) for frame in non_empty],
         how="vertical_relaxed",
     )
+
+
+def _scan_aligned_frame(path: Path, schema: dict[str, pl.DataType]) -> pl.LazyFrame:
+    lf = pl.scan_parquet(path)
+    schema_names = set(lf.collect_schema().names())
+    return lf.select(
+        [
+            (
+                pl.col(name).cast(dtype, strict=False).alias(name)
+                if name in schema_names
+                else pl.lit(None, dtype=dtype).alias(name)
+            )
+            for name, dtype in schema.items()
+        ]
+    )
+
+
+def _sink_parquet_from_paths(
+    paths: list[Path],
+    *,
+    output_path: Path,
+    schema: dict[str, pl.DataType],
+    compression: str,
+) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if output_path.exists():
+        output_path.unlink()
+    if not paths:
+        _empty_frame(schema).write_parquet(output_path, compression=compression)
+        return
+    if len(paths) == 1:
+        _align_frame_to_schema(pl.read_parquet(paths[0]), schema).write_parquet(
+            output_path,
+            compression=compression,
+        )
+        return
+    pl.concat(
+        [_scan_aligned_frame(path, schema) for path in paths],
+        how="vertical_relaxed",
+    ).sink_parquet(output_path, compression=compression)
+
+
+def _build_year_internal_path(run_dir: Path, category: str, filing_year: int) -> Path:
+    return run_dir / "_internal_by_year" / category / f"{filing_year}.parquet"
+
+
+def _write_parquet_shard(
+    df: pl.DataFrame,
+    *,
+    output_path: Path,
+    schema: dict[str, pl.DataType],
+    compression: str,
+) -> bool:
+    aligned = _align_frame_to_schema(df, schema)
+    if aligned.is_empty():
+        return False
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    aligned.write_parquet(output_path, compression=compression)
+    return True
 
 
 def _load_existing_summary_rows(path: Path, *, overwrite: bool) -> dict[int, dict[str, Any]]:
@@ -179,6 +241,7 @@ def _semantic_preprocessing_payload(
         "cleaning_policy_id": run_cfg.cleaning.cleaning_policy_id if run_cfg.cleaning.enabled else "raw_item_text",
         "segment_policy_id": segment_policy_id,
         "year_filter": list(run_cfg.year_filter) if run_cfg.year_filter is not None else None,
+        "section_collect_batch_size": run_cfg.section_collect_batch_size,
     }
     return json.loads(json.dumps(payload))
 
@@ -476,206 +539,372 @@ def run_finbert_sentence_preprocessing(
     )
 
     existing_summary_rows = _load_existing_summary_rows(yearly_summary_path, overwrite=run_cfg.overwrite)
-    existing_split_audit_df = _load_existing_split_audit(oversize_sections_path, overwrite=run_cfg.overwrite)
-    existing_cleaning_row_audit_df = _load_existing_frame(
-        cleaning_row_audit_path,
-        schema=CLEANING_ROW_AUDIT_SCHEMA,
-        overwrite=run_cfg.overwrite,
-    )
-    existing_flagged_rows_df = _load_existing_frame(
-        cleaning_flagged_rows_path,
-        schema=CLEANING_ROW_AUDIT_SCHEMA,
-        overwrite=run_cfg.overwrite,
-    )
-    existing_scope_diagnostics_df = _load_existing_frame(
-        item_scope_cleaning_diagnostics_path,
-        schema=SCOPE_DIAGNOSTICS_SCHEMA,
-        overwrite=run_cfg.overwrite,
-    )
-    existing_manual_audit_df = _load_existing_frame(
-        manual_boundary_audit_sample_path,
-        schema=MANUAL_AUDIT_SAMPLE_SCHEMA,
-        overwrite=run_cfg.overwrite,
-    )
+    run_dir.mkdir(parents=True, exist_ok=True)
     summary_rows: list[dict[str, Any]] = []
-    processed_split_audit_chunks: list[pl.DataFrame] = []
-    processed_cleaning_row_audit_chunks: list[pl.DataFrame] = []
-    processed_flagged_rows_chunks: list[pl.DataFrame] = []
-    processed_scope_diagnostics_chunks: list[pl.DataFrame] = []
-    processed_manual_audit_chunks: list[pl.DataFrame] = []
-    reused_years: set[int] = set()
     accepted_universe_contract_fingerprint = _accepted_universe_contract_fingerprint(run_cfg)
     target_doc_universe_fingerprint = _target_doc_universe_fingerprint(run_cfg)
+    expected_target_fingerprint = (
+        json.dumps(target_doc_universe_fingerprint, sort_keys=True)
+        if target_doc_universe_fingerprint is not None
+        else None
+    )
     for year_path in year_paths:
         filing_year = int(year_path.stem)
         sentence_path = sentence_dataset_dir / f"{filing_year}.parquet"
         cleaned_scope_path = cleaned_item_scopes_dir / f"{filing_year}.parquet"
         existing_summary_row = existing_summary_rows.get(filing_year)
-        split_audit_df = (
-            existing_split_audit_df.filter(pl.col("filing_year") == filing_year)
-            if not existing_split_audit_df.is_empty()
-            else _empty_split_audit_frame()
+        split_audit_year_path = _build_year_internal_path(run_dir, "oversize_sections", filing_year)
+        cleaning_row_audit_year_path = _build_year_internal_path(run_dir, "cleaning_row_audit", filing_year)
+        flagged_rows_year_path = _build_year_internal_path(run_dir, "cleaning_flagged_rows", filing_year)
+        scope_diagnostics_year_path = _build_year_internal_path(
+            run_dir,
+            "item_scope_cleaning_diagnostics",
+            filing_year,
         )
-        cleaning_year_df = _filter_existing_years(
-            existing_cleaning_row_audit_df,
-            {filing_year},
-            year_col="calendar_year",
+        manual_audit_year_path = _build_year_internal_path(
+            run_dir,
+            "manual_boundary_audit_sample",
+            filing_year,
         )
-        flagged_year_df = _filter_existing_years(
-            existing_flagged_rows_df,
-            {filing_year},
-            year_col="calendar_year",
+        expected_source_fingerprint = json.dumps(
+            semantic_file_fingerprint(year_path),
+            sort_keys=True,
         )
-        scope_diagnostics_year_df = _filter_existing_years(
-            existing_scope_diagnostics_df,
-            {filing_year},
+        can_reuse = (
+            not run_cfg.overwrite
+            and existing_summary_row is not None
+            and run_manifest_path.exists()
+            and sentence_path.exists()
+            and cleaned_scope_path.exists()
+            and split_audit_year_path.exists()
+            and cleaning_row_audit_year_path.exists()
+            and flagged_rows_year_path.exists()
+            and scope_diagnostics_year_path.exists()
+            and manual_audit_year_path.exists()
+            and existing_summary_row.get("source_items_shard_fingerprint") == expected_source_fingerprint
+            and existing_summary_row.get("accepted_universe_contract_fingerprint")
+            == accepted_universe_contract_fingerprint
+            and existing_summary_row.get("target_doc_universe_fingerprint") == expected_target_fingerprint
         )
-        manual_audit_year_df = _filter_existing_years(
-            existing_manual_audit_df,
-            {filing_year},
-        )
-        if not run_cfg.overwrite and _can_reuse_existing_year(
-            filing_year=filing_year,
-            year_path=year_path,
-            sentence_path=sentence_path,
-            cleaned_scope_path=cleaned_scope_path,
-            existing_summary_row=existing_summary_row,
-            split_audit_df=split_audit_df,
-            cleaning_year_df=cleaning_year_df,
-            flagged_year_df=flagged_year_df,
-            scope_diagnostics_year_df=scope_diagnostics_year_df,
-            manual_audit_year_df=manual_audit_year_df,
-            required_artifact_paths=(
-                run_manifest_path,
-                cleaning_row_audit_path,
-                cleaning_flagged_rows_path,
-                item_scope_cleaning_diagnostics_path,
-                manual_boundary_audit_sample_path,
-                oversize_sections_path,
-            ),
-            accepted_universe_contract_fingerprint=accepted_universe_contract_fingerprint,
-            target_doc_universe_fingerprint=target_doc_universe_fingerprint,
-        ):
-            sentence_df = pl.read_parquet(sentence_path)
-            reused_years.add(filing_year)
-            summary_rows.append(
-                _summary_row(
-                    filing_year=filing_year,
-                    status="reused_existing",
-                    run_dir=run_dir,
-                    source_path=year_path,
-                    sentence_path=sentence_path,
-                    sections_df=None,
-                    sentence_df=sentence_df,
-                    split_audit_df=split_audit_df,
-                    cleaning_row_audit_df=cleaning_year_df,
-                    flagged_rows_df=flagged_year_df,
-                    scope_diagnostics_df=scope_diagnostics_year_df,
-                    manual_audit_df=manual_audit_year_df,
-                    existing_summary_row=existing_summary_row,
-                )
-            )
+        if can_reuse:
+            reused_row = dict(existing_summary_row)
+            reused_row["status"] = "reused_existing"
+            reused_row["source_path"] = relative_artifact_path(year_path, base_path=run_dir)
+            reused_row["sentence_dataset_path"] = relative_artifact_path(sentence_path, base_path=run_dir)
+            summary_rows.append(reused_row)
             continue
 
-        sections_df = (
-            load_eligible_section_universe(
-                run_cfg.section_universe,
-                year_paths=[year_path],
-                target_doc_universe_path=run_cfg.target_doc_universe_path,
-            ).collect()
-        )
-        sections_df = _annotate_analysis_sections(sections_df)
-        cleaning_result = clean_item_scopes_with_audit(
-            sections_df,
-            run_cfg.cleaning,
-            segment_policy_id=segment_policy_id,
-        )
-        cleaned_scope_path.parent.mkdir(parents=True, exist_ok=True)
-        cleaning_result.cleaned_scope_df.write_parquet(
-            cleaned_scope_path,
+        year_temp_root = run_dir / "_temp_streaming_preprocessing" / f"{filing_year}"
+        if year_temp_root.exists():
+            shutil.rmtree(year_temp_root)
+        cleaned_scope_shard_dir = year_temp_root / "cleaned_item_scopes"
+        sentence_shard_dir = year_temp_root / "sentence_dataset"
+        split_audit_shard_dir = year_temp_root / "oversize_sections"
+        cleaning_row_audit_shard_dir = year_temp_root / "cleaning_row_audit"
+        flagged_rows_shard_dir = year_temp_root / "cleaning_flagged_rows"
+        scope_diagnostics_shard_dir = year_temp_root / "item_scope_cleaning_diagnostics"
+        manual_audit_shard_dir = year_temp_root / "manual_boundary_audit_sample"
+
+        cleaned_scope_shards: list[Path] = []
+        sentence_shards: list[Path] = []
+        split_audit_shards: list[Path] = []
+        cleaning_row_audit_shards: list[Path] = []
+        flagged_rows_shards: list[Path] = []
+        scope_diagnostics_shards: list[Path] = []
+        manual_audit_shards: list[Path] = []
+
+        section_rows = 0
+        section_doc_ids: set[str] = set()
+        max_section_char_count: int | None = None
+        oversize_section_rows = 0
+        sentence_rows = 0
+        bucket_counts = {"short": 0, "medium": 0, "long": 0}
+        chunked_section_rows = 0
+        warning_split_rows = 0
+        max_original_char_count: int | None = None
+        cleaned_scope_rows = 0
+        cleaning_dropped_rows = 0
+        cleaning_flagged_rows = 0
+        split_audit_rows = 0
+        cleaning_row_audit_rows = 0
+        scope_diagnostics_rows = 0
+        manual_audit_rows = 0
+
+        section_batches = load_eligible_section_universe(
+            run_cfg.section_universe,
+            year_paths=[year_path],
+            target_doc_universe_path=run_cfg.target_doc_universe_path,
+        ).collect_batches(chunk_size=run_cfg.section_collect_batch_size)
+        for batch_index, batch in enumerate(section_batches, start=1):
+            sections_df = batch if isinstance(batch, pl.DataFrame) else pl.DataFrame(batch)
+            if sections_df.is_empty():
+                continue
+            sections_df = _annotate_analysis_sections(sections_df)
+
+            section_rows += int(sections_df.height)
+            section_doc_ids.update(str(value) for value in sections_df.get_column("doc_id").unique().to_list())
+            if "char_count" in sections_df.columns and sections_df.height:
+                batch_max_char_count = sections_df.select(pl.col("char_count").max()).item()
+                if batch_max_char_count is not None:
+                    batch_max = int(batch_max_char_count)
+                    max_section_char_count = (
+                        batch_max
+                        if max_section_char_count is None
+                        else max(max_section_char_count, batch_max)
+                    )
+                oversize_section_rows += int(
+                    sections_df.select(
+                        (pl.col("char_count").cast(pl.Int32, strict=False) > SENTENCE_CHUNK_CHAR_LIMIT)
+                        .sum()
+                    ).item()
+                )
+
+            cleaning_result = clean_item_scopes_with_audit(
+                sections_df,
+                run_cfg.cleaning,
+                segment_policy_id=segment_policy_id,
+            )
+            cleaned_scope_shard_path = cleaned_scope_shard_dir / f"{batch_index:06d}.parquet"
+            if _write_parquet_shard(
+                cleaning_result.cleaned_scope_df,
+                output_path=cleaned_scope_shard_path,
+                schema=CLEANED_ITEM_SCOPE_SCHEMA,
+                compression=run_cfg.sentence_dataset.compression,
+            ):
+                cleaned_scope_shards.append(cleaned_scope_shard_path)
+
+            sentence_sections_df = cleaned_scopes_for_sentence_materialization(
+                cleaning_result.cleaned_scope_df
+            )
+            sentence_df, split_audit_df = _derive_sentence_frame_with_split_audit(
+                sentence_sections_df,
+                run_cfg.sentence_dataset,
+                authority=authority,
+            )
+            sentence_shard_path = sentence_shard_dir / f"{batch_index:06d}.parquet"
+            if _write_parquet_shard(
+                sentence_df,
+                output_path=sentence_shard_path,
+                schema=SENTENCE_FRAME_SCHEMA,
+                compression=run_cfg.sentence_dataset.compression,
+            ):
+                sentence_shards.append(sentence_shard_path)
+
+            split_audit_shard_path = split_audit_shard_dir / f"{batch_index:06d}.parquet"
+            if _write_parquet_shard(
+                split_audit_df,
+                output_path=split_audit_shard_path,
+                schema=SENTENCE_SPLIT_AUDIT_SCHEMA,
+                compression="zstd",
+            ):
+                split_audit_shards.append(split_audit_shard_path)
+
+            cleaning_row_audit_shard_path = cleaning_row_audit_shard_dir / f"{batch_index:06d}.parquet"
+            if _write_parquet_shard(
+                cleaning_result.row_audit_df,
+                output_path=cleaning_row_audit_shard_path,
+                schema=CLEANING_ROW_AUDIT_SCHEMA,
+                compression="zstd",
+            ):
+                cleaning_row_audit_shards.append(cleaning_row_audit_shard_path)
+
+            flagged_rows_shard_path = flagged_rows_shard_dir / f"{batch_index:06d}.parquet"
+            if _write_parquet_shard(
+                cleaning_result.flagged_rows_df,
+                output_path=flagged_rows_shard_path,
+                schema=CLEANING_ROW_AUDIT_SCHEMA,
+                compression="zstd",
+            ):
+                flagged_rows_shards.append(flagged_rows_shard_path)
+
+            scope_diagnostics_shard_path = scope_diagnostics_shard_dir / f"{batch_index:06d}.parquet"
+            if _write_parquet_shard(
+                cleaning_result.scope_diagnostics_df,
+                output_path=scope_diagnostics_shard_path,
+                schema=SCOPE_DIAGNOSTICS_SCHEMA,
+                compression="zstd",
+            ):
+                scope_diagnostics_shards.append(scope_diagnostics_shard_path)
+
+            manual_audit_shard_path = manual_audit_shard_dir / f"{batch_index:06d}.parquet"
+            if _write_parquet_shard(
+                cleaning_result.manual_audit_sample_df,
+                output_path=manual_audit_shard_path,
+                schema=MANUAL_AUDIT_SAMPLE_SCHEMA,
+                compression="zstd",
+            ):
+                manual_audit_shards.append(manual_audit_shard_path)
+
+            sentence_rows += int(sentence_df.height)
+            if sentence_df.height and FINBERT_TOKEN_BUCKET_COLUMN in sentence_df.columns:
+                batch_bucket_counts = (
+                    sentence_df.group_by(FINBERT_TOKEN_BUCKET_COLUMN)
+                    .agg(pl.len().alias("sentence_rows"))
+                    .to_dicts()
+                )
+                for row in batch_bucket_counts:
+                    bucket = str(row[FINBERT_TOKEN_BUCKET_COLUMN])
+                    if bucket in bucket_counts:
+                        bucket_counts[bucket] += int(row["sentence_rows"])
+
+            cleaned_scope_rows += int(
+                cleaning_result.row_audit_df.select((~pl.col("dropped_after_cleaning")).sum()).item()
+            ) if not cleaning_result.row_audit_df.is_empty() else 0
+            cleaning_dropped_rows += int(
+                cleaning_result.row_audit_df.select(pl.col("dropped_after_cleaning").sum()).item()
+            ) if not cleaning_result.row_audit_df.is_empty() else 0
+            cleaning_flagged_rows += int(cleaning_result.flagged_rows_df.height)
+            split_audit_rows += int(split_audit_df.height)
+            cleaning_row_audit_rows += int(cleaning_result.row_audit_df.height)
+            scope_diagnostics_rows += int(cleaning_result.scope_diagnostics_df.height)
+            manual_audit_rows += int(cleaning_result.manual_audit_sample_df.height)
+
+            if not split_audit_df.is_empty():
+                chunked_section_rows += int(split_audit_df["benchmark_row_id"].n_unique())
+                warning_split_rows += int(
+                    split_audit_df.filter(pl.col("warning_boundary_used"))["benchmark_row_id"].n_unique()
+                )
+                batch_max_original = split_audit_df.select(pl.col("original_char_count").max()).item()
+                if batch_max_original is not None:
+                    batch_original = int(batch_max_original)
+                    max_original_char_count = (
+                        batch_original
+                        if max_original_char_count is None
+                        else max(max_original_char_count, batch_original)
+                    )
+
+        _sink_parquet_from_paths(
+            cleaned_scope_shards,
+            output_path=cleaned_scope_path,
+            schema=CLEANED_ITEM_SCOPE_SCHEMA,
             compression=run_cfg.sentence_dataset.compression,
         )
-        sentence_sections_df = cleaned_scopes_for_sentence_materialization(
-            cleaning_result.cleaned_scope_df
+        _sink_parquet_from_paths(
+            sentence_shards,
+            output_path=sentence_path,
+            schema=SENTENCE_FRAME_SCHEMA,
+            compression=run_cfg.sentence_dataset.compression,
         )
-        sentence_df, split_audit_df = _derive_sentence_frame_with_split_audit(
-            sentence_sections_df,
-            run_cfg.sentence_dataset,
-            authority=authority,
+        _sink_parquet_from_paths(
+            split_audit_shards,
+            output_path=split_audit_year_path,
+            schema=SENTENCE_SPLIT_AUDIT_SCHEMA,
+            compression="zstd",
         )
-        processed_split_audit_chunks.append(split_audit_df)
-        processed_cleaning_row_audit_chunks.append(cleaning_result.row_audit_df)
-        processed_flagged_rows_chunks.append(cleaning_result.flagged_rows_df)
-        processed_scope_diagnostics_chunks.append(cleaning_result.scope_diagnostics_df)
-        processed_manual_audit_chunks.append(cleaning_result.manual_audit_sample_df)
-        sentence_path.parent.mkdir(parents=True, exist_ok=True)
-        sentence_df.write_parquet(sentence_path, compression=run_cfg.sentence_dataset.compression)
-        _warn_on_fallback_split_boundaries(filing_year, split_audit_df)
+        _sink_parquet_from_paths(
+            cleaning_row_audit_shards,
+            output_path=cleaning_row_audit_year_path,
+            schema=CLEANING_ROW_AUDIT_SCHEMA,
+            compression="zstd",
+        )
+        _sink_parquet_from_paths(
+            flagged_rows_shards,
+            output_path=flagged_rows_year_path,
+            schema=CLEANING_ROW_AUDIT_SCHEMA,
+            compression="zstd",
+        )
+        _sink_parquet_from_paths(
+            scope_diagnostics_shards,
+            output_path=scope_diagnostics_year_path,
+            schema=SCOPE_DIAGNOSTICS_SCHEMA,
+            compression="zstd",
+        )
+        _sink_parquet_from_paths(
+            manual_audit_shards,
+            output_path=manual_audit_year_path,
+            schema=MANUAL_AUDIT_SAMPLE_SCHEMA,
+            compression="zstd",
+        )
+        if year_temp_root.exists():
+            shutil.rmtree(year_temp_root)
+
+        if split_audit_year_path.exists():
+            split_audit_df = pl.read_parquet(split_audit_year_path)
+            _warn_on_fallback_split_boundaries(filing_year, split_audit_df)
+
         summary_rows.append(
-                _summary_row(
-                    filing_year=filing_year,
-                    status="processed",
-                    run_dir=run_dir,
-                    source_path=year_path,
-                    sentence_path=sentence_path,
-                sections_df=sections_df,
-                sentence_df=sentence_df,
-                split_audit_df=split_audit_df,
-                cleaning_row_audit_df=cleaning_result.row_audit_df,
-                flagged_rows_df=cleaning_result.flagged_rows_df,
-                scope_diagnostics_df=cleaning_result.scope_diagnostics_df,
-                manual_audit_df=cleaning_result.manual_audit_sample_df,
-                source_items_shard_fingerprint=semantic_file_fingerprint(year_path),
-                accepted_universe_contract_fingerprint=accepted_universe_contract_fingerprint,
-                target_doc_universe_fingerprint=target_doc_universe_fingerprint,
-            )
+            {
+                "filing_year": filing_year,
+                "status": "processed",
+                "source_path": relative_artifact_path(year_path, base_path=run_dir),
+                "sentence_dataset_path": relative_artifact_path(sentence_path, base_path=run_dir),
+                "section_rows": int(section_rows),
+                "doc_count": len(section_doc_ids),
+                "max_section_char_count": max_section_char_count,
+                "oversize_section_rows": int(oversize_section_rows),
+                "chunked_section_rows": int(chunked_section_rows),
+                "warning_split_rows": int(warning_split_rows),
+                "sentence_rows": int(sentence_rows),
+                "short_sentence_rows": int(bucket_counts["short"]),
+                "medium_sentence_rows": int(bucket_counts["medium"]),
+                "long_sentence_rows": int(bucket_counts["long"]),
+                "cleaned_scope_rows": int(cleaned_scope_rows),
+                "cleaning_dropped_rows": int(cleaning_dropped_rows),
+                "cleaning_flagged_rows": int(cleaning_flagged_rows),
+                "split_audit_rows": int(split_audit_rows),
+                "cleaning_row_audit_rows": int(cleaning_row_audit_rows),
+                "scope_diagnostics_rows": int(scope_diagnostics_rows),
+                "manual_audit_rows": int(manual_audit_rows),
+                "source_items_shard_fingerprint": expected_source_fingerprint,
+                "accepted_universe_contract_fingerprint": accepted_universe_contract_fingerprint,
+                "target_doc_universe_fingerprint": expected_target_fingerprint,
+            }
         )
 
     summary_df = pl.DataFrame(summary_rows).sort("filing_year") if summary_rows else pl.DataFrame()
-    run_dir.mkdir(parents=True, exist_ok=True)
-    final_split_audit_chunks: list[pl.DataFrame] = []
-    final_cleaning_row_audit_chunks: list[pl.DataFrame] = []
-    final_flagged_rows_chunks: list[pl.DataFrame] = []
-    final_scope_diagnostics_chunks: list[pl.DataFrame] = []
-    final_manual_audit_chunks: list[pl.DataFrame] = []
-    if reused_years and not existing_split_audit_df.is_empty():
-        final_split_audit_chunks.append(
-            existing_split_audit_df.filter(pl.col("filing_year").is_in(sorted(reused_years)))
-        )
-    if reused_years:
-        final_cleaning_row_audit_chunks.append(
-            _filter_existing_years(existing_cleaning_row_audit_df, reused_years)
-        )
-        final_flagged_rows_chunks.append(
-            _filter_existing_years(existing_flagged_rows_df, reused_years)
-        )
-        final_scope_diagnostics_chunks.append(
-            _filter_existing_years(existing_scope_diagnostics_df, reused_years)
-        )
-        final_manual_audit_chunks.append(
-            _filter_existing_years(existing_manual_audit_df, reused_years)
-        )
-    final_split_audit_chunks.extend(processed_split_audit_chunks)
-    final_cleaning_row_audit_chunks.extend(processed_cleaning_row_audit_chunks)
-    final_flagged_rows_chunks.extend(processed_flagged_rows_chunks)
-    final_scope_diagnostics_chunks.extend(processed_scope_diagnostics_chunks)
-    final_manual_audit_chunks.extend(processed_manual_audit_chunks)
-    non_empty_split_audit_chunks = [chunk for chunk in final_split_audit_chunks if not chunk.is_empty()]
-    final_split_audit_df = (
-        pl.concat(non_empty_split_audit_chunks, how="vertical_relaxed")
-        if non_empty_split_audit_chunks
-        else _empty_split_audit_frame()
+    summary_years = [int(row["filing_year"]) for row in summary_rows]
+    _sink_parquet_from_paths(
+        [
+            _build_year_internal_path(run_dir, "oversize_sections", year)
+            for year in summary_years
+            if _build_year_internal_path(run_dir, "oversize_sections", year).exists()
+        ],
+        output_path=oversize_sections_path,
+        schema=SENTENCE_SPLIT_AUDIT_SCHEMA,
+        compression="zstd",
     )
-    final_cleaning_row_audit_df = _concat_frames(final_cleaning_row_audit_chunks, CLEANING_ROW_AUDIT_SCHEMA)
-    final_flagged_rows_df = _concat_frames(final_flagged_rows_chunks, CLEANING_ROW_AUDIT_SCHEMA)
-    final_scope_diagnostics_df = _concat_frames(final_scope_diagnostics_chunks, SCOPE_DIAGNOSTICS_SCHEMA)
-    final_manual_audit_df = _concat_frames(final_manual_audit_chunks, MANUAL_AUDIT_SAMPLE_SCHEMA)
-    final_split_audit_df.write_parquet(oversize_sections_path, compression="zstd")
-    final_cleaning_row_audit_df.write_parquet(cleaning_row_audit_path, compression="zstd")
-    final_flagged_rows_df.write_parquet(cleaning_flagged_rows_path, compression="zstd")
-    final_scope_diagnostics_df.write_parquet(item_scope_cleaning_diagnostics_path, compression="zstd")
+    _sink_parquet_from_paths(
+        [
+            _build_year_internal_path(run_dir, "cleaning_row_audit", year)
+            for year in summary_years
+            if _build_year_internal_path(run_dir, "cleaning_row_audit", year).exists()
+        ],
+        output_path=cleaning_row_audit_path,
+        schema=CLEANING_ROW_AUDIT_SCHEMA,
+        compression="zstd",
+    )
+    _sink_parquet_from_paths(
+        [
+            _build_year_internal_path(run_dir, "cleaning_flagged_rows", year)
+            for year in summary_years
+            if _build_year_internal_path(run_dir, "cleaning_flagged_rows", year).exists()
+        ],
+        output_path=cleaning_flagged_rows_path,
+        schema=CLEANING_ROW_AUDIT_SCHEMA,
+        compression="zstd",
+    )
+    _sink_parquet_from_paths(
+        [
+            _build_year_internal_path(run_dir, "item_scope_cleaning_diagnostics", year)
+            for year in summary_years
+            if _build_year_internal_path(run_dir, "item_scope_cleaning_diagnostics", year).exists()
+        ],
+        output_path=item_scope_cleaning_diagnostics_path,
+        schema=SCOPE_DIAGNOSTICS_SCHEMA,
+        compression="zstd",
+    )
+    _sink_parquet_from_paths(
+        [
+            _build_year_internal_path(run_dir, "manual_boundary_audit_sample", year)
+            for year in summary_years
+            if _build_year_internal_path(run_dir, "manual_boundary_audit_sample", year).exists()
+        ],
+        output_path=manual_boundary_audit_sample_path,
+        schema=MANUAL_AUDIT_SAMPLE_SCHEMA,
+        compression="zstd",
+    )
+    final_scope_diagnostics_df = pl.read_parquet(item_scope_cleaning_diagnostics_path)
     final_scope_diagnostics_df.write_csv(item_scope_cleaning_diagnostics_csv_path)
-    final_manual_audit_df.write_parquet(manual_boundary_audit_sample_path, compression="zstd")
     summary_df.write_parquet(yearly_summary_path, compression="zstd")
     summary_df.write_csv(yearly_summary_csv_path)
 

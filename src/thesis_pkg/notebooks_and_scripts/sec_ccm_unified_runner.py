@@ -1095,11 +1095,11 @@ def main() -> None:
     )
     LM2011_TEXT_FEATURE_BATCH_SIZE = _env_int(
         "SEC_CCM_LM2011_TEXT_FEATURE_BATCH_SIZE",
-        1000,
+        100,
     )
     LM2011_EVENT_WINDOW_DOC_BATCH_SIZE = _env_int(
         "SEC_CCM_LM2011_EVENT_WINDOW_DOC_BATCH_SIZE",
-        250,
+        100,
     )
     FINBERT_OUTPUT_DIR = _env_path(
         "SEC_CCM_FINBERT_OUTPUT_DIR",

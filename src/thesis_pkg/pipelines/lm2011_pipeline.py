@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Mapping
 import datetime as dt
 import math
+from pathlib import Path
+import shutil
 import warnings
 
 import polars as pl
@@ -51,6 +53,7 @@ _LM2011_TABLE_I_MDA_SECTION_LABEL = "Management Discussion and Analysis (MD&A) S
 _LM2011_TABLE_I_DEFAULT_SAMPLE_START = dt.date(1994, 1, 1)
 _LM2011_TABLE_I_DEFAULT_SAMPLE_END = dt.date(2008, 12, 31)
 DEFAULT_EVENT_WINDOW_DOC_BATCH_SIZE = 250
+_STREAMING_PARQUET_COMPRESSION = "zstd"
 _LM2011_TABLE_I_FULL_10K_ROW_LABELS: dict[str, str] = {
     "first_filing_per_year": "Include only first filing in a given year",
     "minimum_180_day_spacing": "At least 180 days between a given firm's 10-K filings",
@@ -903,6 +906,91 @@ def _project_public_event_screen_surface(surface_df: pl.DataFrame) -> pl.DataFra
     return surface_df.select(_empty_event_screen_surface_df().columns)
 
 
+def write_lm2011_event_screen_surface_parquet(
+    sample_backbone_lf: pl.LazyFrame,
+    daily_lf: pl.LazyFrame,
+    annual_accounting_panel_lf: pl.LazyFrame,
+    ff_factors_daily_lf: pl.LazyFrame | None,
+    full_10k_text_features_lf: pl.LazyFrame | None,
+    *,
+    output_path: Path,
+    event_window_doc_batch_size: int = DEFAULT_EVENT_WINDOW_DOC_BATCH_SIZE,
+    progress_callback: Callable[[dict[str, int]], None] | None = None,
+    temp_root: Path | None = None,
+    cleanup_on_success: bool = True,
+) -> int:
+    docs_df = _prepare_table_i_base_frame(
+        sample_backbone_lf,
+        daily_lf,
+        annual_accounting_panel_lf,
+        full_10k_text_features_lf,
+    )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    resolved_temp_root = temp_root or output_path.parent / f".{output_path.stem}_tmp"
+    if resolved_temp_root.exists():
+        shutil.rmtree(resolved_temp_root)
+    resolved_temp_root.mkdir(parents=True, exist_ok=True)
+    shard_dir = resolved_temp_root / "shards"
+    shard_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        if docs_df.height == 0:
+            _empty_event_screen_surface_df().write_parquet(
+                output_path,
+                compression=_STREAMING_PARQUET_COMPRESSION,
+            )
+            if cleanup_on_success and resolved_temp_root.exists():
+                shutil.rmtree(resolved_temp_root)
+            return 0
+
+        batch_size = _validated_event_window_doc_batch_size(event_window_doc_batch_size)
+        docs_sorted = docs_df.sort("filing_date", "KYPERMNO", "doc_id")
+        daily_source_lf = _prepare_daily_event_source_lf(daily_lf)
+        factors_df = _prepare_daily_factor_frame(ff_factors_daily_lf)
+        total_docs = docs_sorted.height
+        total_batches = int(math.ceil(total_docs / batch_size))
+        shard_paths: list[Path] = []
+
+        for batch_start in range(0, total_docs, batch_size):
+            docs_batch = docs_sorted.slice(batch_start, batch_size)
+            daily_batch_df = _collect_daily_event_batch(daily_source_lf, factors_df, docs_batch)
+            surface_batch = _build_lm2011_event_screen_surface(docs_batch, daily_batch_df)
+            if not surface_batch.is_empty():
+                shard_path = shard_dir / f"{int(batch_start / batch_size) + 1:06d}.parquet"
+                surface_batch.write_parquet(shard_path, compression=_STREAMING_PARQUET_COMPRESSION)
+                shard_paths.append(shard_path)
+            if progress_callback is not None:
+                batch_index = int(batch_start / batch_size) + 1
+                progress_callback(
+                    {
+                        "batch_index": batch_index,
+                        "total_batches": total_batches,
+                        "batch_doc_count": docs_batch.height,
+                        "docs_completed": min(batch_start + docs_batch.height, total_docs),
+                        "docs_total": total_docs,
+                    }
+                )
+
+        if output_path.exists():
+            output_path.unlink()
+        if shard_paths:
+            pl.scan_parquet([str(path) for path in shard_paths]).sink_parquet(
+                output_path,
+                compression=_STREAMING_PARQUET_COMPRESSION,
+            )
+        else:
+            _empty_event_screen_surface_df().write_parquet(
+                output_path,
+                compression=_STREAMING_PARQUET_COMPRESSION,
+            )
+        row_count = int(pl.scan_parquet(output_path).select(pl.len()).collect().item())
+        if cleanup_on_success and resolved_temp_root.exists():
+            shutil.rmtree(resolved_temp_root)
+        return row_count
+    except Exception:
+        raise
+
+
 def _build_lm2011_event_screen_surface_batched(
     sample_backbone_lf: pl.LazyFrame,
     daily_lf: pl.LazyFrame,
@@ -1399,6 +1487,28 @@ def build_lm2011_sue_panel(
     if docs_df.height == 0:
         return _empty_sue_panel_df().lazy()
 
+    docs_df = docs_df.with_columns(
+        pl.coalesce(
+            [
+                pl.col("APDEDATEQ").cast(pl.Date, strict=False),
+                pl.col("PDATEQ").cast(pl.Date, strict=False),
+            ]
+        ).alias("_quarter_fiscal_period_end")
+    )
+    relevant_gvkeys = [
+        int(value)
+        for value in docs_df.get_column("gvkey_int").drop_nulls().unique().to_list()
+    ]
+    if not relevant_gvkeys:
+        return _empty_sue_panel_df().lazy()
+    announcement_min = docs_df.select(pl.col("quarter_report_date").min()).item()
+    announcement_max = docs_df.select(pl.col("quarter_report_date").max()).item()
+    fiscal_min = docs_df.select(pl.col("_quarter_fiscal_period_end").min()).item()
+    fiscal_max = docs_df.select(pl.col("_quarter_fiscal_period_end").max()).item()
+    require_exact_fiscal_window = bool(
+        docs_df.select(pl.col("_quarter_fiscal_period_end").is_not_null().all()).item()
+    )
+
     docs_df = _attach_pre_filing_price_and_prior_month_price(docs_df, daily_lf)
     _require_columns(
         ibes_unadjusted_earnings_lf,
@@ -1426,16 +1536,24 @@ def build_lm2011_sue_panel(
             if "forecast_revision_1m" in ibes_unadjusted_earnings_lf.collect_schema()
             else pl.lit(None, dtype=pl.Float64)
         ).alias("forecast_revision_1m"),
+    ).filter(
+        pl.col("gvkey_int").cast(pl.Int32, strict=False).is_in(relevant_gvkeys)
+        & pl.col("announcement_date").cast(pl.Date, strict=False).is_between(
+            announcement_min,
+            announcement_max,
+            closed="both",
+        )
+        & (
+            pl.col("fiscal_period_end").cast(pl.Date, strict=False).is_between(
+                fiscal_min,
+                fiscal_max,
+                closed="both",
+            )
+            if require_exact_fiscal_window and fiscal_min is not None and fiscal_max is not None
+            else pl.lit(True)
+        )
     ).collect().unique(maintain_order=True)
 
-    docs_df = docs_df.with_columns(
-        pl.coalesce(
-            [
-                pl.col("APDEDATEQ").cast(pl.Date, strict=False),
-                pl.col("PDATEQ").cast(pl.Date, strict=False),
-            ]
-        ).alias("_quarter_fiscal_period_end")
-    )
     joined = select_refinitiv_lm2011_doc_analyst_inputs(
         docs_df.rename({"_quarter_fiscal_period_end": "quarter_fiscal_period_end"}),
         ibes,
@@ -1476,6 +1594,9 @@ def _prepare_monthly_stock_frame(
     *,
     monthly_return_col: str,
     portfolio_weighting: str,
+    allowed_permnos: list[int] | None = None,
+    month_start: dt.date | None = None,
+    month_end: dt.date | None = None,
 ) -> pl.DataFrame:
     monthly_schema = monthly_stock_lf.collect_schema()
     permno_col = _resolve_first_existing(monthly_schema, ("KYPERMNO", "kypermno"), "monthly_stock")
@@ -1485,8 +1606,7 @@ def _prepare_monthly_stock_frame(
     if portfolio_weighting == "lagged_value":
         market_cap_col = _resolve_first_existing(monthly_schema, ("MTCAP", "MTHCAP"), "monthly_stock")
 
-    monthly_df = (
-        monthly_stock_lf.select(
+    monthly_base_lf = monthly_stock_lf.select(
             pl.col(permno_col).cast(pl.Int32, strict=False).alias("KYPERMNO"),
             pl.col(month_col).cast(pl.Date, strict=False).alias("portfolio_month"),
             pl.col(monthly_return_col).cast(pl.Float64, strict=False).alias("monthly_return"),
@@ -1496,9 +1616,16 @@ def _prepare_monthly_stock_frame(
                 else pl.lit(1.0, dtype=pl.Float64).alias("_market_cap")
             ),
         )
-        .drop_nulls(subset=["KYPERMNO", "portfolio_month"])
-        .collect()
-        .sort("KYPERMNO", "portfolio_month")
+    if allowed_permnos:
+        monthly_base_lf = monthly_base_lf.filter(pl.col("KYPERMNO").is_in(allowed_permnos))
+    if month_start is not None:
+        monthly_base_lf = monthly_base_lf.filter(pl.col("portfolio_month") >= pl.lit(month_start))
+    if month_end is not None:
+        monthly_base_lf = monthly_base_lf.filter(pl.col("portfolio_month") <= pl.lit(month_end))
+
+    monthly_df = monthly_base_lf.drop_nulls(subset=["KYPERMNO", "portfolio_month"]).collect().sort(
+        "KYPERMNO",
+        "portfolio_month",
     )
     if portfolio_weighting == "lagged_value":
         monthly_df = monthly_df.with_columns(
@@ -1531,48 +1658,66 @@ def _prepare_monthly_factor_frame(ff_factors_monthly_with_mom_lf: pl.LazyFrame |
 
 
 def _build_strategy_assignment_frame(strategy_docs_df: pl.DataFrame) -> pl.DataFrame:
-    rows: list[dict[str, object]] = []
-    for row in strategy_docs_df.iter_rows(named=True):
-        filing_date = row["filing_date"]
-        if filing_date is None:
-            continue
-        filing_date = _coerce_python_date(filing_date, label="strategy filing_date")
-        sort_year = filing_date.year + 1
-        if sort_year < _STRATEGY_MIN_SORT_YEAR or sort_year > _STRATEGY_MAX_SORT_YEAR:
-            continue
-        for signal_name in _STRATEGY_SIGNAL_COLUMNS:
-            signal_value = row.get(signal_name)
-            if signal_value is None:
-                continue
-            rows.append(
-                {
-                    "doc_id": str(row["doc_id"]),
-                    "KYPERMNO": int(row["KYPERMNO"]),
-                    "sort_year": sort_year,
-                    "sort_signal_name": signal_name,
-                    "signal_value": float(signal_value),
-                }
-            )
-    if not rows:
-        return pl.DataFrame(
-            schema={
-                "doc_id": pl.Utf8,
-                "KYPERMNO": pl.Int32,
-                "sort_year": pl.Int32,
-                "sort_signal_name": pl.Utf8,
-                "signal_value": pl.Float64,
-                "quintile": pl.Int8,
-            }
+    signal_columns = [
+        signal_name
+        for signal_name in _STRATEGY_SIGNAL_COLUMNS
+        if signal_name in strategy_docs_df.columns
+    ]
+    empty = pl.DataFrame(
+        schema={
+            "doc_id": pl.Utf8,
+            "KYPERMNO": pl.Int32,
+            "sort_year": pl.Int32,
+            "sort_signal_name": pl.Utf8,
+            "signal_value": pl.Float64,
+            "quintile": pl.Int8,
+        }
+    )
+    if not signal_columns or strategy_docs_df.is_empty():
+        return empty
+
+    base = (
+        strategy_docs_df.select(
+            pl.col("doc_id").cast(pl.Utf8, strict=False),
+            pl.col("KYPERMNO").cast(pl.Int32, strict=False),
+            pl.col("filing_date").cast(pl.Date, strict=False),
+            *[pl.col(column).cast(pl.Float64, strict=False).alias(column) for column in signal_columns],
         )
-    base = pl.DataFrame(rows).sort("sort_year", "sort_signal_name", "signal_value", "doc_id")
-    groups: list[pl.DataFrame] = []
-    for group in base.partition_by(["sort_year", "sort_signal_name"], maintain_order=True):
-        n_obs = group.height
-        if n_obs == 0:
-            continue
-        quintiles = [int(idx * 5 / n_obs) + 1 for idx in range(n_obs)]
-        groups.append(group.with_columns(pl.Series("quintile", quintiles, dtype=pl.Int8)))
-    return pl.concat(groups, how="vertical_relaxed") if groups else base
+        .drop_nulls(subset=["doc_id", "KYPERMNO", "filing_date"])
+        .with_columns((pl.col("filing_date").dt.year() + 1).cast(pl.Int32).alias("sort_year"))
+        .filter(
+            pl.col("sort_year").is_between(_STRATEGY_MIN_SORT_YEAR, _STRATEGY_MAX_SORT_YEAR, closed="both")
+        )
+        .unpivot(
+            index=["doc_id", "KYPERMNO", "sort_year"],
+            on=signal_columns,
+            variable_name="sort_signal_name",
+            value_name="signal_value",
+        )
+        .drop_nulls(subset=["signal_value"])
+        .sort("sort_year", "sort_signal_name", "signal_value", "doc_id")
+    )
+    if base.is_empty():
+        return empty
+    group_keys = ["sort_year", "sort_signal_name"]
+    return (
+        base.with_row_index("_global_rank")
+        .with_columns(
+            (pl.col("_global_rank") - pl.col("_global_rank").min().over(group_keys))
+            .cast(pl.Int64)
+            .alias("_group_rank"),
+            pl.len().over(group_keys).cast(pl.Int64).alias("_group_size"),
+        )
+        .with_columns(
+            (
+                ((pl.col("_group_rank") * pl.lit(5.0)) / pl.col("_group_size"))
+                .floor()
+                .cast(pl.Int8)
+                + pl.lit(1, dtype=pl.Int8)
+            ).alias("quintile")
+        )
+        .select("doc_id", "KYPERMNO", "sort_year", "sort_signal_name", "signal_value", "quintile")
+    )
 
 
 def _strategy_sort_year_expr() -> pl.Expr:
@@ -1729,10 +1874,17 @@ def _build_trading_strategy_monthly_returns_df(
     if assignments.height == 0:
         return _empty_trading_strategy_monthly_returns_df()
 
+    allowed_permnos = [int(value) for value in assignments.get_column("KYPERMNO").unique().to_list()]
+    monthly_start = _STRATEGY_START_DATE
+    if portfolio_weighting == "lagged_value":
+        monthly_start = _STRATEGY_START_DATE.replace(day=1) - dt.timedelta(days=1)
     monthly_df = _prepare_monthly_stock_frame(
         monthly_stock_lf,
         monthly_return_col=monthly_return_col,
         portfolio_weighting=portfolio_weighting,
+        allowed_permnos=allowed_permnos,
+        month_start=monthly_start,
+        month_end=_STRATEGY_END_DATE,
     ).filter(
         pl.col("portfolio_month").is_between(pl.lit(_STRATEGY_START_DATE), pl.lit(_STRATEGY_END_DATE), closed="both")
     )

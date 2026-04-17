@@ -2,8 +2,11 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping
+import json
 import math
+from pathlib import Path
 import re
+import shutil
 
 import polars as pl
 
@@ -24,6 +27,7 @@ LM2011_DICTIONARY_REQUIRED_LISTS: tuple[str, ...] = (
 _LINEBREAK_HYPHEN_RE = re.compile(r"([A-Za-z])-\s*(?:\r?\n)\s*([A-Za-z])")
 _TOKEN_RE = re.compile(r"[A-Za-z]{2,}(?:[-'][A-Za-z]+)*")
 RAW_ITEM_TEXT_CLEANING_POLICY_ID = "raw_item_text"
+_STREAMING_PARQUET_COMPRESSION = "zstd"
 
 
 def _require_columns(lf: pl.LazyFrame, required: tuple[str, ...], label: str) -> None:
@@ -234,6 +238,7 @@ def _feature_schema(
     *,
     include_item_id: bool,
     include_cleaning_policy_id: bool,
+    raw_form_col: str,
     token_count_col: str,
     total_token_count_col: str,
     signal_specs: tuple[tuple[str, frozenset[str], bool], ...],
@@ -242,6 +247,7 @@ def _feature_schema(
         "doc_id": pl.Utf8,
         "cik_10": pl.Utf8,
         "filing_date": pl.Date,
+        raw_form_col: pl.Utf8,
         "normalized_form": pl.Utf8,
         total_token_count_col: pl.Int32,
         token_count_col: pl.Int32,
@@ -257,6 +263,27 @@ def _feature_schema(
     return schema
 
 
+def _empty_feature_frame(
+    *,
+    include_item_id: bool,
+    cleaning_policy_id: str | None,
+    raw_form_col: str,
+    token_count_col: str,
+    total_token_count_col: str,
+    signal_specs: tuple[tuple[str, frozenset[str], bool], ...],
+) -> pl.DataFrame:
+    return pl.DataFrame(
+        schema=_feature_schema(
+            include_item_id=include_item_id,
+            include_cleaning_policy_id=cleaning_policy_id is not None,
+            raw_form_col=raw_form_col,
+            token_count_col=token_count_col,
+            total_token_count_col=total_token_count_col,
+            signal_specs=signal_specs,
+        )
+    )
+
+
 def _build_scored_text_frame(
     batches: Iterable[pl.DataFrame],
     *,
@@ -264,6 +291,7 @@ def _build_scored_text_frame(
     token_count_col: str,
     total_token_count_col: str,
     include_item_id: bool,
+    raw_form_col: str,
     cleaning_policy_id: str | None = None,
     signal_specs: tuple[tuple[str, frozenset[str], bool], ...],
     master_dictionary_words: Iterable[str],
@@ -291,6 +319,7 @@ def _build_scored_text_frame(
     schema = _feature_schema(
         include_item_id=include_item_id,
         include_cleaning_policy_id=cleaning_policy_id is not None,
+        raw_form_col=raw_form_col,
         token_count_col=token_count_col,
         total_token_count_col=total_token_count_col,
         signal_specs=signal_specs,
@@ -305,6 +334,253 @@ def _build_scored_text_frame(
     if cleaning_policy_id is not None:
         df = df.with_columns(pl.lit(cleaning_policy_id, dtype=pl.Utf8).alias("cleaning_policy_id"))
     return df.lazy()
+
+
+def _pass1_schema(
+    *,
+    include_item_id: bool,
+    raw_form_col: str,
+    token_count_col: str,
+    total_token_count_col: str,
+) -> dict[str, pl.DataType]:
+    schema: dict[str, pl.DataType] = {
+        "doc_id": pl.Utf8,
+        "cik_10": pl.Utf8,
+        "filing_date": pl.Date,
+        raw_form_col: pl.Utf8,
+        "normalized_form": pl.Utf8,
+        total_token_count_col: pl.Int32,
+        token_count_col: pl.Int32,
+        "_matched_counts_json": pl.Utf8,
+    }
+    if include_item_id:
+        schema["item_id"] = pl.Utf8
+    return schema
+
+
+def _prepare_pass1_rows(
+    batch: pl.DataFrame,
+    *,
+    text_col: str,
+    vocabulary: frozenset[str],
+    master_dictionary_words: frozenset[str],
+    token_count_col: str,
+    total_token_count_col: str,
+    text_cleaner: Callable[[str | None], str | None] | None = None,
+) -> tuple[list[dict[str, object]], Counter[str]]:
+    rows: list[dict[str, object]] = []
+    document_frequency: Counter[str] = Counter()
+    for row in batch.iter_rows(named=True):
+        row_dict = dict(row)
+        text_value = row_dict.pop(text_col, None)
+        text_input = text_value if isinstance(text_value, str) else None
+        if text_cleaner is not None:
+            text_input = text_cleaner(text_input)
+        tokens = tokenize_lm2011_text(text_input)
+        recognized_word_total = sum(1 for token in tokens if token in master_dictionary_words)
+        counts = Counter(token for token in tokens if token in vocabulary)
+        rows.append(
+            {
+                **row_dict,
+                total_token_count_col: len(tokens),
+                token_count_col: recognized_word_total,
+                "_matched_counts_json": json.dumps(dict(counts), sort_keys=True, separators=(",", ":")),
+            }
+        )
+        document_frequency.update(counts.keys())
+    return rows, document_frequency
+
+
+def _feature_row_from_pass1(
+    row: dict[str, object],
+    *,
+    raw_form_col: str,
+    token_count_col: str,
+    total_token_count_col: str,
+    signal_specs: tuple[tuple[str, frozenset[str], bool], ...],
+    idf_by_token: Mapping[str, float],
+    cleaning_policy_id: str | None,
+) -> dict[str, object]:
+    out = {
+        "doc_id": row["doc_id"],
+        "cik_10": row["cik_10"],
+        "filing_date": row["filing_date"],
+        raw_form_col: row.get(raw_form_col),
+    }
+    if "item_id" in row:
+        out["item_id"] = row["item_id"]
+    out["normalized_form"] = row["normalized_form"]
+    out[total_token_count_col] = int(row.get(total_token_count_col) or 0)
+    out[token_count_col] = int(row.get(token_count_col) or 0)
+
+    counts = Counter(
+        {
+            str(token): int(count)
+            for token, count in json.loads(str(row.get("_matched_counts_json") or "{}")).items()
+        }
+    )
+    recognized_word_total = int(out[token_count_col])
+    denominator = float(recognized_word_total) if recognized_word_total > 0 else None
+    for signal_stem, signal_tokens, include_tfidf in signal_specs:
+        matched_count = float(sum(counts.get(token, 0) for token in signal_tokens))
+        out[f"{signal_stem}_prop"] = (matched_count / denominator) if denominator else None
+        if include_tfidf:
+            out[f"{signal_stem}_tfidf"] = (
+                float(
+                    sum(
+                        _lm2011_term_weight(
+                            term_frequency=counts.get(token, 0),
+                            document_length=recognized_word_total,
+                            inverse_document_frequency=idf_by_token.get(token, 0.0),
+                        )
+                        for token in signal_tokens
+                        if counts.get(token, 0) > 0
+                    )
+                )
+                if denominator
+                else None
+            )
+    if cleaning_policy_id is not None:
+        out["cleaning_policy_id"] = cleaning_policy_id
+    return out
+
+
+def _prepare_temp_root(output_path: Path, temp_root: Path | None) -> Path:
+    resolved = temp_root or output_path.parent / f".{output_path.stem}_tmp"
+    if resolved.exists():
+        shutil.rmtree(resolved)
+    resolved.mkdir(parents=True, exist_ok=True)
+    return resolved
+
+
+def _write_streaming_text_features(
+    batches: Iterable[pl.DataFrame],
+    *,
+    output_path: Path,
+    temp_root: Path | None,
+    token_count_col: str,
+    total_token_count_col: str,
+    include_item_id: bool,
+    raw_form_col: str,
+    cleaning_policy_id: str | None = None,
+    signal_specs: tuple[tuple[str, frozenset[str], bool], ...],
+    master_dictionary_words: Iterable[str],
+    text_col: str,
+    text_cleaner: Callable[[str | None], str | None] | None = None,
+    cleanup_on_success: bool = True,
+) -> int:
+    vocabulary = frozenset().union(*(tokens for _, tokens, _ in signal_specs))
+    normalized_master_dictionary_words = _normalize_master_dictionary_words(master_dictionary_words)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_dir = _prepare_temp_root(output_path, temp_root)
+    pass1_dir = temp_dir / "pass1"
+    feature_dir = temp_dir / "features"
+    pass1_dir.mkdir(parents=True, exist_ok=True)
+    feature_dir.mkdir(parents=True, exist_ok=True)
+
+    pass1_paths: list[Path] = []
+    document_frequency: Counter[str] = Counter()
+    doc_count = 0
+    pass1_schema = _pass1_schema(
+        include_item_id=include_item_id,
+        raw_form_col=raw_form_col,
+        token_count_col=token_count_col,
+        total_token_count_col=total_token_count_col,
+    )
+    feature_schema = _feature_schema(
+        include_item_id=include_item_id,
+        include_cleaning_policy_id=cleaning_policy_id is not None,
+        raw_form_col=raw_form_col,
+        token_count_col=token_count_col,
+        total_token_count_col=total_token_count_col,
+        signal_specs=signal_specs,
+    )
+
+    try:
+        for batch_index, batch in enumerate(batches, start=1):
+            rows, batch_document_frequency = _prepare_pass1_rows(
+                batch,
+                text_col=text_col,
+                vocabulary=vocabulary,
+                master_dictionary_words=normalized_master_dictionary_words,
+                token_count_col=token_count_col,
+                total_token_count_col=total_token_count_col,
+                text_cleaner=text_cleaner,
+            )
+            if not rows:
+                continue
+            shard_path = pass1_dir / f"{batch_index:06d}.parquet"
+            pl.DataFrame(rows, schema_overrides=pass1_schema).write_parquet(
+                shard_path,
+                compression=_STREAMING_PARQUET_COMPRESSION,
+            )
+            pass1_paths.append(shard_path)
+            document_frequency.update(batch_document_frequency)
+            doc_count += len(rows)
+
+        if output_path.exists():
+            output_path.unlink()
+        if doc_count == 0:
+            _empty_feature_frame(
+                include_item_id=include_item_id,
+                cleaning_policy_id=cleaning_policy_id,
+                raw_form_col=raw_form_col,
+                token_count_col=token_count_col,
+                total_token_count_col=total_token_count_col,
+                signal_specs=signal_specs,
+            ).write_parquet(output_path, compression=_STREAMING_PARQUET_COMPRESSION)
+            if cleanup_on_success and temp_dir.exists():
+                shutil.rmtree(temp_dir)
+            return 0
+
+        idf_by_token = {
+            token: _lm2011_inverse_document_frequency(doc_count, doc_freq)
+            for token, doc_freq in document_frequency.items()
+        }
+        feature_shard_paths: list[Path] = []
+        for batch_index, shard_path in enumerate(pass1_paths, start=1):
+            pass1_df = pl.read_parquet(shard_path)
+            rows = [
+                _feature_row_from_pass1(
+                    row,
+                    raw_form_col=raw_form_col,
+                    token_count_col=token_count_col,
+                    total_token_count_col=total_token_count_col,
+                    signal_specs=signal_specs,
+                    idf_by_token=idf_by_token,
+                    cleaning_policy_id=cleaning_policy_id,
+                )
+                for row in pass1_df.iter_rows(named=True)
+            ]
+            if not rows:
+                continue
+            feature_shard_path = feature_dir / f"{batch_index:06d}.parquet"
+            pl.DataFrame(rows, schema_overrides=feature_schema).write_parquet(
+                feature_shard_path,
+                compression=_STREAMING_PARQUET_COMPRESSION,
+            )
+            feature_shard_paths.append(feature_shard_path)
+
+        if feature_shard_paths:
+            pl.scan_parquet([str(path) for path in feature_shard_paths]).sink_parquet(
+                output_path,
+                compression=_STREAMING_PARQUET_COMPRESSION,
+            )
+        else:
+            _empty_feature_frame(
+                include_item_id=include_item_id,
+                cleaning_policy_id=cleaning_policy_id,
+                raw_form_col=raw_form_col,
+                token_count_col=token_count_col,
+                total_token_count_col=total_token_count_col,
+                signal_specs=signal_specs,
+            ).write_parquet(output_path, compression=_STREAMING_PARQUET_COMPRESSION)
+        row_count = int(pl.scan_parquet(output_path).select(pl.len()).collect().item())
+        if cleanup_on_success and temp_dir.exists():
+            shutil.rmtree(temp_dir)
+        return row_count
+    except Exception:
+        raise
 
 
 def _build_lm2011_signal_specs(
@@ -357,9 +633,52 @@ def build_lm2011_text_features_full_10k(
         token_count_col="token_count_full_10k",
         total_token_count_col="total_token_count_full_10k",
         include_item_id=False,
+        raw_form_col=raw_form_col,
         signal_specs=signal_specs,
         master_dictionary_words=master_dictionary_words,
         text_cleaner=lambda value: clean_full_10k_for_lm2011(value, contract=cleaning_contract),
+    )
+
+
+def write_lm2011_text_features_full_10k_parquet(
+    sec_parsed_lf: pl.LazyFrame,
+    *,
+    output_path: Path,
+    dictionary_lists: Mapping[str, Iterable[str]],
+    harvard_negative_word_list: Iterable[str] | None,
+    master_dictionary_words: Iterable[str],
+    text_col: str = "full_text",
+    raw_form_col: str = "document_type_filename",
+    cleaning_contract: Full10KCleaningContract = "current",
+    batch_size: int = DEFAULT_TEXT_FEATURE_BATCH_SIZE,
+    temp_root: Path | None = None,
+    cleanup_on_success: bool = True,
+) -> int:
+    normalized_dict = normalize_lm2011_dictionary_lists(dictionary_lists)
+    signal_specs = _build_lm2011_signal_specs(
+        normalized_dict=normalized_dict,
+        harvard_negative_word_list=harvard_negative_word_list,
+    )
+    batches = _iter_text_base_batches(
+        sec_parsed_lf,
+        label="sec_parsed",
+        text_col=text_col,
+        raw_form_col=raw_form_col,
+        batch_size=batch_size,
+    )
+    return _write_streaming_text_features(
+        batches,
+        output_path=output_path,
+        temp_root=temp_root,
+        text_col=text_col,
+        token_count_col="token_count_full_10k",
+        total_token_count_col="total_token_count_full_10k",
+        include_item_id=False,
+        raw_form_col=raw_form_col,
+        signal_specs=signal_specs,
+        master_dictionary_words=master_dictionary_words,
+        text_cleaner=lambda value: clean_full_10k_for_lm2011(value, contract=cleaning_contract),
+        cleanup_on_success=cleanup_on_success,
     )
 
 
@@ -394,9 +713,54 @@ def build_lm2011_text_features_mda(
         token_count_col="token_count_mda",
         total_token_count_col="total_token_count_mda",
         include_item_id=True,
+        raw_form_col=raw_form_col,
         cleaning_policy_id=RAW_ITEM_TEXT_CLEANING_POLICY_ID,
         signal_specs=signal_specs,
         master_dictionary_words=master_dictionary_words,
+    )
+
+
+def write_lm2011_text_features_mda_parquet(
+    sec_item_lf: pl.LazyFrame,
+    *,
+    output_path: Path,
+    dictionary_lists: Mapping[str, Iterable[str]],
+    harvard_negative_word_list: Iterable[str] | None,
+    master_dictionary_words: Iterable[str],
+    text_col: str = "full_text",
+    raw_form_col: str = "document_type_filename",
+    required_item_id: str = "7",
+    batch_size: int = DEFAULT_TEXT_FEATURE_BATCH_SIZE,
+    temp_root: Path | None = None,
+    cleanup_on_success: bool = True,
+) -> int:
+    normalized_dict = normalize_lm2011_dictionary_lists(dictionary_lists)
+    signal_specs = _build_lm2011_signal_specs(
+        normalized_dict=normalized_dict,
+        harvard_negative_word_list=harvard_negative_word_list,
+    )
+    batches = _iter_text_base_batches(
+        sec_item_lf,
+        label="sec_items",
+        text_col=text_col,
+        raw_form_col=raw_form_col,
+        include_item_id=True,
+        required_item_id=required_item_id,
+        batch_size=batch_size,
+    )
+    return _write_streaming_text_features(
+        batches,
+        output_path=output_path,
+        temp_root=temp_root,
+        text_col=text_col,
+        token_count_col="token_count_mda",
+        total_token_count_col="total_token_count_mda",
+        include_item_id=True,
+        raw_form_col=raw_form_col,
+        cleaning_policy_id=RAW_ITEM_TEXT_CLEANING_POLICY_ID,
+        signal_specs=signal_specs,
+        master_dictionary_words=master_dictionary_words,
+        cleanup_on_success=cleanup_on_success,
     )
 
 
@@ -432,6 +796,7 @@ def build_lm2011_trading_strategy_signal_frame(
         token_count_col="token_count_full_10k",
         total_token_count_col="total_token_count_full_10k",
         include_item_id=False,
+        raw_form_col=raw_form_col,
         signal_specs=signal_specs,
         master_dictionary_words=master_dictionary_words,
         text_cleaner=lambda value: clean_full_10k_for_lm2011(value, contract=cleaning_contract),

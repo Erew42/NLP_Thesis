@@ -359,6 +359,7 @@ class FinbertSentencePreprocessingRunConfig:
     cleaning: ItemTextCleaningConfig = field(default_factory=ItemTextCleaningConfig)
     target_doc_universe_path: Path | None = None
     year_filter: tuple[int, ...] | None = None
+    section_collect_batch_size: int = 500
     overwrite: bool = False
     run_name: str | None = None
     note: str = ""
@@ -377,6 +378,8 @@ class FinbertSentencePreprocessingRunConfig:
                 "target_doc_universe_path",
                 Path(self.target_doc_universe_path).resolve(),
             )
+        if self.section_collect_batch_size <= 0:
+            raise ValueError("section_collect_batch_size must be a positive integer.")
 
 
 @dataclass(frozen=True)
