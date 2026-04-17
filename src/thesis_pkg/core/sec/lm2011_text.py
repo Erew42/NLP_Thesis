@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 import json
 import math
 from pathlib import Path
@@ -62,11 +62,16 @@ def normalize_lm2011_dictionary_lists(
 
 
 def tokenize_lm2011_text(text: str | None) -> list[str]:
+    return list(iter_lm2011_tokens(text))
+
+
+def iter_lm2011_tokens(text: str | None) -> Iterator[str]:
     if text is None:
-        return []
+        return
     normalized = text.replace("\r\n", "\n").replace("\r", "\n")
     normalized = _LINEBREAK_HYPHEN_RE.sub(r"\1\2", normalized)
-    return [token.casefold() for token in _TOKEN_RE.findall(normalized)]
+    for match in _TOKEN_RE.finditer(normalized):
+        yield match.group(0).casefold()
 
 
 def _normalize_master_dictionary_words(master_dictionary_words: Iterable[str] | None) -> frozenset[str]:
@@ -172,10 +177,11 @@ def _prepare_document_stats(
             text_input = text_value if isinstance(text_value, str) else None
             if text_cleaner is not None:
                 text_input = text_cleaner(text_input)
-            tokens = tokenize_lm2011_text(text_input)
-            token_total = len(tokens)
-            recognized_word_total = sum(1 for token in tokens if token in master_dictionary_words)
-            counts = Counter(token for token in tokens if token in vocabulary)
+            token_total, recognized_word_total, counts = _count_document_tokens(
+                text_input,
+                vocabulary=vocabulary,
+                master_dictionary_words=master_dictionary_words,
+            )
             base_rows.append(row_dict)
             doc_token_counts[doc_id] = counts
             doc_token_totals[doc_id] = token_total
@@ -188,6 +194,24 @@ def _prepare_document_stats(
         for token, doc_freq in document_frequency.items()
     }
     return base_rows, doc_token_counts, doc_token_totals, doc_recognized_word_totals, idf_by_token
+
+
+def _count_document_tokens(
+    text: str | None,
+    *,
+    vocabulary: frozenset[str],
+    master_dictionary_words: frozenset[str],
+) -> tuple[int, int, Counter[str]]:
+    token_total = 0
+    recognized_word_total = 0
+    counts: Counter[str] = Counter()
+    for token in iter_lm2011_tokens(text):
+        token_total += 1
+        if token in master_dictionary_words:
+            recognized_word_total += 1
+        if token in vocabulary:
+            counts[token] += 1
+    return token_total, recognized_word_total, counts
 
 
 def _build_feature_rows(
@@ -376,13 +400,15 @@ def _prepare_pass1_rows(
         text_input = text_value if isinstance(text_value, str) else None
         if text_cleaner is not None:
             text_input = text_cleaner(text_input)
-        tokens = tokenize_lm2011_text(text_input)
-        recognized_word_total = sum(1 for token in tokens if token in master_dictionary_words)
-        counts = Counter(token for token in tokens if token in vocabulary)
+        token_total, recognized_word_total, counts = _count_document_tokens(
+            text_input,
+            vocabulary=vocabulary,
+            master_dictionary_words=master_dictionary_words,
+        )
         rows.append(
             {
                 **row_dict,
-                total_token_count_col: len(tokens),
+                total_token_count_col: token_total,
                 token_count_col: recognized_word_total,
                 "_matched_counts_json": json.dumps(dict(counts), sort_keys=True, separators=(",", ":")),
             }
@@ -467,6 +493,7 @@ def _write_streaming_text_features(
     master_dictionary_words: Iterable[str],
     text_col: str,
     text_cleaner: Callable[[str | None], str | None] | None = None,
+    progress_callback: Callable[[dict[str, int]], None] | None = None,
     cleanup_on_success: bool = True,
 ) -> int:
     vocabulary = frozenset().union(*(tokens for _, tokens, _ in signal_specs))
@@ -517,6 +544,14 @@ def _write_streaming_text_features(
             pass1_paths.append(shard_path)
             document_frequency.update(batch_document_frequency)
             doc_count += len(rows)
+            if progress_callback is not None:
+                progress_callback(
+                    {
+                        "batch_index": batch_index,
+                        "batch_doc_count": len(rows),
+                        "docs_completed": doc_count,
+                    }
+                )
 
         if output_path.exists():
             output_path.unlink()
@@ -651,6 +686,7 @@ def write_lm2011_text_features_full_10k_parquet(
     raw_form_col: str = "document_type_filename",
     cleaning_contract: Full10KCleaningContract = "current",
     batch_size: int = DEFAULT_TEXT_FEATURE_BATCH_SIZE,
+    progress_callback: Callable[[dict[str, int]], None] | None = None,
     temp_root: Path | None = None,
     cleanup_on_success: bool = True,
 ) -> int:
@@ -678,6 +714,7 @@ def write_lm2011_text_features_full_10k_parquet(
         signal_specs=signal_specs,
         master_dictionary_words=master_dictionary_words,
         text_cleaner=lambda value: clean_full_10k_for_lm2011(value, contract=cleaning_contract),
+        progress_callback=progress_callback,
         cleanup_on_success=cleanup_on_success,
     )
 
@@ -731,6 +768,7 @@ def write_lm2011_text_features_mda_parquet(
     raw_form_col: str = "document_type_filename",
     required_item_id: str = "7",
     batch_size: int = DEFAULT_TEXT_FEATURE_BATCH_SIZE,
+    progress_callback: Callable[[dict[str, int]], None] | None = None,
     temp_root: Path | None = None,
     cleanup_on_success: bool = True,
 ) -> int:
@@ -760,6 +798,7 @@ def write_lm2011_text_features_mda_parquet(
         cleaning_policy_id=RAW_ITEM_TEXT_CLEANING_POLICY_ID,
         signal_specs=signal_specs,
         master_dictionary_words=master_dictionary_words,
+        progress_callback=progress_callback,
         cleanup_on_success=cleanup_on_success,
     )
 

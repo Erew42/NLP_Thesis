@@ -224,6 +224,54 @@ def _print_rows_table(rows: list[dict[str, object]], *, sort_by: list[str] | Non
     print(frame.write_csv(None, separator="\t"))
 
 
+def _read_proc_kb_map(path: Path) -> dict[str, int]:
+    if not path.exists():
+        return {}
+    values: dict[str, int] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if ":" not in line:
+            continue
+        key, raw_value = line.split(":", 1)
+        parts = raw_value.strip().split()
+        if not parts:
+            continue
+        try:
+            values[key.strip()] = int(parts[0])
+        except ValueError:
+            continue
+    return values
+
+
+def _kb_to_gib(value_kb: int | None) -> float | None:
+    if value_kb is None:
+        return None
+    return round(float(value_kb) / 1024.0 / 1024.0, 3)
+
+
+def _ram_snapshot(label: str) -> dict[str, object]:
+    payload: dict[str, object] = {"label": label}
+    meminfo = _read_proc_kb_map(Path("/proc/meminfo"))
+    status = _read_proc_kb_map(Path("/proc/self/status"))
+    if not meminfo and not status:
+        payload["ram_stats_unavailable"] = True
+        return payload
+    mem_total_kb = meminfo.get("MemTotal")
+    mem_available_kb = meminfo.get("MemAvailable")
+    payload["process_rss_gb"] = _kb_to_gib(status.get("VmRSS"))
+    payload["process_hwm_gb"] = _kb_to_gib(status.get("VmHWM"))
+    payload["system_total_gb"] = _kb_to_gib(mem_total_kb)
+    payload["system_available_gb"] = _kb_to_gib(mem_available_kb)
+    if mem_total_kb is not None and mem_available_kb is not None:
+        payload["system_used_gb"] = _kb_to_gib(max(mem_total_kb - mem_available_kb, 0))
+    return payload
+
+
+def _print_ram_snapshot(label: str, *, enabled: bool) -> None:
+    if not enabled:
+        return
+    print(_ram_snapshot(label))
+
+
 def _resolve_ff48_siccodes_path(work_root: Path) -> Path:
     env_override = _env_optional_path("SEC_CCM_FF48_SICCODES_PATH")
     if env_override is not None:
@@ -428,6 +476,9 @@ from thesis_pkg.notebooks_and_scripts.finbert_item_analysis_runner import (
     run_finbert_pipeline,
 )
 from thesis_pkg.notebooks_and_scripts.lm2011_sample_post_refinitiv_runner import (
+    DEFAULT_LM2011_EVENT_WINDOW_DOC_BATCH_SIZE,
+    DEFAULT_LM2011_FULL_10K_CLEANING_CONTRACT,
+    DEFAULT_LM2011_TEXT_FEATURE_BATCH_SIZE,
     LM2011_ALL_STAGE_NAMES,
     LM2011_OPTIONAL_STAGE_DEFAULTS_FALSE,
     LM2011PostRefinitivRunConfig,
@@ -1091,15 +1142,20 @@ def main() -> None:
     LM2011_FF_MONTHLY_WITH_MOM_PATH = _env_optional_path("SEC_CCM_LM2011_FF_MONTHLY_WITH_MOM_PATH")
     LM2011_FULL_10K_CLEANING_CONTRACT = _env_str(
         "SEC_CCM_LM2011_FULL_10K_CLEANING_CONTRACT",
-        "current",
+        DEFAULT_LM2011_FULL_10K_CLEANING_CONTRACT,
     )
     LM2011_TEXT_FEATURE_BATCH_SIZE = _env_int(
         "SEC_CCM_LM2011_TEXT_FEATURE_BATCH_SIZE",
-        100,
+        DEFAULT_LM2011_TEXT_FEATURE_BATCH_SIZE,
     )
     LM2011_EVENT_WINDOW_DOC_BATCH_SIZE = _env_int(
         "SEC_CCM_LM2011_EVENT_WINDOW_DOC_BATCH_SIZE",
-        100,
+        DEFAULT_LM2011_EVENT_WINDOW_DOC_BATCH_SIZE,
+    )
+    PRINT_RAM_STATS = _env_bool("SEC_CCM_PRINT_RAM_STATS", False)
+    RAM_LOG_INTERVAL_BATCHES = _env_int(
+        "SEC_CCM_RAM_LOG_INTERVAL_BATCHES",
+        10,
     )
     FINBERT_OUTPUT_DIR = _env_path(
         "SEC_CCM_FINBERT_OUTPUT_DIR",
@@ -1268,6 +1324,8 @@ def main() -> None:
             "LM2011_FULL_10K_CLEANING_CONTRACT": LM2011_FULL_10K_CLEANING_CONTRACT,
             "LM2011_TEXT_FEATURE_BATCH_SIZE": LM2011_TEXT_FEATURE_BATCH_SIZE,
             "LM2011_EVENT_WINDOW_DOC_BATCH_SIZE": LM2011_EVENT_WINDOW_DOC_BATCH_SIZE,
+            "PRINT_RAM_STATS": PRINT_RAM_STATS,
+            "RAM_LOG_INTERVAL_BATCHES": RAM_LOG_INTERVAL_BATCHES,
             "RUN_FINBERT": RUN_FINBERT,
             "RUN_FINBERT_PREPROCESS": RUN_FINBERT_PREPROCESS,
             "RUN_FINBERT_ANALYSIS": RUN_FINBERT_ANALYSIS,
@@ -1292,6 +1350,7 @@ def main() -> None:
 
     # ## Preflight
     required_paths: list[tuple[str, Path]] = []
+    _print_ram_snapshot("sec_ccm_unified_runner_start", enabled=PRINT_RAM_STATS)
 
     if RUN_CCM_MODE == "REUSE":
         required_paths.extend(
@@ -2663,7 +2722,10 @@ def main() -> None:
             full_10k_cleaning_contract=LM2011_FULL_10K_CLEANING_CONTRACT,
             text_feature_batch_size=LM2011_TEXT_FEATURE_BATCH_SIZE,
             event_window_doc_batch_size=LM2011_EVENT_WINDOW_DOC_BATCH_SIZE,
+            print_ram_stats=PRINT_RAM_STATS,
+            ram_log_interval_batches=RAM_LOG_INTERVAL_BATCHES,
         )
+        _print_ram_snapshot("sec_ccm_unified_runner_before_lm2011", enabled=PRINT_RAM_STATS)
         run_lm2011_post_refinitiv_pipeline(
             LM2011PostRefinitivRunConfig(
                 paths=lm2011_paths,
@@ -2675,6 +2737,7 @@ def main() -> None:
                 fail_closed_for_enabled_stages=True,
             )
         )
+        _print_ram_snapshot("sec_ccm_unified_runner_after_lm2011", enabled=PRINT_RAM_STATS)
         _record_downstream_stage(
             "lm2011_post_refinitiv",
             {
@@ -3028,6 +3091,7 @@ def main() -> None:
         _add("boundary", key, path)
 
     _print_rows_table(artifact_rows, sort_by=["stage", "artifact"], empty_message="No artifacts indexed")
+    _print_ram_snapshot("sec_ccm_unified_runner_end", enabled=PRINT_RAM_STATS)
 
     if refinitiv_artifact_stages:
         refinitiv_manifest_path = REFINITIV_STEP1_OUT_DIR / "refinitiv_step1_runner_manifest.json"

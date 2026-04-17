@@ -172,6 +172,10 @@ MONTHLY_STOCK_CANDIDATES: tuple[str, ...] = (
 EMPTY_TABLE_REASON = "insufficient_sample_size_for_estimable_quarterly_fama_macbeth"
 SKIPPED_MISSING_SEEDED_UPSTREAM = "skipped_missing_seeded_upstream"
 SKIPPED_MISSING_OPTIONAL_INPUT = "skipped_missing_optional_input"
+DEFAULT_LM2011_FULL_10K_CLEANING_CONTRACT = "lm2011_paper"
+DEFAULT_LM2011_TEXT_FEATURE_BATCH_SIZE = 10
+DEFAULT_LM2011_EVENT_WINDOW_DOC_BATCH_SIZE = 50
+DEFAULT_RAM_LOG_INTERVAL_BATCHES = 10
 
 STAGE_ARTIFACT_FILENAMES: dict[str, str] = {
     "sample_backbone": "lm2011_sample_backbone.parquet",
@@ -242,6 +246,8 @@ class RunnerPaths:
     full_10k_cleaning_contract: str
     text_feature_batch_size: int
     event_window_doc_batch_size: int
+    print_ram_stats: bool
+    ram_log_interval_batches: int
 
 
 @dataclass(frozen=True)
@@ -290,21 +296,32 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--full-10k-cleaning-contract",
-        default="current",
+        default=DEFAULT_LM2011_FULL_10K_CLEANING_CONTRACT,
         choices=FULL_10K_CLEANING_CONTRACTS,
         help="Full-10-K cleaning contract for paper-faithful sample reruns.",
     )
     parser.add_argument(
         "--text-feature-batch-size",
         type=int,
-        default=100,
+        default=DEFAULT_LM2011_TEXT_FEATURE_BATCH_SIZE,
         help="Number of rows per batch when scoring LM2011 full-text features.",
     )
     parser.add_argument(
         "--event-window-doc-batch-size",
         type=int,
-        default=100,
+        default=DEFAULT_LM2011_EVENT_WINDOW_DOC_BATCH_SIZE,
         help="Number of documents per batch when building LM2011 event-window market surfaces.",
+    )
+    parser.add_argument(
+        "--print-ram-stats",
+        action="store_true",
+        help="Print Linux /proc-based RAM snapshots around memory-heavy LM2011 stages.",
+    )
+    parser.add_argument(
+        "--ram-log-interval-batches",
+        type=int,
+        default=DEFAULT_RAM_LOG_INTERVAL_BATCHES,
+        help="Emit LM2011 batch progress logs every N batches.",
     )
     return parser.parse_args(argv)
 
@@ -371,6 +388,68 @@ def _elapsed_seconds(started_at_utc: str, completed_at_utc: str) -> int | None:
     return max(int((completed_at - started_at).total_seconds()), 0)
 
 
+def _read_proc_kb_map(path: Path) -> dict[str, int]:
+    if not path.exists():
+        return {}
+    values: dict[str, int] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if ":" not in line:
+            continue
+        key, raw_value = line.split(":", 1)
+        parts = raw_value.strip().split()
+        if not parts:
+            continue
+        try:
+            values[key.strip()] = int(parts[0])
+        except ValueError:
+            continue
+    return values
+
+
+def _kb_to_gib(value_kb: int | None) -> float | None:
+    if value_kb is None:
+        return None
+    return round(float(value_kb) / 1024.0 / 1024.0, 3)
+
+
+def _ram_snapshot(label: str) -> dict[str, object]:
+    payload: dict[str, object] = {"label": label}
+    meminfo = _read_proc_kb_map(Path("/proc/meminfo"))
+    status = _read_proc_kb_map(Path("/proc/self/status"))
+    if not meminfo and not status:
+        payload["ram_stats_unavailable"] = True
+        return payload
+
+    mem_total_kb = meminfo.get("MemTotal")
+    mem_available_kb = meminfo.get("MemAvailable")
+    payload["process_rss_gb"] = _kb_to_gib(status.get("VmRSS"))
+    payload["process_hwm_gb"] = _kb_to_gib(status.get("VmHWM"))
+    payload["system_total_gb"] = _kb_to_gib(mem_total_kb)
+    payload["system_available_gb"] = _kb_to_gib(mem_available_kb)
+    if mem_total_kb is not None and mem_available_kb is not None:
+        payload["system_used_gb"] = _kb_to_gib(max(mem_total_kb - mem_available_kb, 0))
+    return payload
+
+
+def _print_ram_snapshot(label: str, *, enabled: bool) -> None:
+    if not enabled:
+        return
+    print(_ram_snapshot(label))
+
+
+def _should_log_periodic_batch(
+    *,
+    batch_index: int,
+    total_batches: int | None,
+    interval: int,
+) -> bool:
+    if batch_index <= 1:
+        return True
+    if total_batches is not None and batch_index >= total_batches:
+        return True
+    return batch_index % max(interval, 1) == 0
+
+
 def _checkpoint_manifest(manifest: dict[str, Any], manifest_path: Path) -> None:
     manifest["last_checkpoint_at_utc"] = _utc_timestamp()
     _write_json(manifest_path, manifest)
@@ -385,6 +464,8 @@ def _resolve_paths(args: argparse.Namespace) -> RunnerPaths:
         raise ValueError("--text-feature-batch-size must be >= 1")
     if int(args.event_window_doc_batch_size) < 1:
         raise ValueError("--event-window-doc-batch-size must be >= 1")
+    if int(args.ram_log_interval_batches) < 1:
+        raise ValueError("--ram-log-interval-batches must be >= 1")
     year_merged_dir = (
         Path(args.year_merged_dir).resolve()
         if args.year_merged_dir is not None
@@ -515,6 +596,8 @@ def _resolve_paths(args: argparse.Namespace) -> RunnerPaths:
         full_10k_cleaning_contract=str(args.full_10k_cleaning_contract),
         text_feature_batch_size=int(args.text_feature_batch_size),
         event_window_doc_batch_size=int(args.event_window_doc_batch_size),
+        print_ram_stats=bool(args.print_ram_stats),
+        ram_log_interval_batches=int(args.ram_log_interval_batches),
     )
 
 
@@ -918,21 +1001,58 @@ def _write_table_i_stage(
     )
 
 
-def _make_event_screen_progress_logger(stage_name: str) -> Callable[[dict[str, int]], None]:
+def _make_event_screen_progress_logger(
+    stage_name: str,
+    *,
+    print_ram_stats: bool,
+    ram_log_interval_batches: int,
+) -> Callable[[dict[str, int]], None]:
     def _logger(progress: dict[str, int]) -> None:
         batch_index = progress["batch_index"]
         total_batches = progress["total_batches"]
-        if batch_index != 1 and batch_index != total_batches and batch_index % 10 != 0:
+        if not _should_log_periodic_batch(
+            batch_index=batch_index,
+            total_batches=total_batches,
+            interval=ram_log_interval_batches,
+        ):
             return
-        print(
-            {
-                "stage": stage_name,
-                "progress": f"{batch_index}/{total_batches}",
-                "batch_doc_count": progress["batch_doc_count"],
-                "docs_completed": progress["docs_completed"],
-                "docs_total": progress["docs_total"],
-            }
-        )
+        payload: dict[str, object] = {
+            "stage": stage_name,
+            "progress": f"{batch_index}/{total_batches}",
+            "batch_doc_count": progress["batch_doc_count"],
+            "docs_completed": progress["docs_completed"],
+            "docs_total": progress["docs_total"],
+        }
+        if print_ram_stats:
+            payload["ram"] = _ram_snapshot(f"{stage_name}_batch_{batch_index}")
+        print(payload)
+
+    return _logger
+
+
+def _make_text_feature_progress_logger(
+    stage_name: str,
+    *,
+    print_ram_stats: bool,
+    ram_log_interval_batches: int,
+) -> Callable[[dict[str, int]], None]:
+    def _logger(progress: dict[str, int]) -> None:
+        batch_index = int(progress["batch_index"])
+        if not _should_log_periodic_batch(
+            batch_index=batch_index,
+            total_batches=None,
+            interval=ram_log_interval_batches,
+        ):
+            return
+        payload: dict[str, object] = {
+            "stage": stage_name,
+            "batch_index": batch_index,
+            "batch_doc_count": int(progress["batch_doc_count"]),
+            "docs_completed": int(progress["docs_completed"]),
+        }
+        if print_ram_stats:
+            payload["ram"] = _ram_snapshot(f"{stage_name}_batch_{batch_index}")
+        print(payload)
 
     return _logger
 
@@ -958,6 +1078,8 @@ def _build_manifest(paths: RunnerPaths) -> dict[str, Any]:
             "raw_mda_cleaning_policy_id": RAW_ITEM_TEXT_CLEANING_POLICY_ID,
             "text_feature_batch_size": paths.text_feature_batch_size,
             "event_window_doc_batch_size": paths.event_window_doc_batch_size,
+            "print_ram_stats": paths.print_ram_stats,
+            "ram_log_interval_batches": paths.ram_log_interval_batches,
         },
         "resolved_inputs": {
             "year_merged_dir": _absolute_path_str(paths.year_merged_dir),
@@ -1129,9 +1251,16 @@ def _write_streaming_text_feature_stage(
     stage_name: str,
     writer: Callable[[], int],
     warnings: Sequence[str] | None = None,
+    print_ram_stats: bool = False,
 ) -> pl.LazyFrame:
     artifact_path = _artifact_output_path(output_dir, stage_name)
-    writer()
+    _print_ram_snapshot(f"{stage_name}_start", enabled=print_ram_stats)
+    try:
+        writer()
+    except Exception:
+        _print_ram_snapshot(f"{stage_name}_failed", enabled=print_ram_stats)
+        raise
+    _print_ram_snapshot(f"{stage_name}_end", enabled=print_ram_stats)
     return _record_existing_stage_artifact(
         manifest,
         manifest_path=manifest_path,
@@ -1153,18 +1282,25 @@ def _write_event_screen_surface_stage(
     daily_panel_path: Path,
     event_window_doc_batch_size: int,
     progress_callback: Callable[[dict[str, int]], None] | None = None,
+    print_ram_stats: bool = False,
 ) -> pl.LazyFrame:
     artifact_path = _artifact_output_path(output_dir, "event_screen_surface")
-    lm2011_pipeline.write_lm2011_event_screen_surface_parquet(
-        sample_backbone_lf,
-        pl.scan_parquet(daily_panel_path),
-        annual_accounting_panel_lf,
-        ff_factors_daily_lf,
-        text_features_full_10k_lf,
-        output_path=artifact_path,
-        event_window_doc_batch_size=event_window_doc_batch_size,
-        progress_callback=progress_callback,
-    )
+    _print_ram_snapshot("event_screen_surface_start", enabled=print_ram_stats)
+    try:
+        lm2011_pipeline.write_lm2011_event_screen_surface_parquet(
+            sample_backbone_lf,
+            pl.scan_parquet(daily_panel_path),
+            annual_accounting_panel_lf,
+            ff_factors_daily_lf,
+            text_features_full_10k_lf,
+            output_path=artifact_path,
+            event_window_doc_batch_size=event_window_doc_batch_size,
+            progress_callback=progress_callback,
+        )
+    except Exception:
+        _print_ram_snapshot("event_screen_surface_failed", enabled=print_ram_stats)
+        raise
+    _print_ram_snapshot("event_screen_surface_end", enabled=print_ram_stats)
     return _record_existing_stage_artifact(
         manifest,
         manifest_path=manifest_path,
@@ -1233,6 +1369,7 @@ def run_lm2011_post_refinitiv_pipeline(run_cfg: LM2011PostRefinitivRunConfig) ->
     manifest_path = paths.output_dir / MANIFEST_FILENAME
     current_stage_name = "initialization"
     _checkpoint_manifest(manifest, manifest_path)
+    _print_ram_snapshot("lm2011_post_refinitiv_pipeline_start", enabled=paths.print_ram_stats)
 
     try:
         dictionary_inputs = load_lm2011_dictionary_inputs(paths.additional_data_dir)
@@ -1502,8 +1639,14 @@ def run_lm2011_post_refinitiv_pipeline(run_cfg: LM2011PostRefinitivRunConfig) ->
                     master_dictionary_words=master_dictionary_words,
                     cleaning_contract=paths.full_10k_cleaning_contract,
                     batch_size=paths.text_feature_batch_size,
+                    progress_callback=_make_text_feature_progress_logger(
+                        "text_features_full_10k",
+                        print_ram_stats=paths.print_ram_stats,
+                        ram_log_interval_batches=paths.ram_log_interval_batches,
+                    ),
                 ),
                 warnings=text_stage_warnings,
+                print_ram_stats=paths.print_ram_stats,
             )
         else:
             _skip_or_raise_stage(
@@ -1531,8 +1674,14 @@ def run_lm2011_post_refinitiv_pipeline(run_cfg: LM2011PostRefinitivRunConfig) ->
                     harvard_negative_word_list=harvard_negative_word_list,
                     master_dictionary_words=master_dictionary_words,
                     batch_size=paths.text_feature_batch_size,
+                    progress_callback=_make_text_feature_progress_logger(
+                        "text_features_mda",
+                        print_ram_stats=paths.print_ram_stats,
+                        ram_log_interval_batches=paths.ram_log_interval_batches,
+                    ),
                 ),
                 warnings=text_stage_warnings,
+                print_ram_stats=paths.print_ram_stats,
             )
         else:
             _skip_or_raise_stage(
@@ -1564,7 +1713,12 @@ def run_lm2011_post_refinitiv_pipeline(run_cfg: LM2011PostRefinitivRunConfig) ->
                 text_features_full_10k_lf=text_features_full_10k_lf,
                 daily_panel_path=paths.daily_panel_path,
                 event_window_doc_batch_size=paths.event_window_doc_batch_size,
-                progress_callback=_make_event_screen_progress_logger("event_screen_surface"),
+                progress_callback=_make_event_screen_progress_logger(
+                    "event_screen_surface",
+                    print_ram_stats=paths.print_ram_stats,
+                    ram_log_interval_batches=paths.ram_log_interval_batches,
+                ),
+                print_ram_stats=paths.print_ram_stats,
             )
         else:
             _skip_or_raise_stage(
@@ -1670,9 +1824,7 @@ def run_lm2011_post_refinitiv_pipeline(run_cfg: LM2011PostRefinitivRunConfig) ->
                 sample_start=dt.date(1994, 1, 1),
                 sample_end=dt.date(2024, 12, 31),
                 event_window_doc_batch_size=paths.event_window_doc_batch_size,
-                _event_screen_progress_callback=_make_event_screen_progress_logger(
-                    "table_i_sample_creation_1994_2024_event_screen_surface"
-                ),
+                _precomputed_event_screen_surface_lf=event_screen_surface_lf,
             )
             _write_table_i_stage(
                 manifest,
@@ -2074,8 +2226,13 @@ def run_lm2011_post_refinitiv_pipeline(run_cfg: LM2011PostRefinitivRunConfig) ->
         manifest["elapsed_seconds"] = _elapsed_seconds(str(manifest["started_at_utc"]), completed_at_utc)
         manifest["failed_stage"] = None
         _checkpoint_manifest(manifest, manifest_path)
+        _print_ram_snapshot("lm2011_post_refinitiv_pipeline_end", enabled=paths.print_ram_stats)
         return 0
     except Exception as exc:
+        _print_ram_snapshot(
+            f"lm2011_post_refinitiv_pipeline_failed_{current_stage_name}",
+            enabled=paths.print_ram_stats,
+        )
         _record_stage_failed(
             manifest,
             stage_name=current_stage_name,

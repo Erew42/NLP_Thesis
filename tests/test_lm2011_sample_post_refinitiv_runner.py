@@ -280,6 +280,16 @@ def test_resolve_paths_auto_resolves_prebuilt_sample_backbone(tmp_path: Path) ->
     assert paths.sample_backbone_path == prebuilt.resolve()
 
 
+def test_parse_args_uses_memory_hardened_defaults() -> None:
+    args = runner.parse_args([])
+
+    assert args.full_10k_cleaning_contract == runner.DEFAULT_LM2011_FULL_10K_CLEANING_CONTRACT
+    assert args.text_feature_batch_size == runner.DEFAULT_LM2011_TEXT_FEATURE_BATCH_SIZE
+    assert args.event_window_doc_batch_size == runner.DEFAULT_LM2011_EVENT_WINDOW_DOC_BATCH_SIZE
+    assert args.print_ram_stats is False
+    assert args.ram_log_interval_batches == runner.DEFAULT_RAM_LOG_INTERVAL_BATCHES
+
+
 def test_resolve_paths_explicit_sample_backbone_takes_precedence(tmp_path: Path) -> None:
     sample_root, upstream_run_root, additional_data_dir, output_dir = _build_temp_layout(tmp_path)
     auto_prebuilt = upstream_run_root / "sec_ccm_premerge" / "lm2011_sample_backbone.parquet"
@@ -747,8 +757,10 @@ def test_main_writes_expected_artifacts_and_manifest_for_stubbed_run(
     assert manifest["failed_stage"] is None
     assert manifest["config"]["full_10k_cleaning_contract"] == "lm2011_paper"
     assert manifest["config"]["raw_mda_cleaning_policy_id"] == "raw_item_text"
-    assert manifest["config"]["text_feature_batch_size"] == 100
-    assert manifest["config"]["event_window_doc_batch_size"] == 100
+    assert manifest["config"]["text_feature_batch_size"] == 10
+    assert manifest["config"]["event_window_doc_batch_size"] == 50
+    assert manifest["config"]["print_ram_stats"] is False
+    assert manifest["config"]["ram_log_interval_batches"] == runner.DEFAULT_RAM_LOG_INTERVAL_BATCHES
     assert manifest["resolved_inputs"]["ff_monthly_csv_path"].endswith("F-F_Research_Data_Factors.csv")
     assert manifest["resolved_inputs"]["momentum_monthly_csv_path"].endswith("F-F_Momentum_Factor.csv")
     assert manifest["resolved_inputs"]["monthly_stock_path"].endswith("sfz_mth.parquet")
@@ -782,16 +794,18 @@ def test_main_writes_expected_artifacts_and_manifest_for_stubbed_run(
     assert manifest["stages"]["table_ia_ii_results"]["status"] == "generated_empty"
     assert manifest["stages"]["table_ia_ii_results"]["reason"] == runner.EMPTY_TABLE_REASON
     assert captured["text_features_full_10k_kwargs"]["cleaning_contract"] == "lm2011_paper"
-    assert captured["text_features_full_10k_kwargs"]["batch_size"] == 100
+    assert captured["text_features_full_10k_kwargs"]["batch_size"] == 10
+    assert callable(captured["text_features_full_10k_kwargs"]["progress_callback"])
     assert captured["text_features_full_10k_kwargs"]["master_dictionary_words"] == ("token", "harvard", "recognized")
-    assert captured["text_features_mda_kwargs"]["batch_size"] == 100
+    assert captured["text_features_mda_kwargs"]["batch_size"] == 10
+    assert callable(captured["text_features_mda_kwargs"]["progress_callback"])
     assert captured["text_features_mda_kwargs"]["master_dictionary_words"] == ("token", "harvard", "recognized")
     assert captured["table_i_windows"] == [
         (dt.date(1994, 1, 1), dt.date(2008, 12, 31)),
         (dt.date(1994, 1, 1), dt.date(2024, 12, 31)),
     ]
-    assert captured["table_i_has_precomputed_surface"] == [True, False]
-    assert captured["table_i_has_progress_callback"] == [False, True]
+    assert captured["table_i_has_precomputed_surface"] == [True, True]
+    assert captured["table_i_has_progress_callback"] == [False, False]
     assert captured["event_panel_has_precomputed_surface"] is True
     assert all("full_text" not in columns for columns in captured["table_i_sec_columns"])
 
@@ -898,9 +912,9 @@ def test_runner_builds_event_screen_surface_twice_and_reuses_default_surface(
     )
 
     assert exit_code == 0
-    assert captured["surface_calls"] == 2
-    assert captured["surface_progress_callbacks"] == [True, True]
-    assert captured["table_i_has_precomputed_surface"] == [True, False]
+    assert captured["surface_calls"] == 1
+    assert captured["surface_progress_callbacks"] == [True]
+    assert captured["table_i_has_precomputed_surface"] == [True, True]
     assert captured["event_panel_has_precomputed_surface"] is True
 
 
@@ -1079,6 +1093,29 @@ def test_main_delegates_to_shared_lm2011_pipeline(tmp_path: Path, monkeypatch: p
     assert run_cfg.paths.output_dir == output_dir.resolve()
     assert set(run_cfg.enabled_stages) == set(runner.LM2011_ALL_STAGE_NAMES)
     assert run_cfg.fail_closed_for_enabled_stages is False
+    assert run_cfg.paths.full_10k_cleaning_contract == runner.DEFAULT_LM2011_FULL_10K_CLEANING_CONTRACT
+    assert run_cfg.paths.text_feature_batch_size == runner.DEFAULT_LM2011_TEXT_FEATURE_BATCH_SIZE
+    assert run_cfg.paths.event_window_doc_batch_size == runner.DEFAULT_LM2011_EVENT_WINDOW_DOC_BATCH_SIZE
+    assert run_cfg.paths.print_ram_stats is False
+    assert run_cfg.paths.ram_log_interval_batches == runner.DEFAULT_RAM_LOG_INTERVAL_BATCHES
+
+
+def test_text_feature_progress_logger_respects_interval(capsys) -> None:
+    logger = runner._make_text_feature_progress_logger(
+        "text_features_full_10k",
+        print_ram_stats=False,
+        ram_log_interval_batches=3,
+    )
+
+    logger({"batch_index": 1, "batch_doc_count": 2, "docs_completed": 2})
+    logger({"batch_index": 2, "batch_doc_count": 2, "docs_completed": 4})
+    logger({"batch_index": 3, "batch_doc_count": 2, "docs_completed": 6})
+
+    output_lines = [line for line in capsys.readouterr().out.splitlines() if line.strip()]
+
+    assert len(output_lines) == 2
+    assert "batch_index': 1" in output_lines[0]
+    assert "batch_index': 3" in output_lines[1]
 
 
 def test_shared_lm2011_pipeline_fails_closed_for_enabled_stage(tmp_path: Path) -> None:

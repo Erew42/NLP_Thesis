@@ -73,7 +73,7 @@ def test_notebook_defaults_match_script_defaults_for_refinitiv_stage_plan() -> N
         "src/thesis_pkg/notebooks_and_scripts/sec_ccm_unified_runner.ipynb"
     ).read_text(encoding="utf-8")
 
-    expected_true_flags = [
+    expected_explicit_flags = [
         "RUN_REFINITIV_STEP1",
         "RUN_REFINITIV_STEP1_RESOLUTION",
         "RUN_REFINITIV_OWNERSHIP_UNIVERSE_HANDOFF",
@@ -89,21 +89,15 @@ def test_notebook_defaults_match_script_defaults_for_refinitiv_stage_plan() -> N
         "RUN_REFINITIV_ANALYST_ACTUALS",
         "RUN_REFINITIV_ANALYST_ESTIMATES_MONTHLY",
         "RUN_REFINITIV_ANALYST_NORMALIZE",
-    ]
-    expected_false_flags = [
         "RUN_SEC_CCM_PREMERGE",
     ]
 
-    for flag_name in expected_true_flags:
+    for flag_name in expected_explicit_flags:
         assert f'{flag_name} = _env_bool(' in source
-        assert f'"{flag_name} = True\\n",' in notebook_source
-        env_flag_name = flag_name.removeprefix("RUN_")
-        assert f'SEC_CCM_RUN_{env_flag_name}' in notebook_source
-        assert f'": {flag_name},\\n"' in notebook_source
-
-    for flag_name in expected_false_flags:
-        assert f'{flag_name} = _env_bool(' in source
-        assert f'"{flag_name} = False\\n",' in notebook_source
+        assert (
+            f'"{flag_name} = True\\n",' in notebook_source
+            or f'"{flag_name} = False\\n",' in notebook_source
+        )
         env_flag_name = flag_name.removeprefix("RUN_")
         assert f'SEC_CCM_RUN_{env_flag_name}' in notebook_source
         assert f'": {flag_name},\\n"' in notebook_source
@@ -241,6 +235,41 @@ def test_notebook_config_exports_finbert_sentence_postprocess_policy_env_key() -
     assert '"    \\"SEC_CCM_FINBERT_SENTENCE_POSTPROCESS_POLICY\\": FINBERT_SENTENCE_POSTPROCESS_POLICY,\\n"' in source
 
 
+def test_runner_and_notebook_share_lm2011_memory_hardened_defaults() -> None:
+    runner_source = Path("src/thesis_pkg/notebooks_and_scripts/sec_ccm_unified_runner.py").read_text(
+        encoding="utf-8"
+    )
+    notebook_source = Path("src/thesis_pkg/notebooks_and_scripts/sec_ccm_unified_runner.ipynb").read_text(
+        encoding="utf-8"
+    )
+
+    assert "DEFAULT_LM2011_FULL_10K_CLEANING_CONTRACT" in runner_source
+    assert "DEFAULT_LM2011_TEXT_FEATURE_BATCH_SIZE" in runner_source
+    assert "DEFAULT_LM2011_EVENT_WINDOW_DOC_BATCH_SIZE" in runner_source
+    assert 'LM2011_FULL_10K_CLEANING_CONTRACT = _env_str(\n        "SEC_CCM_LM2011_FULL_10K_CLEANING_CONTRACT",\n        DEFAULT_LM2011_FULL_10K_CLEANING_CONTRACT,' in runner_source
+    assert 'LM2011_TEXT_FEATURE_BATCH_SIZE = _env_int(\n        "SEC_CCM_LM2011_TEXT_FEATURE_BATCH_SIZE",\n        DEFAULT_LM2011_TEXT_FEATURE_BATCH_SIZE,' in runner_source
+    assert 'LM2011_EVENT_WINDOW_DOC_BATCH_SIZE = _env_int(\n        "SEC_CCM_LM2011_EVENT_WINDOW_DOC_BATCH_SIZE",\n        DEFAULT_LM2011_EVENT_WINDOW_DOC_BATCH_SIZE,' in runner_source
+    assert 'LM2011_FULL_10K_CLEANING_CONTRACT = \\"lm2011_paper\\"' in notebook_source
+    assert 'LM2011_TEXT_FEATURE_BATCH_SIZE = 10' in notebook_source
+    assert 'LM2011_EVENT_WINDOW_DOC_BATCH_SIZE = 50' in notebook_source
+
+
+def test_runner_and_notebook_export_ram_logging_env_keys() -> None:
+    runner_source = Path("src/thesis_pkg/notebooks_and_scripts/sec_ccm_unified_runner.py").read_text(
+        encoding="utf-8"
+    )
+    notebook_source = Path("src/thesis_pkg/notebooks_and_scripts/sec_ccm_unified_runner.ipynb").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'SEC_CCM_PRINT_RAM_STATS' in runner_source
+    assert 'SEC_CCM_RAM_LOG_INTERVAL_BATCHES' in runner_source
+    assert 'PRINT_RAM_STATS = True' in notebook_source
+    assert 'RAM_LOG_INTERVAL_BATCHES = 10' in notebook_source
+    assert '"    \\"SEC_CCM_PRINT_RAM_STATS\\": PRINT_RAM_STATS,\\n"' in notebook_source
+    assert '"    \\"SEC_CCM_RAM_LOG_INTERVAL_BATCHES\\": RAM_LOG_INTERVAL_BATCHES,\\n"' in notebook_source
+
+
 def test_print_rows_table_uses_tabular_ascii_output(capsys) -> None:
     rows = [{"stage": "lookup", "artifact": "out", "path": "C:/tmp/out.parquet"}]
 
@@ -251,6 +280,32 @@ def test_print_rows_table_uses_tabular_ascii_output(capsys) -> None:
 
     assert captured == expected + "\n"
     assert "┌" not in captured
+
+
+def test_ram_snapshot_reports_linux_style_values(monkeypatch: MonkeyPatch) -> None:
+    def _fake_read_proc(path: Path) -> dict[str, int]:
+        if path.name == "meminfo":
+            return {"MemTotal": 8 * 1024 * 1024, "MemAvailable": 3 * 1024 * 1024}
+        return {"VmRSS": 512 * 1024, "VmHWM": 768 * 1024}
+
+    monkeypatch.setattr(runner, "_read_proc_kb_map", _fake_read_proc)
+
+    snapshot = runner._ram_snapshot("unit_test")
+
+    assert snapshot == {
+        "label": "unit_test",
+        "process_rss_gb": 0.5,
+        "process_hwm_gb": 0.75,
+        "system_total_gb": 8.0,
+        "system_available_gb": 3.0,
+        "system_used_gb": 5.0,
+    }
+
+
+def test_print_ram_snapshot_is_silent_when_disabled(capsys) -> None:
+    runner._print_ram_snapshot("unit_test", enabled=False)
+
+    assert capsys.readouterr().out == ""
 
 
 def test_sec_ccm_unified_runner_notebook_bootstrap_is_valid() -> None:
@@ -268,8 +323,12 @@ def test_sec_ccm_unified_runner_notebook_bootstrap_is_valid() -> None:
     assert 'SEC_CCM_RUN_SEC_PARSE' in config_cell
     assert 'SEC_CCM_OUTPUT_DIR' in config_cell
     assert 'SEC_CCM_FINBERT_SENTENCE_POSTPROCESS_POLICY' in config_cell
-    assert "from thesis_pkg.notebooks_and_scripts.sec_ccm_unified_runner import main" in run_cell
-    assert "main()" in run_cell
+    assert 'SEC_CCM_PRINT_RAM_STATS' in config_cell
+    assert 'SEC_CCM_RAM_LOG_INTERVAL_BATCHES' in config_cell
+    assert 'ram_snapshot' in config_cell
+    assert 'print_ram_snapshot("notebook_before_main")' in run_cell
+    assert 'main = reload(module).main' in run_cell
+    assert 'print_ram_snapshot("notebook_after_main")' in run_cell
 
 
 def _configure_minimal_main_env(monkeypatch: MonkeyPatch, tmp_path: Path) -> dict[str, Path]:
@@ -835,6 +894,21 @@ def test_main_runs_downstream_pipelines_and_indexes_manifests(
     capsys,
 ) -> None:
     paths = _configure_minimal_main_env(monkeypatch, tmp_path)
+    items_analysis_dir = paths["run_root"] / "items_analysis"
+    items_analysis_dir.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame({"doc_id": ["0000000001:1995000001"]}).write_parquet(items_analysis_dir / "1995.parquet")
+    for year in (2006, 2007, 2008):
+        pl.DataFrame({"doc_id": [f"0000000001:{year}000001"]}).write_parquet(items_analysis_dir / f"{year}.parquet")
+    doc_ownership_dir = paths["run_root"] / "refinitiv_doc_ownership_lm2011"
+    doc_ownership_dir.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame({"doc_id": ["0000000001:1995000001"]}).write_parquet(
+        doc_ownership_dir / "refinitiv_lm2011_doc_ownership.parquet"
+    )
+    doc_analyst_dir = paths["run_root"] / "refinitiv_doc_analyst_lm2011"
+    doc_analyst_dir.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame({"doc_id": ["0000000001:1995000001"]}).write_parquet(
+        doc_analyst_dir / "refinitiv_doc_analyst_selected.parquet"
+    )
     monkeypatch.setenv("SEC_CCM_RUN_LM2011_POST_REFINITIV", "true")
     monkeypatch.setenv("SEC_CCM_RUN_FINBERT", "true")
     monkeypatch.setenv("SEC_CCM_FINBERT_SHORT_BATCH_SIZE", "5")
@@ -893,3 +967,40 @@ def test_main_runs_downstream_pipelines_and_indexes_manifests(
     assert captured["finbert_kwargs"] == {"preprocessing_cfg": None, "run_preprocess": True, "run_analysis": True}
     assert "lm2011_post_refinitiv_manifest_json" in output
     assert "finbert_analysis_manifest_json" in output
+
+
+def test_main_lm2011_contract_env_override_wins(monkeypatch: MonkeyPatch, tmp_path: Path) -> None:
+    paths = _configure_minimal_main_env(monkeypatch, tmp_path)
+    items_analysis_dir = paths["run_root"] / "items_analysis"
+    items_analysis_dir.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame({"doc_id": ["0000000001:1995000001"]}).write_parquet(items_analysis_dir / "1995.parquet")
+    doc_ownership_dir = paths["run_root"] / "refinitiv_doc_ownership_lm2011"
+    doc_ownership_dir.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame({"doc_id": ["0000000001:1995000001"]}).write_parquet(
+        doc_ownership_dir / "refinitiv_lm2011_doc_ownership.parquet"
+    )
+    doc_analyst_dir = paths["run_root"] / "refinitiv_doc_analyst_lm2011"
+    doc_analyst_dir.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame({"doc_id": ["0000000001:1995000001"]}).write_parquet(
+        doc_analyst_dir / "refinitiv_doc_analyst_selected.parquet"
+    )
+    monkeypatch.setenv("SEC_CCM_RUN_LM2011_POST_REFINITIV", "true")
+    monkeypatch.setenv("SEC_CCM_RUN_FINBERT", "false")
+    monkeypatch.setenv("SEC_CCM_LM2011_FULL_10K_CLEANING_CONTRACT", "current")
+    monkeypatch.setenv("SEC_CCM_LM2011_TEXT_FEATURE_BATCH_SIZE", "7")
+    monkeypatch.setenv("SEC_CCM_LM2011_EVENT_WINDOW_DOC_BATCH_SIZE", "9")
+
+    captured: dict[str, object] = {}
+
+    def _lm2011_stub(run_cfg):
+        captured["run_cfg"] = run_cfg
+        return 0
+
+    monkeypatch.setattr(runner, "run_lm2011_post_refinitiv_pipeline", _lm2011_stub)
+
+    runner.main()
+
+    lm2011_run_cfg = captured["run_cfg"]
+    assert lm2011_run_cfg.paths.full_10k_cleaning_contract == "current"
+    assert lm2011_run_cfg.paths.text_feature_batch_size == 7
+    assert lm2011_run_cfg.paths.event_window_doc_batch_size == 9

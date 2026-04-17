@@ -748,19 +748,20 @@ def test_write_lm2011_text_features_full_10k_parquet_matches_eager_builder(tmp_p
         batch_size=1,
     ).collect()
 
-    output_path = tmp_path / "full_10k.parquet"
-    row_count = write_lm2011_text_features_full_10k_parquet(
-        sec_parsed.lazy(),
-        output_path=output_path,
-        dictionary_lists=_lm_dictionary_lists(),
-        harvard_negative_word_list=_harvard_negative_word_list(),
-        master_dictionary_words=_master_dictionary_words(),
-        batch_size=1,
-    )
-    streamed = pl.read_parquet(output_path)
+    for batch_size in (1, 5, 10):
+        output_path = tmp_path / f"full_10k_{batch_size}.parquet"
+        row_count = write_lm2011_text_features_full_10k_parquet(
+            sec_parsed.lazy(),
+            output_path=output_path,
+            dictionary_lists=_lm_dictionary_lists(),
+            harvard_negative_word_list=_harvard_negative_word_list(),
+            master_dictionary_words=_master_dictionary_words(),
+            batch_size=batch_size,
+        )
+        streamed = pl.read_parquet(output_path)
 
-    assert row_count == eager.height
-    _assert_frames_equal_with_float_tolerance(eager, streamed, sort_by=["doc_id"])
+        assert row_count == eager.height
+        _assert_frames_equal_with_float_tolerance(eager, streamed, sort_by=["doc_id"])
 
 
 def test_write_lm2011_text_features_mda_parquet_matches_eager_builder(tmp_path: Path) -> None:
@@ -782,7 +783,67 @@ def test_write_lm2011_text_features_mda_parquet_matches_eager_builder(tmp_path: 
         batch_size=1,
     ).collect()
 
-    output_path = tmp_path / "mda.parquet"
+    for batch_size in (1, 5, 10):
+        output_path = tmp_path / f"mda_{batch_size}.parquet"
+        row_count = write_lm2011_text_features_mda_parquet(
+            sec_items.lazy(),
+            output_path=output_path,
+            dictionary_lists=_lm_dictionary_lists(),
+            harvard_negative_word_list=_harvard_negative_word_list(),
+            master_dictionary_words=_master_dictionary_words(),
+            batch_size=batch_size,
+        )
+        streamed = pl.read_parquet(output_path)
+
+        assert row_count == eager.height
+        _assert_frames_equal_with_float_tolerance(eager, streamed, sort_by=["doc_id"])
+
+
+def test_write_lm2011_text_features_full_10k_parquet_emits_progress_callback(tmp_path: Path) -> None:
+    sec_parsed = pl.DataFrame(
+        {
+            "doc_id": ["d1", "d2", "d3"],
+            "cik_10": ["0001", "0002", "0003"],
+            "filing_date": [dt.date(2023, 1, 1), dt.date(2023, 1, 2), dt.date(2023, 1, 3)],
+            "document_type_filename": ["10-K", "10-K", "10-K"],
+            "full_text": ["gain loss", "uncertain may", "lawsuit must"],
+        }
+    )
+    output_path = tmp_path / "full_10k_progress.parquet"
+    progress: list[dict[str, int]] = []
+
+    row_count = write_lm2011_text_features_full_10k_parquet(
+        sec_parsed.lazy(),
+        output_path=output_path,
+        dictionary_lists=_lm_dictionary_lists(),
+        harvard_negative_word_list=_harvard_negative_word_list(),
+        master_dictionary_words=_master_dictionary_words(),
+        batch_size=1,
+        progress_callback=progress.append,
+    )
+
+    assert row_count == 3
+    assert progress == [
+        {"batch_index": 1, "batch_doc_count": 1, "docs_completed": 1},
+        {"batch_index": 2, "batch_doc_count": 1, "docs_completed": 2},
+        {"batch_index": 3, "batch_doc_count": 1, "docs_completed": 3},
+    ]
+
+
+def test_write_lm2011_text_features_mda_parquet_emits_progress_callback(tmp_path: Path) -> None:
+    sec_items = pl.DataFrame(
+        {
+            "doc_id": ["d1", "d2", "d3"],
+            "cik_10": ["0001", "0002", "0003"],
+            "filing_date": [dt.date(2023, 1, 1), dt.date(2023, 1, 2), dt.date(2023, 1, 3)],
+            "document_type_filename": ["10-K", "10-K", "10-K"],
+            "item_id": ["7", "7", "7"],
+            "full_text": ["loss may", "gain must", "uncertain lawsuit"],
+        }
+    )
+    output_path = tmp_path / "mda_progress.parquet"
+    progress: list[dict[str, int]] = []
+
     row_count = write_lm2011_text_features_mda_parquet(
         sec_items.lazy(),
         output_path=output_path,
@@ -790,11 +851,15 @@ def test_write_lm2011_text_features_mda_parquet_matches_eager_builder(tmp_path: 
         harvard_negative_word_list=_harvard_negative_word_list(),
         master_dictionary_words=_master_dictionary_words(),
         batch_size=1,
+        progress_callback=progress.append,
     )
-    streamed = pl.read_parquet(output_path)
 
-    assert row_count == eager.height
-    _assert_frames_equal_with_float_tolerance(eager, streamed, sort_by=["doc_id"])
+    assert row_count == 3
+    assert progress == [
+        {"batch_index": 1, "batch_doc_count": 1, "docs_completed": 1},
+        {"batch_index": 2, "batch_doc_count": 1, "docs_completed": 2},
+        {"batch_index": 3, "batch_doc_count": 1, "docs_completed": 3},
+    ]
 
 
 def test_build_lm2011_event_panel_uses_prc_when_final_prc_is_missing() -> None:
