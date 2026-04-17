@@ -12,6 +12,7 @@ from typing import Any, Sequence
 
 
 REPO_ROOT_ENV_VAR = "NLP_THESIS_REPO_ROOT"
+IN_COLAB = "google.colab" in sys.modules
 
 
 def _resolve_repo_root() -> Path:
@@ -34,6 +35,17 @@ def _resolve_repo_root() -> Path:
         if (candidate / "src" / "thesis_pkg" / "pipeline.py").exists():
             return candidate
     raise RuntimeError("Could not resolve repository root containing src/thesis_pkg/pipeline.py")
+
+
+def _resolve_colab_drive_root() -> Path:
+    for candidate in (
+        Path("/content/drive/MyDrive"),
+        Path("/content/drive/My Drive"),
+        Path("/content/drive"),
+    ):
+        if candidate.exists():
+            return candidate
+    return Path("/content/drive")
 
 
 ROOT = _resolve_repo_root()
@@ -76,9 +88,21 @@ from thesis_pkg.pipelines.lm2011_regressions import (
 )
 
 
-DEFAULT_SAMPLE_ROOT = ROOT / "full_data_run" / "sample_5pct_seed42"
-DEFAULT_UPSTREAM_RUN_ROOT = DEFAULT_SAMPLE_ROOT / "results" / "sec_ccm_unified_runner" / "local_sample"
-DEFAULT_ADDITIONAL_DATA_DIR = ROOT / "full_data_run" / "LM2011_additional_data"
+DEFAULT_SAMPLE_ROOT = (
+    _resolve_colab_drive_root() / "Data_LM"
+    if IN_COLAB
+    else ROOT / "full_data_run" / "sample_5pct_seed42"
+)
+DEFAULT_UPSTREAM_RUN_ROOT = (
+    DEFAULT_SAMPLE_ROOT / "results" / "sec_ccm_unified_runner"
+    if IN_COLAB
+    else DEFAULT_SAMPLE_ROOT / "results" / "sec_ccm_unified_runner" / "local_sample"
+)
+DEFAULT_ADDITIONAL_DATA_DIR = (
+    DEFAULT_SAMPLE_ROOT / "LM2011_additional_data"
+    if IN_COLAB
+    else ROOT / "full_data_run" / "LM2011_additional_data"
+)
 DEFAULT_OUTPUT_DIR = DEFAULT_SAMPLE_ROOT / "results" / "lm2011_sample_post_refinitiv_runner"
 
 PARQUET_COMPRESSION = "zstd"
@@ -362,7 +386,14 @@ def _resolve_paths(args: argparse.Namespace) -> RunnerPaths:
     year_merged_dir = (
         Path(args.year_merged_dir).resolve()
         if args.year_merged_dir is not None
-        else sample_root / "year_merged"
+        else (
+            _resolve_optional_existing_path(
+                sample_root / "year_merged",
+                sample_root / "parquet_data" / "_year_merged",
+                sample_root / "Data" / "Sample_Filings" / "parquet_batches" / "_year_merged",
+            )
+            or sample_root / "year_merged"
+        )
     )
     daily_panel_path = (
         Path(args.daily_panel_path).resolve()
@@ -371,11 +402,24 @@ def _resolve_paths(args: argparse.Namespace) -> RunnerPaths:
             _resolve_optional_existing_path(
                 sample_root / "derived_data" / "final_flagged_data_compdesc_added.sample_5pct_seed42.parquet",
                 sample_root / "derived_data" / "final_flagged_data_compdesc_added.parquet",
+                sample_root / "CRSP_Compustat_data" / "derived_data" / "final_flagged_data_compdesc_added.parquet",
+                sample_root / "Data" / "CRSP_Compustat_data" / "derived_data" / "final_flagged_data_compdesc_added.parquet",
             )
             or sample_root / "derived_data" / "final_flagged_data_compdesc_added.sample_5pct_seed42.parquet"
         )
     )
-    ccm_base_dir = Path(args.ccm_base_dir).resolve() if args.ccm_base_dir is not None else sample_root / "ccm_parquet_data"
+    ccm_base_dir = (
+        Path(args.ccm_base_dir).resolve()
+        if args.ccm_base_dir is not None
+        else (
+            _resolve_optional_existing_path(
+                sample_root / "ccm_parquet_data",
+                sample_root / "CRSP_Compustat_data" / "parquet_data",
+                sample_root / "Data" / "CRSP_Compustat_data" / "parquet_data",
+            )
+            or sample_root / "ccm_parquet_data"
+        )
+    )
     auto_sample_backbone_path = upstream_run_root / "sec_ccm_premerge" / "lm2011_sample_backbone.parquet"
     sample_backbone_path = (
         Path(args.sample_backbone_path).resolve()

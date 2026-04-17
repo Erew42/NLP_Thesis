@@ -225,14 +225,15 @@ def _print_rows_table(rows: list[dict[str, object]], *, sort_by: list[str] | Non
 
 
 def _resolve_ff48_siccodes_path(work_root: Path) -> Path:
-    return _env_path(
-        "SEC_CCM_FF48_SICCODES_PATH",
-        _first_existing_path(
-            ROOT / "full_data_run" / "LM2011_additional_data" / "FF_Siccodes_48_Industries.txt",
-            ROOT / "LM2011_additional_data" / "FF_Siccodes_48_Industries.txt",
-            work_root / "LM2011_additional_data" / "FF_Siccodes_48_Industries.txt",
-            work_root / "Data" / "LM2011_additional_data" / "FF_Siccodes_48_Industries.txt",
-        ),
+    env_override = _env_optional_path("SEC_CCM_FF48_SICCODES_PATH")
+    if env_override is not None:
+        return env_override
+
+    return _first_existing_path(
+        work_root / "LM2011_additional_data" / "FF_Siccodes_48_Industries.txt",
+        work_root / "Data" / "LM2011_additional_data" / "FF_Siccodes_48_Industries.txt",
+        ROOT / "full_data_run" / "LM2011_additional_data" / "FF_Siccodes_48_Industries.txt",
+        ROOT / "LM2011_additional_data" / "FF_Siccodes_48_Industries.txt",
     )
 
 
@@ -256,16 +257,36 @@ def _resolve_optional_ccm_parquet_artifact(base_dir: Path, parquet_names: tuple[
     return None
 
 
-def _resolve_lm2011_additional_data_dir(work_root: Path) -> Path:
-    return _env_path(
-        "SEC_CCM_LM2011_ADDITIONAL_DATA_DIR",
-        _first_existing_path(
-            ROOT / "full_data_run" / "LM2011_additional_data",
-            ROOT / "LM2011_additional_data",
-            work_root / "LM2011_additional_data",
-            work_root / "Data" / "LM2011_additional_data",
-        ),
+def _looks_like_lm2011_additional_data_dir(path: Path) -> bool:
+    if not path.exists() or not path.is_dir():
+        return False
+    required_word_lists = all(
+        (path / filename).exists()
+        for filename in LM2011_OPERATIVE_WORD_LIST_FILES.values()
     )
+    has_harvard_negative = (path / HARVARD_NEGATIVE_WORD_LIST_FILE).exists()
+    has_master_dictionary = any(
+        (path / filename).exists()
+        for filename, _ in MASTER_DICTIONARY_CANDIDATES
+    )
+    return required_word_lists and has_harvard_negative and has_master_dictionary
+
+
+def _resolve_lm2011_additional_data_dir(work_root: Path) -> Path:
+    env_override = _env_optional_path("SEC_CCM_LM2011_ADDITIONAL_DATA_DIR")
+    if env_override is not None:
+        return env_override
+
+    candidates = (
+        work_root / "LM2011_additional_data",
+        work_root / "Data" / "LM2011_additional_data",
+        ROOT / "full_data_run" / "LM2011_additional_data",
+        ROOT / "LM2011_additional_data",
+    )
+    for candidate in candidates:
+        if _looks_like_lm2011_additional_data_dir(candidate):
+            return candidate
+    return _first_existing_path(*candidates)
 
 
 def _resolve_stage_toggle(
@@ -350,6 +371,9 @@ from thesis_pkg.benchmarking import FinbertSectionUniverseConfig
 from thesis_pkg.benchmarking import FinbertRuntimeConfig
 from thesis_pkg.benchmarking import FinbertSentencePreprocessingRunConfig
 from thesis_pkg.benchmarking import SentenceDatasetConfig
+from thesis_pkg.core.sec.lm2011_dictionary import HARVARD_NEGATIVE_WORD_LIST_FILE
+from thesis_pkg.core.sec.lm2011_dictionary import LM2011_OPERATIVE_WORD_LIST_FILES
+from thesis_pkg.core.sec.lm2011_dictionary import MASTER_DICTIONARY_CANDIDATES
 from thesis_pkg.core.sec.suspicious_boundary_diagnostics import (
     DiagnosticsConfig,
     parse_focus_items,

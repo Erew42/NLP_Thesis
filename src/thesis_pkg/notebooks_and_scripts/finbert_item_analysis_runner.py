@@ -9,6 +9,7 @@ from typing import Sequence
 
 
 REPO_ROOT_ENV_VAR = "NLP_THESIS_REPO_ROOT"
+IN_COLAB = "google.colab" in sys.modules
 
 
 def _resolve_repo_root() -> Path:
@@ -33,6 +34,17 @@ def _resolve_repo_root() -> Path:
     raise RuntimeError("Could not resolve repository root containing src/thesis_pkg/pipeline.py")
 
 
+def _resolve_colab_drive_root() -> Path:
+    for candidate in (
+        Path("/content/drive/MyDrive"),
+        Path("/content/drive/My Drive"),
+        Path("/content/drive"),
+    ):
+        if candidate.exists():
+            return candidate
+    return Path("/content/drive")
+
+
 ROOT = _resolve_repo_root()
 SRC = ROOT / "src"
 if str(SRC) not in sys.path:
@@ -54,12 +66,27 @@ from thesis_pkg.benchmarking import run_finbert_sentence_preprocessing
 from thesis_pkg.benchmarking.run_logging import utc_timestamp
 
 
-DEFAULT_FULL_DATA_ROOT = ROOT / "full_data_run"
-DEFAULT_SAMPLE_ROOT = DEFAULT_FULL_DATA_ROOT / "sample_5pct_seed42"
-DEFAULT_SAMPLE_UPSTREAM_RUN_ROOT = DEFAULT_SAMPLE_ROOT / "results" / "sec_ccm_unified_runner" / "local_sample"
+DEFAULT_FULL_DATA_ROOT = (
+    _resolve_colab_drive_root() / "Data_LM"
+    if IN_COLAB
+    else ROOT / "full_data_run"
+)
+DEFAULT_SAMPLE_ROOT = (
+    DEFAULT_FULL_DATA_ROOT
+    if IN_COLAB
+    else DEFAULT_FULL_DATA_ROOT / "sample_5pct_seed42"
+)
+DEFAULT_SAMPLE_UPSTREAM_RUN_ROOT = (
+    DEFAULT_SAMPLE_ROOT / "results" / "sec_ccm_unified_runner"
+    if IN_COLAB
+    else DEFAULT_SAMPLE_ROOT / "results" / "sec_ccm_unified_runner" / "local_sample"
+)
 DEFAULT_SAMPLE_ITEMS_ANALYSIS_DIR = DEFAULT_SAMPLE_UPSTREAM_RUN_ROOT / "items_analysis"
 DEFAULT_SAMPLE_LM2011_BACKBONE_PATH = (
     DEFAULT_SAMPLE_ROOT / "results" / "lm2011_sample_post_refinitiv_runner" / "lm2011_sample_backbone.parquet"
+)
+DEFAULT_SAMPLE_UNIFIED_LM2011_BACKBONE_PATH = (
+    DEFAULT_SAMPLE_UPSTREAM_RUN_ROOT / "lm2011_post_refinitiv" / "lm2011_sample_backbone.parquet"
 )
 DEFAULT_SAMPLE_UPSTREAM_LM2011_BACKBONE_PATH = (
     DEFAULT_SAMPLE_UPSTREAM_RUN_ROOT / "sec_ccm_premerge" / "lm2011_sample_backbone.parquet"
@@ -79,6 +106,7 @@ ANALYSIS_RUNNER_NAME = "finbert_item_analysis"
 
 def _default_local_sample_backbone_path() -> Path:
     for candidate in (
+        DEFAULT_SAMPLE_UNIFIED_LM2011_BACKBONE_PATH,
         DEFAULT_SAMPLE_LM2011_BACKBONE_PATH,
         DEFAULT_SAMPLE_UPSTREAM_LM2011_BACKBONE_PATH,
         DEFAULT_SAMPLE_PREMERGE_BACKBONE_PATH,
