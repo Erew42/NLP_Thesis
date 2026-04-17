@@ -1127,8 +1127,18 @@ def _make_text_feature_progress_logger(
     *,
     print_ram_stats: bool,
     ram_log_interval_batches: int,
-) -> Callable[[dict[str, int]], None]:
-    def _logger(progress: dict[str, int]) -> None:
+) -> Callable[[dict[str, object]], None]:
+    def _logger(progress: dict[str, object]) -> None:
+        event = str(progress.get("event") or "batch")
+        if event != "batch":
+            payload: dict[str, object] = {
+                "stage": stage_name,
+                "event": event,
+            }
+            if print_ram_stats:
+                payload["ram"] = _ram_snapshot(f"{stage_name}_{event}")
+            print(payload)
+            return
         batch_index = int(progress["batch_index"])
         if not _should_log_periodic_batch(
             batch_index=batch_index,
@@ -1138,6 +1148,7 @@ def _make_text_feature_progress_logger(
             return
         payload: dict[str, object] = {
             "stage": stage_name,
+            "event": "batch",
             "batch_index": batch_index,
             "batch_doc_count": int(progress["batch_doc_count"]),
             "docs_completed": int(progress["docs_completed"]),

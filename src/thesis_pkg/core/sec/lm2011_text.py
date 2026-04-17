@@ -203,98 +203,99 @@ def _validated_microbatch_byte_limit(limit_bytes: int) -> int:
     return int(limit_bytes)
 
 
-def _build_text_doc_manifest(
+def _stage_text_base_source(
     base_lf: pl.LazyFrame,
     *,
+    temp_dir: Path,
+    row_group_size: int,
+) -> pl.LazyFrame:
+    source_path = temp_dir / "source.parquet"
+    # This staged boundary is intentional: it avoids re-running the upstream SEC text plan
+    # while avoiding a global sort over full-text payloads before the first batch.
+    base_lf.sink_parquet(
+        source_path,
+        compression=_STREAMING_PARQUET_COMPRESSION,
+        row_group_size=max(1, int(row_group_size)),
+    )
+    return pl.scan_parquet(str(source_path))
+
+
+def _validate_unique_text_doc_ids(base_lf: pl.LazyFrame) -> None:
+    duplicate_doc_ids = (
+        base_lf.select(pl.col("doc_id").cast(pl.Utf8, strict=False).alias("doc_id"))
+        .group_by("doc_id")
+        .len()
+        .filter(pl.col("len") > 1)
+        .limit(10)
+        .collect()
+        .get_column("doc_id")
+        .to_list()
+    )
+    if duplicate_doc_ids:
+        raise ValueError(f"LM2011 text scoring requires doc_id to be unique in the writer path: {duplicate_doc_ids}")
+
+
+def _iter_staged_text_microbatches(
+    staged_source_lf: pl.LazyFrame,
+    *,
     text_col: str,
-) -> pl.DataFrame:
-    manifest = (
-        base_lf.select(
-            pl.col("doc_id").cast(pl.Utf8, strict=False).alias("doc_id"),
-            pl.col("filing_date").cast(pl.Date, strict=False).alias("filing_date"),
+    max_docs_per_microbatch: int,
+    max_input_text_bytes_per_microbatch: int,
+) -> Iterator[pl.DataFrame]:
+    if not hasattr(staged_source_lf, "collect_batches"):
+        raise RuntimeError(
+            "Polars LazyFrame.collect_batches is required for memory-safe LM2011 text scoring. "
+            "Upgrade Polars to a version that provides collect_batches."
+        )
+    max_docs = _validated_batch_size(max_docs_per_microbatch)
+    max_bytes = _validated_microbatch_byte_limit(max_input_text_bytes_per_microbatch)
+    for staged_batch in staged_source_lf.collect_batches(chunk_size=max_docs):
+        if staged_batch.height <= 0:
+            continue
+        batch = staged_batch.with_columns(
             pl.col(text_col)
             .cast(pl.Utf8, strict=False)
             .str.len_bytes()
             .fill_null(0)
             .cast(pl.Int64, strict=False)
-            .alias("_input_text_bytes"),
+            .alias("_input_text_bytes")
         )
-        .sort("filing_date", "doc_id")
-        .collect()
-        .with_row_index("_source_row_nr", offset=0)
-    )
-    duplicate_doc_ids = (
-        manifest.group_by("doc_id")
-        .len()
-        .filter(pl.col("len") > 1)
-        .get_column("doc_id")
-        .to_list()
-    )
-    if duplicate_doc_ids:
-        raise ValueError(f"LM2011 text scoring requires doc_id to be unique in the writer path: {duplicate_doc_ids[:10]}")
-    return manifest
+        byte_sizes = batch.get_column("_input_text_bytes").to_list()
+        current_start = 0
+        current_count = 0
+        current_bytes = 0
+        for row_index, row_bytes in enumerate(byte_sizes):
+            input_bytes = int(row_bytes or 0)
+            should_flush = current_count > 0 and (
+                current_count >= max_docs
+                or current_bytes + input_bytes > max_bytes
+            )
+            if should_flush:
+                yield batch.slice(current_start, current_count).drop("_input_text_bytes")
+                current_start = row_index
+                current_count = 0
+                current_bytes = 0
+            current_count += 1
+            current_bytes += input_bytes
+            if current_count >= max_docs:
+                yield batch.slice(current_start, current_count).drop("_input_text_bytes")
+                current_start = row_index + 1
+                current_count = 0
+                current_bytes = 0
+        if current_count > 0:
+            yield batch.slice(current_start, current_count).drop("_input_text_bytes")
+        del batch
+        del byte_sizes
+        del staged_batch
+        gc.collect()
 
 
-def _pack_text_doc_microbatches(
-    manifest_df: pl.DataFrame,
-    *,
-    max_docs_per_microbatch: int,
-    max_input_text_bytes_per_microbatch: int,
-) -> list[tuple[int, int]]:
-    max_docs = _validated_batch_size(max_docs_per_microbatch)
-    max_bytes = _validated_microbatch_byte_limit(max_input_text_bytes_per_microbatch)
-    microbatches: list[tuple[int, int]] = []
-    current_start_row: int | None = None
-    current_count = 0
-    current_bytes = 0
-    for row in manifest_df.iter_rows(named=True):
-        row_index = int(row["_source_row_nr"])
-        row_bytes = int(row.get("_input_text_bytes") or 0)
-        if current_start_row is None:
-            current_start_row = row_index
-        should_flush = current_count > 0 and (
-            current_count >= max_docs
-            or current_bytes + row_bytes > max_bytes
-        )
-        if should_flush:
-            microbatches.append((current_start_row, current_count))
-            current_start_row = row_index
-            current_count = 0
-            current_bytes = 0
-        current_count += 1
-        current_bytes += row_bytes
-        if current_count >= max_docs and current_start_row is not None:
-            microbatches.append((current_start_row, current_count))
-            current_start_row = None
-            current_count = 0
-            current_bytes = 0
-    if current_count > 0 and current_start_row is not None:
-        microbatches.append((current_start_row, current_count))
-    return microbatches
-
-
-def _collect_text_microbatch(
-    staged_source_lf: pl.LazyFrame,
-    *,
-    start_row: int,
-    row_count: int,
-) -> pl.DataFrame:
-    return staged_source_lf.slice(start_row, row_count).collect()
-
-
-def _stage_text_base_source(
-    base_lf: pl.LazyFrame,
-    *,
-    temp_dir: Path,
-) -> pl.LazyFrame:
-    source_path = temp_dir / "source.parquet"
-    # This staged boundary is intentional: it avoids re-running the upstream SEC text plan
-    # for every microbatch while keeping downstream shards bounded.
-    base_lf.sort("filing_date", "doc_id").sink_parquet(
-        source_path,
-        compression=_STREAMING_PARQUET_COMPRESSION,
-    )
-    return pl.scan_parquet(str(source_path))
+def _emit_progress(
+    progress_callback: Callable[[dict[str, object]], None] | None,
+    payload: dict[str, object],
+) -> None:
+    if progress_callback is not None:
+        progress_callback(payload)
 
 
 def _prepare_document_stats(
@@ -635,7 +636,7 @@ def _write_streaming_text_features(
     master_dictionary_words: Iterable[str],
     text_col: str,
     text_cleaner: Callable[[str | None], str | None] | None = None,
-    progress_callback: Callable[[dict[str, int]], None] | None = None,
+    progress_callback: Callable[[dict[str, object]], None] | None = None,
     cleanup_on_success: bool = True,
 ) -> int:
     vocabulary = frozenset().union(*(tokens for _, tokens, _ in signal_specs))
@@ -686,14 +687,15 @@ def _write_streaming_text_features(
             pass1_paths.append(shard_path)
             document_frequency.update(batch_document_frequency)
             doc_count += len(rows)
-            if progress_callback is not None:
-                progress_callback(
-                    {
-                        "batch_index": batch_index,
-                        "batch_doc_count": len(rows),
-                        "docs_completed": doc_count,
-                    }
-                )
+            _emit_progress(
+                progress_callback,
+                {
+                    "event": "batch",
+                    "batch_index": batch_index,
+                    "batch_doc_count": len(rows),
+                    "docs_completed": doc_count,
+                },
+            )
 
         if output_path.exists():
             output_path.unlink()
@@ -778,7 +780,7 @@ def _write_production_microbatched_text_features(
     max_docs_per_microbatch: int,
     max_input_text_bytes_per_microbatch: int,
     required_item_id: str | None = None,
-    progress_callback: Callable[[dict[str, int]], None] | None = None,
+    progress_callback: Callable[[dict[str, object]], None] | None = None,
     cleanup_on_success: bool = True,
 ) -> int:
     vocabulary = frozenset().union(*(tokens for _, tokens, _ in signal_specs))
@@ -812,26 +814,30 @@ def _write_production_microbatched_text_features(
         include_item_id=include_item_id,
         required_item_id=required_item_id,
     )
-    staged_source_lf = _stage_text_base_source(base_lf, temp_dir=temp_dir)
-    manifest_df = _build_text_doc_manifest(staged_source_lf, text_col=text_col)
-    microbatches = _pack_text_doc_microbatches(
-        manifest_df,
-        max_docs_per_microbatch=max_docs_per_microbatch,
-        max_input_text_bytes_per_microbatch=max_input_text_bytes_per_microbatch,
+    _emit_progress(progress_callback, {"event": "stage_source_start"})
+    staged_source_lf = _stage_text_base_source(
+        base_lf,
+        temp_dir=temp_dir,
+        row_group_size=max_docs_per_microbatch,
     )
-    total_docs = manifest_df.height
+    _validate_unique_text_doc_ids(staged_source_lf)
+    _emit_progress(progress_callback, {"event": "stage_source_end"})
 
     pass1_paths: list[Path] = []
     document_frequency: Counter[str] = Counter()
     doc_count = 0
 
     try:
-        for batch_index, (start_row, row_count) in enumerate(microbatches, start=1):
-            batch = _collect_text_microbatch(
+        _emit_progress(progress_callback, {"event": "pass1_start"})
+        for batch_index, batch in enumerate(
+            _iter_staged_text_microbatches(
                 staged_source_lf,
-                start_row=start_row,
-                row_count=row_count,
-            )
+                text_col=text_col,
+                max_docs_per_microbatch=max_docs_per_microbatch,
+                max_input_text_bytes_per_microbatch=max_input_text_bytes_per_microbatch,
+            ),
+            start=1,
+        ):
             rows, batch_document_frequency = _prepare_pass1_rows(
                 batch,
                 text_col=text_col,
@@ -850,14 +856,15 @@ def _write_production_microbatched_text_features(
                 pass1_paths.append(shard_path)
                 document_frequency.update(batch_document_frequency)
                 doc_count += len(rows)
-            if progress_callback is not None:
-                progress_callback(
-                    {
-                        "batch_index": batch_index,
-                        "batch_doc_count": row_count,
-                        "docs_completed": min(doc_count, total_docs),
-                    }
-                )
+            _emit_progress(
+                progress_callback,
+                {
+                    "event": "batch",
+                    "batch_index": batch_index,
+                    "batch_doc_count": batch.height,
+                    "docs_completed": doc_count,
+                },
+            )
             del batch
             del rows
             del batch_document_frequency
@@ -882,6 +889,7 @@ def _write_production_microbatched_text_features(
             token: _lm2011_inverse_document_frequency(doc_count, doc_freq)
             for token, doc_freq in document_frequency.items()
         }
+        _emit_progress(progress_callback, {"event": "pass2_start"})
         feature_shard_paths: list[Path] = []
         for batch_index, shard_path in enumerate(pass1_paths, start=1):
             pass1_df = pl.read_parquet(shard_path)
@@ -909,7 +917,10 @@ def _write_production_microbatched_text_features(
             gc.collect()
 
         if feature_shard_paths:
-            pl.scan_parquet([str(path) for path in feature_shard_paths]).sink_parquet(
+            sort_by = ["filing_date", "doc_id"]
+            if include_item_id:
+                sort_by.append("item_id")
+            pl.scan_parquet([str(path) for path in feature_shard_paths]).sort(sort_by).sink_parquet(
                 output_path,
                 compression=_STREAMING_PARQUET_COMPRESSION,
             )
@@ -922,6 +933,7 @@ def _write_production_microbatched_text_features(
                 total_token_count_col=total_token_count_col,
                 signal_specs=signal_specs,
             ).write_parquet(output_path, compression=_STREAMING_PARQUET_COMPRESSION)
+        _emit_progress(progress_callback, {"event": "pass2_end"})
         row_count = int(pl.scan_parquet(output_path).select(pl.len()).collect().item())
         if cleanup_on_success and temp_dir.exists():
             shutil.rmtree(temp_dir)
@@ -998,7 +1010,7 @@ def write_lm2011_text_features_full_10k_parquet(
     raw_form_col: str = "document_type_filename",
     cleaning_contract: Full10KCleaningContract = "current",
     batch_size: int = DEFAULT_TEXT_FEATURE_BATCH_SIZE,
-    progress_callback: Callable[[dict[str, int]], None] | None = None,
+    progress_callback: Callable[[dict[str, object]], None] | None = None,
     temp_root: Path | None = None,
     cleanup_on_success: bool = True,
 ) -> int:
@@ -1076,7 +1088,7 @@ def write_lm2011_text_features_mda_parquet(
     raw_form_col: str = "document_type_filename",
     required_item_id: str = "7",
     batch_size: int = DEFAULT_TEXT_FEATURE_BATCH_SIZE,
-    progress_callback: Callable[[dict[str, int]], None] | None = None,
+    progress_callback: Callable[[dict[str, object]], None] | None = None,
     temp_root: Path | None = None,
     cleanup_on_success: bool = True,
 ) -> int:

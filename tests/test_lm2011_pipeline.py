@@ -734,11 +734,11 @@ def test_build_lm2011_text_features_full_10k_exports_total_and_recognized_token_
 def test_write_lm2011_text_features_full_10k_parquet_matches_eager_builder(tmp_path: Path) -> None:
     sec_parsed = pl.DataFrame(
         {
-            "doc_id": ["d1", "d2"],
-            "cik_10": ["0001", "0002"],
-            "filing_date": [dt.date(2023, 1, 1), dt.date(2023, 1, 2)],
-            "document_type_filename": ["10-K", "10-K405"],
-            "full_text": ["gain gain loss may must uncertain", "gain lawsuit"],
+            "doc_id": ["d2", "d1"],
+            "cik_10": ["0002", "0001"],
+            "filing_date": [dt.date(2023, 1, 2), dt.date(2023, 1, 1)],
+            "document_type_filename": ["10-K405", "10-K"],
+            "full_text": ["gain lawsuit", "gain gain loss may must uncertain"],
         }
     )
     eager = build_lm2011_text_features_full_10k(
@@ -762,6 +762,7 @@ def test_write_lm2011_text_features_full_10k_parquet_matches_eager_builder(tmp_p
         streamed = pl.read_parquet(output_path)
 
         assert row_count == eager.height
+        assert streamed.get_column("doc_id").to_list() == ["d1", "d2"]
         _assert_frames_equal_with_float_tolerance(eager, streamed, sort_by=["doc_id"])
 
 
@@ -811,7 +812,7 @@ def test_write_lm2011_text_features_full_10k_parquet_emits_progress_callback(tmp
         }
     )
     output_path = tmp_path / "full_10k_progress.parquet"
-    progress: list[dict[str, int]] = []
+    progress: list[dict[str, object]] = []
 
     row_count = write_lm2011_text_features_full_10k_parquet(
         sec_parsed.lazy(),
@@ -825,9 +826,14 @@ def test_write_lm2011_text_features_full_10k_parquet_emits_progress_callback(tmp
 
     assert row_count == 3
     assert progress == [
-        {"batch_index": 1, "batch_doc_count": 1, "docs_completed": 1},
-        {"batch_index": 2, "batch_doc_count": 1, "docs_completed": 2},
-        {"batch_index": 3, "batch_doc_count": 1, "docs_completed": 3},
+        {"event": "stage_source_start"},
+        {"event": "stage_source_end"},
+        {"event": "pass1_start"},
+        {"event": "batch", "batch_index": 1, "batch_doc_count": 1, "docs_completed": 1},
+        {"event": "batch", "batch_index": 2, "batch_doc_count": 1, "docs_completed": 2},
+        {"event": "batch", "batch_index": 3, "batch_doc_count": 1, "docs_completed": 3},
+        {"event": "pass2_start"},
+        {"event": "pass2_end"},
     ]
 
 
@@ -880,7 +886,7 @@ def test_write_lm2011_text_features_mda_parquet_emits_progress_callback(tmp_path
         }
     )
     output_path = tmp_path / "mda_progress.parquet"
-    progress: list[dict[str, int]] = []
+    progress: list[dict[str, object]] = []
 
     row_count = write_lm2011_text_features_mda_parquet(
         sec_items.lazy(),
@@ -894,9 +900,14 @@ def test_write_lm2011_text_features_mda_parquet_emits_progress_callback(tmp_path
 
     assert row_count == 3
     assert progress == [
-        {"batch_index": 1, "batch_doc_count": 1, "docs_completed": 1},
-        {"batch_index": 2, "batch_doc_count": 1, "docs_completed": 2},
-        {"batch_index": 3, "batch_doc_count": 1, "docs_completed": 3},
+        {"event": "stage_source_start"},
+        {"event": "stage_source_end"},
+        {"event": "pass1_start"},
+        {"event": "batch", "batch_index": 1, "batch_doc_count": 1, "docs_completed": 1},
+        {"event": "batch", "batch_index": 2, "batch_doc_count": 1, "docs_completed": 2},
+        {"event": "batch", "batch_index": 3, "batch_doc_count": 1, "docs_completed": 3},
+        {"event": "pass2_start"},
+        {"event": "pass2_end"},
     ]
 
 

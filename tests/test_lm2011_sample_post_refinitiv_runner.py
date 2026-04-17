@@ -1148,15 +1148,17 @@ def test_text_feature_progress_logger_respects_interval(capsys) -> None:
         ram_log_interval_batches=3,
     )
 
-    logger({"batch_index": 1, "batch_doc_count": 2, "docs_completed": 2})
-    logger({"batch_index": 2, "batch_doc_count": 2, "docs_completed": 4})
-    logger({"batch_index": 3, "batch_doc_count": 2, "docs_completed": 6})
+    logger({"event": "stage_source_start"})
+    logger({"event": "batch", "batch_index": 1, "batch_doc_count": 2, "docs_completed": 2})
+    logger({"event": "batch", "batch_index": 2, "batch_doc_count": 2, "docs_completed": 4})
+    logger({"event": "batch", "batch_index": 3, "batch_doc_count": 2, "docs_completed": 6})
 
     output_lines = [line for line in capsys.readouterr().out.splitlines() if line.strip()]
 
-    assert len(output_lines) == 2
-    assert "batch_index': 1" in output_lines[0]
-    assert "batch_index': 3" in output_lines[1]
+    assert len(output_lines) == 3
+    assert "event': 'stage_source_start'" in output_lines[0]
+    assert "batch_index': 1" in output_lines[1]
+    assert "batch_index': 3" in output_lines[2]
 
 
 def test_shared_lm2011_pipeline_fails_closed_for_enabled_stage(tmp_path: Path) -> None:
