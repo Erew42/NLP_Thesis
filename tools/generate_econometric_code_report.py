@@ -193,8 +193,8 @@ def _evidence_refs() -> list[EvidenceRef]:
     return [
         EvidenceRef(
             "E1",
-            "src/thesis_pkg/notebooks_and_scripts/lm2011_sample_post_refinitiv_runner.py:1858-2200",
-            "Runner stages that materialize event_panel, sue_panel, Table IV/V/VI/VIII/IA.I, and Table IA.II.",
+            "src/thesis_pkg/notebooks_and_scripts/lm2011_sample_post_refinitiv_runner.py:2504-2856, 2904-3030 and src/thesis_pkg/notebooks_and_scripts/sec_ccm_unified_runner.py:3094-3141",
+            "Standalone LM2011 stage materialization through Table IA.II, extension-pipeline materialization, and unified-runner wiring that invokes LM2011 extension after FinBERT.",
         ),
         EvidenceRef(
             "E2",
@@ -208,27 +208,27 @@ def _evidence_refs() -> list[EvidenceRef]:
         ),
         EvidenceRef(
             "E4",
-            "src/thesis_pkg/core/ccm/lm2011.py:899-1020 and 1023-1111",
-            "FF48 industry assignment and event-date market equity / book-to-market attachment.",
+            "src/thesis_pkg/core/ccm/lm2011.py:899-1111 and src/thesis_pkg/core/ccm/sec_ccm_contracts.py:65-96",
+            "FF48 industry assignment plus shared event-date market-equity normalization to millions of USD.",
         ),
         EvidenceRef(
             "E5",
-            "src/thesis_pkg/pipelines/lm2011_pipeline.py:651-902",
+            "src/thesis_pkg/pipelines/lm2011_pipeline.py:734-946",
             "Shared OLS helper, factor-model alpha/RMSE helper, and event-screen arithmetic.",
         ),
         EvidenceRef(
             "E6",
-            "src/thesis_pkg/pipelines/lm2011_pipeline.py:360-383, 765-794, 1042-1073, 1273-1305",
+            "src/thesis_pkg/pipelines/lm2011_pipeline.py:361-378, 809-838, 1110-1138, 1338-1365",
             "Ownership handling, log transforms, sample filters, winsorization, and event-panel output selection.",
         ),
         EvidenceRef(
             "E7",
-            "src/thesis_pkg/core/sec/lm2011_text.py:84-101, 158-256, 621-842",
+            "src/thesis_pkg/core/sec/lm2011_text.py:96-109, 310-400, 1004-1145",
             "IDF and TF-IDF formulas, recognized-word denominators, and text-feature builders.",
         ),
         EvidenceRef(
             "E8",
-            "src/thesis_pkg/core/ccm/lm2011.py:826-896 and src/thesis_pkg/pipelines/lm2011_pipeline.py:1379-1569",
+            "src/thesis_pkg/core/ccm/lm2011.py:774-896 and src/thesis_pkg/pipelines/lm2011_pipeline.py:1444-1668",
             "Quarterly accounting attachment, pre-filing and prior-month price attachment, and SUE variable construction.",
         ),
         EvidenceRef(
@@ -243,22 +243,22 @@ def _evidence_refs() -> list[EvidenceRef]:
         ),
         EvidenceRef(
             "E11",
-            "src/thesis_pkg/pipelines/lm2011_pipeline.py:1592-1967",
+            "src/thesis_pkg/pipelines/lm2011_pipeline.py:1780-2144",
             "Trading-strategy assignment, equal/value weighting, long-short return construction, and FF4 loading regression.",
         ),
         EvidenceRef(
             "E12",
-            "src/thesis_pkg/benchmarking/finbert_analysis.py:231-270",
+            "src/thesis_pkg/benchmarking/finbert_analysis.py:159-275",
             "FinBERT length-weighted feature aggregation used by the extension scaffold.",
         ),
         EvidenceRef(
             "E13",
-            "src/thesis_pkg/pipelines/lm2011_extension.py:20-124, 565-746, 876-1049",
-            "Extension sample window, control sets, feature families, event-base assembly, and extension estimation scaffold.",
+            "src/thesis_pkg/pipelines/lm2011_extension.py:20-123, 565-1049",
+            "Extension sample window, control/specification grids, cleaned-scope alignment, event-base assembly, sample-loss accounting, and extension estimation scaffold.",
         ),
         EvidenceRef(
             "E14",
-            "src/thesis_pkg/pipelines/lm2011_pipeline.py:275-299 and 1639-1657",
+            "src/thesis_pkg/pipelines/lm2011_pipeline.py:276-298, 544-557, 1827-1845",
             "Daily and monthly factor scaling: divide by 100 when the factor columns appear to be stored in percent units.",
         ),
     ]
@@ -291,7 +291,7 @@ def _variable_tables() -> list[tuple[str, list[VariableRow]]]:
                 ),
                 VariableRow(
                     "text_scope",
-                    "Regression text surface label such as full_10k, mda_item_7, item_7_mda, or item_1a_risk_factors.",
+                    "Regression text surface label such as full_10k, mda_item_7, item_7_mda, item_1a_risk_factors, or item_1_business.",
                     "E9, E13",
                 ),
                 VariableRow(
@@ -491,7 +491,7 @@ def _build_story(root: Path) -> list[object]:
     )
     story.append(
         _paragraph(
-            "Scope result: the implemented econometric stack is concentrated in the LM2011 pipeline and extension modules. "
+            "Scope result: the implemented econometric stack is concentrated in the LM2011 pipeline, the post-Refinitiv runner, and the newer extension stages that the unified runner can append after FinBERT. "
             "The code paths observed are event-study style return construction, SUE panel construction, quarterly Fama-MacBeth cross-sectional regressions, "
             "a monthly long-short trading strategy with factor loadings, and a newer extension scaffold that reuses the same Fama-MacBeth engine.",
             styles["body"],
@@ -502,7 +502,7 @@ def _build_story(root: Path) -> list[object]:
     story.append(_paragraph("1. Observed Regression Path Map", styles["h1"]))
     story.append(
         _paragraph(
-            "The sample runner wires the main econometric flow as a staged pipeline. The stages below are directly instantiated in Python code rather than inferred from naming conventions (E1).",
+            "The standalone LM2011 post-Refinitiv runner wires the main econometric flow, and the unified SEC-CCM runner can append LM2011 extension after FinBERT artifacts are available. The stages below are directly instantiated in Python code rather than inferred from naming conventions (E1).",
             styles["body"],
         )
     )
@@ -512,12 +512,12 @@ def _build_story(root: Path) -> list[object]:
         "event_panel + MD&A text features + FF48 industries -> return_regression_panel_mda -> Table V",
         "event_panel + quarterly accounting + analyst inputs -> sue_panel -> sue_regression_panel -> Table VIII",
         "event_panel + yearly filing text + monthly stock returns + monthly factors -> trading_strategy_monthly_returns -> Table IA.II",
-        "public extension path: event_panel + dictionary / FinBERT feature surfaces + FF48 industries -> extension_analysis_panel -> run_lm2011_extension_estimation_scaffold",
+        "sec_ccm_unified_runner (optional): finbert artifacts + event_panel -> run_lm2011_extension_pipeline -> extension_dictionary_surface + extension_finbert_surface + extension_control_ladder + extension_specification_grid + extension_analysis_panel + extension_sample_loss + extension_results",
     ]:
         story.append(_bullet(line, styles))
     story.append(
         _paragraph(
-            "I did not find a Python runner in src/ that calls the extension scaffold; the extension path is currently exposed as library code rather than as a wired stage in the main sample runner (E13).",
+            "The standalone post-Refinitiv runner still stops at Table IA.II, but sec_ccm_unified_runner now wires the extension stage after FinBERT when SEC_CCM_RUN_LM2011_EXTENSION is enabled and a materialized event_panel is present (E1).",
             styles["body"],
         )
     )
@@ -1060,7 +1060,7 @@ Reported outputs:
     story.append(_paragraph("9. Extension Path For 2009-2024", styles["h1"]))
     story.append(
         _paragraph(
-            "The extension code builds a newer analysis surface for 2009-01-01 through 2024-12-31. It reuses the same return controls, the same FF48 industry attachments, and the same quarterly Fama-MacBeth estimator, but allows additional outcomes, text scopes, and feature families (E13).",
+            "The extension module defines a newer 2009-01-01 through 2024-12-31 analysis surface. It reuses the same return controls, the same FF48 industry attachments, and the same quarterly Fama-MacBeth estimator. The default runner scopes are item_7_mda and item_1a_risk_factors, while the normalization helpers also understand aliases such as mda_item_7 and item_1_business (E13).",
             styles["body"],
         )
     )
@@ -1074,8 +1074,8 @@ Reported outputs:
     story.append(
         _code_block(
             """
-Primary outcome:    filing_period_excess_return
-Secondary outcomes: abnormal_volume, postevent_return_volatility
+Default runner outcome:  filing_period_excess_return
+Module-defined secondary outcomes: abnormal_volume, postevent_return_volatility
 
 Base controls:
     log_size, log_book_to_market, log_share_turnover, pre_ffalpha, nasdaq_dummy
@@ -1092,6 +1092,12 @@ Control sets:
     C2 = base controls + ownership proxy, also restricted to non-null ownership proxy
             """,
             styles,
+        )
+    )
+    story.append(
+        _paragraph(
+            "The module exposes abnormal_volume and postevent_return_volatility as secondary outcomes, but run_lm2011_extension_pipeline currently calls build_lm2011_extension_sample_loss_table and run_lm2011_extension_estimation_scaffold with their defaults. In the shipped runner path, extension_sample_loss and extension_results are therefore written for filing_period_excess_return unless a library caller overrides outcome_names directly (E1, E13).",
+            styles["body"],
         )
     )
     story.append(_paragraph("9.2 Extension feature families", styles["h2"]))
@@ -1143,7 +1149,7 @@ finbert_neg_dominant_share_i =
     )
     story.append(
         _paragraph(
-            "The extension scaffold only estimates on cleaned-scope matched universes when both dictionary and FinBERT surfaces are supplied; otherwise it raises a ValueError about universe misalignment rather than silently mixing surfaces (E12, E13).",
+            "The current runner defaults dictionary_source_mode to prefer_cleaned_scopes and validates that dictionary and FinBERT surfaces share identical cleaned-scope universes on doc_id, filing_date, text_scope, and cleaning_policy_id. If cleaned scopes are missing or misaligned, the matched comparison fails closed instead of silently falling back to raw item text (E13).",
             styles["body"],
         )
     )
@@ -1213,7 +1219,7 @@ It then adds:
         "The main return outcome is not cumulative abnormal return from a factor model; it is the difference between compounded stock and compounded market gross returns over filing days 0..3.",
         "postevent_return_volatility is a factor-model RMSE, not a raw realized-volatility measure.",
         "LM2011 dictionary proportions use recognized master-dictionary words as the denominator, while separate total_token_count columns preserve the broader post-clean token totals.",
-        "The extension scaffold is materially different from the original LM2011 tables because it adds alternative text scopes, a control-set ladder around ownership support, and FinBERT-based features, but it still reuses the same Fama-MacBeth core.",
+        "The extension scaffold is now wired into sec_ccm_unified_runner after FinBERT and fails closed on cleaned-scope misalignment instead of silently mixing dictionary and model surfaces.",
     ]:
         story.append(_bullet(line, styles))
     story.append(_paragraph("12.2 Economic takeaways", styles["h2"]))
