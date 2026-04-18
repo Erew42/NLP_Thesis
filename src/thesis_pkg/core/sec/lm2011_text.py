@@ -34,6 +34,7 @@ _LINEBREAK_HYPHEN_RE = re.compile(r"([A-Za-z])-\s*(?:\r?\n)\s*([A-Za-z])")
 _TOKEN_RE = re.compile(r"[A-Za-z]{2,}(?:[-'][A-Za-z]+)*")
 RAW_ITEM_TEXT_CLEANING_POLICY_ID = "raw_item_text"
 _STREAMING_PARQUET_COMPRESSION = "zstd"
+_STAGED_SOURCE_MIN_ROW_GROUP_SIZE = 128
 
 
 def _require_columns(lf: pl.LazyFrame, required: tuple[str, ...], label: str) -> None:
@@ -214,10 +215,13 @@ def _stage_text_base_source(
     source_path = temp_dir / "source.parquet"
     # This staged boundary is intentional: it avoids re-running the upstream SEC text plan
     # while avoiding a global sort over full-text payloads before the first batch.
+    # Keep staged source metadata compact even when scoring uses tiny microbatches.
+    effective_row_group_size = max(_STAGED_SOURCE_MIN_ROW_GROUP_SIZE, int(row_group_size))
     base_lf.sink_parquet(
         source_path,
         compression=_STREAMING_PARQUET_COMPRESSION,
-        row_group_size=max(1, int(row_group_size)),
+        statistics=False,
+        row_group_size=effective_row_group_size,
     )
     _validate_local_parquet(source_path, stage_label="staged source")
     return pl.scan_parquet(str(source_path)), source_path

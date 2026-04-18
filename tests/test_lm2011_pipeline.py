@@ -5,6 +5,7 @@ import math
 from pathlib import Path
 
 import polars as pl
+import pyarrow.parquet as pq
 import pytest
 import yaml
 
@@ -873,6 +874,80 @@ def test_write_lm2011_text_features_full_10k_parquet_stages_source_once_before_m
 
     assert row_count == 3
     assert observed["rows"] == 3
+
+
+def test_write_lm2011_text_features_full_10k_parquet_staged_source_disables_full_text_statistics(
+    tmp_path: Path,
+) -> None:
+    temp_root = tmp_path / "staged_source_root"
+    long_text = " ".join((["loss"] * 4096) + (["uncertain"] * 2048) + (["lawsuit"] * 1024))
+    sec_parsed = pl.DataFrame(
+        {
+            "doc_id": ["d1", "d2", "d3"],
+            "cik_10": ["0001", "0002", "0003"],
+            "filing_date": [dt.date(2023, 1, 1), dt.date(2023, 1, 2), dt.date(2023, 1, 3)],
+            "document_type_filename": ["10-K", "10-K", "10-K"],
+            "full_text": [long_text, long_text.replace("loss", "gain"), long_text.replace("uncertain", "must")],
+        }
+    )
+    output_path = tmp_path / "full_10k_staged_source_stats.parquet"
+
+    row_count = write_lm2011_text_features_full_10k_parquet(
+        sec_parsed.lazy(),
+        output_path=output_path,
+        dictionary_lists=_lm_dictionary_lists(),
+        harvard_negative_word_list=_harvard_negative_word_list(),
+        master_dictionary_words=_master_dictionary_words(),
+        batch_size=1,
+        temp_root=temp_root,
+        cleanup_on_success=False,
+    )
+
+    workspaces = sorted(path for path in temp_root.iterdir() if path.is_dir())
+    source_path = workspaces[0] / "source.parquet"
+    parquet_file = pq.ParquetFile(source_path)
+    full_text_index = parquet_file.schema.names.index("full_text")
+
+    assert row_count == 3
+    assert len(workspaces) == 1
+    assert parquet_file.metadata.num_row_groups == 1
+    assert parquet_file.metadata.row_group(0).column(full_text_index).statistics is None
+
+
+def test_write_lm2011_text_features_full_10k_parquet_staged_source_uses_row_group_floor(
+    tmp_path: Path,
+) -> None:
+    temp_root = tmp_path / "staged_row_groups_root"
+    sec_parsed = pl.DataFrame(
+        {
+            "doc_id": [f"d{idx}" for idx in range(129)],
+            "cik_10": [f"{idx:04d}" for idx in range(129)],
+            "filing_date": [dt.date(2023, 1, 1)] * 129,
+            "document_type_filename": ["10-K"] * 129,
+            "full_text": ["gain loss uncertain"] * 129,
+        }
+    )
+    output_path = tmp_path / "full_10k_staged_row_groups.parquet"
+
+    row_count = write_lm2011_text_features_full_10k_parquet(
+        sec_parsed.lazy(),
+        output_path=output_path,
+        dictionary_lists=_lm_dictionary_lists(),
+        harvard_negative_word_list=_harvard_negative_word_list(),
+        master_dictionary_words=_master_dictionary_words(),
+        batch_size=1,
+        temp_root=temp_root,
+        cleanup_on_success=False,
+    )
+
+    workspaces = sorted(path for path in temp_root.iterdir() if path.is_dir())
+    source_path = workspaces[0] / "source.parquet"
+    parquet_file = pq.ParquetFile(source_path)
+
+    assert row_count == 129
+    assert len(workspaces) == 1
+    assert parquet_file.metadata.num_rows == 129
+    assert parquet_file.metadata.num_row_groups == 2
 
 
 def test_write_lm2011_text_features_mda_parquet_emits_progress_callback(tmp_path: Path) -> None:
