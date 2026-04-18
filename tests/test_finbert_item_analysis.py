@@ -533,6 +533,72 @@ def test_finbert_item_analysis_runner_can_override_sentence_postprocess_policy(
     assert run_cfg_v2.sentence_dataset.postprocess_policy == "item7_reference_stitch_protect_v2"
 
 
+def test_finbert_item_analysis_runner_accepts_xlarge_batch_profile(
+    tmp_path: Path,
+) -> None:
+    from thesis_pkg.notebooks_and_scripts import finbert_item_analysis_runner as runner
+
+    source_dir = tmp_path / "items_analysis"
+    output_dir = tmp_path / "runs"
+    source_dir.mkdir(parents=True)
+
+    run_cfg = runner._resolve_run_config(
+        runner.parse_args(
+            [
+                "--data-profile",
+                "EXPLICIT",
+                "--source-items-dir",
+                str(source_dir),
+                "--output-dir",
+                str(output_dir),
+                "--batch-profile",
+                "xlarge",
+            ]
+        )
+    )
+
+    large = runner.BATCH_PRESETS["large"]
+    xlarge = runner.BATCH_PRESETS["xlarge"]
+
+    assert run_cfg.batch_config.name == "xlarge"
+    assert xlarge.short_batch_size == large.short_batch_size * 2
+    assert xlarge.medium_batch_size == large.medium_batch_size * 2
+    assert xlarge.long_batch_size == large.long_batch_size * 2
+
+
+def test_finbert_item_analysis_runner_edge_overrides_auto_match_effective_lengths(
+    tmp_path: Path,
+) -> None:
+    from thesis_pkg.notebooks_and_scripts import finbert_item_analysis_runner as runner
+
+    source_dir = tmp_path / "items_analysis"
+    output_dir = tmp_path / "runs"
+    source_dir.mkdir(parents=True)
+
+    run_cfg = runner._resolve_run_config(
+        runner.parse_args(
+            [
+                "--data-profile",
+                "EXPLICIT",
+                "--source-items-dir",
+                str(source_dir),
+                "--output-dir",
+                str(output_dir),
+                "--short-edge",
+                "64",
+                "--medium-edge",
+                "128",
+            ]
+        )
+    )
+
+    assert run_cfg.sentence_dataset.bucket_edges.short_edge == 64
+    assert run_cfg.sentence_dataset.bucket_edges.medium_edge == 128
+    assert run_cfg.bucket_lengths.short_max_length == 64
+    assert run_cfg.bucket_lengths.medium_max_length == 128
+    assert run_cfg.bucket_lengths.long_max_length == 512
+
+
 def test_run_finbert_pipeline_analysis_only_reuses_existing_preprocessing(
     tmp_path: Path,
     monkeypatch,

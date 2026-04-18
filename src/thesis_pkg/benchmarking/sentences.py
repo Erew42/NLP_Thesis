@@ -565,6 +565,7 @@ def _derive_sentence_batch(
         authority,
         text_col="full_text",
         batch_size=max(cfg.token_length_batch_size, 1),
+        bucket_edges=cfg.bucket_edges,
     )
     return sentence_df.rename({"full_text": "sentence_text"}), split_audit_df
 

@@ -276,7 +276,7 @@ def _semantic_preprocessing_guard(
     year_paths: list[Path],
 ) -> dict[str, Any]:
     return make_semantic_reuse_guard(
-        version="sentence_preprocessing_v3",
+        version="sentence_preprocessing_v4",
         payload=_semantic_preprocessing_payload(run_cfg, authority, segment_policy_id),
         fingerprints={
             "accepted_universe_contract_fingerprint": _accepted_universe_contract_fingerprint(run_cfg),

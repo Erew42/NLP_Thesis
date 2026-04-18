@@ -19,10 +19,13 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
   "pytest",
+  "hypothesis",
   "PyYAML",
   "matplotlib",
+  "reportlab",
 ]
 benchmark = [
+  "matplotlib",
   "spacy",
   "torch",
   "transformers",

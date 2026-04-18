@@ -5,10 +5,13 @@ from thesis_pkg.benchmarking.contracts import BenchmarkItemSpec
 from thesis_pkg.benchmarking.contracts import BenchmarkSampleSpec
 from thesis_pkg.benchmarking.contracts import ALLOWED_SENTENCE_POSTPROCESS_POLICIES
 from thesis_pkg.benchmarking.contracts import BucketBatchConfig
+from thesis_pkg.benchmarking.contracts import BucketEdgeSpec
 from thesis_pkg.benchmarking.contracts import BucketLengthSpec
+from thesis_pkg.benchmarking.contracts import DEFAULT_BUCKET_EDGE_SPEC
 from thesis_pkg.benchmarking.contracts import DEFAULT_FINBERT_10K_ITEMS
 from thesis_pkg.benchmarking.contracts import DEFAULT_FINBERT_AUTHORITY
 from thesis_pkg.benchmarking.contracts import DEFAULT_RUNNER_SENTENCE_POSTPROCESS_POLICY
+from thesis_pkg.benchmarking.contracts import auto_bucket_lengths_for_edges
 from thesis_pkg.benchmarking.contracts import FinbertAnalysisRunArtifacts
 from thesis_pkg.benchmarking.contracts import FinbertAnalysisRunConfig
 from thesis_pkg.benchmarking.contracts import FinbertAuthoritySpec
@@ -25,6 +28,7 @@ from thesis_pkg.benchmarking.contracts import FinbertSectionUniverseConfig
 from thesis_pkg.benchmarking.contracts import FinbertTokenizerProfileRunArtifacts
 from thesis_pkg.benchmarking.contracts import FinbertTokenizerProfileRunConfig
 from thesis_pkg.benchmarking.contracts import ItemTextCleaningConfig
+from thesis_pkg.benchmarking.contracts import resolve_bucket_lengths_for_edges
 from thesis_pkg.benchmarking.contracts import SentenceDatasetConfig
 from thesis_pkg.benchmarking.contracts import StageRunsConfig
 from thesis_pkg.benchmarking.finbert_analysis import run_finbert_item_analysis
@@ -61,7 +65,9 @@ __all__ = [
     "BenchmarkSampleSpec",
     "ALLOWED_SENTENCE_POSTPROCESS_POLICIES",
     "BucketBatchConfig",
+    "BucketEdgeSpec",
     "BucketLengthSpec",
+    "DEFAULT_BUCKET_EDGE_SPEC",
     "DEFAULT_FINBERT_10K_ITEMS",
     "DEFAULT_FINBERT_AUTHORITY",
     "DEFAULT_RUNNER_SENTENCE_POSTPROCESS_POLICY",
@@ -83,6 +89,7 @@ __all__ = [
     "ItemTextCleaningConfig",
     "SentenceDatasetConfig",
     "StageRunsConfig",
+    "auto_bucket_lengths_for_edges",
     "annotate_finbert_token_lengths",
     "benchmark_full_pipeline",
     "benchmark_model_only",
@@ -102,6 +109,7 @@ __all__ = [
     "load_finbert_tokenizer",
     "materialize_sentence_benchmark_dataset",
     "resolve_finbert_label_mapping",
+    "resolve_bucket_lengths_for_edges",
     "run_finbert_benchmark",
     "run_finbert_benchmark_sweep",
     "run_finbert_item_analysis",

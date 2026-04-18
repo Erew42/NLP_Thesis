@@ -395,7 +395,7 @@ def test_build_finbert_benchmark_suite_records_sentence_dataset_artifact_when_en
     assert manifest["spec_version"] == "1.2"
     assert manifest["path_semantics"] == "manifest_relative_v1"
     assert manifest["artifacts"]["sentences_path"] == "derived/finbert_10k_item_sentences.parquet"
-    assert manifest["sentence_universe_contract"]["contract_version"] == "sentence_universe_contract_v2"
+    assert manifest["sentence_universe_contract"]["contract_version"] == "sentence_universe_contract_v3"
     assert "temp_root" not in manifest["builder_execution"]
     assert manifest["nonportable_diagnostics"]["builder_execution"]["temp_root"].endswith(
         ".tmp_finbert_build_seed42"
@@ -408,6 +408,11 @@ def test_build_finbert_benchmark_suite_records_sentence_dataset_artifact_when_en
         "token_length_batch_size": 1024,
         "drop_blank_sentences": True,
         "compression": "lz4",
+        "postprocess_policy": "none",
+        "bucket_edges": {
+            "short_edge": 128,
+            "medium_edge": 256,
+        },
     }
 
 

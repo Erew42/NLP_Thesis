@@ -96,7 +96,7 @@ def sentence_universe_contract_payload(
     section_universe_contract: dict[str, Any],
 ) -> dict[str, Any]:
     return {
-        "contract_version": "sentence_universe_contract_v2",
+        "contract_version": "sentence_universe_contract_v3",
         "sentence_dataset_config": asdict(cfg.sentence_dataset),
         "section_universe_contract_fingerprint": json_sha256(section_universe_contract),
         "sections_dataset_fingerprint": semantic_file_fingerprint(sections_path),

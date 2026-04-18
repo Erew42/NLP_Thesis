@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from dataclasses import field
 from pathlib import Path
 
+DEFAULT_FINBERT_TOKEN_COUNT_MAX_LENGTH = 512
+
 
 def _normalize_year_filter(
     year_filter: tuple[int, ...] | None,
@@ -58,17 +60,33 @@ class FinbertAuthoritySpec:
     tokenizer_class_name: str = "BertTokenizer"
     model_class_name: str = "BertForSequenceClassification"
     do_lower_case: bool = True
-    token_count_max_length: int = 512
+    token_count_max_length: int = DEFAULT_FINBERT_TOKEN_COUNT_MAX_LENGTH
     token_bucket_edges: tuple[int, int] = (128, 256)
 
     def __post_init__(self) -> None:
-        if self.token_count_max_length != 512:
+        if self.token_count_max_length != DEFAULT_FINBERT_TOKEN_COUNT_MAX_LENGTH:
             raise ValueError("The benchmark dataset definition is fixed at the 512-token authority level.")
         if self.token_bucket_edges != (128, 256):
             raise ValueError("The benchmark dataset token buckets are fixed at 128/256/512.")
 
 
 DEFAULT_FINBERT_AUTHORITY = FinbertAuthoritySpec()
+
+
+@dataclass(frozen=True)
+class BucketEdgeSpec:
+    short_edge: int = 128
+    medium_edge: int = 256
+
+    def __post_init__(self) -> None:
+        if not (0 < self.short_edge <= self.medium_edge <= DEFAULT_FINBERT_TOKEN_COUNT_MAX_LENGTH):
+            raise ValueError(
+                "Bucket edges must satisfy "
+                f"0 < short <= medium <= {DEFAULT_FINBERT_TOKEN_COUNT_MAX_LENGTH}."
+            )
+
+
+DEFAULT_BUCKET_EDGE_SPEC = BucketEdgeSpec()
 
 ALLOWED_SENTENCE_POSTPROCESS_POLICIES: tuple[str, ...] = (
     "none",
@@ -146,6 +164,7 @@ class SentenceDatasetConfig:
     enabled: bool = False
     sentencizer_backend: str = "spacy_blank_en_sentencizer"
     postprocess_policy: str = "none"
+    bucket_edges: BucketEdgeSpec = field(default_factory=BucketEdgeSpec)
     spacy_batch_size: int = 32
     token_length_batch_size: int = 1024
     drop_blank_sentences: bool = True
@@ -223,11 +242,50 @@ class BenchmarkBuildArtifacts:
 class BucketLengthSpec:
     short_max_length: int = 128
     medium_max_length: int = 256
-    long_max_length: int = 512
+    long_max_length: int = DEFAULT_FINBERT_TOKEN_COUNT_MAX_LENGTH
 
     def __post_init__(self) -> None:
         if not (0 < self.short_max_length <= self.medium_max_length <= self.long_max_length):
             raise ValueError("Bucket max lengths must satisfy 0 < short <= medium <= long.")
+
+
+def auto_bucket_lengths_for_edges(
+    bucket_edges: BucketEdgeSpec,
+    *,
+    long_max_length: int = DEFAULT_FINBERT_TOKEN_COUNT_MAX_LENGTH,
+) -> BucketLengthSpec:
+    return BucketLengthSpec(
+        short_max_length=bucket_edges.short_edge,
+        medium_max_length=bucket_edges.medium_edge,
+        long_max_length=long_max_length,
+    )
+
+
+def resolve_bucket_lengths_for_edges(
+    *,
+    bucket_edges: BucketEdgeSpec,
+    short_max_length: int | None,
+    medium_max_length: int | None,
+    long_max_length: int | None,
+) -> BucketLengthSpec:
+    base_edges = DEFAULT_BUCKET_EDGE_SPEC
+    base_lengths = BucketLengthSpec()
+    auto_lengths = (
+        auto_bucket_lengths_for_edges(bucket_edges)
+        if bucket_edges != base_edges
+        else base_lengths
+    )
+    return BucketLengthSpec(
+        short_max_length=(
+            short_max_length if short_max_length is not None else auto_lengths.short_max_length
+        ),
+        medium_max_length=(
+            medium_max_length if medium_max_length is not None else auto_lengths.medium_max_length
+        ),
+        long_max_length=(
+            long_max_length if long_max_length is not None else auto_lengths.long_max_length
+        ),
+    )
 
 
 @dataclass(frozen=True)

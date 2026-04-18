@@ -4,6 +4,7 @@ from pathlib import Path
 
 import polars as pl
 
+from thesis_pkg.benchmarking.contracts import BucketEdgeSpec
 from thesis_pkg.benchmarking.contracts import DEFAULT_FINBERT_AUTHORITY
 from thesis_pkg.benchmarking.token_lengths import annotate_finbert_token_lengths
 from thesis_pkg.benchmarking.token_lengths import annotate_finbert_token_lengths_in_batches
@@ -48,6 +49,24 @@ def test_annotate_finbert_token_lengths_uses_fixed_512_schema(monkeypatch) -> No
 
     assert result.columns == ["full_text", "finbert_token_count_512", "finbert_token_bucket_512"]
     assert result["finbert_token_bucket_512"].to_list() == ["short", "long"]
+
+
+def test_annotate_finbert_token_lengths_accepts_custom_bucket_edges(monkeypatch) -> None:
+    from thesis_pkg.benchmarking import token_lengths
+
+    monkeypatch.setattr(
+        token_lengths,
+        "compute_finbert_token_lengths",
+        lambda texts, authority: [64 if "short" in text else 120 for text in texts],
+    )
+    df = pl.DataFrame({"full_text": ["short text", "medium text"]})
+    result = annotate_finbert_token_lengths(
+        df,
+        DEFAULT_FINBERT_AUTHORITY,
+        bucket_edges=BucketEdgeSpec(short_edge=64, medium_edge=128),
+    )
+
+    assert result["finbert_token_bucket_512"].to_list() == ["short", "medium"]
 
 
 def test_annotate_finbert_token_lengths_in_batches_preserves_row_order(monkeypatch) -> None:

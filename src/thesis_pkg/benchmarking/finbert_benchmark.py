@@ -15,10 +15,12 @@ import polars as pl
 from thesis_pkg.benchmarking.contracts import BucketBatchConfig
 from thesis_pkg.benchmarking.contracts import BucketLengthSpec
 from thesis_pkg.benchmarking.contracts import DEFAULT_FINBERT_AUTHORITY
+from thesis_pkg.benchmarking.contracts import DEFAULT_BUCKET_EDGE_SPEC
 from thesis_pkg.benchmarking.contracts import FinbertAuthoritySpec
 from thesis_pkg.benchmarking.contracts import FinbertBenchmarkRunArtifacts
 from thesis_pkg.benchmarking.contracts import FinbertBenchmarkRunConfig
 from thesis_pkg.benchmarking.contracts import FinbertRuntimeConfig
+from thesis_pkg.benchmarking.contracts import SentenceDatasetConfig
 from thesis_pkg.benchmarking.manifest_contracts import json_sha256
 from thesis_pkg.benchmarking.manifest_contracts import MANIFEST_PATH_SEMANTICS_RELATIVE
 from thesis_pkg.benchmarking.manifest_contracts import resolve_manifest_path
@@ -162,8 +164,28 @@ def _validated_sentence_universe_contract(
     sections_path = manifest_diagnostics["_sections_path_resolved"]
     registered_sentences_path = manifest_diagnostics.get("_registered_sentences_path_resolved")
     declared_contract_version = declared.get("contract_version")
+    declared_sentence_dataset_config = declared.get("sentence_dataset_config")
+    if declared_contract_version in {
+        "sentence_universe_contract_v1",
+        "sentence_universe_contract_v2",
+    } and isinstance(
+        declared_sentence_dataset_config,
+        dict,
+    ):
+        default_sentence_dataset_config = asdict(SentenceDatasetConfig())
+        declared_sentence_dataset_config = {
+            **default_sentence_dataset_config,
+            **declared_sentence_dataset_config,
+            "bucket_edges": declared_sentence_dataset_config.get(
+                "bucket_edges",
+                {
+                    "short_edge": DEFAULT_BUCKET_EDGE_SPEC.short_edge,
+                    "medium_edge": DEFAULT_BUCKET_EDGE_SPEC.medium_edge,
+                },
+            ),
+        }
     recomputed = {
-        "contract_version": "sentence_universe_contract_v2",
+        "contract_version": "sentence_universe_contract_v3",
         "sentence_dataset_config": asdict(run_cfg.sentence_dataset),
         "section_universe_contract_fingerprint": declared.get("section_universe_contract_fingerprint"),
         "sections_dataset_fingerprint": semantic_file_fingerprint(sections_path),
@@ -177,9 +199,12 @@ def _validated_sentence_universe_contract(
     if not declared:
         mismatches.append("missing_contract")
     else:
-        if declared.get("sentence_dataset_config") != recomputed["sentence_dataset_config"]:
+        if declared_sentence_dataset_config != recomputed["sentence_dataset_config"]:
             mismatches.append("sentence_dataset_config")
-        if declared_contract_version == "sentence_universe_contract_v2":
+        if declared_contract_version in {
+            "sentence_universe_contract_v2",
+            "sentence_universe_contract_v3",
+        }:
             if declared.get("sections_dataset_fingerprint") != recomputed["sections_dataset_fingerprint"]:
                 mismatches.append("sections_dataset_fingerprint")
             if manifest_diagnostics.get("registered_sentences_available"):
@@ -188,6 +213,8 @@ def _validated_sentence_universe_contract(
                     != recomputed["precomputed_sentences_fingerprint"]
                 ):
                     mismatches.append("precomputed_sentences_fingerprint")
+        elif declared_contract_version not in {None, "sentence_universe_contract_v1"}:
+            mismatches.append("contract_version")
     recomputed["sentence_universe_contract_fingerprint"] = json_sha256(recomputed)
     recomputed["declared_contract_version"] = declared_contract_version
     recomputed["sentence_universe_comparable"] = not mismatches

@@ -5,6 +5,7 @@ from typing import Sequence
 
 import polars as pl
 
+from thesis_pkg.benchmarking.contracts import BucketEdgeSpec
 from thesis_pkg.benchmarking.contracts import FinbertAuthoritySpec
 
 
@@ -35,8 +36,25 @@ def load_finbert_tokenizer(authority: FinbertAuthoritySpec):
     )
 
 
-def assign_finbert_token_bucket(token_count: int, authority: FinbertAuthoritySpec) -> str:
+def _resolved_bucket_edges(
+    authority: FinbertAuthoritySpec,
+    bucket_edges: BucketEdgeSpec | None,
+) -> BucketEdgeSpec:
+    if bucket_edges is not None:
+        return bucket_edges
     short_edge, medium_edge = authority.token_bucket_edges
+    return BucketEdgeSpec(short_edge=short_edge, medium_edge=medium_edge)
+
+
+def assign_finbert_token_bucket(
+    token_count: int,
+    authority: FinbertAuthoritySpec,
+    *,
+    bucket_edges: BucketEdgeSpec | None = None,
+) -> str:
+    resolved_bucket_edges = _resolved_bucket_edges(authority, bucket_edges)
+    short_edge = resolved_bucket_edges.short_edge
+    medium_edge = resolved_bucket_edges.medium_edge
     if token_count <= short_edge:
         return "short"
     if token_count <= medium_edge:
@@ -70,9 +88,13 @@ def annotate_finbert_token_lengths(
     authority: FinbertAuthoritySpec,
     *,
     text_col: str = "full_text",
+    bucket_edges: BucketEdgeSpec | None = None,
 ) -> pl.DataFrame:
     token_counts = compute_finbert_token_lengths(df[text_col].to_list(), authority)
-    token_buckets = [assign_finbert_token_bucket(count, authority) for count in token_counts]
+    token_buckets = [
+        assign_finbert_token_bucket(count, authority, bucket_edges=bucket_edges)
+        for count in token_counts
+    ]
     return df.with_columns(
         [
             pl.Series(FINBERT_TOKEN_COUNT_COLUMN, token_counts, dtype=pl.Int32),
@@ -87,14 +109,27 @@ def annotate_finbert_token_lengths_in_batches(
     *,
     text_col: str = "full_text",
     batch_size: int = 1024,
+    bucket_edges: BucketEdgeSpec | None = None,
 ) -> pl.DataFrame:
     if batch_size <= 0:
         raise ValueError("batch_size must be a positive integer.")
     if df.is_empty():
-        return annotate_finbert_token_lengths(df, authority, text_col=text_col)
+        return annotate_finbert_token_lengths(
+            df,
+            authority,
+            text_col=text_col,
+            bucket_edges=bucket_edges,
+        )
 
     chunks: list[pl.DataFrame] = []
     for offset in range(0, df.height, batch_size):
         chunk = df.slice(offset, batch_size)
-        chunks.append(annotate_finbert_token_lengths(chunk, authority, text_col=text_col))
+        chunks.append(
+            annotate_finbert_token_lengths(
+                chunk,
+                authority,
+                text_col=text_col,
+                bucket_edges=bucket_edges,
+            )
+        )
     return pl.concat(chunks, how="vertical_relaxed")

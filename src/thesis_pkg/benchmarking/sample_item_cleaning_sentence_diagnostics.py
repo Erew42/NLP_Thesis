@@ -349,12 +349,15 @@ def _summary_payload(
         "sentence_dataset": {
             "sentencizer_backend": cfg.sentence_dataset.sentencizer_backend,
             "postprocess_policy": cfg.sentence_dataset.postprocess_policy,
+            "bucket_edges": {
+                "short_edge": cfg.sentence_dataset.bucket_edges.short_edge,
+                "medium_edge": cfg.sentence_dataset.bucket_edges.medium_edge,
+            },
             "segment_policy_id": build_segment_policy_id(cfg.sentence_dataset, cfg.cleaning, cfg.authority),
         },
         "authority": {
             "model_name": cfg.authority.model_name,
             "token_count_max_length": cfg.authority.token_count_max_length,
-            "token_bucket_edges": list(cfg.authority.token_bucket_edges),
         },
         "counts": {
             "sample_item_rows": int(sample_sections_df.height),

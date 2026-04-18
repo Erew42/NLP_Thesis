@@ -422,27 +422,30 @@ def _resolve_finbert_batch_config(
 
 def _resolve_finbert_bucket_lengths(
     *,
+    bucket_edges: BucketEdgeSpec,
     short_max_length: int | None,
     medium_max_length: int | None,
     long_max_length: int | None,
 ) -> BucketLengthSpec:
-    base = BucketLengthSpec()
-    if (
-        short_max_length is None
-        and medium_max_length is None
-        and long_max_length is None
-    ):
+    return resolve_bucket_lengths_for_edges(
+        bucket_edges=bucket_edges,
+        short_max_length=short_max_length,
+        medium_max_length=medium_max_length,
+        long_max_length=long_max_length,
+    )
+
+
+def _resolve_finbert_bucket_edges(
+    *,
+    short_edge: int | None,
+    medium_edge: int | None,
+) -> BucketEdgeSpec:
+    base = BucketEdgeSpec()
+    if short_edge is None and medium_edge is None:
         return base
-    return BucketLengthSpec(
-        short_max_length=(
-            short_max_length if short_max_length is not None else base.short_max_length
-        ),
-        medium_max_length=(
-            medium_max_length if medium_max_length is not None else base.medium_max_length
-        ),
-        long_max_length=(
-            long_max_length if long_max_length is not None else base.long_max_length
-        ),
+    return BucketEdgeSpec(
+        short_edge=short_edge if short_edge is not None else base.short_edge,
+        medium_edge=medium_edge if medium_edge is not None else base.medium_edge,
     )
 
 
@@ -454,6 +457,7 @@ if SRC.exists() and str(SRC) not in sys.path:
 import polars as pl
 
 from thesis_pkg.benchmarking import BucketBatchConfig
+from thesis_pkg.benchmarking import BucketEdgeSpec
 from thesis_pkg.benchmarking import BucketLengthSpec
 from thesis_pkg.benchmarking import DEFAULT_RUNNER_SENTENCE_POSTPROCESS_POLICY
 from thesis_pkg.benchmarking import FinbertAnalysisRunConfig
@@ -461,6 +465,7 @@ from thesis_pkg.benchmarking import FinbertSectionUniverseConfig
 from thesis_pkg.benchmarking import FinbertRuntimeConfig
 from thesis_pkg.benchmarking import FinbertSentencePreprocessingRunConfig
 from thesis_pkg.benchmarking import SentenceDatasetConfig
+from thesis_pkg.benchmarking import resolve_bucket_lengths_for_edges
 from thesis_pkg.core.sec.lm2011_dictionary import HARVARD_NEGATIVE_WORD_LIST_FILE
 from thesis_pkg.core.sec.lm2011_dictionary import LM2011_OPERATIVE_WORD_LIST_FILES
 from thesis_pkg.core.sec.lm2011_dictionary import MASTER_DICTIONARY_CANDIDATES
@@ -1236,10 +1241,17 @@ def main() -> None:
     )
     FINBERT_OVERWRITE = _env_bool("SEC_CCM_FINBERT_OVERWRITE", False)
     FINBERT_NOTE = _env_str("SEC_CCM_FINBERT_NOTE", "")
+    # Batch profiles come from finbert_item_analysis_runner.BATCH_PRESETS:
+    # small=32/16/8, baseline=64/32/16, large=128/64/32, xlarge=256/128/64.
+    # Bucket edges default to 128/256. When edge overrides are provided without explicit
+    # max_length overrides, short/medium effective max_length values auto-match the new
+    # edges while the long bucket stays at 512.
     FINBERT_BATCH_PROFILE = _env_str("SEC_CCM_FINBERT_BATCH_PROFILE", "baseline")
     FINBERT_SHORT_BATCH_SIZE = _env_optional_int("SEC_CCM_FINBERT_SHORT_BATCH_SIZE", None)
     FINBERT_MEDIUM_BATCH_SIZE = _env_optional_int("SEC_CCM_FINBERT_MEDIUM_BATCH_SIZE", None)
     FINBERT_LONG_BATCH_SIZE = _env_optional_int("SEC_CCM_FINBERT_LONG_BATCH_SIZE", None)
+    FINBERT_SHORT_EDGE = _env_optional_int("SEC_CCM_FINBERT_SHORT_EDGE", None)
+    FINBERT_MEDIUM_EDGE = _env_optional_int("SEC_CCM_FINBERT_MEDIUM_EDGE", None)
     FINBERT_SHORT_MAX_LENGTH = _env_optional_int("SEC_CCM_FINBERT_SHORT_MAX_LENGTH", None)
     FINBERT_MEDIUM_MAX_LENGTH = _env_optional_int("SEC_CCM_FINBERT_MEDIUM_MAX_LENGTH", None)
     FINBERT_LONG_MAX_LENGTH = _env_optional_int("SEC_CCM_FINBERT_LONG_MAX_LENGTH", None)
@@ -1249,7 +1261,12 @@ def main() -> None:
         medium_batch_size=FINBERT_MEDIUM_BATCH_SIZE,
         long_batch_size=FINBERT_LONG_BATCH_SIZE,
     )
+    FINBERT_BUCKET_EDGES = _resolve_finbert_bucket_edges(
+        short_edge=FINBERT_SHORT_EDGE,
+        medium_edge=FINBERT_MEDIUM_EDGE,
+    )
     FINBERT_BUCKET_LENGTHS = _resolve_finbert_bucket_lengths(
+        bucket_edges=FINBERT_BUCKET_EDGES,
         short_max_length=FINBERT_SHORT_MAX_LENGTH,
         medium_max_length=FINBERT_MEDIUM_MAX_LENGTH,
         long_max_length=FINBERT_LONG_MAX_LENGTH,
@@ -1396,6 +1413,10 @@ def main() -> None:
                 "short": FINBERT_BATCH_CONFIG.short_batch_size,
                 "medium": FINBERT_BATCH_CONFIG.medium_batch_size,
                 "long": FINBERT_BATCH_CONFIG.long_batch_size,
+            },
+            "FINBERT_BUCKET_EDGES": {
+                "short": FINBERT_BUCKET_EDGES.short_edge,
+                "medium": FINBERT_BUCKET_EDGES.medium_edge,
             },
             "FINBERT_BUCKET_LENGTHS": {
                 "short": FINBERT_BUCKET_LENGTHS.short_max_length,
@@ -2884,6 +2905,7 @@ def main() -> None:
             runtime=FinbertRuntimeConfig(device=FINBERT_DEVICE),
             sentence_dataset=SentenceDatasetConfig(
                 postprocess_policy=FINBERT_SENTENCE_POSTPROCESS_POLICY,
+                bucket_edges=FINBERT_BUCKET_EDGES,
             ),
             backbone_path=finbert_backbone_path,
             year_filter=finbert_year_filter,

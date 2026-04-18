@@ -19,6 +19,7 @@ def test_build_segment_policy_id_includes_sentence_postprocess_policy() -> None:
     )
 
     assert "__post_item7_reference_stitch_protect_v1__" in segment_policy_id
+    assert "__bucket128_256__" in segment_policy_id
 
 
 def test_clean_item_text_removes_layout_artifacts_but_preserves_inline_references() -> None:

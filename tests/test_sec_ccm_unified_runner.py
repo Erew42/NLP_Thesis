@@ -904,6 +904,41 @@ def test_resolve_finbert_batch_config_prefers_raw_overrides() -> None:
     assert batch_cfg.long_batch_size == 3
 
 
+def test_resolve_finbert_bucket_edges_and_lengths_auto_match() -> None:
+    bucket_edges = runner._resolve_finbert_bucket_edges(
+        short_edge=64,
+        medium_edge=128,
+    )
+    bucket_lengths = runner._resolve_finbert_bucket_lengths(
+        bucket_edges=bucket_edges,
+        short_max_length=None,
+        medium_max_length=None,
+        long_max_length=None,
+    )
+
+    assert bucket_edges.short_edge == 64
+    assert bucket_edges.medium_edge == 128
+    assert bucket_lengths.short_max_length == 64
+    assert bucket_lengths.medium_max_length == 128
+    assert bucket_lengths.long_max_length == 512
+
+
+def test_resolve_finbert_bucket_lengths_prefers_explicit_overrides() -> None:
+    bucket_lengths = runner._resolve_finbert_bucket_lengths(
+        bucket_edges=runner._resolve_finbert_bucket_edges(
+            short_edge=64,
+            medium_edge=128,
+        ),
+        short_max_length=80,
+        medium_max_length=None,
+        long_max_length=400,
+    )
+
+    assert bucket_lengths.short_max_length == 80
+    assert bucket_lengths.medium_max_length == 128
+    assert bucket_lengths.long_max_length == 400
+
+
 def test_main_runs_downstream_pipelines_and_indexes_manifests(
     monkeypatch: MonkeyPatch,
     tmp_path: Path,
@@ -928,6 +963,8 @@ def test_main_runs_downstream_pipelines_and_indexes_manifests(
     monkeypatch.setenv("SEC_CCM_RUN_LM2011_POST_REFINITIV", "true")
     monkeypatch.setenv("SEC_CCM_RUN_FINBERT", "true")
     monkeypatch.setenv("SEC_CCM_FINBERT_SHORT_BATCH_SIZE", "5")
+    monkeypatch.setenv("SEC_CCM_FINBERT_SHORT_EDGE", "64")
+    monkeypatch.setenv("SEC_CCM_FINBERT_MEDIUM_EDGE", "128")
     monkeypatch.setenv("SEC_CCM_FINBERT_RUN_NAME", "shared_finbert")
     monkeypatch.setenv("SEC_CCM_FINBERT_SENTENCE_POSTPROCESS_POLICY", "none")
 
@@ -979,6 +1016,10 @@ def test_main_runs_downstream_pipelines_and_indexes_manifests(
     assert "ff_factors_monthly_with_mom_normalized" not in lm2011_run_cfg.enabled_stages
     assert lm2011_run_cfg.paths.local_work_root == (paths["root"] / "local_work" / "lm2011_post_refinitiv")
     assert finbert_analysis_cfg.batch_config.short_batch_size == 5
+    assert finbert_analysis_cfg.sentence_dataset.bucket_edges.short_edge == 64
+    assert finbert_analysis_cfg.sentence_dataset.bucket_edges.medium_edge == 128
+    assert finbert_analysis_cfg.bucket_lengths.short_max_length == 64
+    assert finbert_analysis_cfg.bucket_lengths.medium_max_length == 128
     assert finbert_analysis_cfg.sentence_dataset.postprocess_policy == "none"
     assert finbert_analysis_cfg.year_filter == runner.LOCAL_SAMPLE_FINBERT_YEARS
     assert captured["finbert_kwargs"] == {"preprocessing_cfg": None, "run_preprocess": True, "run_analysis": True}

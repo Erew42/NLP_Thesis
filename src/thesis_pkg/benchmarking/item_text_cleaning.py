@@ -269,6 +269,7 @@ def build_segment_policy_id(
     return (
         f"{sentence_cfg.sentencizer_backend}"
         f"__post_{sentence_cfg.postprocess_policy}"
+        f"__bucket{sentence_cfg.bucket_edges.short_edge}_{sentence_cfg.bucket_edges.medium_edge}"
         f"__clean_{cleaning_policy}"
         "__heading_none"
         f"__maxpos{authority.token_count_max_length}"

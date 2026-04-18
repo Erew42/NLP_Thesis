@@ -59,10 +59,12 @@ from thesis_pkg.benchmarking import FinbertSentencePreprocessingRunArtifacts
 from thesis_pkg.benchmarking import FinbertSectionUniverseConfig
 from thesis_pkg.benchmarking import FinbertRuntimeConfig
 from thesis_pkg.benchmarking import ALLOWED_SENTENCE_POSTPROCESS_POLICIES
+from thesis_pkg.benchmarking import BucketEdgeSpec
 from thesis_pkg.benchmarking import DEFAULT_RUNNER_SENTENCE_POSTPROCESS_POLICY
 from thesis_pkg.benchmarking import SentenceDatasetConfig
 from thesis_pkg.benchmarking import run_finbert_sentence_parquet_inference
 from thesis_pkg.benchmarking import run_finbert_sentence_preprocessing
+from thesis_pkg.benchmarking import resolve_bucket_lengths_for_edges
 from thesis_pkg.benchmarking.run_logging import utc_timestamp
 
 
@@ -100,8 +102,23 @@ BATCH_PRESETS: dict[str, BucketBatchConfig] = {
     "small": BucketBatchConfig(name="small", short_batch_size=32, medium_batch_size=16, long_batch_size=8),
     "baseline": BucketBatchConfig(name="baseline", short_batch_size=64, medium_batch_size=32, long_batch_size=16),
     "large": BucketBatchConfig(name="large", short_batch_size=128, medium_batch_size=64, long_batch_size=32),
+    "xlarge": BucketBatchConfig(name="xlarge", short_batch_size=256, medium_batch_size=128, long_batch_size=64),
 }
 ANALYSIS_RUNNER_NAME = "finbert_item_analysis"
+
+
+def _resolve_bucket_edges(
+    *,
+    short_edge: int | None,
+    medium_edge: int | None,
+) -> BucketEdgeSpec:
+    base = BucketEdgeSpec()
+    if short_edge is None and medium_edge is None:
+        return base
+    return BucketEdgeSpec(
+        short_edge=short_edge if short_edge is not None else base.short_edge,
+        medium_edge=medium_edge if medium_edge is not None else base.medium_edge,
+    )
 
 
 def _default_local_sample_backbone_path() -> Path:
@@ -135,6 +152,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         choices=ALLOWED_SENTENCE_POSTPROCESS_POLICIES,
         default=DEFAULT_RUNNER_SENTENCE_POSTPROCESS_POLICY,
     )
+    parser.add_argument("--short-edge", type=int, default=None)
+    parser.add_argument("--medium-edge", type=int, default=None)
     parser.add_argument("--device", type=str, default=None)
     parser.add_argument("--write-sentence-scores", action="store_true")
     parser.add_argument(
@@ -170,14 +189,25 @@ def _resolve_run_config(args: argparse.Namespace) -> FinbertAnalysisRunConfig:
     if args.output_dir is not None and args.data_profile == "LOCAL_SAMPLE":
         output_dir = Path(args.output_dir).resolve()
 
+    bucket_edges = _resolve_bucket_edges(
+        short_edge=args.short_edge,
+        medium_edge=args.medium_edge,
+    )
     return FinbertAnalysisRunConfig(
         source_items_dir=source_items_dir,
         out_root=output_dir,
         batch_config=BATCH_PRESETS[args.batch_profile],
+        bucket_lengths=resolve_bucket_lengths_for_edges(
+            bucket_edges=bucket_edges,
+            short_max_length=None,
+            medium_max_length=None,
+            long_max_length=None,
+        ),
         section_universe=FinbertSectionUniverseConfig(source_items_dir=source_items_dir),
         runtime=FinbertRuntimeConfig(device=args.device),
         sentence_dataset=SentenceDatasetConfig(
             postprocess_policy=args.sentence_postprocess_policy,
+            bucket_edges=bucket_edges,
         ),
         backbone_path=backbone_path,
         year_filter=year_filter,
