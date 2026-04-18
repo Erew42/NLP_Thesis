@@ -549,7 +549,21 @@ def _configure_minimal_main_env(monkeypatch: MonkeyPatch, tmp_path: Path) -> dic
     ccm_daily_phase_b_surface_path = root / "ccm_phase_b_surface.parquet"
     ccm_daily_bridge_surface_path = root / "ccm_bridge_surface.parquet"
     canonical_link_path = root / "canonical_link.parquet"
-    pl.DataFrame({"dummy": [1]}).write_parquet(ccm_daily_path)
+    pl.DataFrame(
+        {
+            "KYPERMNO": [1],
+            "CALDT": [runner.dt.date(1995, 1, 3)],
+            "FINAL_RET": [0.01],
+            "RET": [0.01],
+            "FINAL_PRC": [10.0],
+            "PRC": [10.0],
+            "VOL": [1000.0],
+            "SHROUT": [100.0],
+            "SHRCD": [10],
+            "EXCHCD": [1],
+            "data_status": [0],
+        }
+    ).write_parquet(ccm_daily_path)
     pl.DataFrame({"CALDT": [runner.dt.date(1995, 1, 3)]}).write_parquet(ccm_daily_market_core_path)
     pl.DataFrame(
         {"KYPERMNO": [1], "CALDT": [runner.dt.date(1995, 1, 3)]}
@@ -590,6 +604,7 @@ def _configure_minimal_main_env(monkeypatch: MonkeyPatch, tmp_path: Path) -> dic
         "root": root,
         "run_root": run_root,
         "ccm_base_dir": ccm_base_dir,
+        "ccm_daily_path": ccm_daily_path,
         "refinitiv_step1_dir": refinitiv_step1_dir,
         "analyst_dir": analyst_dir,
         "sec_year_merged_dir": sec_year_merged_dir,
@@ -1180,3 +1195,90 @@ def test_main_lm2011_contract_env_override_wins(monkeypatch: MonkeyPatch, tmp_pa
     assert lm2011_run_cfg.paths.mda_text_feature_batch_size == 7
     assert lm2011_run_cfg.paths.event_window_doc_batch_size == 9
     assert lm2011_run_cfg.paths.local_work_root == (paths["root"] / "local_work" / "lm2011_post_refinitiv")
+
+
+def test_main_lm2011_defaults_daily_panel_to_ccm_daily_path(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    paths = _configure_minimal_main_env(monkeypatch, tmp_path)
+    items_analysis_dir = paths["run_root"] / "items_analysis"
+    items_analysis_dir.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame({"doc_id": ["0000000001:1995000001"]}).write_parquet(items_analysis_dir / "1995.parquet")
+    doc_ownership_dir = paths["run_root"] / "refinitiv_doc_ownership_lm2011"
+    doc_ownership_dir.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame({"doc_id": ["0000000001:1995000001"]}).write_parquet(
+        doc_ownership_dir / "refinitiv_lm2011_doc_ownership.parquet"
+    )
+    doc_analyst_dir = paths["run_root"] / "refinitiv_doc_analyst_lm2011"
+    doc_analyst_dir.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame({"doc_id": ["0000000001:1995000001"]}).write_parquet(
+        doc_analyst_dir / "refinitiv_doc_analyst_selected.parquet"
+    )
+    sec_ccm_output_dir = paths["run_root"] / "sec_ccm_premerge"
+    sec_ccm_output_dir.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame(
+        {
+            "doc_id": ["0000000001:1995000001"],
+            "filing_date": [runner.dt.date(1995, 1, 31)],
+            "aligned_caldt": [runner.dt.date(1995, 1, 31)],
+            "kypermno": [1],
+        }
+    ).write_parquet(sec_ccm_output_dir / "final_flagged_data.parquet")
+
+    monkeypatch.setenv("SEC_CCM_RUN_LM2011_POST_REFINITIV", "true")
+    monkeypatch.setenv("SEC_CCM_RUN_FINBERT", "false")
+
+    captured: dict[str, object] = {}
+
+    def _lm2011_stub(run_cfg):
+        captured["run_cfg"] = run_cfg
+        return 0
+
+    monkeypatch.setattr(runner, "run_lm2011_post_refinitiv_pipeline", _lm2011_stub)
+
+    runner.main()
+
+    lm2011_run_cfg = captured["run_cfg"]
+    assert lm2011_run_cfg.paths.daily_panel_path == paths["ccm_daily_path"]
+
+
+def test_main_lm2011_daily_panel_override_fails_fast_when_not_daily_panel(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    paths = _configure_minimal_main_env(monkeypatch, tmp_path)
+    items_analysis_dir = paths["run_root"] / "items_analysis"
+    items_analysis_dir.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame({"doc_id": ["0000000001:1995000001"]}).write_parquet(items_analysis_dir / "1995.parquet")
+    doc_ownership_dir = paths["run_root"] / "refinitiv_doc_ownership_lm2011"
+    doc_ownership_dir.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame({"doc_id": ["0000000001:1995000001"]}).write_parquet(
+        doc_ownership_dir / "refinitiv_lm2011_doc_ownership.parquet"
+    )
+    doc_analyst_dir = paths["run_root"] / "refinitiv_doc_analyst_lm2011"
+    doc_analyst_dir.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame({"doc_id": ["0000000001:1995000001"]}).write_parquet(
+        doc_analyst_dir / "refinitiv_doc_analyst_selected.parquet"
+    )
+    bad_daily_panel = tmp_path / "bad_daily_panel.parquet"
+    pl.DataFrame(
+        {
+            "doc_id": ["0000000001:1995000001"],
+            "filing_date": [runner.dt.date(1995, 1, 31)],
+            "aligned_caldt": [runner.dt.date(1995, 1, 31)],
+            "kypermno": [1],
+        }
+    ).write_parquet(bad_daily_panel)
+
+    monkeypatch.setenv("SEC_CCM_RUN_LM2011_POST_REFINITIV", "true")
+    monkeypatch.setenv("SEC_CCM_RUN_FINBERT", "false")
+    monkeypatch.setenv("SEC_CCM_LM2011_DAILY_PANEL_PATH", str(bad_daily_panel))
+    monkeypatch.setattr(
+        runner,
+        "run_lm2011_post_refinitiv_pipeline",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("LM2011 pipeline should not run")),
+    )
+
+    with pytest.raises(ValueError, match="LM2011 daily_panel_path must point to a CCM daily market panel parquet"):
+        runner.main()
