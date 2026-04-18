@@ -6,7 +6,7 @@ import gc
 import json
 import os
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
@@ -127,6 +127,60 @@ DEFAULT_LOCAL_WORK_ROOT = (
     if IN_COLAB
     else ROOT / ".tmp" / "lm2011_post_refinitiv"
 )
+
+
+def _env_value(name: str, *, env: Mapping[str, str] | None = None) -> str | None:
+    source = os.environ if env is None else env
+    return source.get(name)
+
+
+def _env_bool_from_mapping(
+    name: str,
+    default: bool,
+    *,
+    env: Mapping[str, str] | None = None,
+) -> bool:
+    value = _env_value(name, env=env)
+    if value is None:
+        return default
+    lowered = value.strip().lower()
+    if lowered in {"1", "true", "yes", "y", "on"}:
+        return True
+    if lowered in {"0", "false", "no", "n", "off"}:
+        return False
+    raise ValueError(f"Invalid boolean value for {name}: {value!r}")
+
+
+def _env_optional_bool_from_mapping(
+    name: str,
+    default: bool | None,
+    *,
+    env: Mapping[str, str] | None = None,
+) -> bool | None:
+    value = _env_value(name, env=env)
+    if value is None:
+        return default
+    lowered = value.strip().lower()
+    if lowered in {"", "auto", "none", "null"}:
+        return None
+    if lowered in {"1", "true", "yes", "y", "on"}:
+        return True
+    if lowered in {"0", "false", "no", "n", "off"}:
+        return False
+    raise ValueError(f"Invalid optional boolean value for {name}: {value!r}")
+
+
+def _resolve_stage_toggle_from_env(
+    env_name: str,
+    *,
+    umbrella_enabled: bool,
+    default_when_umbrella: bool,
+    env: Mapping[str, str] | None = None,
+) -> bool:
+    explicit = _env_optional_bool_from_mapping(env_name, None, env=env)
+    if explicit is not None:
+        return explicit
+    return umbrella_enabled and default_when_umbrella
 
 PARQUET_COMPRESSION = "zstd"
 YEAR_MERGED_GLOB = "*.parquet"
@@ -303,6 +357,36 @@ class LM2011PostRefinitivRunConfig:
             raise ValueError(f"Unknown LM2011 stage names: {unknown}")
 
 
+def resolve_lm2011_stage_flags_from_env(
+    env: Mapping[str, str] | None = None,
+) -> dict[str, bool]:
+    umbrella_enabled = _env_bool_from_mapping(
+        "SEC_CCM_RUN_LM2011_POST_REFINITIV",
+        False,
+        env=env,
+    )
+    return {
+        stage_name: _resolve_stage_toggle_from_env(
+            f"SEC_CCM_RUN_LM2011_{stage_name.upper()}",
+            umbrella_enabled=umbrella_enabled,
+            default_when_umbrella=stage_name not in LM2011_OPTIONAL_STAGE_DEFAULTS_FALSE,
+            env=env,
+        )
+        for stage_name in LM2011_ALL_STAGE_NAMES
+    }
+
+
+def resolve_enabled_lm2011_stage_names_from_env(
+    env: Mapping[str, str] | None = None,
+) -> tuple[str, ...]:
+    stage_flags = resolve_lm2011_stage_flags_from_env(env)
+    return tuple(
+        stage_name
+        for stage_name in LM2011_ALL_STAGE_NAMES
+        if stage_flags[stage_name]
+    )
+
+
 @dataclass(frozen=True)
 class LM2011ExtensionRunConfig:
     output_dir: Path
@@ -360,6 +444,24 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--daily-panel-path", type=Path, default=None)
     parser.add_argument("--items-analysis-dir", type=Path, default=None)
     parser.add_argument("--ccm-base-dir", type=Path, default=None)
+    parser.add_argument(
+        "--doc-ownership-path",
+        type=Path,
+        default=None,
+        help=(
+            "Optional finalized LM2011 document-ownership parquet. If omitted, the runner "
+            "uses <upstream-run-root>/refinitiv_doc_ownership_lm2011/refinitiv_lm2011_doc_ownership.parquet."
+        ),
+    )
+    parser.add_argument(
+        "--doc-analyst-selected-path",
+        type=Path,
+        default=None,
+        help=(
+            "Optional finalized LM2011 document-analyst parquet. If omitted, the runner "
+            "uses <upstream-run-root>/refinitiv_doc_analyst_lm2011/refinitiv_doc_analyst_selected.parquet."
+        ),
+    )
     parser.add_argument(
         "--monthly-stock-path",
         type=Path,
@@ -1108,6 +1210,24 @@ def _resolve_paths(args: argparse.Namespace) -> RunnerPaths:
         if args.items_analysis_dir is not None
         else upstream_run_root / "items_analysis"
     )
+    doc_ownership_path = (
+        Path(args.doc_ownership_path).resolve()
+        if args.doc_ownership_path is not None
+        else (
+            upstream_run_root
+            / "refinitiv_doc_ownership_lm2011"
+            / "refinitiv_lm2011_doc_ownership.parquet"
+        )
+    )
+    doc_analyst_selected_path = (
+        Path(args.doc_analyst_selected_path).resolve()
+        if args.doc_analyst_selected_path is not None
+        else (
+            upstream_run_root
+            / "refinitiv_doc_analyst_lm2011"
+            / "refinitiv_doc_analyst_selected.parquet"
+        )
+    )
     monthly_stock_path = (
         Path(args.monthly_stock_path).resolve()
         if args.monthly_stock_path is not None
@@ -1130,16 +1250,8 @@ def _resolve_paths(args: argparse.Namespace) -> RunnerPaths:
         ccm_base_dir=ccm_base_dir,
         matched_clean_path=matched_clean_path,
         items_analysis_dir=items_analysis_dir,
-        doc_ownership_path=(
-            upstream_run_root
-            / "refinitiv_doc_ownership_lm2011"
-            / "refinitiv_lm2011_doc_ownership.parquet"
-        ),
-        doc_analyst_selected_path=(
-            upstream_run_root
-            / "refinitiv_doc_analyst_lm2011"
-            / "refinitiv_doc_analyst_selected.parquet"
-        ),
+        doc_ownership_path=doc_ownership_path,
+        doc_analyst_selected_path=doc_analyst_selected_path,
         filingdates_path=_resolve_optional_ccm_parquet_artifact(ccm_base_dir, ("filingdates.parquet",)),
         quarterly_balance_sheet_path=_resolve_optional_ccm_parquet_artifact(
             ccm_base_dir,
@@ -1189,6 +1301,24 @@ def _resolve_paths(args: argparse.Namespace) -> RunnerPaths:
         event_window_doc_batch_size=int(args.event_window_doc_batch_size),
         print_ram_stats=bool(args.print_ram_stats),
         ram_log_interval_batches=int(args.ram_log_interval_batches),
+    )
+
+
+def build_lm2011_post_refinitiv_run_config(
+    args: argparse.Namespace,
+    *,
+    enabled_stages: Sequence[str] | None = None,
+    fail_closed_for_enabled_stages: bool = False,
+) -> LM2011PostRefinitivRunConfig:
+    resolved_enabled_stages = (
+        tuple(LM2011_ALL_STAGE_NAMES)
+        if enabled_stages is None
+        else tuple(enabled_stages)
+    )
+    return LM2011PostRefinitivRunConfig(
+        paths=_resolve_paths(args),
+        enabled_stages=resolved_enabled_stages,
+        fail_closed_for_enabled_stages=fail_closed_for_enabled_stages,
     )
 
 
@@ -3052,7 +3182,7 @@ def run_lm2011_extension_pipeline(run_cfg: LM2011ExtensionRunConfig) -> int:
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     return run_lm2011_post_refinitiv_pipeline(
-        LM2011PostRefinitivRunConfig(paths=_resolve_paths(args))
+        build_lm2011_post_refinitiv_run_config(args)
     )
 
 

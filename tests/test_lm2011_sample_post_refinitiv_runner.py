@@ -23,6 +23,12 @@ def _write_text(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
+def _load_lm2011_notebook_cell_sources() -> list[str]:
+    notebook_path = Path("src/thesis_pkg/notebooks_and_scripts/lm2011_sample_post_refinitiv_runner.ipynb")
+    notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
+    return ["".join(cell.get("source", [])) for cell in notebook["cells"]]
+
+
 def _stub_table_i_sample_creation_df(
     *,
     window_label: str = "1994-2008",
@@ -680,6 +686,8 @@ def test_parse_args_uses_memory_hardened_defaults() -> None:
     assert args.full_10k_text_feature_batch_size is None
     assert args.mda_text_feature_batch_size is None
     assert args.text_feature_batch_size is None
+    assert args.doc_ownership_path is None
+    assert args.doc_analyst_selected_path is None
     assert args.event_window_doc_batch_size == runner.DEFAULT_LM2011_EVENT_WINDOW_DOC_BATCH_SIZE
     assert args.local_work_root == runner.DEFAULT_LOCAL_WORK_ROOT
     assert args.print_ram_stats is False
@@ -735,6 +743,36 @@ def test_resolve_paths_legacy_text_feature_batch_size_applies_to_both_text_stage
 
     assert paths.full_10k_text_feature_batch_size == 7
     assert paths.mda_text_feature_batch_size == 7
+
+
+def test_resolve_paths_explicit_doc_artifact_paths_take_precedence(tmp_path: Path) -> None:
+    sample_root, upstream_run_root, additional_data_dir, output_dir = _build_temp_layout(tmp_path)
+    explicit_doc_ownership = tmp_path / "explicit" / "doc_ownership.parquet"
+    explicit_doc_analyst = tmp_path / "explicit" / "doc_analyst_selected.parquet"
+    _write_parquet(explicit_doc_ownership, pl.DataFrame({"doc_id": ["explicit"]}))
+    _write_parquet(explicit_doc_analyst, pl.DataFrame({"doc_id": ["explicit"]}))
+
+    paths = runner._resolve_paths(
+        runner.parse_args(
+            [
+                "--sample-root",
+                str(sample_root),
+                "--upstream-run-root",
+                str(upstream_run_root),
+                "--additional-data-dir",
+                str(additional_data_dir),
+                "--output-dir",
+                str(output_dir),
+                "--doc-ownership-path",
+                str(explicit_doc_ownership),
+                "--doc-analyst-selected-path",
+                str(explicit_doc_analyst),
+            ]
+        )
+    )
+
+    assert paths.doc_ownership_path == explicit_doc_ownership.resolve()
+    assert paths.doc_analyst_selected_path == explicit_doc_analyst.resolve()
 
 
 def test_prepare_lm2011_sec_backbone_input_excludes_full_text() -> None:
@@ -1544,6 +1582,203 @@ def test_main_delegates_to_shared_lm2011_pipeline(tmp_path: Path, monkeypatch: p
     assert run_cfg.paths.local_work_root == runner.DEFAULT_LOCAL_WORK_ROOT.resolve()
     assert run_cfg.paths.print_ram_stats is False
     assert run_cfg.paths.ram_log_interval_batches == runner.DEFAULT_RAM_LOG_INTERVAL_BATCHES
+
+
+def test_build_run_config_can_override_stage_selection(
+    tmp_path: Path,
+) -> None:
+    sample_root, upstream_run_root, additional_data_dir, output_dir = _build_temp_layout(tmp_path)
+    args = runner.parse_args(
+        [
+            "--sample-root",
+            str(sample_root),
+            "--upstream-run-root",
+            str(upstream_run_root),
+            "--additional-data-dir",
+            str(additional_data_dir),
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    run_cfg = runner.build_lm2011_post_refinitiv_run_config(
+        args,
+        enabled_stages=("sample_backbone", "event_panel"),
+        fail_closed_for_enabled_stages=True,
+    )
+
+    assert run_cfg.paths.output_dir == output_dir.resolve()
+    assert run_cfg.enabled_stages == ("sample_backbone", "event_panel")
+    assert run_cfg.fail_closed_for_enabled_stages is True
+
+
+def test_resolve_enabled_lm2011_stage_names_from_env_matches_unified_runner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from thesis_pkg.notebooks_and_scripts import sec_ccm_unified_runner as unified_runner
+
+    stage_env_names = [
+        "SEC_CCM_RUN_LM2011_POST_REFINITIV",
+        *[
+            f"SEC_CCM_RUN_LM2011_{stage_name.upper()}"
+            for stage_name in runner.LM2011_ALL_STAGE_NAMES
+        ],
+    ]
+    for env_name in stage_env_names:
+        monkeypatch.delenv(env_name, raising=False)
+
+    monkeypatch.setenv("SEC_CCM_RUN_LM2011_POST_REFINITIV", "true")
+    monkeypatch.setenv("SEC_CCM_RUN_LM2011_TEXT_FEATURES_MDA", "false")
+    monkeypatch.setenv("SEC_CCM_RUN_LM2011_TABLE_IA_II_RESULTS", "true")
+
+    umbrella_enabled = unified_runner._env_bool("SEC_CCM_RUN_LM2011_POST_REFINITIV", False)
+    expected_enabled_stages = tuple(
+        stage_name
+        for stage_name in unified_runner.LM2011_ALL_STAGE_NAMES
+        if unified_runner._resolve_stage_toggle(
+            f"SEC_CCM_RUN_LM2011_{stage_name.upper()}",
+            umbrella_enabled=umbrella_enabled,
+            default_when_umbrella=stage_name
+            not in unified_runner.LM2011_OPTIONAL_STAGE_DEFAULTS_FALSE,
+        )
+    )
+
+    assert runner.resolve_enabled_lm2011_stage_names_from_env() == expected_enabled_stages
+
+
+def test_notebook_wrapper_honors_unified_env_contract_and_stage_semantics(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sample_root, upstream_run_root, additional_data_dir, _ = _build_temp_layout(tmp_path)
+    sec_ccm_output_dir = upstream_run_root / "sec_ccm_premerge"
+    sec_ccm_output_dir.mkdir(parents=True, exist_ok=True)
+    _write_parquet(
+        sec_ccm_output_dir / "sec_ccm_matched_clean.parquet",
+        pl.DataFrame({"doc_id": ["d1"], "KYPERMNO": [1]}),
+    )
+    _write_parquet(
+        sec_ccm_output_dir / "lm2011_sample_backbone.parquet",
+        pl.DataFrame({"doc_id": ["d1"]}),
+    )
+    custom_daily_panel = tmp_path / "overrides" / "daily_panel.parquet"
+    custom_monthly_stock = tmp_path / "overrides" / "monthly_stock.parquet"
+    custom_ff_monthly_with_mom = tmp_path / "overrides" / "ff_monthly_with_mom.parquet"
+    _write_parquet(custom_daily_panel)
+    _write_parquet(custom_monthly_stock)
+    _write_parquet(custom_ff_monthly_with_mom)
+
+    notebook_output_dir = tmp_path / "notebook_output"
+    local_work_root = tmp_path / "local_work"
+
+    monkeypatch.setenv("SEC_CCM_WORK_ROOT", str(sample_root))
+    monkeypatch.setenv("SEC_CCM_RUN_ROOT", str(upstream_run_root))
+    monkeypatch.setenv("SEC_CCM_OUTPUT_DIR", str(sec_ccm_output_dir))
+    monkeypatch.setenv("SEC_CCM_ITEMS_ANALYSIS_DIR", str(upstream_run_root / "items_analysis"))
+    monkeypatch.setenv("SEC_CCM_CCM_BASE_DIR", str(sample_root / "ccm_parquet_data"))
+    monkeypatch.setenv("SEC_CCM_SEC_YEAR_MERGED_DIR", str(sample_root / "year_merged"))
+    monkeypatch.setenv(
+        "SEC_CCM_REFINITIV_DOC_OWNERSHIP_LM2011_DIR",
+        str(upstream_run_root / "refinitiv_doc_ownership_lm2011"),
+    )
+    monkeypatch.setenv(
+        "SEC_CCM_REFINITIV_DOC_ANALYST_LM2011_DIR",
+        str(upstream_run_root / "refinitiv_doc_analyst_lm2011"),
+    )
+    monkeypatch.setenv("SEC_CCM_LM2011_ADDITIONAL_DATA_DIR", str(additional_data_dir))
+    monkeypatch.setenv("SEC_CCM_LM2011_OUTPUT_DIR", str(notebook_output_dir))
+    monkeypatch.setenv("SEC_CCM_LOCAL_WORK", str(local_work_root))
+    monkeypatch.setenv("SEC_CCM_LM2011_DAILY_PANEL_PATH", str(custom_daily_panel))
+    monkeypatch.setenv("SEC_CCM_LM2011_MONTHLY_STOCK_PATH", str(custom_monthly_stock))
+    monkeypatch.setenv(
+        "SEC_CCM_LM2011_FF_MONTHLY_WITH_MOM_PATH",
+        str(custom_ff_monthly_with_mom),
+    )
+    monkeypatch.setenv("SEC_CCM_LM2011_FULL_10K_CLEANING_CONTRACT", "current")
+    monkeypatch.setenv("SEC_CCM_LM2011_FULL_10K_TEXT_FEATURE_BATCH_SIZE", "11")
+    monkeypatch.setenv("SEC_CCM_LM2011_MDA_TEXT_FEATURE_BATCH_SIZE", "13")
+    monkeypatch.setenv("SEC_CCM_LM2011_EVENT_WINDOW_DOC_BATCH_SIZE", "17")
+    monkeypatch.setenv("SEC_CCM_PRINT_RAM_STATS", "true")
+    monkeypatch.setenv("SEC_CCM_RAM_LOG_INTERVAL_BATCHES", "19")
+    monkeypatch.setenv("SEC_CCM_RUN_LM2011_POST_REFINITIV", "true")
+    monkeypatch.setenv("SEC_CCM_RUN_LM2011_TEXT_FEATURES_MDA", "false")
+    monkeypatch.setenv("SEC_CCM_RUN_LM2011_TABLE_IA_II_RESULTS", "true")
+
+    repo_root = tmp_path / "repo_root"
+    repo_root.mkdir(parents=True, exist_ok=True)
+    notebook_cells = _load_lm2011_notebook_cell_sources()
+    config_source = notebook_cells[2]
+    run_args_source = notebook_cells[3]
+    execute_source = notebook_cells[4]
+
+    namespace: dict[str, object] = {
+        "IN_COLAB": False,
+        "Path": Path,
+        "os": os,
+        "repo_root": repo_root,
+    }
+    exec(config_source, namespace)
+
+    assert namespace["WORK_ROOT"] == sample_root.resolve()
+    assert namespace["UPSTREAM_RUN_ROOT"] == upstream_run_root.resolve()
+    assert namespace["YEAR_MERGED_DIR"] == (sample_root / "year_merged").resolve()
+    assert namespace["MATCHED_CLEAN_PATH"] == (sec_ccm_output_dir / "sec_ccm_matched_clean.parquet").resolve()
+    assert namespace["SAMPLE_BACKBONE_PATH"] == (sec_ccm_output_dir / "lm2011_sample_backbone.parquet").resolve()
+    assert namespace["ITEMS_ANALYSIS_DIR"] == (upstream_run_root / "items_analysis").resolve()
+    assert namespace["CCM_BASE_DIR"] == (sample_root / "ccm_parquet_data").resolve()
+    assert namespace["DAILY_PANEL_PATH"] == custom_daily_panel.resolve()
+    assert namespace["MONTHLY_STOCK_PATH"] == custom_monthly_stock.resolve()
+    assert namespace["FF_MONTHLY_WITH_MOM_PATH"] == custom_ff_monthly_with_mom.resolve()
+    assert namespace["OUTPUT_DIR"] == notebook_output_dir.resolve()
+    assert namespace["LOCAL_WORK_ROOT"] == (local_work_root / "lm2011_post_refinitiv").resolve()
+    assert namespace["DOC_OWNERSHIP_PATH"] == (
+        upstream_run_root
+        / "refinitiv_doc_ownership_lm2011"
+        / "refinitiv_lm2011_doc_ownership.parquet"
+    ).resolve()
+    assert namespace["DOC_ANALYST_SELECTED_PATH"] == (
+        upstream_run_root
+        / "refinitiv_doc_analyst_lm2011"
+        / "refinitiv_doc_analyst_selected.parquet"
+    ).resolve()
+    assert namespace["FULL_10K_CLEANING_CONTRACT"] == "current"
+    assert namespace["FULL_10K_TEXT_FEATURE_BATCH_SIZE"] == 11
+    assert namespace["MDA_TEXT_FEATURE_BATCH_SIZE"] == 13
+    assert namespace["EVENT_WINDOW_DOC_BATCH_SIZE"] == 17
+    assert namespace["PRINT_RAM_STATS"] is True
+    assert namespace["RAM_LOG_INTERVAL_BATCHES"] == 19
+
+    exec(run_args_source, namespace)
+    run_args = namespace["RUN_ARGS"]
+    assert "--text-feature-batch-size" not in run_args
+    assert "--doc-ownership-path" in run_args
+    assert "--doc-analyst-selected-path" in run_args
+    assert "--full-10k-text-feature-batch-size" in run_args
+    assert "--mda-text-feature-batch-size" in run_args
+    assert "--event-window-doc-batch-size" in run_args
+    assert "--print-ram-stats" in run_args
+
+    captured: dict[str, object] = {}
+
+    def _capture_run(run_cfg: runner.LM2011PostRefinitivRunConfig) -> int:
+        captured["run_cfg"] = run_cfg
+        return 0
+
+    monkeypatch.setattr(namespace["runner"], "run_lm2011_post_refinitiv_pipeline", _capture_run)
+    exec(execute_source, namespace)
+
+    run_cfg = captured["run_cfg"]
+    assert isinstance(run_cfg, runner.LM2011PostRefinitivRunConfig)
+    assert run_cfg.paths.output_dir == notebook_output_dir.resolve()
+    assert run_cfg.paths.local_work_root == (local_work_root / "lm2011_post_refinitiv").resolve()
+    assert run_cfg.paths.doc_ownership_path == namespace["DOC_OWNERSHIP_PATH"]
+    assert run_cfg.paths.doc_analyst_selected_path == namespace["DOC_ANALYST_SELECTED_PATH"]
+    assert run_cfg.paths.full_10k_cleaning_contract == "current"
+    assert run_cfg.paths.full_10k_text_feature_batch_size == 11
+    assert run_cfg.paths.mda_text_feature_batch_size == 13
+    assert run_cfg.paths.event_window_doc_batch_size == 17
+    assert run_cfg.fail_closed_for_enabled_stages is True
+    assert run_cfg.enabled_stages == runner.resolve_enabled_lm2011_stage_names_from_env()
 
 
 def test_text_feature_progress_logger_respects_interval(capsys) -> None:
