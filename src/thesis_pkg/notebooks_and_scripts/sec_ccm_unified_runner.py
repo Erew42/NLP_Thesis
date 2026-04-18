@@ -528,11 +528,14 @@ from thesis_pkg.notebooks_and_scripts.lm2011_sample_post_refinitiv_runner import
     DEFAULT_LM2011_FULL_10K_TEXT_FEATURE_BATCH_SIZE,
     DEFAULT_LM2011_MDA_TEXT_FEATURE_BATCH_SIZE,
     DEFAULT_LM2011_TEXT_FEATURE_BATCH_SIZE,
+    EXTENSION_MANIFEST_FILENAME as LM2011_EXTENSION_MANIFEST_FILENAME,
+    LM2011ExtensionRunConfig,
     LM2011_ALL_STAGE_NAMES,
     LM2011_OPTIONAL_STAGE_DEFAULTS_FALSE,
     LM2011PostRefinitivRunConfig,
     MONTHLY_STOCK_CANDIDATES,
     RunnerPaths as LM2011RunnerPaths,
+    run_lm2011_extension_pipeline,
     run_lm2011_post_refinitiv_pipeline,
 )
 from thesis_pkg.pipelines.refinitiv.doc_ownership import _build_lm2011_doc_ownership_universe_diagnostics
@@ -576,6 +579,97 @@ LM2011_STAGES_REQUIRING_DOC_ANALYST: frozenset[str] = frozenset(
 class _ArtifactStage:
     name: str
     paths: dict[str, Path]
+
+
+def _build_lm2011_extension_run_config(
+    *,
+    lm2011_paths: LM2011RunnerPaths,
+    lm2011_output_dir: Path,
+    output_dir: Path,
+    require_cleaned_scope_match: bool,
+    finbert_analysis_run_dir: Path | None,
+    finbert_preprocessing_run_dir: Path | None,
+    finbert_analysis_artifacts: object | None = None,
+    finbert_preprocessing_artifacts: object | None = None,
+) -> LM2011ExtensionRunConfig:
+    same_run_analysis_run_dir = getattr(finbert_analysis_artifacts, "run_dir", None)
+    same_run_analysis_manifest_path = getattr(finbert_analysis_artifacts, "run_manifest_path", None)
+    same_run_item_features_long_path = getattr(finbert_analysis_artifacts, "item_features_long_path", None)
+    same_run_preprocessing_run_dir = getattr(finbert_preprocessing_artifacts, "run_dir", None)
+    same_run_preprocessing_manifest_path = getattr(
+        finbert_preprocessing_artifacts,
+        "run_manifest_path",
+        None,
+    )
+    same_run_cleaned_item_scopes_dir = getattr(
+        finbert_preprocessing_artifacts,
+        "cleaned_item_scopes_dir",
+        None,
+    )
+    return LM2011ExtensionRunConfig(
+        output_dir=output_dir,
+        additional_data_dir=lm2011_paths.additional_data_dir,
+        items_analysis_dir=lm2011_paths.items_analysis_dir,
+        event_panel_path=lm2011_output_dir / "lm2011_event_panel.parquet",
+        company_history_path=Path(lm2011_paths.company_history_path)
+        if lm2011_paths.company_history_path is not None
+        else lm2011_paths.ccm_base_dir / "companyhistory.parquet",
+        company_description_path=Path(lm2011_paths.company_description_path)
+        if lm2011_paths.company_description_path is not None
+        else lm2011_paths.ccm_base_dir / "companydescription.parquet",
+        ff48_siccodes_path=lm2011_paths.ff48_siccodes_path,
+        finbert_item_features_long_path=(
+            Path(same_run_item_features_long_path)
+            if same_run_item_features_long_path is not None
+            else None
+        ),
+        finbert_analysis_run_dir=(
+            Path(same_run_analysis_run_dir)
+            if same_run_analysis_run_dir is not None
+            else finbert_analysis_run_dir
+        ),
+        finbert_analysis_manifest_path=(
+            Path(same_run_analysis_manifest_path)
+            if same_run_analysis_manifest_path is not None
+            else None
+        ),
+        finbert_cleaned_item_scopes_dir=(
+            Path(same_run_cleaned_item_scopes_dir)
+            if same_run_cleaned_item_scopes_dir is not None
+            else None
+        ),
+        finbert_preprocessing_run_dir=(
+            Path(same_run_preprocessing_run_dir)
+            if same_run_preprocessing_run_dir is not None
+            else finbert_preprocessing_run_dir
+        ),
+        finbert_preprocessing_manifest_path=(
+            Path(same_run_preprocessing_manifest_path)
+            if same_run_preprocessing_manifest_path is not None
+            else None
+        ),
+        require_cleaned_scope_match=require_cleaned_scope_match,
+    )
+
+
+def _lm2011_extension_stage_paths(output_dir: Path) -> dict[str, Path]:
+    return {
+        "lm2011_extension_output_dir": output_dir,
+        "lm2011_extension_manifest_json": output_dir / LM2011_EXTENSION_MANIFEST_FILENAME,
+        "lm2011_extension_dictionary_surface_parquet": (
+            output_dir / "lm2011_extension_dictionary_surface.parquet"
+        ),
+        "lm2011_extension_finbert_surface_parquet": (
+            output_dir / "lm2011_extension_finbert_surface.parquet"
+        ),
+        "lm2011_extension_analysis_panel_parquet": (
+            output_dir / "lm2011_extension_analysis_panel.parquet"
+        ),
+        "lm2011_extension_sample_loss_parquet": (
+            output_dir / "lm2011_extension_sample_loss.parquet"
+        ),
+        "lm2011_extension_results_parquet": output_dir / "lm2011_extension_results.parquet",
+    }
 
 
 def _discover_sec_years(zip_dir: Path, merged_dir: Path) -> list[int]:
@@ -1123,6 +1217,7 @@ def main() -> None:
         umbrella_enabled=RUN_FINBERT,
         default_when_umbrella=True,
     )
+    RUN_LM2011_EXTENSION = _env_bool("SEC_CCM_RUN_LM2011_EXTENSION", False)
 
     SEC_PARSE_MODE = _env_str("SEC_CCM_SEC_PARSE_MODE", "parsed")
     YEARS = _env_int_list("SEC_CCM_YEARS", available_years)
@@ -1180,6 +1275,10 @@ def main() -> None:
         "SEC_CCM_LM2011_OUTPUT_DIR",
         RUN_ROOT / "lm2011_post_refinitiv",
     )
+    LM2011_EXTENSION_OUTPUT_DIR = _env_path(
+        "SEC_CCM_LM2011_EXTENSION_OUTPUT_DIR",
+        RUN_ROOT / "lm2011_extension",
+    )
     LM2011_ADDITIONAL_DATA_DIR = _resolve_lm2011_additional_data_dir(WORK_ROOT)
     LM2011_SAMPLE_BACKBONE_PATH = _env_optional_path("SEC_CCM_LM2011_SAMPLE_BACKBONE_PATH")
     LM2011_MATCHED_CLEAN_PATH = _env_optional_path("SEC_CCM_LM2011_MATCHED_CLEAN_PATH")
@@ -1225,6 +1324,16 @@ def main() -> None:
     FINBERT_OUTPUT_DIR = _env_path(
         "SEC_CCM_FINBERT_OUTPUT_DIR",
         RUN_ROOT / "finbert_item_analysis",
+    )
+    LM2011_EXTENSION_REQUIRE_CLEANED_SCOPE_MATCH = _env_bool(
+        "SEC_CCM_LM2011_EXTENSION_REQUIRE_CLEANED_SCOPE_MATCH",
+        True,
+    )
+    LM2011_EXTENSION_FINBERT_ANALYSIS_RUN_DIR = _env_optional_path(
+        "SEC_CCM_LM2011_EXTENSION_FINBERT_ANALYSIS_RUN_DIR"
+    )
+    LM2011_EXTENSION_FINBERT_PREPROCESS_RUN_DIR = _env_optional_path(
+        "SEC_CCM_LM2011_EXTENSION_FINBERT_PREPROCESS_RUN_DIR"
     )
     FINBERT_SOURCE_ITEMS_DIR = _env_optional_path("SEC_CCM_FINBERT_SOURCE_ITEMS_DIR")
     FINBERT_BACKBONE_PATH = _env_optional_path("SEC_CCM_FINBERT_BACKBONE_PATH")
@@ -1398,6 +1507,19 @@ def main() -> None:
             "RUN_LM2011_POST_REFINITIV": RUN_LM2011_POST_REFINITIV,
             "LM2011_ENABLED_STAGE_COUNT": sum(1 for enabled in LM2011_STAGE_FLAGS.values() if enabled),
             "LM2011_POST_REFINITIV_DIR": str(LM2011_POST_REFINITIV_DIR),
+            "RUN_LM2011_EXTENSION": RUN_LM2011_EXTENSION,
+            "LM2011_EXTENSION_OUTPUT_DIR": str(LM2011_EXTENSION_OUTPUT_DIR),
+            "LM2011_EXTENSION_REQUIRE_CLEANED_SCOPE_MATCH": LM2011_EXTENSION_REQUIRE_CLEANED_SCOPE_MATCH,
+            "LM2011_EXTENSION_FINBERT_ANALYSIS_RUN_DIR": (
+                str(LM2011_EXTENSION_FINBERT_ANALYSIS_RUN_DIR)
+                if LM2011_EXTENSION_FINBERT_ANALYSIS_RUN_DIR is not None
+                else None
+            ),
+            "LM2011_EXTENSION_FINBERT_PREPROCESS_RUN_DIR": (
+                str(LM2011_EXTENSION_FINBERT_PREPROCESS_RUN_DIR)
+                if LM2011_EXTENSION_FINBERT_PREPROCESS_RUN_DIR is not None
+                else None
+            ),
             "LM2011_FULL_10K_CLEANING_CONTRACT": LM2011_FULL_10K_CLEANING_CONTRACT,
             "LM2011_FULL_10K_TEXT_FEATURE_BATCH_SIZE": LM2011_FULL_10K_TEXT_FEATURE_BATCH_SIZE,
             "LM2011_MDA_TEXT_FEATURE_BATCH_SIZE": LM2011_MDA_TEXT_FEATURE_BATCH_SIZE,
@@ -2599,6 +2721,8 @@ def main() -> None:
     # ## 6) Gated item extraction
     analysis_item_paths: list[Path] = []
     diagnostic_item_paths: list[Path] = []
+    lm2011_paths: LM2011RunnerPaths | None = None
+    finbert_artifacts = None
 
     if RUN_GATED_ITEM_EXTRACTION:
         if sec_ccm_paths is None:
@@ -2965,6 +3089,56 @@ def main() -> None:
                 "finbert_run_analysis": RUN_FINBERT_ANALYSIS,
                 "finbert_sentence_postprocess_policy": FINBERT_SENTENCE_POSTPROCESS_POLICY,
             }
+        )
+
+    if RUN_LM2011_EXTENSION:
+        if lm2011_paths is None:
+            raise RuntimeError(
+                "LM2011 extension requires LM2011 post-Refinitiv runner paths, but the LM2011 block did not run."
+            )
+        extension_event_panel_path = LM2011_POST_REFINITIV_DIR / "lm2011_event_panel.parquet"
+        if not extension_event_panel_path.exists():
+            raise RuntimeError(
+                "LM2011 extension requires the materialized LM2011 event panel.\n"
+                f"Expected path: {extension_event_panel_path}\n"
+                "Enable the LM2011 event_panel stage in this run before running the extension."
+            )
+        finbert_analysis_artifacts = (
+            finbert_artifacts.analysis_artifacts if finbert_artifacts is not None else None
+        )
+        finbert_preprocessing_artifacts = (
+            finbert_artifacts.preprocessing_artifacts if finbert_artifacts is not None else None
+        )
+        extension_cfg = _build_lm2011_extension_run_config(
+            lm2011_paths=lm2011_paths,
+            lm2011_output_dir=LM2011_POST_REFINITIV_DIR,
+            output_dir=LM2011_EXTENSION_OUTPUT_DIR,
+            require_cleaned_scope_match=LM2011_EXTENSION_REQUIRE_CLEANED_SCOPE_MATCH,
+            finbert_analysis_run_dir=LM2011_EXTENSION_FINBERT_ANALYSIS_RUN_DIR,
+            finbert_preprocessing_run_dir=LM2011_EXTENSION_FINBERT_PREPROCESS_RUN_DIR,
+            finbert_analysis_artifacts=finbert_analysis_artifacts,
+            finbert_preprocessing_artifacts=finbert_preprocessing_artifacts,
+        )
+        print(
+            {
+                "lm2011_extension_output_dir": str(LM2011_EXTENSION_OUTPUT_DIR),
+                "lm2011_extension_require_cleaned_scope_match": LM2011_EXTENSION_REQUIRE_CLEANED_SCOPE_MATCH,
+                "lm2011_extension_finbert_analysis_run_dir": (
+                    str(LM2011_EXTENSION_FINBERT_ANALYSIS_RUN_DIR)
+                    if LM2011_EXTENSION_FINBERT_ANALYSIS_RUN_DIR is not None
+                    else None
+                ),
+                "lm2011_extension_finbert_preprocess_run_dir": (
+                    str(LM2011_EXTENSION_FINBERT_PREPROCESS_RUN_DIR)
+                    if LM2011_EXTENSION_FINBERT_PREPROCESS_RUN_DIR is not None
+                    else None
+                ),
+            }
+        )
+        run_lm2011_extension_pipeline(extension_cfg)
+        _record_downstream_stage(
+            "lm2011_extension",
+            _lm2011_extension_stage_paths(LM2011_EXTENSION_OUTPUT_DIR),
         )
 
     # ## 7) No-item diagnostics + boundary diagnostics

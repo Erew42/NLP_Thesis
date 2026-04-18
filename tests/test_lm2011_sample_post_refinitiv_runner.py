@@ -224,6 +224,399 @@ def _build_temp_layout(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
     return sample_root, upstream_run_root, additional_data_dir, output_dir
 
 
+def _build_extension_inputs(tmp_path: Path, additional_data_dir: Path) -> dict[str, Path]:
+    event_panel_path = tmp_path / "extension_event_panel.parquet"
+    company_history_path = tmp_path / "companyhistory.parquet"
+    company_description_path = tmp_path / "companydescription.parquet"
+    items_analysis_dir = tmp_path / "items_analysis"
+    finbert_analysis_run_dir = tmp_path / "finbert_analysis"
+    finbert_preprocessing_run_dir = tmp_path / "finbert_preprocess"
+    cleaned_item_scopes_dir = finbert_preprocessing_run_dir / "cleaned_item_scopes" / "by_year"
+    item_features_long_path = finbert_analysis_run_dir / "item_features_long.parquet"
+
+    _write_parquet(
+        event_panel_path,
+        pl.DataFrame(
+            {
+                "doc_id": ["doc1", "doc2"],
+                "gvkey_int": [1001, 1002],
+                "KYPERMNO": [5001, 5002],
+                "filing_date": [dt.date(2009, 3, 2), dt.date(2009, 5, 15)],
+                "size_event": [100.0, 125.0],
+                "bm_event": [0.8, 0.9],
+                "share_turnover": [0.05, 0.08],
+                "pre_ffalpha": [0.01, -0.02],
+                "institutional_ownership": [None, 45.0],
+                "nasdaq_dummy": [1, 0],
+                "filing_period_excess_return": [0.02, -0.01],
+                "abnormal_volume": [0.3, 0.4],
+                "postevent_return_volatility": [0.04, 0.05],
+            }
+        ),
+    )
+    _write_parquet(
+        company_history_path,
+        pl.DataFrame(
+            {
+                "KYGVKEY": [1001, 1002],
+                "HCHGDT": [dt.date(2000, 1, 1), dt.date(2000, 1, 1)],
+                "HCHGENDDT": [None, None],
+                "HSIC": [111, 3845],
+            }
+        ),
+    )
+    _write_parquet(
+        company_description_path,
+        pl.DataFrame({"KYGVKEY": [1001, 1002], "SIC": ["0111", "3845"]}),
+    )
+    _write_parquet(
+        items_analysis_dir / "2009.parquet",
+        pl.DataFrame(
+            {
+                "doc_id": ["doc1", "doc1", "doc2", "doc2"],
+                "cik_10": ["0000000001", "0000000001", "0000000002", "0000000002"],
+                "filing_date": [
+                    dt.date(2009, 3, 2),
+                    dt.date(2009, 3, 2),
+                    dt.date(2009, 5, 15),
+                    dt.date(2009, 5, 15),
+                ],
+                "document_type_filename": ["10-K", "10-K", "10-K", "10-K"],
+                "item_id": ["7", "1A", "7", "1A"],
+                "full_text": [
+                    "loss loss gain recognized must",
+                    "loss uncertain lawsuit recognized",
+                    "loss gain recognized may",
+                    "loss uncertain recognized may",
+                ],
+            }
+        ),
+    )
+    _write_parquet(
+        item_features_long_path,
+        pl.DataFrame(
+            {
+                "doc_id": ["doc1", "doc1", "doc2", "doc2"],
+                "filing_date": [
+                    dt.date(2009, 3, 2),
+                    dt.date(2009, 3, 2),
+                    dt.date(2009, 5, 15),
+                    dt.date(2009, 5, 15),
+                ],
+                "benchmark_item_code": ["item_7", "item_1a", "item_7", "item_1a"],
+                "cleaning_policy_id": [
+                    "item_text_clean_v2",
+                    "item_text_clean_v2",
+                    "item_text_clean_v2",
+                    "item_text_clean_v2",
+                ],
+                "model_name": ["yiyanghkust/finbert-tone"] * 4,
+                "model_version": ["rev-a"] * 4,
+                "segment_policy_id": ["sentence_dataset_v1_finbert_token_512"] * 4,
+                "finbert_segment_count": [3, 2, 4, 2],
+                "finbert_token_count_512_sum": [30, 20, 40, 18],
+                "finbert_neg_prob_lenw_mean": [0.6, 0.5, 0.2, 0.4],
+                "finbert_pos_prob_lenw_mean": [0.1, 0.2, 0.5, 0.3],
+                "finbert_neu_prob_lenw_mean": [0.3, 0.3, 0.3, 0.3],
+                "finbert_net_negative_lenw_mean": [0.5, 0.3, -0.3, 0.1],
+                "finbert_neg_dominant_share": [0.67, 0.5, 0.25, 0.5],
+            }
+        ),
+    )
+    _write_parquet(
+        cleaned_item_scopes_dir / "2009.parquet",
+        pl.DataFrame(
+            {
+                "doc_id": ["doc1", "doc1", "doc2", "doc2"],
+                "cik_10": ["0000000001", "0000000001", "0000000002", "0000000002"],
+                "filing_date": [
+                    dt.date(2009, 3, 2),
+                    dt.date(2009, 3, 2),
+                    dt.date(2009, 5, 15),
+                    dt.date(2009, 5, 15),
+                ],
+                "document_type_raw": ["10-K", "10-K", "10-K", "10-K"],
+                "item_id": ["7", "1A", "7", "1A"],
+                "text_scope": [
+                    "item_7_mda",
+                    "item_1a_risk_factors",
+                    "item_7_mda",
+                    "item_1a_risk_factors",
+                ],
+                "cleaning_policy_id": [
+                    "item_text_clean_v2",
+                    "item_text_clean_v2",
+                    "item_text_clean_v2",
+                    "item_text_clean_v2",
+                ],
+                "cleaned_text": [
+                    "loss loss gain recognized must",
+                    "loss uncertain lawsuit recognized",
+                    "loss gain recognized may",
+                    "loss uncertain recognized may",
+                ],
+            }
+        ),
+    )
+    _write_text(finbert_analysis_run_dir / "run_manifest.json", json.dumps({"runner_name": "analysis"}))
+    _write_text(finbert_preprocessing_run_dir / "run_manifest.json", json.dumps({"runner_name": "preprocess"}))
+
+    return {
+        "event_panel_path": event_panel_path,
+        "company_history_path": company_history_path,
+        "company_description_path": company_description_path,
+        "items_analysis_dir": items_analysis_dir,
+        "finbert_analysis_run_dir": finbert_analysis_run_dir,
+        "finbert_preprocessing_run_dir": finbert_preprocessing_run_dir,
+        "item_features_long_path": item_features_long_path,
+        "cleaned_item_scopes_dir": cleaned_item_scopes_dir,
+        "ff48_siccodes_path": additional_data_dir / "FF_Siccodes_48_Industries.txt",
+    }
+
+
+def test_extension_pipeline_writes_manifest_and_fully_enumerated_results(tmp_path: Path) -> None:
+    _, _, additional_data_dir, _ = _build_temp_layout(tmp_path)
+    extension_inputs = _build_extension_inputs(tmp_path, additional_data_dir)
+    output_dir = tmp_path / "lm2011_extension"
+
+    exit_code = runner.run_lm2011_extension_pipeline(
+        runner.LM2011ExtensionRunConfig(
+            output_dir=output_dir,
+            additional_data_dir=additional_data_dir,
+            items_analysis_dir=extension_inputs["items_analysis_dir"],
+            event_panel_path=extension_inputs["event_panel_path"],
+            company_history_path=extension_inputs["company_history_path"],
+            company_description_path=extension_inputs["company_description_path"],
+            ff48_siccodes_path=extension_inputs["ff48_siccodes_path"],
+            finbert_item_features_long_path=extension_inputs["item_features_long_path"],
+            finbert_analysis_run_dir=extension_inputs["finbert_analysis_run_dir"],
+            finbert_preprocessing_run_dir=extension_inputs["finbert_preprocessing_run_dir"],
+            require_cleaned_scope_match=True,
+            run_id="unit_test_extension",
+        )
+    )
+
+    assert exit_code == 0
+
+    manifest_path = output_dir / runner.EXTENSION_MANIFEST_FILENAME
+    results_path = output_dir / runner.EXTENSION_STAGE_ARTIFACT_FILENAMES["extension_results"]
+    sample_loss_path = output_dir / runner.EXTENSION_STAGE_ARTIFACT_FILENAMES["extension_sample_loss"]
+    dictionary_surface_path = output_dir / runner.EXTENSION_STAGE_ARTIFACT_FILENAMES["extension_dictionary_surface"]
+    finbert_surface_path = output_dir / runner.EXTENSION_STAGE_ARTIFACT_FILENAMES["extension_finbert_surface"]
+    analysis_panel_path = output_dir / runner.EXTENSION_STAGE_ARTIFACT_FILENAMES["extension_analysis_panel"]
+
+    for path in (
+        manifest_path,
+        results_path,
+        sample_loss_path,
+        dictionary_surface_path,
+        finbert_surface_path,
+        analysis_panel_path,
+    ):
+        assert path.exists()
+
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["run_status"] == "completed"
+    assert manifest["failed_stage"] is None
+    assert manifest["config"]["dictionary_source_mode"] == runner.EXTENSION_DICTIONARY_SOURCE_PREFER_CLEANED
+    assert manifest["config"]["effective_dictionary_source_mode"] == runner.EXTENSION_DICTIONARY_SOURCE_PREFER_CLEANED
+    assert manifest["resolved_inputs"]["finbert_item_features_long_path"] == str(
+        extension_inputs["item_features_long_path"].resolve()
+    )
+    assert manifest["resolved_inputs"]["finbert_cleaned_item_scopes_dir"] == str(
+        extension_inputs["cleaned_item_scopes_dir"].resolve()
+    )
+    assert manifest["stages"]["extension_dictionary_surface"]["status"] == "generated"
+    assert manifest["stages"]["extension_finbert_surface"]["status"] == "generated"
+    assert manifest["stages"]["extension_results"]["status"] == "generated"
+    assert manifest["row_counts"]["extension_results"] >= 18
+
+    panel = pl.read_parquet(analysis_panel_path).sort("doc_id", "text_scope")
+    assert panel.get_column("sample_window").unique().to_list() == ["2009_2024"]
+    assert set(panel.get_column("text_scope").unique().to_list()) == {
+        "item_7_mda",
+        "item_1a_risk_factors",
+    }
+
+    finbert_surface = pl.read_parquet(finbert_surface_path).sort("doc_id", "text_scope")
+    assert set(finbert_surface.get_column("text_scope").unique().to_list()) == {
+        "item_7_mda",
+        "item_1a_risk_factors",
+    }
+    assert "item_1" not in finbert_surface.get_column("text_scope").to_list()
+
+    results = pl.read_parquet(results_path)
+    assert "estimator_status" in results.columns
+    assert results.get_column("estimator_status").null_count() == 0
+    observed_grid = {
+        (
+            row["text_scope"],
+            row["specification_name"],
+            row["control_set_id"],
+            row["outcome_name"],
+        )
+        for row in results.select(
+            "text_scope",
+            "specification_name",
+            "control_set_id",
+            "outcome_name",
+        ).unique().to_dicts()
+    }
+    expected_grid = {
+        (text_scope, specification_name, control_set_id, "filing_period_excess_return")
+        for text_scope in ("item_7_mda", "item_1a_risk_factors")
+        for specification_name in (
+            "dictionary_only",
+            "finbert_only",
+            "dictionary_finbert_joint",
+        )
+        for control_set_id in ("C0", "C1", "C2")
+    }
+    assert observed_grid == expected_grid
+
+
+def test_extension_pipeline_strict_cleaned_scope_match_fails_closed(tmp_path: Path) -> None:
+    _, _, additional_data_dir, _ = _build_temp_layout(tmp_path)
+    extension_inputs = _build_extension_inputs(tmp_path, additional_data_dir)
+    output_dir = tmp_path / "lm2011_extension"
+
+    with pytest.raises(
+        FileNotFoundError,
+        match="cleaned_item_scopes_dir",
+    ):
+        runner.run_lm2011_extension_pipeline(
+            runner.LM2011ExtensionRunConfig(
+                output_dir=output_dir,
+                additional_data_dir=additional_data_dir,
+                items_analysis_dir=extension_inputs["items_analysis_dir"],
+                event_panel_path=extension_inputs["event_panel_path"],
+                company_history_path=extension_inputs["company_history_path"],
+                company_description_path=extension_inputs["company_description_path"],
+                ff48_siccodes_path=extension_inputs["ff48_siccodes_path"],
+                finbert_item_features_long_path=extension_inputs["item_features_long_path"],
+                require_cleaned_scope_match=True,
+                run_id="unit_test_extension_fail_closed",
+            )
+        )
+
+    manifest = json.loads((output_dir / runner.EXTENSION_MANIFEST_FILENAME).read_text(encoding="utf-8"))
+    assert manifest["run_status"] == "failed"
+    assert manifest["failed_stage"] == "configuration_validation"
+    assert manifest["stages"]["configuration_validation"]["status"] == "failed"
+    assert manifest["stages"]["configuration_validation"]["artifact_path"] is None
+    assert "extension_finbert_surface" not in manifest["stages"]
+
+
+def test_extension_pipeline_relaxed_mode_fails_fast_without_cleaned_scope_match(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, _, additional_data_dir, _ = _build_temp_layout(tmp_path)
+    extension_inputs = _build_extension_inputs(tmp_path, additional_data_dir)
+    output_dir = tmp_path / "lm2011_extension"
+
+    def _unexpected_analysis_panel(*_: object, **__: object) -> pl.LazyFrame:
+        raise AssertionError("extension_analysis_panel should not run in relaxed fallback fail-fast mode")
+
+    monkeypatch.setattr(runner, "build_lm2011_extension_analysis_panel", _unexpected_analysis_panel)
+
+    with pytest.raises(
+        ValueError,
+        match="relaxed raw-item fallback is not supported",
+    ):
+        runner.run_lm2011_extension_pipeline(
+            runner.LM2011ExtensionRunConfig(
+                output_dir=output_dir,
+                additional_data_dir=additional_data_dir,
+                items_analysis_dir=extension_inputs["items_analysis_dir"],
+                event_panel_path=extension_inputs["event_panel_path"],
+                company_history_path=extension_inputs["company_history_path"],
+                company_description_path=extension_inputs["company_description_path"],
+                ff48_siccodes_path=extension_inputs["ff48_siccodes_path"],
+                finbert_item_features_long_path=extension_inputs["item_features_long_path"],
+                require_cleaned_scope_match=False,
+                run_id="unit_test_extension_relaxed_fail_fast",
+            )
+        )
+
+    manifest = json.loads((output_dir / runner.EXTENSION_MANIFEST_FILENAME).read_text(encoding="utf-8"))
+    assert manifest["run_status"] == "failed"
+    assert manifest["failed_stage"] == "configuration_validation"
+    assert manifest["stages"]["configuration_validation"]["status"] == "failed"
+    assert manifest["stages"]["configuration_validation"]["artifact_path"] is None
+    assert "extension_dictionary_surface" not in manifest["stages"]
+
+
+def test_extension_dictionary_surface_prefers_cleaned_scopes_when_available(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, _, additional_data_dir, _ = _build_temp_layout(tmp_path)
+    extension_inputs = _build_extension_inputs(tmp_path, additional_data_dir)
+    dictionary_inputs = runner.load_lm2011_dictionary_inputs(additional_data_dir)
+    captured: dict[str, object] = {"used_cleaned": False}
+
+    def _cleaned_builder(*args: object, **kwargs: object) -> pl.LazyFrame:
+        captured["used_cleaned"] = True
+        cleaned_lf = args[0] if args else kwargs["cleaned_scopes_lf"]
+        cleaned = cleaned_lf.collect().sort("doc_id", "text_scope")
+        assert set(cleaned.get_column("text_scope").to_list()) == {
+            "item_7_mda",
+            "item_1a_risk_factors",
+        }
+        return pl.DataFrame(
+            {
+                "doc_id": ["doc1", "doc1"],
+                "cik_10": ["0000000001", "0000000001"],
+                "filing_date": [dt.date(2009, 3, 2), dt.date(2009, 3, 2)],
+                "text_scope": ["item_7_mda", "item_1a_risk_factors"],
+                "cleaning_policy_id": ["item_text_clean_v2", "item_text_clean_v2"],
+                "dictionary_family": ["lm2011_frozen", "lm2011_frozen"],
+                "total_token_count": [5, 4],
+                "token_count": [5, 4],
+                "lm_negative_tfidf": [0.1, 0.2],
+            }
+        ).lazy()
+
+    def _raw_builder(*_: object, **__: object) -> pl.LazyFrame:
+        raise AssertionError("raw dictionary rescoring should not run when cleaned scopes are available")
+
+    monkeypatch.setattr(
+        runner,
+        "build_lm2011_extension_dictionary_features_from_cleaned_scopes",
+        _cleaned_builder,
+    )
+    monkeypatch.setattr(
+        runner,
+        "build_lm2011_extension_dictionary_features",
+        _raw_builder,
+    )
+
+    cfg = runner.LM2011ExtensionRunConfig(
+        output_dir=tmp_path / "lm2011_extension",
+        additional_data_dir=additional_data_dir,
+        items_analysis_dir=extension_inputs["items_analysis_dir"],
+        event_panel_path=extension_inputs["event_panel_path"],
+        company_history_path=extension_inputs["company_history_path"],
+        company_description_path=extension_inputs["company_description_path"],
+        ff48_siccodes_path=extension_inputs["ff48_siccodes_path"],
+        finbert_item_features_long_path=extension_inputs["item_features_long_path"],
+    )
+
+    out = runner._build_extension_dictionary_surface_lf(
+        cfg,
+        cleaned_item_scopes_dir=extension_inputs["cleaned_item_scopes_dir"],
+        event_doc_ids_lf=pl.DataFrame({"doc_id": ["doc1", "doc2"]}).lazy(),
+        dictionary_inputs=dictionary_inputs,
+    ).collect()
+
+    assert captured["used_cleaned"] is True
+    assert set(out.get_column("text_scope").to_list()) == {
+        "item_7_mda",
+        "item_1a_risk_factors",
+    }
+
+
 def test_resolve_ccm_parquet_artifact_supports_nested_documents_export_layout(tmp_path: Path) -> None:
     base_dir = tmp_path / "ccm"
     nested_dir = base_dir / "documents-export-2025-3-19"

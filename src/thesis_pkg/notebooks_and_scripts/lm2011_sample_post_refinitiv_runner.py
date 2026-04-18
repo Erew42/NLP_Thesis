@@ -82,6 +82,18 @@ from thesis_pkg.pipelines.lm2011_pipeline import (
     write_lm2011_sue_panel_parquet,
 )
 from thesis_pkg.pipelines import lm2011_pipeline
+from thesis_pkg.pipelines.lm2011_extension import (
+    EXTENSION_ITEM_SCOPE_IDS,
+    EXTENSION_PRIMARY_TEXT_SCOPES,
+    build_lm2011_extension_analysis_panel,
+    build_lm2011_extension_control_ladder,
+    build_lm2011_extension_dictionary_features,
+    build_lm2011_extension_dictionary_features_from_cleaned_scopes,
+    build_lm2011_extension_sample_loss_table,
+    build_lm2011_extension_specification_grid,
+    normalize_lm2011_extension_text_scope_expr,
+    run_lm2011_extension_estimation_scaffold,
+)
 from thesis_pkg.pipelines.lm2011_regressions import (
     build_lm2011_return_regression_panel,
     build_lm2011_sue_regression_panel,
@@ -222,6 +234,22 @@ LM2011_OPTIONAL_STAGE_DEFAULTS_FALSE = frozenset(
     }
 )
 SKIPPED_STAGE_DISABLED = "disabled_by_run_config"
+EXTENSION_MANIFEST_FILENAME = "lm2011_extension_run_manifest.json"
+EXTENSION_DICTIONARY_SOURCE_PREFER_CLEANED = "prefer_cleaned_scopes"
+EXTENSION_DICTIONARY_SOURCE_RAW = "raw_item_text"
+EXTENSION_ALLOWED_DICTIONARY_SOURCE_MODES = (
+    EXTENSION_DICTIONARY_SOURCE_PREFER_CLEANED,
+    EXTENSION_DICTIONARY_SOURCE_RAW,
+)
+EXTENSION_STAGE_ARTIFACT_FILENAMES: dict[str, str] = {
+    "extension_dictionary_surface": "lm2011_extension_dictionary_surface.parquet",
+    "extension_finbert_surface": "lm2011_extension_finbert_surface.parquet",
+    "extension_control_ladder": "lm2011_extension_control_ladder.parquet",
+    "extension_specification_grid": "lm2011_extension_specification_grid.parquet",
+    "extension_analysis_panel": "lm2011_extension_analysis_panel.parquet",
+    "extension_sample_loss": "lm2011_extension_sample_loss.parquet",
+    "extension_results": "lm2011_extension_results.parquet",
+}
 
 
 @dataclass(frozen=True)
@@ -273,6 +301,37 @@ class LM2011PostRefinitivRunConfig:
         unknown = sorted(set(self.enabled_stages) - set(LM2011_ALL_STAGE_NAMES))
         if unknown:
             raise ValueError(f"Unknown LM2011 stage names: {unknown}")
+
+
+@dataclass(frozen=True)
+class LM2011ExtensionRunConfig:
+    output_dir: Path
+    additional_data_dir: Path
+    items_analysis_dir: Path
+    event_panel_path: Path
+    company_history_path: Path
+    company_description_path: Path
+    ff48_siccodes_path: Path
+    finbert_item_features_long_path: Path | None = None
+    finbert_analysis_run_dir: Path | None = None
+    finbert_analysis_manifest_path: Path | None = None
+    finbert_cleaned_item_scopes_dir: Path | None = None
+    finbert_preprocessing_run_dir: Path | None = None
+    finbert_preprocessing_manifest_path: Path | None = None
+    require_cleaned_scope_match: bool = True
+    dictionary_source_mode: str = EXTENSION_DICTIONARY_SOURCE_PREFER_CLEANED
+    text_scopes: tuple[str, ...] = EXTENSION_PRIMARY_TEXT_SCOPES
+    run_id: str = "lm2011_extension"
+    note: str = ""
+
+    def __post_init__(self) -> None:
+        if self.dictionary_source_mode not in EXTENSION_ALLOWED_DICTIONARY_SOURCE_MODES:
+            raise ValueError(
+                "Unknown LM2011 extension dictionary_source_mode: "
+                f"{self.dictionary_source_mode!r}"
+            )
+        if not self.text_scopes:
+            raise ValueError("LM2011 extension text_scopes must be non-empty.")
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -531,6 +590,432 @@ def _should_log_periodic_batch(
 def _checkpoint_manifest(manifest: dict[str, Any], manifest_path: Path) -> None:
     manifest["last_checkpoint_at_utc"] = _utc_timestamp()
     _write_json(manifest_path, manifest)
+
+
+def _normalize_extension_text_scope_value(value: str) -> str:
+    raw = value.strip().casefold().replace("-", "_")
+    if raw in {"7", "item_7", "mda_item_7", "item_7_mda"}:
+        return "item_7_mda"
+    if raw in {"1a", "item_1a", "item_1a_risk_factors"}:
+        return "item_1a_risk_factors"
+    if raw in {"1", "item_1", "item_1_business"}:
+        return "item_1_business"
+    if raw in {"items_1_1a_7_concat", "item_1_item_1a_item_7_concat"}:
+        return "items_1_1a_7_concat"
+    return raw
+
+
+def _normalized_extension_text_scopes(text_scopes: Sequence[str]) -> tuple[str, ...]:
+    normalized = tuple(dict.fromkeys(_normalize_extension_text_scope_value(scope) for scope in text_scopes))
+    if not normalized:
+        raise ValueError("LM2011 extension text_scopes must be non-empty.")
+    return normalized
+
+
+def _extension_artifact_output_path(output_dir: Path, stage_name: str) -> Path:
+    return output_dir / EXTENSION_STAGE_ARTIFACT_FILENAMES[stage_name]
+
+
+def _read_json_payload(path: Path) -> dict[str, Any]:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _resolve_manifest_path_value(
+    *,
+    manifest: dict[str, Any],
+    manifest_path: Path,
+    value: object,
+) -> Path | None:
+    if value is None:
+        return None
+    raw = str(value).strip()
+    if raw == "":
+        return None
+    candidate = Path(raw).expanduser()
+    if str(manifest.get("path_semantics") or "") == "manifest_relative_v1" and not candidate.is_absolute():
+        candidate = manifest_path.parent / candidate
+    return candidate.resolve()
+
+
+def _resolve_finbert_extension_inputs(
+    run_cfg: LM2011ExtensionRunConfig,
+) -> dict[str, Any]:
+    analysis_run_dir = (
+        Path(run_cfg.finbert_analysis_run_dir).resolve()
+        if run_cfg.finbert_analysis_run_dir is not None
+        else None
+    )
+    analysis_manifest_path = (
+        Path(run_cfg.finbert_analysis_manifest_path).resolve()
+        if run_cfg.finbert_analysis_manifest_path is not None
+        else (
+            (analysis_run_dir / "run_manifest.json").resolve()
+            if analysis_run_dir is not None
+            else None
+        )
+    )
+    analysis_manifest: dict[str, Any] | None = None
+    if analysis_manifest_path is not None:
+        if not analysis_manifest_path.exists():
+            raise FileNotFoundError(
+                f"FinBERT analysis manifest not found: {analysis_manifest_path}"
+            )
+        analysis_manifest = _read_json_payload(analysis_manifest_path)
+        analysis_run_dir = analysis_manifest_path.parent.resolve()
+    item_features_long_path = (
+        Path(run_cfg.finbert_item_features_long_path).resolve()
+        if run_cfg.finbert_item_features_long_path is not None
+        else None
+    )
+    if item_features_long_path is None and analysis_manifest is not None:
+        item_features_long_path = _resolve_manifest_path_value(
+            manifest=analysis_manifest,
+            manifest_path=analysis_manifest_path,
+            value=((analysis_manifest.get("artifacts") or {}).get("item_features_long_path")),
+        )
+    if item_features_long_path is None and analysis_run_dir is not None:
+        candidate = analysis_run_dir / "item_features_long.parquet"
+        if candidate.exists():
+            item_features_long_path = candidate.resolve()
+    if item_features_long_path is None or not item_features_long_path.exists():
+        raise FileNotFoundError(
+            "LM2011 extension requires FinBERT item_features_long.parquet, "
+            f"but it was not resolved from {analysis_run_dir or run_cfg.finbert_item_features_long_path}."
+        )
+
+    preprocessing_run_dir = (
+        Path(run_cfg.finbert_preprocessing_run_dir).resolve()
+        if run_cfg.finbert_preprocessing_run_dir is not None
+        else None
+    )
+    preprocessing_manifest_path = (
+        Path(run_cfg.finbert_preprocessing_manifest_path).resolve()
+        if run_cfg.finbert_preprocessing_manifest_path is not None
+        else (
+            (preprocessing_run_dir / "run_manifest.json").resolve()
+            if preprocessing_run_dir is not None
+            else None
+        )
+    )
+    preprocessing_manifest: dict[str, Any] | None = None
+    if preprocessing_manifest_path is not None:
+        if not preprocessing_manifest_path.exists():
+            raise FileNotFoundError(
+                f"FinBERT preprocessing manifest not found: {preprocessing_manifest_path}"
+            )
+        preprocessing_manifest = _read_json_payload(preprocessing_manifest_path)
+        preprocessing_run_dir = preprocessing_manifest_path.parent.resolve()
+
+    cleaned_item_scopes_dir = (
+        Path(run_cfg.finbert_cleaned_item_scopes_dir).resolve()
+        if run_cfg.finbert_cleaned_item_scopes_dir is not None
+        else None
+    )
+    if cleaned_item_scopes_dir is None and preprocessing_manifest is not None:
+        cleaned_item_scopes_dir = _resolve_manifest_path_value(
+            manifest=preprocessing_manifest,
+            manifest_path=preprocessing_manifest_path,
+            value=((preprocessing_manifest.get("artifacts") or {}).get("cleaned_item_scopes_dir")),
+        )
+    if cleaned_item_scopes_dir is None and preprocessing_run_dir is not None:
+        candidate = preprocessing_run_dir / "cleaned_item_scopes" / "by_year"
+        if candidate.exists():
+            cleaned_item_scopes_dir = candidate.resolve()
+    if cleaned_item_scopes_dir is not None and not cleaned_item_scopes_dir.exists():
+        raise FileNotFoundError(
+            f"Resolved FinBERT cleaned_item_scopes_dir does not exist: {cleaned_item_scopes_dir}"
+        )
+
+    return {
+        "analysis_run_dir": analysis_run_dir,
+        "analysis_manifest_path": analysis_manifest_path,
+        "analysis_manifest": analysis_manifest,
+        "item_features_long_path": item_features_long_path,
+        "preprocessing_run_dir": preprocessing_run_dir,
+        "preprocessing_manifest_path": preprocessing_manifest_path,
+        "preprocessing_manifest": preprocessing_manifest,
+        "cleaned_item_scopes_dir": cleaned_item_scopes_dir,
+    }
+
+
+def _build_extension_manifest(
+    run_cfg: LM2011ExtensionRunConfig,
+    *,
+    resolved_finbert_inputs: dict[str, Any],
+) -> dict[str, Any]:
+    started_at_utc = _utc_timestamp()
+    return {
+        "runner_name": "lm2011_extension_runner",
+        "generated_at_utc": started_at_utc,
+        "started_at_utc": started_at_utc,
+        "completed_at_utc": None,
+        "elapsed_seconds": None,
+        "failed_stage": None,
+        "run_status": "running",
+        "roots": {
+            "output_dir": _absolute_path_str(run_cfg.output_dir),
+            "additional_data_dir": _absolute_path_str(run_cfg.additional_data_dir),
+        },
+        "config": {
+            "run_id": run_cfg.run_id,
+            "note": run_cfg.note,
+            "require_cleaned_scope_match": run_cfg.require_cleaned_scope_match,
+            "dictionary_source_mode": run_cfg.dictionary_source_mode,
+            "text_scopes": list(_normalized_extension_text_scopes(run_cfg.text_scopes)),
+        },
+        "resolved_inputs": {
+            "items_analysis_dir": _absolute_path_str(run_cfg.items_analysis_dir),
+            "event_panel_path": _absolute_path_str(run_cfg.event_panel_path),
+            "company_history_path": _absolute_path_str(run_cfg.company_history_path),
+            "company_description_path": _absolute_path_str(run_cfg.company_description_path),
+            "ff48_siccodes_path": _absolute_path_str(run_cfg.ff48_siccodes_path),
+            "finbert_analysis_run_dir": _absolute_path_str(resolved_finbert_inputs["analysis_run_dir"]),
+            "finbert_analysis_manifest_path": _absolute_path_str(
+                resolved_finbert_inputs["analysis_manifest_path"]
+            ),
+            "finbert_item_features_long_path": _absolute_path_str(
+                resolved_finbert_inputs["item_features_long_path"]
+            ),
+            "finbert_preprocessing_run_dir": _absolute_path_str(
+                resolved_finbert_inputs["preprocessing_run_dir"]
+            ),
+            "finbert_preprocessing_manifest_path": _absolute_path_str(
+                resolved_finbert_inputs["preprocessing_manifest_path"]
+            ),
+            "finbert_cleaned_item_scopes_dir": _absolute_path_str(
+                resolved_finbert_inputs["cleaned_item_scopes_dir"]
+            ),
+        },
+        "artifacts": {},
+        "row_counts": {},
+        "stages": {},
+        "dictionary_inputs": {},
+    }
+
+
+def _record_extension_stage_failed(
+    manifest: dict[str, Any],
+    *,
+    output_dir: Path,
+    stage_name: str,
+    exc: Exception,
+    manifest_path: Path | None = None,
+) -> None:
+    artifact_path = (
+        _absolute_path_str(_extension_artifact_output_path(output_dir, stage_name))
+        if stage_name in EXTENSION_STAGE_ARTIFACT_FILENAMES
+        else None
+    )
+    manifest["stages"][stage_name] = {
+        "status": "failed",
+        "artifact_path": artifact_path,
+        "row_count": None,
+        "reason": str(exc),
+        "completed_at_utc": _utc_timestamp(),
+    }
+    if manifest_path is not None:
+        _checkpoint_manifest(manifest, manifest_path)
+
+
+def _write_extension_stage(
+    manifest: dict[str, Any],
+    *,
+    manifest_path: Path | None,
+    output_dir: Path,
+    stage_name: str,
+    frame: pl.LazyFrame | pl.DataFrame,
+    empty_reason: str | None = None,
+    extra_artifacts: dict[str, Path] | None = None,
+    warnings: Sequence[str] | None = None,
+) -> pl.LazyFrame:
+    artifact_path = _extension_artifact_output_path(output_dir, stage_name)
+    written_path, row_count = _write_frame_artifact(frame, artifact_path)
+    _record_stage_success(
+        manifest,
+        stage_name=stage_name,
+        artifact_path=written_path,
+        row_count=row_count,
+        empty_reason=empty_reason,
+        extra_artifacts=extra_artifacts,
+        warnings=warnings,
+    )
+    if manifest_path is not None:
+        _checkpoint_manifest(manifest, manifest_path)
+    return pl.scan_parquet(written_path)
+
+
+def _scan_year_sharded_parquet_dir(directory: Path, *, label: str) -> pl.LazyFrame:
+    if not directory.exists() or not _parquet_glob_exists(directory, "*.parquet"):
+        raise FileNotFoundError(f"{label} not found or empty: {directory}")
+    return pl.scan_parquet(str(directory / "*.parquet"))
+
+
+def _coalesce_existing_expr(
+    schema: pl.Schema,
+    candidates: Sequence[str],
+    *,
+    dtype: pl.DataType,
+) -> pl.Expr:
+    exprs = [
+        pl.col(column).cast(dtype, strict=False)
+        for column in candidates
+        if column in schema
+    ]
+    return pl.coalesce(exprs) if exprs else pl.lit(None, dtype=dtype)
+
+
+def _build_extension_finbert_surface_lf(
+    item_features_lf: pl.LazyFrame,
+    event_doc_ids_lf: pl.LazyFrame,
+    *,
+    text_scopes: Sequence[str],
+) -> pl.LazyFrame:
+    schema = item_features_lf.collect_schema()
+    if "text_scope" in schema:
+        raw_scope_expr = pl.col("text_scope")
+    elif "benchmark_item_code" in schema:
+        raw_scope_expr = pl.col("benchmark_item_code")
+    elif "item_id" in schema:
+        raw_scope_expr = pl.col("item_id")
+    else:
+        raise ValueError(
+            "FinBERT item features must contain text_scope, benchmark_item_code, or item_id."
+        )
+    normalized_text_scopes = list(_normalized_extension_text_scopes(text_scopes))
+    return (
+        item_features_lf.join(event_doc_ids_lf, on="doc_id", how="inner")
+        .select(
+            pl.col("doc_id").cast(pl.Utf8, strict=False),
+            (
+                pl.col("filing_date").cast(pl.Date, strict=False)
+                if "filing_date" in schema
+                else pl.lit(None, dtype=pl.Date)
+            ).alias("filing_date"),
+            normalize_lm2011_extension_text_scope_expr(raw_scope_expr).alias("text_scope"),
+            (
+                pl.col("cleaning_policy_id").cast(pl.Utf8, strict=False)
+                if "cleaning_policy_id" in schema
+                else pl.lit(None, dtype=pl.Utf8)
+            ).alias("cleaning_policy_id"),
+            (
+                pl.col("model_name").cast(pl.Utf8, strict=False)
+                if "model_name" in schema
+                else pl.lit(None, dtype=pl.Utf8)
+            ).alias("model_name"),
+            (
+                pl.col("model_version").cast(pl.Utf8, strict=False)
+                if "model_version" in schema
+                else pl.lit(None, dtype=pl.Utf8)
+            ).alias("model_version"),
+            (
+                pl.col("segment_policy_id").cast(pl.Utf8, strict=False)
+                if "segment_policy_id" in schema
+                else pl.lit(None, dtype=pl.Utf8)
+            ).alias("segment_policy_id"),
+            _coalesce_existing_expr(
+                schema,
+                ("finbert_segment_count", "sentence_count"),
+                dtype=pl.Int32,
+            ).alias("finbert_segment_count"),
+            _coalesce_existing_expr(
+                schema,
+                ("finbert_token_count_512", "finbert_token_count_512_sum"),
+                dtype=pl.Int64,
+            ).alias("finbert_token_count_512"),
+            _coalesce_existing_expr(
+                schema,
+                ("finbert_token_count_512_sum", "finbert_token_count_512"),
+                dtype=pl.Int64,
+            ).alias("finbert_token_count_512_sum"),
+            *[
+                _coalesce_existing_expr(schema, (column,), dtype=pl.Float64).alias(column)
+                for column in (
+                    "finbert_neg_prob_lenw_mean",
+                    "finbert_pos_prob_lenw_mean",
+                    "finbert_neu_prob_lenw_mean",
+                    "finbert_net_negative_lenw_mean",
+                    "finbert_neg_dominant_share",
+                )
+            ],
+        )
+        .filter(pl.col("text_scope").is_in(normalized_text_scopes))
+        .unique(subset=["doc_id", "text_scope"], keep="first")
+    )
+
+
+def _build_extension_dictionary_surface_lf(
+    run_cfg: LM2011ExtensionRunConfig,
+    *,
+    cleaned_item_scopes_dir: Path | None,
+    event_doc_ids_lf: pl.LazyFrame,
+    dictionary_inputs: Any,
+) -> pl.LazyFrame:
+    normalized_text_scopes = _normalized_extension_text_scopes(run_cfg.text_scopes)
+    if run_cfg.dictionary_source_mode == EXTENSION_DICTIONARY_SOURCE_PREFER_CLEANED:
+        if cleaned_item_scopes_dir is not None:
+            cleaned_scopes_lf = _scan_year_sharded_parquet_dir(
+                cleaned_item_scopes_dir,
+                label="FinBERT cleaned_item_scopes_dir",
+            )
+            cleaned_scopes_lf = (
+                cleaned_scopes_lf.join(event_doc_ids_lf, on="doc_id", how="inner")
+                .with_columns(
+                    normalize_lm2011_extension_text_scope_expr(pl.col("text_scope")).alias("text_scope")
+                )
+                .filter(pl.col("text_scope").is_in(list(normalized_text_scopes)))
+            )
+            return build_lm2011_extension_dictionary_features_from_cleaned_scopes(
+                cleaned_scopes_lf,
+                dictionary_lists=dictionary_inputs.dictionary_lists,
+                harvard_negative_word_list=dictionary_inputs.harvard_negative_word_list,
+                master_dictionary_words=dictionary_inputs.master_dictionary_words,
+            ).filter(pl.col("text_scope").is_in(list(normalized_text_scopes)))
+        if run_cfg.require_cleaned_scope_match:
+            raise FileNotFoundError(
+                "LM2011 extension requires FinBERT cleaned_item_scopes_dir for strict matched comparison."
+            )
+
+    if not _parquet_glob_exists(run_cfg.items_analysis_dir, ITEMS_ANALYSIS_GLOB):
+        raise FileNotFoundError(
+            f"LM2011 extension raw items_analysis directory not found or empty: {run_cfg.items_analysis_dir}"
+        )
+    items_analysis_lf = _prepare_lm2011_sec_input_lf(
+        pl.scan_parquet(str(run_cfg.items_analysis_dir / ITEMS_ANALYSIS_GLOB))
+    )
+    items_analysis_lf = items_analysis_lf.join(event_doc_ids_lf, on="doc_id", how="inner")
+    text_scope_item_ids = {
+        text_scope: item_id
+        for text_scope, item_id in EXTENSION_ITEM_SCOPE_IDS.items()
+        if text_scope in normalized_text_scopes
+    }
+    return build_lm2011_extension_dictionary_features(
+        items_analysis_lf,
+        dictionary_lists=dictionary_inputs.dictionary_lists,
+        harvard_negative_word_list=dictionary_inputs.harvard_negative_word_list,
+        master_dictionary_words=dictionary_inputs.master_dictionary_words,
+        text_scope_item_ids=text_scope_item_ids,
+    ).filter(pl.col("text_scope").is_in(list(normalized_text_scopes)))
+
+
+def _validate_extension_comparison_mode(
+    run_cfg: LM2011ExtensionRunConfig,
+    *,
+    cleaned_item_scopes_dir: Path | None,
+) -> None:
+    if run_cfg.dictionary_source_mode != EXTENSION_DICTIONARY_SOURCE_PREFER_CLEANED:
+        return
+    if cleaned_item_scopes_dir is not None:
+        return
+    if run_cfg.require_cleaned_scope_match:
+        raise FileNotFoundError(
+            "LM2011 extension requires FinBERT cleaned_item_scopes_dir for strict matched comparison."
+        )
+    raise ValueError(
+        "LM2011 extension relaxed raw-item fallback is not supported in the current "
+        "matched dictionary-versus-FinBERT runner. The extension analysis panel requires "
+        "both surfaces to carry aligned cleaned-scope cleaning_policy_id metadata. "
+        "Provide cleaned_item_scopes_dir or keep require_cleaned_scope_match=True."
+    )
 
 
 def _resolve_paths(args: argparse.Namespace) -> RunnerPaths:
@@ -2406,6 +2891,154 @@ def run_lm2011_post_refinitiv_pipeline(run_cfg: LM2011PostRefinitivRunConfig) ->
         manifest["run_status"] = "failed"
         manifest["completed_at_utc"] = completed_at_utc
         manifest["elapsed_seconds"] = _elapsed_seconds(str(manifest["started_at_utc"]), completed_at_utc)
+        manifest["failed_stage"] = current_stage_name
+        manifest["error"] = {
+            "stage": current_stage_name,
+            "type": type(exc).__name__,
+            "message": str(exc),
+        }
+        _checkpoint_manifest(manifest, manifest_path)
+        raise
+
+
+def run_lm2011_extension_pipeline(run_cfg: LM2011ExtensionRunConfig) -> int:
+    output_dir = Path(run_cfg.output_dir).resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    resolved_finbert_inputs = _resolve_finbert_extension_inputs(run_cfg)
+    manifest = _build_extension_manifest(
+        run_cfg,
+        resolved_finbert_inputs=resolved_finbert_inputs,
+    )
+    manifest_path = output_dir / EXTENSION_MANIFEST_FILENAME
+    current_stage_name = "initialization"
+    _checkpoint_manifest(manifest, manifest_path)
+
+    try:
+        current_stage_name = "configuration_validation"
+        _validate_extension_comparison_mode(
+            run_cfg,
+            cleaned_item_scopes_dir=resolved_finbert_inputs["cleaned_item_scopes_dir"],
+        )
+
+        dictionary_inputs = load_lm2011_dictionary_inputs(run_cfg.additional_data_dir)
+        manifest["dictionary_inputs"] = dictionary_inputs.to_manifest_dict()
+
+        event_panel_lf = pl.scan_parquet(run_cfg.event_panel_path)
+        event_doc_ids_lf = event_panel_lf.select(
+            pl.col("doc_id").cast(pl.Utf8, strict=False)
+        ).unique()
+
+        manifest["config"]["effective_dictionary_source_mode"] = run_cfg.dictionary_source_mode
+        _checkpoint_manifest(manifest, manifest_path)
+
+        current_stage_name = "extension_dictionary_surface"
+        dictionary_surface_lf = _write_extension_stage(
+            manifest,
+            manifest_path=manifest_path,
+            output_dir=output_dir,
+            stage_name="extension_dictionary_surface",
+            frame=_build_extension_dictionary_surface_lf(
+                run_cfg,
+                cleaned_item_scopes_dir=resolved_finbert_inputs["cleaned_item_scopes_dir"],
+                event_doc_ids_lf=event_doc_ids_lf,
+                dictionary_inputs=dictionary_inputs,
+            ),
+        )
+
+        current_stage_name = "extension_finbert_surface"
+        finbert_surface_lf = _write_extension_stage(
+            manifest,
+            manifest_path=manifest_path,
+            output_dir=output_dir,
+            stage_name="extension_finbert_surface",
+            frame=_build_extension_finbert_surface_lf(
+                pl.scan_parquet(resolved_finbert_inputs["item_features_long_path"]),
+                event_doc_ids_lf,
+                text_scopes=run_cfg.text_scopes,
+            ),
+        )
+
+        current_stage_name = "extension_control_ladder"
+        _write_extension_stage(
+            manifest,
+            manifest_path=manifest_path,
+            output_dir=output_dir,
+            stage_name="extension_control_ladder",
+            frame=build_lm2011_extension_control_ladder(),
+        )
+
+        current_stage_name = "extension_specification_grid"
+        _write_extension_stage(
+            manifest,
+            manifest_path=manifest_path,
+            output_dir=output_dir,
+            stage_name="extension_specification_grid",
+            frame=build_lm2011_extension_specification_grid(),
+        )
+
+        current_stage_name = "extension_analysis_panel"
+        extension_panel_lf = _write_extension_stage(
+            manifest,
+            manifest_path=manifest_path,
+            output_dir=output_dir,
+            stage_name="extension_analysis_panel",
+            frame=build_lm2011_extension_analysis_panel(
+                event_panel_lf,
+                dictionary_surface_lf,
+                finbert_surface_lf,
+                pl.scan_parquet(run_cfg.company_history_path),
+                pl.scan_parquet(run_cfg.company_description_path),
+                ff48_siccodes_path=run_cfg.ff48_siccodes_path,
+            ),
+        )
+
+        current_stage_name = "extension_sample_loss"
+        _write_extension_stage(
+            manifest,
+            manifest_path=manifest_path,
+            output_dir=output_dir,
+            stage_name="extension_sample_loss",
+            frame=build_lm2011_extension_sample_loss_table(extension_panel_lf),
+        )
+
+        current_stage_name = "extension_results"
+        _write_extension_stage(
+            manifest,
+            manifest_path=manifest_path,
+            output_dir=output_dir,
+            stage_name="extension_results",
+            frame=run_lm2011_extension_estimation_scaffold(
+                extension_panel_lf,
+                run_id=run_cfg.run_id,
+                text_scopes=_normalized_extension_text_scopes(run_cfg.text_scopes),
+            ),
+        )
+
+        completed_at_utc = _utc_timestamp()
+        manifest["run_status"] = "completed"
+        manifest["completed_at_utc"] = completed_at_utc
+        manifest["elapsed_seconds"] = _elapsed_seconds(
+            str(manifest["started_at_utc"]),
+            completed_at_utc,
+        )
+        manifest["failed_stage"] = None
+        _checkpoint_manifest(manifest, manifest_path)
+        return 0
+    except Exception as exc:
+        _record_extension_stage_failed(
+            manifest,
+            output_dir=output_dir,
+            stage_name=current_stage_name,
+            exc=exc,
+            manifest_path=manifest_path,
+        )
+        completed_at_utc = _utc_timestamp()
+        manifest["run_status"] = "failed"
+        manifest["completed_at_utc"] = completed_at_utc
+        manifest["elapsed_seconds"] = _elapsed_seconds(
+            str(manifest["started_at_utc"]),
+            completed_at_utc,
+        )
         manifest["failed_stage"] = current_stage_name
         manifest["error"] = {
             "stage": current_stage_name,

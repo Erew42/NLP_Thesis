@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import polars as pl
 import pytest
@@ -233,6 +234,121 @@ def test_notebook_config_exports_finbert_sentence_postprocess_policy_env_key() -
 
     assert 'FINBERT_SENTENCE_POSTPROCESS_POLICY = \\"reference_stitch_protect_v3\\"' in source
     assert '"    \\"SEC_CCM_FINBERT_SENTENCE_POSTPROCESS_POLICY\\": FINBERT_SENTENCE_POSTPROCESS_POLICY,\\n"' in source
+
+
+def test_runner_exposes_lm2011_extension_env_flags_and_orders_stage_after_finbert() -> None:
+    runner_path = Path("src/thesis_pkg/notebooks_and_scripts/sec_ccm_unified_runner.py")
+    source = runner_path.read_text(encoding="utf-8")
+
+    assert 'SEC_CCM_RUN_LM2011_EXTENSION' in source
+    assert 'LM2011_EXTENSION_REQUIRE_CLEANED_SCOPE_MATCH = _env_bool(' in source
+    assert 'LM2011_EXTENSION_FINBERT_ANALYSIS_RUN_DIR = _env_optional_path(' in source
+    assert 'LM2011_EXTENSION_FINBERT_PREPROCESS_RUN_DIR = _env_optional_path(' in source
+    assert "run_lm2011_extension_pipeline(extension_cfg)" in source
+
+    finbert_marker = "if RUN_FINBERT_PREPROCESS or RUN_FINBERT_ANALYSIS:"
+    extension_marker = "if RUN_LM2011_EXTENSION:"
+    assert source.index(extension_marker) > source.index(finbert_marker)
+
+
+def test_notebook_config_exports_lm2011_extension_env_keys() -> None:
+    notebook_path = Path("src/thesis_pkg/notebooks_and_scripts/sec_ccm_unified_runner.ipynb")
+    source = notebook_path.read_text(encoding="utf-8")
+
+    assert 'RUN_LM2011_EXTENSION = ' in source
+    assert 'LM2011_EXTENSION_OUTPUT_DIR = RUN_ROOT / \\"lm2011_extension\\"' in source
+    assert 'LM2011_EXTENSION_REQUIRE_CLEANED_SCOPE_MATCH = True' in source
+    assert 'LM2011_EXTENSION_FINBERT_ANALYSIS_RUN_DIR = None' in source
+    assert 'LM2011_EXTENSION_FINBERT_PREPROCESS_RUN_DIR = None' in source
+    assert '"    \\"SEC_CCM_RUN_LM2011_EXTENSION\\": RUN_LM2011_EXTENSION,\\n"' in source
+    assert '"    \\"SEC_CCM_LM2011_EXTENSION_OUTPUT_DIR\\": LM2011_EXTENSION_OUTPUT_DIR,\\n"' in source
+    assert (
+        '"    \\"SEC_CCM_LM2011_EXTENSION_REQUIRE_CLEANED_SCOPE_MATCH\\": '
+        'LM2011_EXTENSION_REQUIRE_CLEANED_SCOPE_MATCH,\\n"'
+    ) in source
+    assert (
+        '"    \\"SEC_CCM_LM2011_EXTENSION_FINBERT_ANALYSIS_RUN_DIR\\": '
+        'LM2011_EXTENSION_FINBERT_ANALYSIS_RUN_DIR,\\n"'
+    ) in source
+    assert (
+        '"    \\"SEC_CCM_LM2011_EXTENSION_FINBERT_PREPROCESS_RUN_DIR\\": '
+        'LM2011_EXTENSION_FINBERT_PREPROCESS_RUN_DIR,\\n"'
+    ) in source
+
+
+def test_build_lm2011_extension_run_config_prefers_same_run_finbert_artifacts() -> None:
+    lm2011_paths = runner.LM2011RunnerPaths(
+        sample_root=Path("sample"),
+        upstream_run_root=Path("upstream"),
+        additional_data_dir=Path("additional"),
+        output_dir=Path("output"),
+        local_work_root=Path("work"),
+        year_merged_dir=Path("year_merged"),
+        sample_backbone_path=Path("backbone.parquet"),
+        daily_panel_path=Path("daily.parquet"),
+        ccm_base_dir=Path("ccm"),
+        matched_clean_path=Path("matched.parquet"),
+        items_analysis_dir=Path("items_analysis"),
+        doc_ownership_path=Path("doc_ownership.parquet"),
+        doc_analyst_selected_path=Path("doc_analyst.parquet"),
+        filingdates_path=Path("filingdates.parquet"),
+        quarterly_balance_sheet_path=Path("bsq.parquet"),
+        quarterly_income_statement_path=Path("isq.parquet"),
+        quarterly_period_descriptor_path=Path("pdq.parquet"),
+        annual_balance_sheet_path=Path("bsa.parquet"),
+        annual_income_statement_path=Path("isa.parquet"),
+        annual_period_descriptor_path=Path("pda.parquet"),
+        annual_fiscal_market_path=Path("fma.parquet"),
+        company_history_path=Path("companyhistory.parquet"),
+        company_description_path=Path("companydescription.parquet"),
+        ff_daily_csv_path=Path("ff_daily.csv"),
+        ff_monthly_csv_path=Path("ff_monthly.csv"),
+        momentum_monthly_csv_path=Path("mom.csv"),
+        ff48_siccodes_path=Path("ff48.txt"),
+        monthly_stock_path=None,
+        ff_monthly_with_mom_path=None,
+        full_10k_cleaning_contract="lm2011_paper",
+        full_10k_text_feature_batch_size=4,
+        mda_text_feature_batch_size=20,
+        event_window_doc_batch_size=50,
+        print_ram_stats=False,
+        ram_log_interval_batches=10,
+    )
+    analysis_artifacts = SimpleNamespace(
+        run_dir=Path("same_run_finbert_analysis"),
+        run_manifest_path=Path("same_run_finbert_analysis") / "run_manifest.json",
+        item_features_long_path=Path("same_run_finbert_analysis") / "item_features_long.parquet",
+    )
+    preprocessing_artifacts = SimpleNamespace(
+        run_dir=Path("same_run_finbert_preprocess"),
+        run_manifest_path=Path("same_run_finbert_preprocess") / "run_manifest.json",
+        cleaned_item_scopes_dir=Path("same_run_finbert_preprocess") / "cleaned_item_scopes" / "by_year",
+    )
+
+    cfg = runner._build_lm2011_extension_run_config(
+        lm2011_paths=lm2011_paths,
+        lm2011_output_dir=Path("lm2011_post_refinitiv"),
+        output_dir=Path("lm2011_extension"),
+        require_cleaned_scope_match=True,
+        finbert_analysis_run_dir=Path("explicit_analysis"),
+        finbert_preprocessing_run_dir=Path("explicit_preprocess"),
+        finbert_analysis_artifacts=analysis_artifacts,
+        finbert_preprocessing_artifacts=preprocessing_artifacts,
+    )
+
+    assert cfg.finbert_analysis_run_dir == Path("same_run_finbert_analysis")
+    assert cfg.finbert_analysis_manifest_path == Path("same_run_finbert_analysis") / "run_manifest.json"
+    assert cfg.finbert_item_features_long_path == (
+        Path("same_run_finbert_analysis") / "item_features_long.parquet"
+    )
+    assert cfg.finbert_preprocessing_run_dir == Path("same_run_finbert_preprocess")
+    assert cfg.finbert_preprocessing_manifest_path == (
+        Path("same_run_finbert_preprocess") / "run_manifest.json"
+    )
+    assert cfg.finbert_cleaned_item_scopes_dir == (
+        Path("same_run_finbert_preprocess") / "cleaned_item_scopes" / "by_year"
+    )
+    assert cfg.event_panel_path == Path("lm2011_post_refinitiv") / "lm2011_event_panel.parquet"
 
 
 def test_runner_and_notebook_share_lm2011_memory_hardened_defaults() -> None:
