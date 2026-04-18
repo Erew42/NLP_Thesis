@@ -110,6 +110,11 @@ DEFAULT_ADDITIONAL_DATA_DIR = (
     else ROOT / "full_data_run" / "LM2011_additional_data"
 )
 DEFAULT_OUTPUT_DIR = DEFAULT_SAMPLE_ROOT / "results" / "lm2011_sample_post_refinitiv_runner"
+DEFAULT_LOCAL_WORK_ROOT = (
+    Path("/content/_batch_work") / "lm2011_post_refinitiv"
+    if IN_COLAB
+    else ROOT / ".tmp" / "lm2011_post_refinitiv"
+)
 
 PARQUET_COMPRESSION = "zstd"
 YEAR_MERGED_GLOB = "*.parquet"
@@ -225,6 +230,7 @@ class RunnerPaths:
     upstream_run_root: Path
     additional_data_dir: Path
     output_dir: Path
+    local_work_root: Path
     year_merged_dir: Path
     sample_backbone_path: Path | None
     daily_panel_path: Path
@@ -275,6 +281,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--upstream-run-root", type=Path, default=DEFAULT_UPSTREAM_RUN_ROOT)
     parser.add_argument("--additional-data-dir", type=Path, default=DEFAULT_ADDITIONAL_DATA_DIR)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
+    parser.add_argument(
+        "--local-work-root",
+        type=Path,
+        default=DEFAULT_LOCAL_WORK_ROOT,
+        help="Local scratch root for LM2011 temporary parquet staging before final artifact promotion.",
+    )
     parser.add_argument("--year-merged-dir", type=Path, default=None)
     parser.add_argument(
         "--sample-backbone-path",
@@ -526,6 +538,7 @@ def _resolve_paths(args: argparse.Namespace) -> RunnerPaths:
     upstream_run_root = Path(args.upstream_run_root).resolve()
     additional_data_dir = Path(args.additional_data_dir).resolve()
     output_dir = Path(args.output_dir).resolve()
+    local_work_root = Path(args.local_work_root).resolve()
     legacy_text_feature_batch_size = (
         int(args.text_feature_batch_size)
         if args.text_feature_batch_size is not None
@@ -625,6 +638,7 @@ def _resolve_paths(args: argparse.Namespace) -> RunnerPaths:
         upstream_run_root=upstream_run_root,
         additional_data_dir=additional_data_dir,
         output_dir=output_dir,
+        local_work_root=local_work_root,
         year_merged_dir=year_merged_dir,
         sample_backbone_path=sample_backbone_path,
         daily_panel_path=daily_panel_path,
@@ -1175,6 +1189,7 @@ def _build_manifest(paths: RunnerPaths) -> dict[str, Any]:
             "upstream_run_root": _absolute_path_str(paths.upstream_run_root),
             "additional_data_dir": _absolute_path_str(paths.additional_data_dir),
             "output_dir": _absolute_path_str(paths.output_dir),
+            "local_work_root": _absolute_path_str(paths.local_work_root),
         },
         "config": {
             "full_10k_cleaning_contract": paths.full_10k_cleaning_contract,
@@ -1780,6 +1795,7 @@ def run_lm2011_post_refinitiv_pipeline(run_cfg: LM2011PostRefinitivRunConfig) ->
                     master_dictionary_words=master_dictionary_words,
                     cleaning_contract=paths.full_10k_cleaning_contract,
                     batch_size=paths.full_10k_text_feature_batch_size,
+                    temp_root=paths.local_work_root / "text_features_full_10k",
                     progress_callback=_make_text_feature_progress_logger(
                         "text_features_full_10k",
                         print_ram_stats=paths.print_ram_stats,
@@ -1816,6 +1832,7 @@ def run_lm2011_post_refinitiv_pipeline(run_cfg: LM2011PostRefinitivRunConfig) ->
                     harvard_negative_word_list=harvard_negative_word_list,
                     master_dictionary_words=master_dictionary_words,
                     batch_size=paths.mda_text_feature_batch_size,
+                    temp_root=paths.local_work_root / "text_features_mda",
                     progress_callback=_make_text_feature_progress_logger(
                         "text_features_mda",
                         print_ram_stats=paths.print_ram_stats,

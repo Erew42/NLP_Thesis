@@ -977,6 +977,7 @@ def test_main_runs_downstream_pipelines_and_indexes_manifests(
     assert lm2011_run_cfg.fail_closed_for_enabled_stages is True
     assert "sample_backbone" in lm2011_run_cfg.enabled_stages
     assert "ff_factors_monthly_with_mom_normalized" not in lm2011_run_cfg.enabled_stages
+    assert lm2011_run_cfg.paths.local_work_root == (paths["root"] / "local_work" / "lm2011_post_refinitiv")
     assert finbert_analysis_cfg.batch_config.short_batch_size == 5
     assert finbert_analysis_cfg.sentence_dataset.postprocess_policy == "none"
     assert finbert_analysis_cfg.year_filter == runner.LOCAL_SAMPLE_FINBERT_YEARS
@@ -1021,3 +1022,4 @@ def test_main_lm2011_contract_env_override_wins(monkeypatch: MonkeyPatch, tmp_pa
     assert lm2011_run_cfg.paths.full_10k_text_feature_batch_size == 7
     assert lm2011_run_cfg.paths.mda_text_feature_batch_size == 7
     assert lm2011_run_cfg.paths.event_window_doc_batch_size == 9
+    assert lm2011_run_cfg.paths.local_work_root == (paths["root"] / "local_work" / "lm2011_post_refinitiv")

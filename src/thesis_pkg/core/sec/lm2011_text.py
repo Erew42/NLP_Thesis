@@ -8,12 +8,14 @@ import math
 from pathlib import Path
 import re
 import shutil
+import tempfile
 
 import polars as pl
 
 from thesis_pkg.core.ccm.lm2011 import normalize_lm2011_form_value
 from thesis_pkg.core.sec.lm2011_cleaning import Full10KCleaningContract
 from thesis_pkg.core.sec.lm2011_cleaning import clean_full_10k_for_lm2011
+from thesis_pkg.io.parquet import _copy_with_verify, _validate_parquet_quick
 
 
 DEFAULT_TEXT_FEATURE_BATCH_SIZE = 1000
@@ -208,7 +210,7 @@ def _stage_text_base_source(
     *,
     temp_dir: Path,
     row_group_size: int,
-) -> pl.LazyFrame:
+) -> tuple[pl.LazyFrame, Path]:
     source_path = temp_dir / "source.parquet"
     # This staged boundary is intentional: it avoids re-running the upstream SEC text plan
     # while avoiding a global sort over full-text payloads before the first batch.
@@ -217,20 +219,27 @@ def _stage_text_base_source(
         compression=_STREAMING_PARQUET_COMPRESSION,
         row_group_size=max(1, int(row_group_size)),
     )
-    return pl.scan_parquet(str(source_path))
+    _validate_local_parquet(source_path, stage_label="staged source")
+    return pl.scan_parquet(str(source_path)), source_path
 
 
-def _validate_unique_text_doc_ids(base_lf: pl.LazyFrame) -> None:
-    duplicate_doc_ids = (
-        base_lf.select(pl.col("doc_id").cast(pl.Utf8, strict=False).alias("doc_id"))
-        .group_by("doc_id")
-        .len()
-        .filter(pl.col("len") > 1)
-        .limit(10)
-        .collect()
-        .get_column("doc_id")
-        .to_list()
-    )
+def _validate_unique_text_doc_ids(base_lf: pl.LazyFrame, *, staged_source_path: Path | None = None) -> None:
+    try:
+        duplicate_doc_ids = (
+            base_lf.select(pl.col("doc_id").cast(pl.Utf8, strict=False).alias("doc_id"))
+            .group_by("doc_id")
+            .len()
+            .filter(pl.col("len") > 1)
+            .limit(10)
+            .collect()
+            .get_column("doc_id")
+            .to_list()
+        )
+    except Exception as exc:
+        location = f" at {staged_source_path}" if staged_source_path is not None else ""
+        raise OSError(
+            f"LM2011 text writer failed while reading staged source parquet{location} during doc_id uniqueness validation."
+        ) from exc
     if duplicate_doc_ids:
         raise ValueError(f"LM2011 text scoring requires doc_id to be unique in the writer path: {duplicate_doc_ids}")
 
@@ -614,12 +623,39 @@ def _feature_row_from_pass1(
     return out
 
 
-def _prepare_temp_root(output_path: Path, temp_root: Path | None) -> Path:
-    resolved = temp_root or output_path.parent / f".{output_path.stem}_tmp"
-    if resolved.exists():
-        shutil.rmtree(resolved)
-    resolved.mkdir(parents=True, exist_ok=True)
-    return resolved
+def _prepare_temp_workspace(output_path: Path, temp_root: Path | None) -> Path:
+    base_dir = temp_root if temp_root is not None else Path(tempfile.gettempdir())
+    base_dir.mkdir(parents=True, exist_ok=True)
+    prefix = re.sub(r"[^A-Za-z0-9_.-]+", "_", output_path.stem) or "lm2011_text"
+    return Path(tempfile.mkdtemp(prefix=f"{prefix}_tmp_", dir=str(base_dir)))
+
+
+def _validate_local_parquet(path: Path, *, stage_label: str) -> None:
+    try:
+        _validate_parquet_quick(path)
+    except Exception as exc:
+        raise OSError(f"LM2011 text writer {stage_label} parquet validation failed for {path}.") from exc
+
+
+def _count_local_parquet_rows(path: Path) -> int:
+    try:
+        return int(pl.scan_parquet(str(path)).select(pl.len()).collect().item())
+    except Exception as exc:
+        raise OSError(f"LM2011 text writer failed while counting rows in local parquet {path}.") from exc
+
+
+def _promote_local_parquet(local_path: Path, output_path: Path) -> None:
+    try:
+        _copy_with_verify(local_path, output_path, validate="quick")
+    except Exception as exc:
+        raise OSError(
+            f"LM2011 text writer final parquet promotion failed from {local_path} to {output_path}."
+        ) from exc
+
+
+def _cleanup_temp_workspace(temp_dir: Path, *, cleanup_on_success: bool) -> None:
+    if cleanup_on_success and temp_dir.exists():
+        shutil.rmtree(temp_dir)
 
 
 def _write_streaming_text_features(
@@ -642,9 +678,10 @@ def _write_streaming_text_features(
     vocabulary = frozenset().union(*(tokens for _, tokens, _ in signal_specs))
     normalized_master_dictionary_words = _normalize_master_dictionary_words(master_dictionary_words)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    temp_dir = _prepare_temp_root(output_path, temp_root)
+    temp_dir = _prepare_temp_workspace(output_path, temp_root)
     pass1_dir = temp_dir / "pass1"
     feature_dir = temp_dir / "features"
+    local_output_path = temp_dir / "final.parquet"
     pass1_dir.mkdir(parents=True, exist_ok=True)
     feature_dir.mkdir(parents=True, exist_ok=True)
 
@@ -697,8 +734,6 @@ def _write_streaming_text_features(
                 },
             )
 
-        if output_path.exists():
-            output_path.unlink()
         if doc_count == 0:
             _empty_feature_frame(
                 include_item_id=include_item_id,
@@ -707,9 +742,10 @@ def _write_streaming_text_features(
                 token_count_col=token_count_col,
                 total_token_count_col=total_token_count_col,
                 signal_specs=signal_specs,
-            ).write_parquet(output_path, compression=_STREAMING_PARQUET_COMPRESSION)
-            if cleanup_on_success and temp_dir.exists():
-                shutil.rmtree(temp_dir)
+            ).write_parquet(local_output_path, compression=_STREAMING_PARQUET_COMPRESSION)
+            _validate_local_parquet(local_output_path, stage_label="local final")
+            _promote_local_parquet(local_output_path, output_path)
+            _cleanup_temp_workspace(temp_dir, cleanup_on_success=cleanup_on_success)
             return 0
 
         idf_by_token = {
@@ -742,7 +778,7 @@ def _write_streaming_text_features(
 
         if feature_shard_paths:
             pl.scan_parquet([str(path) for path in feature_shard_paths]).sink_parquet(
-                output_path,
+                local_output_path,
                 compression=_STREAMING_PARQUET_COMPRESSION,
             )
         else:
@@ -753,10 +789,11 @@ def _write_streaming_text_features(
                 token_count_col=token_count_col,
                 total_token_count_col=total_token_count_col,
                 signal_specs=signal_specs,
-            ).write_parquet(output_path, compression=_STREAMING_PARQUET_COMPRESSION)
-        row_count = int(pl.scan_parquet(output_path).select(pl.len()).collect().item())
-        if cleanup_on_success and temp_dir.exists():
-            shutil.rmtree(temp_dir)
+            ).write_parquet(local_output_path, compression=_STREAMING_PARQUET_COMPRESSION)
+        _validate_local_parquet(local_output_path, stage_label="local final")
+        row_count = _count_local_parquet_rows(local_output_path)
+        _promote_local_parquet(local_output_path, output_path)
+        _cleanup_temp_workspace(temp_dir, cleanup_on_success=cleanup_on_success)
         return row_count
     except Exception:
         raise
@@ -786,9 +823,10 @@ def _write_production_microbatched_text_features(
     vocabulary = frozenset().union(*(tokens for _, tokens, _ in signal_specs))
     normalized_master_dictionary_words = _normalize_master_dictionary_words(master_dictionary_words)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    temp_dir = _prepare_temp_root(output_path, temp_root)
+    temp_dir = _prepare_temp_workspace(output_path, temp_root)
     pass1_dir = temp_dir / "pass1"
     feature_dir = temp_dir / "features"
+    local_output_path = temp_dir / "final.parquet"
     pass1_dir.mkdir(parents=True, exist_ok=True)
     feature_dir.mkdir(parents=True, exist_ok=True)
 
@@ -815,12 +853,12 @@ def _write_production_microbatched_text_features(
         required_item_id=required_item_id,
     )
     _emit_progress(progress_callback, {"event": "stage_source_start"})
-    staged_source_lf = _stage_text_base_source(
+    staged_source_lf, staged_source_path = _stage_text_base_source(
         base_lf,
         temp_dir=temp_dir,
         row_group_size=max_docs_per_microbatch,
     )
-    _validate_unique_text_doc_ids(staged_source_lf)
+    _validate_unique_text_doc_ids(staged_source_lf, staged_source_path=staged_source_path)
     _emit_progress(progress_callback, {"event": "stage_source_end"})
 
     pass1_paths: list[Path] = []
@@ -870,8 +908,6 @@ def _write_production_microbatched_text_features(
             del batch_document_frequency
             gc.collect()
 
-        if output_path.exists():
-            output_path.unlink()
         if doc_count == 0:
             _empty_feature_frame(
                 include_item_id=include_item_id,
@@ -880,9 +916,10 @@ def _write_production_microbatched_text_features(
                 token_count_col=token_count_col,
                 total_token_count_col=total_token_count_col,
                 signal_specs=signal_specs,
-            ).write_parquet(output_path, compression=_STREAMING_PARQUET_COMPRESSION)
-            if cleanup_on_success and temp_dir.exists():
-                shutil.rmtree(temp_dir)
+            ).write_parquet(local_output_path, compression=_STREAMING_PARQUET_COMPRESSION)
+            _validate_local_parquet(local_output_path, stage_label="local final")
+            _promote_local_parquet(local_output_path, output_path)
+            _cleanup_temp_workspace(temp_dir, cleanup_on_success=cleanup_on_success)
             return 0
 
         idf_by_token = {
@@ -921,7 +958,7 @@ def _write_production_microbatched_text_features(
             if include_item_id:
                 sort_by.append("item_id")
             pl.scan_parquet([str(path) for path in feature_shard_paths]).sort(sort_by).sink_parquet(
-                output_path,
+                local_output_path,
                 compression=_STREAMING_PARQUET_COMPRESSION,
             )
         else:
@@ -932,11 +969,12 @@ def _write_production_microbatched_text_features(
                 token_count_col=token_count_col,
                 total_token_count_col=total_token_count_col,
                 signal_specs=signal_specs,
-            ).write_parquet(output_path, compression=_STREAMING_PARQUET_COMPRESSION)
+            ).write_parquet(local_output_path, compression=_STREAMING_PARQUET_COMPRESSION)
+        _validate_local_parquet(local_output_path, stage_label="local final")
         _emit_progress(progress_callback, {"event": "pass2_end"})
-        row_count = int(pl.scan_parquet(output_path).select(pl.len()).collect().item())
-        if cleanup_on_success and temp_dir.exists():
-            shutil.rmtree(temp_dir)
+        row_count = _count_local_parquet_rows(local_output_path)
+        _promote_local_parquet(local_output_path, output_path)
+        _cleanup_temp_workspace(temp_dir, cleanup_on_success=cleanup_on_success)
         return row_count
     except Exception:
         raise

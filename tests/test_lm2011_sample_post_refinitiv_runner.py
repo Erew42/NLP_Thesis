@@ -288,6 +288,7 @@ def test_parse_args_uses_memory_hardened_defaults() -> None:
     assert args.mda_text_feature_batch_size is None
     assert args.text_feature_batch_size is None
     assert args.event_window_doc_batch_size == runner.DEFAULT_LM2011_EVENT_WINDOW_DOC_BATCH_SIZE
+    assert args.local_work_root == runner.DEFAULT_LOCAL_WORK_ROOT
     assert args.print_ram_stats is False
     assert args.ram_log_interval_batches == runner.DEFAULT_RAM_LOG_INTERVAL_BATCHES
 
@@ -629,6 +630,7 @@ def test_main_writes_expected_artifacts_and_manifest_for_stubbed_run(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     sample_root, upstream_run_root, additional_data_dir, output_dir = _build_temp_layout(tmp_path)
+    local_work_root = tmp_path / "lm2011_local_work"
     prebuilt_backbone = upstream_run_root / "sec_ccm_premerge" / "lm2011_sample_backbone.parquet"
     _write_parquet(prebuilt_backbone, pl.DataFrame({"doc_id": ["d1"]}))
     captured: dict[str, object] = {}
@@ -760,6 +762,8 @@ def test_main_writes_expected_artifacts_and_manifest_for_stubbed_run(
             str(additional_data_dir),
             "--output-dir",
             str(output_dir),
+            "--local-work-root",
+            str(local_work_root),
             "--full-10k-cleaning-contract",
             "lm2011_paper",
         ]
@@ -785,6 +789,7 @@ def test_main_writes_expected_artifacts_and_manifest_for_stubbed_run(
     assert manifest["completed_at_utc"] is not None
     assert manifest["elapsed_seconds"] is not None
     assert manifest["failed_stage"] is None
+    assert manifest["roots"]["local_work_root"] == str(local_work_root.resolve())
     assert manifest["config"]["full_10k_cleaning_contract"] == "lm2011_paper"
     assert manifest["config"]["raw_mda_cleaning_policy_id"] == "raw_item_text"
     assert manifest["config"]["text_feature_batch_size"] == 4
@@ -827,9 +832,11 @@ def test_main_writes_expected_artifacts_and_manifest_for_stubbed_run(
     assert manifest["stages"]["table_ia_ii_results"]["reason"] == runner.EMPTY_TABLE_REASON
     assert captured["text_features_full_10k_kwargs"]["cleaning_contract"] == "lm2011_paper"
     assert captured["text_features_full_10k_kwargs"]["batch_size"] == 4
+    assert captured["text_features_full_10k_kwargs"]["temp_root"] == local_work_root.resolve() / "text_features_full_10k"
     assert callable(captured["text_features_full_10k_kwargs"]["progress_callback"])
     assert captured["text_features_full_10k_kwargs"]["master_dictionary_words"] == ("token", "harvard", "recognized")
     assert captured["text_features_mda_kwargs"]["batch_size"] == 20
+    assert captured["text_features_mda_kwargs"]["temp_root"] == local_work_root.resolve() / "text_features_mda"
     assert callable(captured["text_features_mda_kwargs"]["progress_callback"])
     assert captured["text_features_mda_kwargs"]["master_dictionary_words"] == ("token", "harvard", "recognized")
     assert captured["table_i_windows"] == [
@@ -1045,6 +1052,7 @@ def test_runner_failure_manifest_preserves_completed_stages_before_extended_tabl
 def test_resolve_paths_honors_colab_style_override_paths(tmp_path: Path) -> None:
     sample_root, upstream_run_root, additional_data_dir, output_dir = _build_temp_layout(tmp_path)
     drive_root = tmp_path / "drive" / "MyDrive" / "sec_full"
+    local_work_root = tmp_path / "colab_local_work"
     year_merged_dir = drive_root / "year_merged"
     derived_data_dir = drive_root / "derived_data"
     ccm_base_dir = drive_root / "ccm_parquet_data"
@@ -1082,6 +1090,8 @@ def test_resolve_paths_honors_colab_style_override_paths(tmp_path: Path) -> None
             str(additional_data_dir),
             "--output-dir",
             str(output_dir),
+            "--local-work-root",
+            str(local_work_root),
             "--year-merged-dir",
             str(year_merged_dir),
             "--matched-clean-path",
@@ -1102,6 +1112,7 @@ def test_resolve_paths_honors_colab_style_override_paths(tmp_path: Path) -> None
     assert paths.items_analysis_dir == items_analysis_dir.resolve()
     assert paths.ccm_base_dir == ccm_base_dir.resolve()
     assert paths.filingdates_path == (ccm_nested / "filingdates.parquet").resolve()
+    assert paths.local_work_root == local_work_root.resolve()
 
 
 def test_main_delegates_to_shared_lm2011_pipeline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1137,6 +1148,7 @@ def test_main_delegates_to_shared_lm2011_pipeline(tmp_path: Path, monkeypatch: p
     assert run_cfg.paths.full_10k_text_feature_batch_size == runner.DEFAULT_LM2011_FULL_10K_TEXT_FEATURE_BATCH_SIZE
     assert run_cfg.paths.mda_text_feature_batch_size == runner.DEFAULT_LM2011_MDA_TEXT_FEATURE_BATCH_SIZE
     assert run_cfg.paths.event_window_doc_batch_size == runner.DEFAULT_LM2011_EVENT_WINDOW_DOC_BATCH_SIZE
+    assert run_cfg.paths.local_work_root == runner.DEFAULT_LOCAL_WORK_ROOT.resolve()
     assert run_cfg.paths.print_ram_stats is False
     assert run_cfg.paths.ram_log_interval_batches == runner.DEFAULT_RAM_LOG_INTERVAL_BATCHES
 

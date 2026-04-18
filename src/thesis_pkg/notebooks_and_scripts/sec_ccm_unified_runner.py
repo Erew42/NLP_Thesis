@@ -2726,6 +2726,7 @@ def main() -> None:
             upstream_run_root=RUN_ROOT,
             additional_data_dir=LM2011_ADDITIONAL_DATA_DIR,
             output_dir=LM2011_POST_REFINITIV_DIR,
+            local_work_root=LOCAL_WORK / "lm2011_post_refinitiv",
             year_merged_dir=lm2011_year_merged_dir,
             sample_backbone_path=lm2011_sample_backbone_path,
             daily_panel_path=lm2011_daily_panel_path,

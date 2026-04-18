@@ -8,6 +8,7 @@ import polars as pl
 import pytest
 import yaml
 
+from thesis_pkg.core.sec import lm2011_text as lm2011_text_module
 from thesis_pkg.pipeline import (
     build_annual_accounting_panel,
     build_lm2011_event_panel,
@@ -943,6 +944,193 @@ def test_write_lm2011_text_features_full_10k_parquet_handles_large_docs_with_mic
         "normalized_form",
     ]
     assert out.get_column("total_token_count_full_10k").to_list() == [70_000, 70_000]
+
+
+def test_write_lm2011_text_features_full_10k_parquet_uses_unique_system_temp_workspace_when_omitted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    system_temp = tmp_path / "system_temp"
+    system_temp.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(lm2011_text_module.tempfile, "gettempdir", lambda: str(system_temp))
+
+    sec_parsed = pl.DataFrame(
+        {
+            "doc_id": ["d1"],
+            "cik_10": ["0001"],
+            "filing_date": [dt.date(2023, 1, 1)],
+            "document_type_filename": ["10-K"],
+            "full_text": ["gain loss"],
+        }
+    )
+    output_path = tmp_path / "outputs" / "full_10k_system_temp.parquet"
+
+    row_count = write_lm2011_text_features_full_10k_parquet(
+        sec_parsed.lazy(),
+        output_path=output_path,
+        dictionary_lists=_lm_dictionary_lists(),
+        harvard_negative_word_list=_harvard_negative_word_list(),
+        master_dictionary_words=_master_dictionary_words(),
+        batch_size=1,
+        cleanup_on_success=False,
+    )
+
+    workspaces = sorted(path for path in system_temp.iterdir() if path.is_dir())
+    assert row_count == 1
+    assert output_path.exists()
+    assert len(workspaces) == 1
+    assert workspaces[0].parent == system_temp
+    assert workspaces[0] != output_path.parent
+    assert (workspaces[0] / "final.parquet").exists()
+
+
+def test_write_streaming_text_features_uses_temp_root_as_workspace_parent(tmp_path: Path) -> None:
+    temp_root = tmp_path / "streaming_root"
+    output_path = tmp_path / "streamed_features.parquet"
+
+    row_count = lm2011_text_module._write_streaming_text_features(
+        [
+            pl.DataFrame(
+                {
+                    "doc_id": ["d1"],
+                    "cik_10": ["0001"],
+                    "filing_date": [dt.date(2023, 1, 1)],
+                    "document_type_filename": ["10-K"],
+                    "normalized_form": ["10-K"],
+                    "full_text": ["loss gain"],
+                }
+            )
+        ],
+        output_path=output_path,
+        temp_root=temp_root,
+        token_count_col="token_count_streaming",
+        total_token_count_col="total_token_count_streaming",
+        include_item_id=False,
+        raw_form_col="document_type_filename",
+        signal_specs=(("loss_signal", frozenset({"loss"}), False),),
+        master_dictionary_words=("loss", "gain"),
+        text_col="full_text",
+        cleanup_on_success=False,
+    )
+
+    workspaces = sorted(path for path in temp_root.iterdir() if path.is_dir())
+    assert row_count == 1
+    assert output_path.exists()
+    assert len(workspaces) == 1
+    assert workspaces[0].parent == temp_root
+    assert (workspaces[0] / "final.parquet").exists()
+
+
+def test_write_lm2011_text_features_full_10k_parquet_cleans_workspace_on_success(tmp_path: Path) -> None:
+    temp_root = tmp_path / "writer_temp_root"
+    sec_parsed = pl.DataFrame(
+        {
+            "doc_id": ["d1"],
+            "cik_10": ["0001"],
+            "filing_date": [dt.date(2023, 1, 1)],
+            "document_type_filename": ["10-K"],
+            "full_text": ["gain loss"],
+        }
+    )
+    output_path = tmp_path / "full_10k_cleanup.parquet"
+
+    row_count = write_lm2011_text_features_full_10k_parquet(
+        sec_parsed.lazy(),
+        output_path=output_path,
+        dictionary_lists=_lm_dictionary_lists(),
+        harvard_negative_word_list=_harvard_negative_word_list(),
+        master_dictionary_words=_master_dictionary_words(),
+        batch_size=1,
+        temp_root=temp_root,
+        cleanup_on_success=True,
+    )
+
+    assert row_count == 1
+    assert output_path.exists()
+    assert temp_root.exists()
+    assert not any(temp_root.iterdir())
+
+
+def test_write_lm2011_text_features_full_10k_parquet_retains_workspace_on_staged_source_validation_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    temp_root = tmp_path / "failed_source_root"
+    sec_parsed = pl.DataFrame(
+        {
+            "doc_id": ["d1"],
+            "cik_10": ["0001"],
+            "filing_date": [dt.date(2023, 1, 1)],
+            "document_type_filename": ["10-K"],
+            "full_text": ["gain loss"],
+        }
+    )
+    output_path = tmp_path / "full_10k_failed_source.parquet"
+    real_validate = lm2011_text_module._validate_parquet_quick
+
+    def _fail_source_only(path: Path) -> None:
+        if path.name == "source.parquet":
+            raise OSError("bad staged source")
+        real_validate(path)
+
+    monkeypatch.setattr(lm2011_text_module, "_validate_parquet_quick", _fail_source_only)
+
+    with pytest.raises(OSError, match="staged source parquet validation failed") as excinfo:
+        write_lm2011_text_features_full_10k_parquet(
+            sec_parsed.lazy(),
+            output_path=output_path,
+            dictionary_lists=_lm_dictionary_lists(),
+            harvard_negative_word_list=_harvard_negative_word_list(),
+            master_dictionary_words=_master_dictionary_words(),
+            batch_size=1,
+            temp_root=temp_root,
+        )
+
+    workspaces = sorted(path for path in temp_root.iterdir() if path.is_dir())
+    source_path = workspaces[0] / "source.parquet"
+    assert len(workspaces) == 1
+    assert source_path.exists()
+    assert str(source_path) in str(excinfo.value)
+
+
+def test_write_lm2011_text_features_full_10k_parquet_retains_local_final_when_promotion_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    temp_root = tmp_path / "failed_promotion_root"
+    sec_parsed = pl.DataFrame(
+        {
+            "doc_id": ["d1"],
+            "cik_10": ["0001"],
+            "filing_date": [dt.date(2023, 1, 1)],
+            "document_type_filename": ["10-K"],
+            "full_text": ["gain loss"],
+        }
+    )
+    output_path = tmp_path / "full_10k_failed_promotion.parquet"
+
+    def _fail_promotion(src: Path, dst: Path, *, retries: int = 3, sleep: float = 1.0, validate: object = True) -> Path:
+        raise OSError(f"copy failed from {src} to {dst}")
+
+    monkeypatch.setattr(lm2011_text_module, "_copy_with_verify", _fail_promotion)
+
+    with pytest.raises(OSError, match="final parquet promotion failed") as excinfo:
+        write_lm2011_text_features_full_10k_parquet(
+            sec_parsed.lazy(),
+            output_path=output_path,
+            dictionary_lists=_lm_dictionary_lists(),
+            harvard_negative_word_list=_harvard_negative_word_list(),
+            master_dictionary_words=_master_dictionary_words(),
+            batch_size=1,
+            temp_root=temp_root,
+        )
+
+    workspaces = sorted(path for path in temp_root.iterdir() if path.is_dir())
+    local_final_path = workspaces[0] / "final.parquet"
+    assert len(workspaces) == 1
+    assert local_final_path.exists()
+    assert str(local_final_path) in str(excinfo.value)
+    assert not output_path.exists()
 
 
 def test_build_lm2011_event_panel_uses_prc_when_final_prc_is_missing() -> None:
