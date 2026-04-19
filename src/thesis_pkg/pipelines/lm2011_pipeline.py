@@ -820,6 +820,87 @@ def _winsorize_column(df: pl.DataFrame, column: str, *, lower_q: float = 0.01, u
     return df.with_columns(pl.col(column).cast(pl.Float64, strict=False).clip(lower, upper).alias(column))
 
 
+def _winsorize_finite_column(
+    df: pl.DataFrame,
+    column: str,
+    *,
+    lower_q: float = 0.01,
+    upper_q: float = 0.99,
+) -> pl.DataFrame:
+    if df.height == 0 or column not in df.columns:
+        return df
+    float_column = pl.col(column).cast(pl.Float64, strict=False)
+    finite_column = pl.when(float_column.is_finite()).then(float_column).otherwise(None)
+    quantiles = df.select(
+        finite_column.quantile(lower_q).alias("_lower"),
+        finite_column.quantile(upper_q).alias("_upper"),
+    ).row(0, named=True)
+    lower = quantiles["_lower"]
+    upper = quantiles["_upper"]
+    if lower is None or upper is None:
+        return df
+    return df.with_columns(
+        pl.when(float_column.is_finite())
+        .then(float_column.clip(lower, upper))
+        .otherwise(float_column)
+        .alias(column)
+    )
+
+
+def _winsorize_lm2011_sue_panel(df: pl.DataFrame) -> pl.DataFrame:
+    for column in ("sue", "analyst_dispersion", "analyst_revisions"):
+        df = _winsorize_finite_column(df, column)
+    return df
+
+
+def _collect_finite_winsorization_bounds_lf(
+    lf: pl.LazyFrame,
+    *,
+    columns: tuple[str, ...],
+    lower_q: float = 0.01,
+    upper_q: float = 0.99,
+) -> dict[str, tuple[float | None, float | None]]:
+    quantile_exprs: list[pl.Expr] = []
+    for column in columns:
+        float_column = pl.col(column).cast(pl.Float64, strict=False)
+        finite_column = pl.when(float_column.is_finite()).then(float_column).otherwise(None)
+        quantile_exprs.extend(
+            [
+                finite_column.quantile(lower_q).alias(f"{column}__lower"),
+                finite_column.quantile(upper_q).alias(f"{column}__upper"),
+            ]
+        )
+    quantiles = lf.select(quantile_exprs).collect().row(0, named=True)
+    return {
+        column: (
+            quantiles[f"{column}__lower"],
+            quantiles[f"{column}__upper"],
+        )
+        for column in columns
+    }
+
+
+def _winsorize_finite_columns_lf(
+    lf: pl.LazyFrame,
+    *,
+    bounds: Mapping[str, tuple[float | None, float | None]],
+) -> pl.LazyFrame:
+    exprs: list[pl.Expr] = []
+    for column, (lower, upper) in bounds.items():
+        if lower is None or upper is None:
+            continue
+        float_column = pl.col(column).cast(pl.Float64, strict=False)
+        exprs.append(
+            pl.when(float_column.is_finite())
+            .then(float_column.clip(lower, upper))
+            .otherwise(float_column)
+            .alias(column)
+        )
+    if not exprs:
+        return lf
+    return lf.with_columns(exprs)
+
+
 def _apply_lm2011_regression_transforms(lf: pl.LazyFrame) -> pl.LazyFrame:
     return lf.with_columns(
         pl.when(pl.col("size_event").cast(pl.Float64, strict=False) > 0)
@@ -1683,13 +1764,15 @@ def build_lm2011_sue_panel(
     global_require_exact_fiscal_window, global_fiscal_min, global_fiscal_max = (
         _resolve_lm2011_sue_global_fiscal_window_policy(docs_df)
     )
-    return _build_lm2011_sue_panel_batch_df(
-        docs_df,
-        ibes_unadjusted_earnings_lf=ibes_unadjusted_earnings_lf,
-        daily_lf=daily_lf,
-        global_require_exact_fiscal_window=global_require_exact_fiscal_window,
-        global_fiscal_min=global_fiscal_min,
-        global_fiscal_max=global_fiscal_max,
+    return _winsorize_lm2011_sue_panel(
+        _build_lm2011_sue_panel_batch_df(
+            docs_df,
+            ibes_unadjusted_earnings_lf=ibes_unadjusted_earnings_lf,
+            daily_lf=daily_lf,
+            global_require_exact_fiscal_window=global_require_exact_fiscal_window,
+            global_fiscal_min=global_fiscal_min,
+            global_fiscal_max=global_fiscal_max,
+        )
     ).lazy()
 
 
@@ -1760,10 +1843,19 @@ def write_lm2011_sue_panel_parquet(
             del sue_batch
             gc.collect()
 
+        if shard_paths:
+            shard_refs = [str(path) for path in shard_paths]
+            sue_bounds = _collect_finite_winsorization_bounds_lf(
+                pl.scan_parquet(shard_refs),
+                columns=("sue", "analyst_dispersion", "analyst_revisions"),
+            )
         if output_path.exists():
             output_path.unlink()
         if shard_paths:
-            pl.scan_parquet([str(path) for path in shard_paths]).sink_parquet(
+            _winsorize_finite_columns_lf(
+                pl.scan_parquet(shard_refs),
+                bounds=sue_bounds,
+            ).sink_parquet(
                 output_path,
                 compression=_STREAMING_PARQUET_COMPRESSION,
             )

@@ -358,6 +358,166 @@ def _assert_frames_equal_with_float_tolerance(
             assert right_values == left_values
 
 
+def _build_sue_winsorization_inputs() -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame, pl.DataFrame]:
+    row_count = 100
+    row_ids = list(range(row_count))
+    filing_date = dt.date(2023, 9, 18)
+    pre_filing_trade_date = dt.date(2023, 9, 17)
+    quarter_report_date = dt.date(2023, 10, 15)
+    fiscal_period_end = dt.date(2023, 9, 30)
+    doc_ids = [f"doc_{row_id:03d}" for row_id in row_ids]
+    gvkeys = [1000 + row_id for row_id in row_ids]
+    permnos = [row_id + 1 for row_id in row_ids]
+
+    event_panel = pl.DataFrame(
+        {
+            "doc_id": pl.Series("doc_id", doc_ids, dtype=pl.Utf8),
+            "gvkey_int": pl.Series("gvkey_int", gvkeys, dtype=pl.Int32),
+            "KYPERMNO": pl.Series("KYPERMNO", permnos, dtype=pl.Int32),
+            "filing_date": pl.Series("filing_date", [filing_date] * row_count, dtype=pl.Date),
+            "pre_filing_trade_date": pl.Series(
+                "pre_filing_trade_date",
+                [pre_filing_trade_date] * row_count,
+                dtype=pl.Date,
+            ),
+            "size_event": pl.Series("size_event", [100.0] * row_count, dtype=pl.Float64),
+            "bm_event": pl.Series("bm_event", [1.5] * row_count, dtype=pl.Float64),
+            "share_turnover": pl.Series("share_turnover", [10.0] * row_count, dtype=pl.Float64),
+            "pre_ffalpha": pl.Series("pre_ffalpha", [0.02] * row_count, dtype=pl.Float64),
+            "institutional_ownership": pl.Series(
+                "institutional_ownership",
+                [55.0] * row_count,
+                dtype=pl.Float64,
+            ),
+            "nasdaq_dummy": pl.Series("nasdaq_dummy", [1] * row_count, dtype=pl.Int8),
+        }
+    )
+    quarterly_panel = pl.DataFrame(
+        {
+            "gvkey_int": pl.Series("gvkey_int", gvkeys, dtype=pl.Int32),
+            "quarter_report_date": pl.Series(
+                "quarter_report_date",
+                [quarter_report_date] * row_count,
+                dtype=pl.Date,
+            ),
+            "APDEDATEQ": pl.Series("APDEDATEQ", [fiscal_period_end] * row_count, dtype=pl.Date),
+            "PDATEQ": pl.Series("PDATEQ", [fiscal_period_end] * row_count, dtype=pl.Date),
+        }
+    )
+    ibes = pl.DataFrame(
+        {
+            "gvkey_int": pl.Series("gvkey_int", gvkeys, dtype=pl.Int32),
+            "announcement_date": pl.Series(
+                "announcement_date",
+                [quarter_report_date] * row_count,
+                dtype=pl.Date,
+            ),
+            "fiscal_period_end": pl.Series(
+                "fiscal_period_end",
+                [fiscal_period_end] * row_count,
+                dtype=pl.Date,
+            ),
+            "actual_eps": pl.Series("actual_eps", [float(row_id) for row_id in row_ids], dtype=pl.Float64),
+            "forecast_consensus_mean": pl.Series(
+                "forecast_consensus_mean",
+                [0.0] * row_count,
+                dtype=pl.Float64,
+            ),
+            "forecast_dispersion": pl.Series(
+                "forecast_dispersion",
+                [float(row_id * 10) for row_id in row_ids],
+                dtype=pl.Float64,
+            ),
+            "forecast_revision_4m": pl.Series(
+                "forecast_revision_4m",
+                [float(row_id * 100) for row_id in row_ids],
+                dtype=pl.Float64,
+            ),
+        }
+    )
+    daily_rows: list[dict[str, object]] = []
+    for permno in permnos:
+        daily_rows.extend(
+            [
+                {"KYPERMNO": permno, "CALDT": dt.date(2023, 8, 31), "PRC": 1.0},
+                {"KYPERMNO": permno, "CALDT": pre_filing_trade_date, "PRC": 1.0},
+            ]
+        )
+    daily = pl.DataFrame(
+        daily_rows,
+        schema_overrides={"KYPERMNO": pl.Int32, "CALDT": pl.Date, "PRC": pl.Float64},
+    )
+    return event_panel, quarterly_panel, ibes, daily
+
+
+def _assert_sue_winsorization_surface(panel: pl.DataFrame, *, check_schema: bool = False) -> None:
+    expected_columns = [
+        "doc_id",
+        "gvkey_int",
+        "KYPERMNO",
+        "filing_date",
+        "quarter_report_date",
+        "size_event",
+        "bm_event",
+        "share_turnover",
+        "sue",
+        "analyst_dispersion",
+        "analyst_revisions",
+        "pre_ffalpha",
+        "institutional_ownership",
+        "nasdaq_dummy",
+    ]
+    expected_schema = {
+        "doc_id": pl.Utf8,
+        "gvkey_int": pl.Int32,
+        "KYPERMNO": pl.Int32,
+        "filing_date": pl.Date,
+        "quarter_report_date": pl.Date,
+        "size_event": pl.Float64,
+        "bm_event": pl.Float64,
+        "share_turnover": pl.Float64,
+        "sue": pl.Float64,
+        "analyst_dispersion": pl.Float64,
+        "analyst_revisions": pl.Float64,
+        "pre_ffalpha": pl.Float64,
+        "institutional_ownership": pl.Float64,
+        "nasdaq_dummy": pl.Int8,
+    }
+    if check_schema:
+        assert panel.columns == expected_columns
+        assert panel.schema == expected_schema
+
+    bounds = panel.select(
+        pl.col("sue").min().alias("sue_min"),
+        pl.col("sue").max().alias("sue_max"),
+        pl.col("analyst_dispersion").min().alias("analyst_dispersion_min"),
+        pl.col("analyst_dispersion").max().alias("analyst_dispersion_max"),
+        pl.col("analyst_revisions").min().alias("analyst_revisions_min"),
+        pl.col("analyst_revisions").max().alias("analyst_revisions_max"),
+    ).row(0, named=True)
+    assert bounds == pytest.approx(
+        {
+            "sue_min": 1.0,
+            "sue_max": 98.0,
+            "analyst_dispersion_min": 10.0,
+            "analyst_dispersion_max": 980.0,
+            "analyst_revisions_min": 100.0,
+            "analyst_revisions_max": 9800.0,
+        }
+    )
+
+    expected_rows = {
+        "doc_000": (1.0, 10.0, 100.0),
+        "doc_050": (50.0, 500.0, 5000.0),
+        "doc_099": (98.0, 980.0, 9800.0),
+    }
+    for doc_id, (expected_sue, expected_dispersion, expected_revisions) in expected_rows.items():
+        row = panel.filter(pl.col("doc_id") == doc_id).row(0, named=True)
+        assert row["sue"] == pytest.approx(expected_sue)
+        assert row["analyst_dispersion"] == pytest.approx(expected_dispersion)
+        assert row["analyst_revisions"] == pytest.approx(expected_revisions)
+
+
 def test_build_lm2011_normalized_filing_feeds_and_sample_backbone_apply_raw_form_rules() -> None:
     sec_parsed = pl.DataFrame(
         {
@@ -2149,55 +2309,29 @@ def test_build_lm2011_sue_panel_keeps_nullable_revision_only_in_upstream_artifac
     assert sue_panel.height == 0
 
 
+def test_build_lm2011_sue_panel_winsorizes_final_panel_globally() -> None:
+    event_panel, quarterly_panel, ibes, daily = _build_sue_winsorization_inputs()
+
+    sue_panel = build_lm2011_sue_panel(
+        event_panel.lazy(),
+        quarterly_panel.lazy(),
+        ibes.lazy(),
+        daily.lazy(),
+    ).collect().sort("doc_id")
+
+    assert sue_panel.height == 100
+    _assert_sue_winsorization_surface(sue_panel, check_schema=True)
+
+
 def test_write_lm2011_sue_panel_parquet_matches_eager_builder(tmp_path: Path) -> None:
-    event_panel = pl.DataFrame(
-        {
-            "doc_id": ["exact_doc", "fallback_doc"],
-            "gvkey_int": [1000, 1001],
-            "KYPERMNO": [1, 2],
-            "filing_date": [dt.date(2023, 9, 18), dt.date(2023, 9, 18)],
-            "pre_filing_trade_date": [dt.date(2023, 9, 17), dt.date(2023, 9, 17)],
-            "size_event": [100.0, 120.0],
-            "bm_event": [1.5, 1.8],
-            "share_turnover": [10.0, 12.0],
-            "pre_ffalpha": [0.02, 0.03],
-            "institutional_ownership": [55.0, 60.0],
-            "nasdaq_dummy": [1, 0],
-        }
-    )
-    quarterly_panel = pl.DataFrame(
-        {
-            "gvkey_int": [1000, 1001],
-            "quarter_report_date": [dt.date(2023, 10, 15), dt.date(2023, 10, 20)],
-            "APDEDATEQ": [dt.date(2023, 9, 30), None],
-            "PDATEQ": [dt.date(2023, 9, 30), None],
-        }
-    )
-    ibes = pl.DataFrame(
-        {
-            "gvkey_int": [1000, 1001],
-            "announcement_date": [dt.date(2023, 10, 15), dt.date(2023, 10, 20)],
-            "fiscal_period_end": [dt.date(2023, 9, 30), dt.date(2023, 9, 25)],
-            "actual_eps": [1.5, 2.0],
-            "forecast_consensus_mean": [1.0, 1.5],
-            "forecast_dispersion": [0.2, 0.3],
-            "forecast_revision_4m": [0.24, 0.18],
-        }
-    )
-    daily = pl.DataFrame(
-        {
-            "KYPERMNO": [1, 1, 2, 2],
-            "CALDT": [dt.date(2023, 8, 31), dt.date(2023, 9, 17), dt.date(2023, 8, 31), dt.date(2023, 9, 17)],
-            "PRC": [8.0, 10.0, 6.0, 12.0],
-        }
-    )
+    event_panel, quarterly_panel, ibes, daily = _build_sue_winsorization_inputs()
 
     eager = build_lm2011_sue_panel(
         event_panel.lazy(),
         quarterly_panel.lazy(),
         ibes.lazy(),
         daily.lazy(),
-    ).collect()
+    ).collect().sort("doc_id")
     output_path = tmp_path / "sue_panel.parquet"
     row_count = write_lm2011_sue_panel_parquet(
         event_panel.lazy(),
@@ -2205,11 +2339,49 @@ def test_write_lm2011_sue_panel_parquet_matches_eager_builder(tmp_path: Path) ->
         ibes.lazy(),
         daily.lazy(),
         output_path=output_path,
-        doc_batch_size=1,
+        doc_batch_size=10,
     )
-    streamed = pl.read_parquet(output_path)
+    streamed = pl.read_parquet(output_path).sort("doc_id")
 
     assert row_count == eager.height
+    _assert_sue_winsorization_surface(streamed)
+    _assert_frames_equal_with_float_tolerance(eager, streamed, sort_by=["doc_id"])
+
+
+def test_write_lm2011_sue_panel_parquet_avoids_eager_reload_of_final_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event_panel, quarterly_panel, ibes, daily = _build_sue_winsorization_inputs()
+
+    eager = build_lm2011_sue_panel(
+        event_panel.lazy(),
+        quarterly_panel.lazy(),
+        ibes.lazy(),
+        daily.lazy(),
+    ).collect().sort("doc_id")
+    output_path = tmp_path / "sue_panel.parquet"
+    original_read_parquet = lm2011_pipeline.pl.read_parquet
+
+    def _guard_read_parquet(source: object, *args: object, **kwargs: object) -> pl.DataFrame:
+        if isinstance(source, (str, Path)) and Path(source).resolve() == output_path.resolve():
+            raise AssertionError("write_lm2011_sue_panel_parquet must not eagerly reload the final output parquet")
+        return original_read_parquet(source, *args, **kwargs)
+
+    monkeypatch.setattr(lm2011_pipeline.pl, "read_parquet", _guard_read_parquet)
+
+    row_count = write_lm2011_sue_panel_parquet(
+        event_panel.lazy(),
+        quarterly_panel.lazy(),
+        ibes.lazy(),
+        daily.lazy(),
+        output_path=output_path,
+        doc_batch_size=10,
+    )
+    streamed = original_read_parquet(output_path).sort("doc_id")
+
+    assert row_count == eager.height
+    _assert_sue_winsorization_surface(streamed)
     _assert_frames_equal_with_float_tolerance(eager, streamed, sort_by=["doc_id"])
 
 
