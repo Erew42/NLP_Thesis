@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
 import datetime as dt
+import json
 import math
 from pathlib import Path
+from typing import Literal
 
+import numpy as np
 import polars as pl
 
 from thesis_pkg.core.ccm.lm2011 import attach_lm2011_industry_classifications
@@ -45,12 +49,46 @@ _TABLE_RESULT_SCHEMA: dict[str, pl.DataType] = {
     "weighting_rule": pl.Utf8,
     "nw_lags": pl.Int32,
 }
+_SKIPPED_QUARTER_SCHEMA: dict[str, pl.DataType] = {
+    "table_id": pl.Utf8,
+    "text_scope": pl.Utf8,
+    "dependent_variable": pl.Utf8,
+    "signal_name": pl.Utf8,
+    "quarter_start": pl.Date,
+    "skip_reason": pl.Utf8,
+    "n_obs": pl.Int32,
+    "industry_count": pl.Int32,
+    "rank": pl.Int32,
+    "column_count": pl.Int32,
+    "condition_number": pl.Float64,
+    "regressors": pl.Utf8,
+    "duplicate_regressor_pairs": pl.Utf8,
+    "restoring_drop_candidates": pl.Utf8,
+}
 _QUARTER_WEIGHTING_RULE = "quarter_observation_count"
 _INTERCEPT_NAME = "intercept"
+_RANK_DEFICIENT_SKIP_REASON = "rank_deficient_design"
 
 
 def _empty_lm2011_table_results_df() -> pl.DataFrame:
     return pl.DataFrame(schema=_TABLE_RESULT_SCHEMA)
+
+
+def _empty_skipped_quarters_df() -> pl.DataFrame:
+    return pl.DataFrame(schema=_SKIPPED_QUARTER_SCHEMA)
+
+
+@dataclass(frozen=True)
+class _QuarterlyFamaMacbethBundle:
+    results_df: pl.DataFrame
+    skipped_quarters_df: pl.DataFrame
+
+
+@dataclass(frozen=True)
+class _CrossSectionalOlsOutcome:
+    coefficients: dict[str, float] | None
+    n_obs: int | None
+    skipped_quarter_row: dict[str, object] | None = None
 
 
 def _quarter_start(value: dt.date) -> dt.date:
@@ -326,14 +364,59 @@ def _newey_west_standard_error(
     return math.sqrt(max(variance, 0.0))
 
 
+def _json_or_none(value: object) -> str | None:
+    if not value:
+        return None
+    return json.dumps(value, separators=(",", ":"))
+
+
+def _best_effort_condition_number(design: np.ndarray) -> float | None:
+    try:
+        condition_number = float(np.linalg.cond(design))
+    except np.linalg.LinAlgError:
+        return None
+    return condition_number if math.isfinite(condition_number) else None
+
+
+def _best_effort_duplicate_regressor_pairs(
+    *,
+    full_names: Sequence[str],
+    design: np.ndarray,
+) -> list[list[str]]:
+    duplicate_pairs: list[list[str]] = []
+    for left_idx in range(1, design.shape[1]):
+        for right_idx in range(left_idx + 1, design.shape[1]):
+            if np.array_equal(design[:, left_idx], design[:, right_idx]):
+                duplicate_pairs.append([full_names[left_idx], full_names[right_idx]])
+    return duplicate_pairs
+
+
+def _best_effort_restoring_drop_candidates(
+    *,
+    full_names: Sequence[str],
+    design: np.ndarray,
+) -> list[str]:
+    restoring_candidates: list[str] = []
+    for idx in range(1, design.shape[1]):
+        reduced_design = np.delete(design, idx, axis=1)
+        if np.linalg.matrix_rank(reduced_design) == reduced_design.shape[1]:
+            restoring_candidates.append(full_names[idx])
+    return restoring_candidates
+
+
 def _fit_cross_sectional_ols(
     df: pl.DataFrame,
     *,
+    table_id: str,
+    text_scope: str,
     dependent_variable: str,
+    signal_column: str,
     regressor_columns: tuple[str, ...],
     industry_col: str,
     label: str,
-) -> tuple[dict[str, float], int] | None:
+    quarter_start: dt.date,
+    on_rank_deficient: Literal["raise", "skip"] = "raise",
+) -> _CrossSectionalOlsOutcome | None:
     industries = sorted(
         {
             int(value)
@@ -348,7 +431,8 @@ def _fit_cross_sectional_ols(
         *[f"_industry_dummy_{industry_id}" for industry_id in dummy_industries],
     )
     n_obs = df.height
-    if n_obs < len(full_names):
+    column_count = len(full_names)
+    if n_obs < column_count:
         return None
 
     endog: list[float] = []
@@ -359,16 +443,80 @@ def _fit_cross_sectional_ols(
         design_row.extend(1.0 if industry_value == industry_id else 0.0 for industry_id in dummy_industries)
         endog.append(float(row[dependent_variable]))
         exog_rows.append(design_row)
-    results = _fit_checked_ols(
-        endog,
-        exog_rows,
-        exog_names=full_names[1:],
-        label=label,
+    design = np.column_stack(
+        (
+            np.ones(n_obs, dtype=float),
+            np.asarray(exog_rows, dtype=float),
+        )
     )
-    return {name: float(value) for name, value in zip(full_names, results.params, strict=True)}, n_obs
+    rank = int(np.linalg.matrix_rank(design))
+    try:
+        results = _fit_checked_ols(
+            endog,
+            exog_rows,
+            exog_names=full_names[1:],
+            label=label,
+        )
+    except ValueError as exc:
+        if (
+            on_rank_deficient == "skip"
+            and rank < column_count
+            and "rank-deficient OLS design" in str(exc)
+        ):
+            duplicate_regressor_pairs = _best_effort_duplicate_regressor_pairs(
+                full_names=full_names,
+                design=design,
+            )
+            restoring_drop_candidates = _best_effort_restoring_drop_candidates(
+                full_names=full_names,
+                design=design,
+            )
+            condition_number = _best_effort_condition_number(design)
+            skipped_quarter_row = {
+                "table_id": table_id,
+                "text_scope": text_scope,
+                "dependent_variable": dependent_variable,
+                "signal_name": signal_column,
+                "quarter_start": quarter_start,
+                "skip_reason": _RANK_DEFICIENT_SKIP_REASON,
+                "n_obs": n_obs,
+                "industry_count": len(industries),
+                "rank": rank,
+                "column_count": column_count,
+                "condition_number": condition_number,
+                "regressors": ", ".join(full_names),
+                "duplicate_regressor_pairs": _json_or_none(duplicate_regressor_pairs),
+                "restoring_drop_candidates": _json_or_none(restoring_drop_candidates),
+            }
+            print(
+                {
+                    "table_id": table_id,
+                    "text_scope": text_scope,
+                    "dependent_variable": dependent_variable,
+                    "signal_name": signal_column,
+                    "quarter_start": str(quarter_start),
+                    "skip_reason": _RANK_DEFICIENT_SKIP_REASON,
+                    "n_obs": n_obs,
+                    "rank": rank,
+                    "column_count": column_count,
+                    "condition_number": condition_number,
+                    "duplicate_regressor_pairs": duplicate_regressor_pairs,
+                    "restoring_drop_candidates": restoring_drop_candidates,
+                }
+            )
+            return _CrossSectionalOlsOutcome(
+                coefficients=None,
+                n_obs=None,
+                skipped_quarter_row=skipped_quarter_row,
+            )
+        raise
+    return _CrossSectionalOlsOutcome(
+        coefficients={name: float(value) for name, value in zip(full_names, results.params, strict=True)},
+        n_obs=n_obs,
+    )
 
 
-def run_lm2011_quarterly_fama_macbeth(
+def _run_lm2011_quarterly_fama_macbeth_bundle(
     panel_lf: pl.LazyFrame,
     *,
     table_id: str,
@@ -380,7 +528,8 @@ def run_lm2011_quarterly_fama_macbeth(
     filing_date_col: str = "filing_date",
     industry_col: str = "ff48_industry_id",
     nw_lags: int = 1,
-) -> pl.DataFrame:
+    on_rank_deficient: Literal["raise", "skip"] = "raise",
+) -> _QuarterlyFamaMacbethBundle:
     ordered_controls = _unique_preserving_order(tuple(control_columns))
     required_columns = (
         filing_date_col,
@@ -404,8 +553,6 @@ def run_lm2011_quarterly_fama_macbeth(
         )
         .drop_nulls(subset=list(required_columns))
     )
-    # Collect the narrowed panel once so the same lazy regression plan is not rerun
-    # separately for every quarter-level specification.
     with_quarters_df = (
         selected_lf.with_columns(
             pl.col(filing_date_col)
@@ -416,7 +563,10 @@ def run_lm2011_quarterly_fama_macbeth(
         .collect()
     )
     if with_quarters_df.height == 0:
-        return _empty_lm2011_table_results_df()
+        return _QuarterlyFamaMacbethBundle(
+            results_df=_empty_lm2011_table_results_df(),
+            skipped_quarters_df=_empty_skipped_quarters_df(),
+        )
 
     regressor_columns = (signal_column, *ordered_controls)
     coefficient_time_series: dict[str, list[float]] = {
@@ -424,30 +574,47 @@ def run_lm2011_quarterly_fama_macbeth(
     }
     quarter_sizes: list[float] = []
     retained_quarters = 0
+    skipped_quarter_rows: list[dict[str, object]] = []
 
     for quarter_df in with_quarters_df.partition_by("_quarter_start", maintain_order=True):
         quarter_start = quarter_df.item(0, "_quarter_start")
-        fit = _fit_cross_sectional_ols(
+        outcome = _fit_cross_sectional_ols(
             quarter_df,
+            table_id=table_id,
+            text_scope=text_scope,
             dependent_variable=dependent_variable,
+            signal_column=signal_column,
             regressor_columns=regressor_columns,
             industry_col=industry_col,
             label=(
                 f"Quarterly Fama-MacBeth quarter={quarter_start} "
                 f"dependent={dependent_variable} signal={signal_column}"
             ),
+            quarter_start=quarter_start,
+            on_rank_deficient=on_rank_deficient,
         )
-        if fit is None:
+        if outcome is None:
             continue
-        coefficients, n_obs = fit
+        if outcome.skipped_quarter_row is not None:
+            skipped_quarter_rows.append(outcome.skipped_quarter_row)
+            continue
+        assert outcome.coefficients is not None
+        assert outcome.n_obs is not None
         retained_quarters += 1
-        quarter_sizes.append(float(n_obs))
+        quarter_sizes.append(float(outcome.n_obs))
         for name in coefficient_time_series:
-            coefficient_time_series[name].append(coefficients[name])
+            coefficient_time_series[name].append(outcome.coefficients[name])
         del quarter_df
 
     if retained_quarters == 0:
-        return _empty_lm2011_table_results_df()
+        return _QuarterlyFamaMacbethBundle(
+            results_df=_empty_lm2011_table_results_df(),
+            skipped_quarters_df=(
+                pl.DataFrame(skipped_quarter_rows, schema_overrides=_SKIPPED_QUARTER_SCHEMA)
+                if skipped_quarter_rows
+                else _empty_skipped_quarters_df()
+            ),
+        )
 
     mean_quarter_n = sum(quarter_sizes) / float(retained_quarters)
     rows: list[dict[str, object]] = []
@@ -474,7 +641,87 @@ def run_lm2011_quarterly_fama_macbeth(
                 "nw_lags": nw_lags,
             }
         )
-    return pl.DataFrame(rows, schema_overrides=_TABLE_RESULT_SCHEMA)
+    return _QuarterlyFamaMacbethBundle(
+        results_df=pl.DataFrame(rows, schema_overrides=_TABLE_RESULT_SCHEMA),
+        skipped_quarters_df=(
+            pl.DataFrame(skipped_quarter_rows, schema_overrides=_SKIPPED_QUARTER_SCHEMA)
+            if skipped_quarter_rows
+            else _empty_skipped_quarters_df()
+        ),
+    )
+
+
+def run_lm2011_quarterly_fama_macbeth(
+    panel_lf: pl.LazyFrame,
+    *,
+    table_id: str,
+    text_scope: str,
+    dependent_variable: str,
+    signal_column: str,
+    control_columns: Sequence[str],
+    specification_id: str | None = None,
+    filing_date_col: str = "filing_date",
+    industry_col: str = "ff48_industry_id",
+    nw_lags: int = 1,
+    on_rank_deficient: Literal["raise", "skip"] = "raise",
+) -> pl.DataFrame:
+    return _run_lm2011_quarterly_fama_macbeth_bundle(
+        panel_lf,
+        table_id=table_id,
+        text_scope=text_scope,
+        dependent_variable=dependent_variable,
+        signal_column=signal_column,
+        control_columns=control_columns,
+        specification_id=specification_id,
+        filing_date_col=filing_date_col,
+        industry_col=industry_col,
+        nw_lags=nw_lags,
+        on_rank_deficient=on_rank_deficient,
+    ).results_df
+
+
+def _run_signal_family_with_diagnostics(
+    panel_lf: pl.LazyFrame,
+    *,
+    table_id: str,
+    text_scope: str,
+    dependent_variable: str,
+    signal_columns: Sequence[str],
+    control_columns: Sequence[str],
+    nw_lags: int = 1,
+) -> _QuarterlyFamaMacbethBundle:
+    outputs = [
+        _run_lm2011_quarterly_fama_macbeth_bundle(
+            panel_lf,
+            table_id=table_id,
+            text_scope=text_scope,
+            dependent_variable=dependent_variable,
+            signal_column=signal_column,
+            control_columns=control_columns,
+            specification_id=signal_column,
+            nw_lags=nw_lags,
+            on_rank_deficient="skip",
+        )
+        for signal_column in signal_columns
+    ]
+    nonempty_results = [output.results_df for output in outputs if output.results_df.height > 0]
+    nonempty_skips = [
+        output.skipped_quarters_df
+        for output in outputs
+        if output.skipped_quarters_df.height > 0
+    ]
+    return _QuarterlyFamaMacbethBundle(
+        results_df=(
+            pl.concat(nonempty_results, how="vertical_relaxed")
+            if nonempty_results
+            else _empty_lm2011_table_results_df()
+        ),
+        skipped_quarters_df=(
+            pl.concat(nonempty_skips, how="vertical_relaxed")
+            if nonempty_skips
+            else _empty_skipped_quarters_df()
+        ),
+    )
 
 
 def _run_signal_family(
@@ -500,10 +747,36 @@ def _run_signal_family(
         )
         for signal_column in signal_columns
     ]
-    nonempty = [output for output in outputs if output.height > 0]
-    if not nonempty:
+    nonempty_outputs = [output for output in outputs if output.height > 0]
+    if not nonempty_outputs:
         return _empty_lm2011_table_results_df()
-    return pl.concat(nonempty, how="vertical_relaxed")
+    return pl.concat(nonempty_outputs, how="vertical_relaxed")
+
+
+def _build_lm2011_table_iv_results_bundle(
+    event_panel_lf: pl.LazyFrame,
+    full_10k_text_features_lf: pl.LazyFrame,
+    company_history_lf: pl.LazyFrame,
+    company_description_lf: pl.LazyFrame,
+    *,
+    ff48_siccodes_path: Path | str,
+) -> _QuarterlyFamaMacbethBundle:
+    panel_lf = build_lm2011_return_regression_panel(
+        event_panel_lf,
+        full_10k_text_features_lf,
+        company_history_lf,
+        company_description_lf,
+        ff48_siccodes_path=ff48_siccodes_path,
+        text_scope="full_10k",
+    )
+    return _run_signal_family_with_diagnostics(
+        panel_lf,
+        table_id="table_iv_full_10k",
+        text_scope="full_10k",
+        dependent_variable="filing_period_excess_return",
+        signal_columns=("h4n_inf_prop", "lm_negative_prop", "h4n_inf_tfidf", "lm_negative_tfidf"),
+        control_columns=_RETURN_CONTROL_COLUMNS,
+    )
 
 
 def build_lm2011_table_iv_results(
@@ -526,6 +799,34 @@ def build_lm2011_table_iv_results(
         panel_lf,
         table_id="table_iv_full_10k",
         text_scope="full_10k",
+        dependent_variable="filing_period_excess_return",
+        signal_columns=("h4n_inf_prop", "lm_negative_prop", "h4n_inf_tfidf", "lm_negative_tfidf"),
+        control_columns=_RETURN_CONTROL_COLUMNS,
+    )
+
+
+def _build_lm2011_table_v_results_bundle(
+    event_panel_lf: pl.LazyFrame,
+    mda_text_features_lf: pl.LazyFrame,
+    company_history_lf: pl.LazyFrame,
+    company_description_lf: pl.LazyFrame,
+    *,
+    ff48_siccodes_path: Path | str,
+) -> _QuarterlyFamaMacbethBundle:
+    _require_columns(mda_text_features_lf, ("doc_id", "total_token_count_mda"), "mda_text_features")
+    panel_lf = build_lm2011_return_regression_panel(
+        event_panel_lf,
+        mda_text_features_lf,
+        company_history_lf,
+        company_description_lf,
+        ff48_siccodes_path=ff48_siccodes_path,
+        text_scope="mda_item_7",
+    )
+    panel_lf = panel_lf.filter(pl.col("total_token_count_mda").cast(pl.Float64, strict=False) >= 250.0)
+    return _run_signal_family_with_diagnostics(
+        panel_lf,
+        table_id="table_v_mda",
+        text_scope="mda_item_7",
         dependent_variable="filing_period_excess_return",
         signal_columns=("h4n_inf_prop", "lm_negative_prop", "h4n_inf_tfidf", "lm_negative_tfidf"),
         control_columns=_RETURN_CONTROL_COLUMNS,
@@ -556,6 +857,45 @@ def build_lm2011_table_v_results(
         text_scope="mda_item_7",
         dependent_variable="filing_period_excess_return",
         signal_columns=("h4n_inf_prop", "lm_negative_prop", "h4n_inf_tfidf", "lm_negative_tfidf"),
+        control_columns=_RETURN_CONTROL_COLUMNS,
+    )
+
+
+def _build_lm2011_table_vi_results_bundle(
+    event_panel_lf: pl.LazyFrame,
+    full_10k_text_features_lf: pl.LazyFrame,
+    company_history_lf: pl.LazyFrame,
+    company_description_lf: pl.LazyFrame,
+    *,
+    ff48_siccodes_path: Path | str,
+) -> _QuarterlyFamaMacbethBundle:
+    panel_lf = build_lm2011_return_regression_panel(
+        event_panel_lf,
+        full_10k_text_features_lf,
+        company_history_lf,
+        company_description_lf,
+        ff48_siccodes_path=ff48_siccodes_path,
+        text_scope="full_10k",
+    )
+    return _run_signal_family_with_diagnostics(
+        panel_lf,
+        table_id="table_vi_full_10k_dictionary_surface",
+        text_scope="full_10k",
+        dependent_variable="filing_period_excess_return",
+        signal_columns=(
+            "lm_negative_prop",
+            "lm_negative_tfidf",
+            "lm_positive_prop",
+            "lm_positive_tfidf",
+            "lm_uncertainty_prop",
+            "lm_uncertainty_tfidf",
+            "lm_litigious_prop",
+            "lm_litigious_tfidf",
+            "lm_modal_strong_prop",
+            "lm_modal_strong_tfidf",
+            "lm_modal_weak_prop",
+            "lm_modal_weak_tfidf",
+        ),
         control_columns=_RETURN_CONTROL_COLUMNS,
     )
 
@@ -599,6 +939,31 @@ def build_lm2011_table_vi_results(
     )
 
 
+def _build_lm2011_table_viii_results_bundle(
+    sue_panel_lf: pl.LazyFrame,
+    full_10k_text_features_lf: pl.LazyFrame,
+    company_history_lf: pl.LazyFrame,
+    company_description_lf: pl.LazyFrame,
+    *,
+    ff48_siccodes_path: Path | str,
+) -> _QuarterlyFamaMacbethBundle:
+    panel_lf = build_lm2011_sue_regression_panel(
+        sue_panel_lf,
+        full_10k_text_features_lf,
+        company_history_lf,
+        company_description_lf,
+        ff48_siccodes_path=ff48_siccodes_path,
+    )
+    return _run_signal_family_with_diagnostics(
+        panel_lf,
+        table_id="table_viii_sue",
+        text_scope="full_10k",
+        dependent_variable="sue",
+        signal_columns=("h4n_inf_prop", "lm_negative_prop", "h4n_inf_tfidf", "lm_negative_tfidf"),
+        control_columns=_SUE_CONTROL_COLUMNS,
+    )
+
+
 def build_lm2011_table_viii_results(
     sue_panel_lf: pl.LazyFrame,
     full_10k_text_features_lf: pl.LazyFrame,
@@ -621,6 +986,33 @@ def build_lm2011_table_viii_results(
         dependent_variable="sue",
         signal_columns=("h4n_inf_prop", "lm_negative_prop", "h4n_inf_tfidf", "lm_negative_tfidf"),
         control_columns=_SUE_CONTROL_COLUMNS,
+    )
+
+
+def _build_lm2011_table_ia_i_results_bundle(
+    event_panel_lf: pl.LazyFrame,
+    full_10k_text_features_lf: pl.LazyFrame,
+    company_history_lf: pl.LazyFrame,
+    company_description_lf: pl.LazyFrame,
+    *,
+    ff48_siccodes_path: Path | str,
+) -> _QuarterlyFamaMacbethBundle:
+    return_panel_lf = build_lm2011_return_regression_panel(
+        event_panel_lf,
+        full_10k_text_features_lf,
+        company_history_lf,
+        company_description_lf,
+        ff48_siccodes_path=ff48_siccodes_path,
+        text_scope="full_10k",
+    )
+    panel_lf = build_lm2011_normalized_difference_panel(return_panel_lf)
+    return _run_signal_family_with_diagnostics(
+        panel_lf,
+        table_id="internet_appendix_table_ia_i",
+        text_scope="full_10k",
+        dependent_variable="filing_period_excess_return",
+        signal_columns=("normalized_difference_negative", "normalized_difference_h4n_inf"),
+        control_columns=_RETURN_CONTROL_COLUMNS,
     )
 
 

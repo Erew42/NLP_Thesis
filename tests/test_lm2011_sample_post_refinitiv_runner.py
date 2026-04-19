@@ -78,8 +78,51 @@ def _stub_table_i_sample_creation_df(
                 "availability_status": "unavailable",
                 "availability_reason": "mda_text_features_unavailable",
             }
-        )
+    )
     return pl.DataFrame(rows)
+
+
+def _empty_quarterly_results_df() -> pl.DataFrame:
+    return pl.DataFrame(
+        {"table_id": [], "estimate": []},
+        schema_overrides={"table_id": pl.Utf8, "estimate": pl.Float64},
+    )
+
+
+def _skipped_quarter_diagnostics_df() -> pl.DataFrame:
+    return pl.DataFrame(
+        {
+            "table_id": ["table_iv_full_10k"],
+            "text_scope": ["full_10k"],
+            "dependent_variable": ["filing_period_excess_return"],
+            "signal_name": ["h4n_inf_prop"],
+            "quarter_start": [dt.date(2000, 1, 1)],
+            "skip_reason": ["rank_deficient_design"],
+            "n_obs": [26],
+            "industry_count": [15],
+            "rank": [21],
+            "column_count": [22],
+            "condition_number": [2.13968e18],
+            "regressors": ["intercept, h4n_inf_prop, log_size"],
+            "duplicate_regressor_pairs": ['[["nasdaq_dummy","_industry_dummy_36"]]'],
+            "restoring_drop_candidates": ['["nasdaq_dummy","_industry_dummy_36"]'],
+        }
+    )
+
+
+def _quarterly_bundle(
+    *,
+    results_df: pl.DataFrame | None = None,
+    skipped_quarters_df: pl.DataFrame | None = None,
+) -> runner._QuarterlyFamaMacbethBundle:
+    return runner._QuarterlyFamaMacbethBundle(
+        results_df=_empty_quarterly_results_df() if results_df is None else results_df,
+        skipped_quarters_df=(
+            pl.DataFrame(schema=_skipped_quarter_diagnostics_df().schema)
+            if skipped_quarters_df is None
+            else skipped_quarters_df
+        ),
+    )
 
 
 def _build_temp_layout(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
@@ -1100,6 +1143,70 @@ def test_write_stage_records_reused_source_path(tmp_path: Path) -> None:
     assert manifest_path.exists()
 
 
+def test_write_quarterly_regression_table_stage_records_diagnostics_artifacts(tmp_path: Path) -> None:
+    output_dir = tmp_path / "output"
+    manifest_path = tmp_path / "manifest.json"
+    manifest: dict[str, object] = {
+        "roots": {"output_dir": str(output_dir)},
+        "artifacts": {},
+        "row_counts": {},
+        "stages": {},
+    }
+    bundle = _quarterly_bundle(
+        results_df=pl.DataFrame({"table_id": ["table_iv_full_10k"], "estimate": [1.0]}),
+        skipped_quarters_df=_skipped_quarter_diagnostics_df(),
+    )
+
+    runner._write_quarterly_regression_table_stage(
+        manifest,
+        manifest_path=manifest_path,
+        output_dir=output_dir,
+        stage_name="table_iv_results",
+        bundle=bundle,
+    )
+
+    stage = manifest["stages"]["table_iv_results"]  # type: ignore[index]
+    skipped_parquet = output_dir / "lm2011_table_iv_results_skipped_quarters.parquet"
+    skipped_csv = output_dir / "lm2011_table_iv_results_skipped_quarters.csv"
+    assert (output_dir / "lm2011_table_iv_results.parquet").exists()
+    assert skipped_parquet.exists()
+    assert skipped_csv.exists()
+    assert stage["status"] == "generated"
+    assert stage["extra_artifacts"] == {
+        "skipped_quarters_parquet": str(skipped_parquet.resolve()),
+        "skipped_quarters_csv": str(skipped_csv.resolve()),
+    }
+    assert stage["warnings"] == [
+        "Skipped 1 rank-deficient quarter across 1 quarter/signal fit; see skipped_quarters_parquet."
+    ]
+
+
+def test_write_quarterly_regression_table_stage_marks_all_skipped_output_empty(tmp_path: Path) -> None:
+    output_dir = tmp_path / "output"
+    manifest_path = tmp_path / "manifest.json"
+    manifest: dict[str, object] = {
+        "roots": {"output_dir": str(output_dir)},
+        "artifacts": {},
+        "row_counts": {},
+        "stages": {},
+    }
+
+    runner._write_quarterly_regression_table_stage(
+        manifest,
+        manifest_path=manifest_path,
+        output_dir=output_dir,
+        stage_name="table_iv_results",
+        bundle=_quarterly_bundle(skipped_quarters_df=_skipped_quarter_diagnostics_df()),
+    )
+
+    stage = manifest["stages"]["table_iv_results"]  # type: ignore[index]
+    assert (output_dir / "lm2011_table_iv_results.parquet").exists()
+    assert (output_dir / "lm2011_table_iv_results_skipped_quarters.parquet").exists()
+    assert (output_dir / "lm2011_table_iv_results_skipped_quarters.csv").exists()
+    assert stage["status"] == "generated_empty"
+    assert stage["reason"] == runner.NO_ESTIMABLE_QUARTERLY_FAMA_MACBETH_QUARTERS
+
+
 def test_pipeline_reuses_existing_text_feature_artifacts_in_output_dir(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1750,12 +1857,12 @@ def test_main_writes_expected_artifacts_and_manifest_for_stubbed_run(
         "build_lm2011_sue_regression_panel",
         lambda *_, **__: pl.DataFrame({"doc_id": ["d1"], "filing_date": [dt.date(2000, 1, 1)]}).lazy(),
     )
-    empty_table = pl.DataFrame({"table_id": [], "estimate": []}, schema_overrides={"table_id": pl.Utf8, "estimate": pl.Float64})
-    monkeypatch.setattr(runner, "build_lm2011_table_iv_results", lambda *_, **__: empty_table)
-    monkeypatch.setattr(runner, "build_lm2011_table_v_results", lambda *_, **__: empty_table)
-    monkeypatch.setattr(runner, "build_lm2011_table_vi_results", lambda *_, **__: empty_table)
-    monkeypatch.setattr(runner, "build_lm2011_table_viii_results", lambda *_, **__: empty_table)
-    monkeypatch.setattr(runner, "build_lm2011_table_ia_i_results", lambda *_, **__: empty_table)
+    empty_quarterly_bundle = _quarterly_bundle()
+    monkeypatch.setattr(runner, "_build_lm2011_table_iv_results_bundle", lambda *_, **__: empty_quarterly_bundle)
+    monkeypatch.setattr(runner, "_build_lm2011_table_v_results_bundle", lambda *_, **__: empty_quarterly_bundle)
+    monkeypatch.setattr(runner, "_build_lm2011_table_vi_results_bundle", lambda *_, **__: empty_quarterly_bundle)
+    monkeypatch.setattr(runner, "_build_lm2011_table_viii_results_bundle", lambda *_, **__: empty_quarterly_bundle)
+    monkeypatch.setattr(runner, "_build_lm2011_table_ia_i_results_bundle", lambda *_, **__: empty_quarterly_bundle)
     monkeypatch.setattr(
         runner,
         "build_lm2011_trading_strategy_monthly_returns",
@@ -1767,7 +1874,7 @@ def test_main_writes_expected_artifacts_and_manifest_for_stubbed_run(
             }
         ).lazy(),
     )
-    monkeypatch.setattr(runner, "build_lm2011_table_ia_ii_results", lambda *_, **__: empty_table)
+    monkeypatch.setattr(runner, "build_lm2011_table_ia_ii_results", lambda *_, **__: _empty_quarterly_results_df())
     exit_code = runner.main(
         [
             "--sample-root",
@@ -1840,7 +1947,7 @@ def test_main_writes_expected_artifacts_and_manifest_for_stubbed_run(
         "MD&A subsection rows are unavailable because lm2011_text_features_mda was not provided."
     ]
     assert manifest["stages"]["table_iv_results"]["status"] == "generated_empty"
-    assert manifest["stages"]["table_iv_results"]["reason"] == runner.EMPTY_TABLE_REASON
+    assert manifest["stages"]["table_iv_results"]["reason"] == runner.NO_ESTIMABLE_QUARTERLY_FAMA_MACBETH_QUARTERS
     assert manifest["stages"]["ff_factors_monthly_with_mom_normalized"]["status"] == "generated"
     assert manifest["stages"]["ff_factors_monthly_with_mom_normalized"]["row_count"] == 2
     assert manifest["stages"]["trading_strategy_monthly_returns"]["status"] == "generated"
@@ -1942,15 +2049,15 @@ def test_runner_builds_event_screen_surface_twice_and_reuses_default_surface(
         "write_lm2011_sue_panel_parquet",
         lambda *_, **kwargs: pl.DataFrame({"doc_id": ["d1"]}).write_parquet(Path(kwargs["output_path"])) or 1,
     )
-    empty_table = pl.DataFrame({"table_id": [], "estimate": []}, schema_overrides={"table_id": pl.Utf8, "estimate": pl.Float64})
+    empty_quarterly_bundle = _quarterly_bundle()
     monkeypatch.setattr(runner, "build_lm2011_return_regression_panel", lambda *_, **__: pl.DataFrame({"doc_id": ["d1"]}).lazy())
     monkeypatch.setattr(runner, "build_lm2011_sue_regression_panel", lambda *_, **__: pl.DataFrame({"doc_id": ["d1"]}).lazy())
-    monkeypatch.setattr(runner, "build_lm2011_table_iv_results", lambda *_, **__: empty_table)
-    monkeypatch.setattr(runner, "build_lm2011_table_v_results", lambda *_, **__: empty_table)
-    monkeypatch.setattr(runner, "build_lm2011_table_vi_results", lambda *_, **__: empty_table)
-    monkeypatch.setattr(runner, "build_lm2011_table_viii_results", lambda *_, **__: empty_table)
-    monkeypatch.setattr(runner, "build_lm2011_table_ia_i_results", lambda *_, **__: empty_table)
-    monkeypatch.setattr(runner, "build_lm2011_table_ia_ii_results", lambda *_, **__: empty_table)
+    monkeypatch.setattr(runner, "_build_lm2011_table_iv_results_bundle", lambda *_, **__: empty_quarterly_bundle)
+    monkeypatch.setattr(runner, "_build_lm2011_table_v_results_bundle", lambda *_, **__: empty_quarterly_bundle)
+    monkeypatch.setattr(runner, "_build_lm2011_table_vi_results_bundle", lambda *_, **__: empty_quarterly_bundle)
+    monkeypatch.setattr(runner, "_build_lm2011_table_viii_results_bundle", lambda *_, **__: empty_quarterly_bundle)
+    monkeypatch.setattr(runner, "_build_lm2011_table_ia_i_results_bundle", lambda *_, **__: empty_quarterly_bundle)
+    monkeypatch.setattr(runner, "build_lm2011_table_ia_ii_results", lambda *_, **__: _empty_quarterly_results_df())
     monkeypatch.setattr(
         runner,
         "build_lm2011_trading_strategy_monthly_returns",
@@ -2028,13 +2135,13 @@ def test_runner_failure_manifest_preserves_completed_stages_before_extended_tabl
     )
     monkeypatch.setattr(runner, "build_lm2011_return_regression_panel", lambda *_, **__: pl.DataFrame({"doc_id": ["d1"]}).lazy())
     monkeypatch.setattr(runner, "build_lm2011_sue_regression_panel", lambda *_, **__: pl.DataFrame({"doc_id": ["d1"]}).lazy())
-    empty_table = pl.DataFrame({"table_id": [], "estimate": []}, schema_overrides={"table_id": pl.Utf8, "estimate": pl.Float64})
-    monkeypatch.setattr(runner, "build_lm2011_table_iv_results", lambda *_, **__: empty_table)
-    monkeypatch.setattr(runner, "build_lm2011_table_v_results", lambda *_, **__: empty_table)
-    monkeypatch.setattr(runner, "build_lm2011_table_vi_results", lambda *_, **__: empty_table)
-    monkeypatch.setattr(runner, "build_lm2011_table_viii_results", lambda *_, **__: empty_table)
-    monkeypatch.setattr(runner, "build_lm2011_table_ia_i_results", lambda *_, **__: empty_table)
-    monkeypatch.setattr(runner, "build_lm2011_table_ia_ii_results", lambda *_, **__: empty_table)
+    empty_quarterly_bundle = _quarterly_bundle()
+    monkeypatch.setattr(runner, "_build_lm2011_table_iv_results_bundle", lambda *_, **__: empty_quarterly_bundle)
+    monkeypatch.setattr(runner, "_build_lm2011_table_v_results_bundle", lambda *_, **__: empty_quarterly_bundle)
+    monkeypatch.setattr(runner, "_build_lm2011_table_vi_results_bundle", lambda *_, **__: empty_quarterly_bundle)
+    monkeypatch.setattr(runner, "_build_lm2011_table_viii_results_bundle", lambda *_, **__: empty_quarterly_bundle)
+    monkeypatch.setattr(runner, "_build_lm2011_table_ia_i_results_bundle", lambda *_, **__: empty_quarterly_bundle)
+    monkeypatch.setattr(runner, "build_lm2011_table_ia_ii_results", lambda *_, **__: _empty_quarterly_results_df())
     monkeypatch.setattr(
         runner,
         "build_lm2011_trading_strategy_monthly_returns",
@@ -2460,4 +2567,4 @@ def test_real_sample_smoke_builds_nonempty_panels_and_empty_tables(tmp_path: Pat
         "table_ia_i_results",
     ):
         assert manifest["stages"][stage_name]["status"] == "generated_empty"
-        assert manifest["stages"][stage_name]["reason"] == runner.EMPTY_TABLE_REASON
+        assert manifest["stages"][stage_name]["reason"] == runner.NO_ESTIMABLE_QUARTERLY_FAMA_MACBETH_QUARTERS

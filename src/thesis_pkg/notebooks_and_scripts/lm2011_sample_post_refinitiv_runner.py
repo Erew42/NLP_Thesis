@@ -99,14 +99,15 @@ from thesis_pkg.pipelines.lm2011_extension import (
     run_lm2011_extension_estimation_scaffold,
 )
 from thesis_pkg.pipelines.lm2011_regressions import (
+    _QuarterlyFamaMacbethBundle,
+    _build_lm2011_table_ia_i_results_bundle,
+    _build_lm2011_table_iv_results_bundle,
+    _build_lm2011_table_v_results_bundle,
+    _build_lm2011_table_vi_results_bundle,
+    _build_lm2011_table_viii_results_bundle,
     build_lm2011_return_regression_panel,
     build_lm2011_sue_regression_panel,
-    build_lm2011_table_ia_i_results,
     build_lm2011_table_ia_ii_results,
-    build_lm2011_table_iv_results,
-    build_lm2011_table_v_results,
-    build_lm2011_table_vi_results,
-    build_lm2011_table_viii_results,
 )
 
 
@@ -249,6 +250,7 @@ MONTHLY_STOCK_CANDIDATES: tuple[str, ...] = (
     "monthlystock.parquet",
 )
 EMPTY_TABLE_REASON = "insufficient_sample_size_for_estimable_quarterly_fama_macbeth"
+NO_ESTIMABLE_QUARTERLY_FAMA_MACBETH_QUARTERS = "no_estimable_quarterly_fama_macbeth_quarters"
 SKIPPED_MISSING_SEEDED_UPSTREAM = "skipped_missing_seeded_upstream"
 SKIPPED_MISSING_OPTIONAL_INPUT = "skipped_missing_optional_input"
 DEFAULT_LM2011_FULL_10K_CLEANING_CONTRACT = "lm2011_paper"
@@ -1860,6 +1862,62 @@ def _write_table_i_stage(
     )
 
 
+def _quarterly_regression_diag_paths(output_dir: Path, stage_name: str) -> tuple[Path, Path]:
+    stem = Path(STAGE_ARTIFACT_FILENAMES[stage_name]).stem
+    return output_dir / f"{stem}_skipped_quarters.parquet", output_dir / f"{stem}_skipped_quarters.csv"
+
+
+def _write_quarterly_regression_table_stage(
+    manifest: dict[str, Any],
+    *,
+    manifest_path: Path,
+    output_dir: Path,
+    stage_name: str,
+    bundle: _QuarterlyFamaMacbethBundle,
+) -> pl.LazyFrame:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    extra_artifacts: dict[str, Path] = {}
+    warnings: list[str] = []
+    skipped_quarters_df = bundle.skipped_quarters_df
+    if skipped_quarters_df.height > 0:
+        skipped_parquet_path, skipped_csv_path = _quarterly_regression_diag_paths(output_dir, stage_name)
+        skipped_quarters_df.write_parquet(skipped_parquet_path, compression=PARQUET_COMPRESSION)
+        skipped_quarters_df.write_csv(skipped_csv_path)
+        extra_artifacts = {
+            "skipped_quarters_parquet": skipped_parquet_path,
+            "skipped_quarters_csv": skipped_csv_path,
+        }
+        skipped_quarter_count = int(
+            skipped_quarters_df.select(pl.col("quarter_start").n_unique()).item()
+        )
+        skipped_fit_count = skipped_quarters_df.height
+        warning = (
+            f"Skipped {skipped_quarter_count} rank-deficient quarter"
+            f"{'' if skipped_quarter_count == 1 else 's'} across {skipped_fit_count} "
+            f"quarter/signal fit{'' if skipped_fit_count == 1 else 's'}; see skipped_quarters_parquet."
+        )
+        warnings.append(warning)
+        print(
+            {
+                "stage": stage_name,
+                "event": "rank_deficient_quarter_skips",
+                "skipped_quarter_count": skipped_quarter_count,
+                "skipped_fit_count": skipped_fit_count,
+                "skipped_quarters_parquet": str(skipped_parquet_path),
+            }
+        )
+    return _write_stage(
+        manifest,
+        manifest_path=manifest_path,
+        output_dir=output_dir,
+        stage_name=stage_name,
+        frame=bundle.results_df,
+        empty_reason=NO_ESTIMABLE_QUARTERLY_FAMA_MACBETH_QUARTERS,
+        extra_artifacts=extra_artifacts,
+        warnings=warnings,
+    )
+
+
 def _make_event_screen_progress_logger(
     stage_name: str,
     *,
@@ -3317,7 +3375,7 @@ def run_lm2011_post_refinitiv_pipeline(run_cfg: LM2011PostRefinitivRunConfig) ->
         table_stage_specs = (
             (
                 "table_iv_results",
-                lambda: build_lm2011_table_iv_results(
+                lambda: _build_lm2011_table_iv_results_bundle(
                     event_panel_lf,
                     text_features_full_10k_lf,
                     pl.scan_parquet(paths.company_history_path),
@@ -3328,7 +3386,7 @@ def run_lm2011_post_refinitiv_pipeline(run_cfg: LM2011PostRefinitivRunConfig) ->
             ),
             (
                 "table_v_results",
-                lambda: build_lm2011_table_v_results(
+                lambda: _build_lm2011_table_v_results_bundle(
                     event_panel_lf,
                     text_features_mda_lf,
                     pl.scan_parquet(paths.company_history_path),
@@ -3339,7 +3397,7 @@ def run_lm2011_post_refinitiv_pipeline(run_cfg: LM2011PostRefinitivRunConfig) ->
             ),
             (
                 "table_vi_results",
-                lambda: build_lm2011_table_vi_results(
+                lambda: _build_lm2011_table_vi_results_bundle(
                     event_panel_lf,
                     text_features_full_10k_lf,
                     pl.scan_parquet(paths.company_history_path),
@@ -3350,7 +3408,7 @@ def run_lm2011_post_refinitiv_pipeline(run_cfg: LM2011PostRefinitivRunConfig) ->
             ),
             (
                 "table_viii_results",
-                lambda: build_lm2011_table_viii_results(
+                lambda: _build_lm2011_table_viii_results_bundle(
                     sue_panel_lf,
                     text_features_full_10k_lf,
                     pl.scan_parquet(paths.company_history_path),
@@ -3361,7 +3419,7 @@ def run_lm2011_post_refinitiv_pipeline(run_cfg: LM2011PostRefinitivRunConfig) ->
             ),
             (
                 "table_ia_i_results",
-                lambda: build_lm2011_table_ia_i_results(
+                lambda: _build_lm2011_table_ia_i_results_bundle(
                     event_panel_lf,
                     text_features_full_10k_lf,
                     pl.scan_parquet(paths.company_history_path),
@@ -3376,13 +3434,12 @@ def run_lm2011_post_refinitiv_pipeline(run_cfg: LM2011PostRefinitivRunConfig) ->
             if _stage_disabled(run_cfg, manifest, manifest_path, stage_name):
                 continue
             if should_run:
-                _write_stage(
+                _write_quarterly_regression_table_stage(
                     manifest,
                     manifest_path=manifest_path,
                     output_dir=paths.output_dir,
                     stage_name=stage_name,
-                    frame=builder(),
-                    empty_reason=EMPTY_TABLE_REASON,
+                    bundle=builder(),
                 )
             else:
                 _skip_or_raise_stage(

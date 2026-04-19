@@ -18,6 +18,7 @@ from thesis_pkg.pipeline import (
     build_lm2011_table_viii_results,
     run_lm2011_quarterly_fama_macbeth,
 )
+from thesis_pkg.pipelines import lm2011_regressions as regressions
 from thesis_pkg.pipelines.lm2011_pipeline import (
     build_lm2011_trading_strategy_ff4_summary,
     build_lm2011_trading_strategy_monthly_returns,
@@ -445,6 +446,82 @@ def test_run_lm2011_quarterly_fama_macbeth_raises_on_rank_deficient_quarter() ->
         )
 
 
+def test_run_lm2011_quarterly_fama_macbeth_skip_mode_skips_rank_deficient_quarter() -> None:
+    rows: list[dict[str, object]] = []
+    for industry_id in (1, 12):
+        for obs_idx in range(2):
+            rows.append(
+                {
+                    "filing_date": dt.date(2021, 2, 15),
+                    "ff48_industry_id": industry_id,
+                    "signal": 1.0 if industry_id == 12 else 0.0,
+                    "dependent": 2.0 + float(obs_idx) + (4.0 if industry_id == 12 else 0.0),
+                }
+            )
+    for industry_id, industry_effect in ((1, 0.0), (12, 0.5)):
+        for signal_value in (0.0, 1.0):
+            rows.append(
+                {
+                    "filing_date": dt.date(2021, 5, 15),
+                    "ff48_industry_id": industry_id,
+                    "signal": signal_value,
+                    "dependent": 1.0 + 2.0 * signal_value + industry_effect,
+                }
+            )
+
+    results = run_lm2011_quarterly_fama_macbeth(
+        pl.DataFrame(rows).lazy(),
+        table_id="unit_test_table",
+        text_scope="full_10k",
+        dependent_variable="dependent",
+        signal_column="signal",
+        control_columns=(),
+        on_rank_deficient="skip",
+    ).sort("coefficient_name")
+
+    by_name = {row["coefficient_name"]: row for row in results.to_dicts()}
+    assert by_name["signal"]["estimate"] == pytest.approx(2.0, abs=1e-10)
+    assert by_name["signal"]["n_quarters"] == 1
+    assert by_name["intercept"]["estimate"] == pytest.approx(1.0, abs=1e-10)
+
+
+def test_run_lm2011_quarterly_fama_macbeth_skip_mode_keeps_insufficient_n_silent() -> None:
+    rows = [
+        {
+            "filing_date": dt.date(2021, 2, 15),
+            "ff48_industry_id": 1,
+            "signal": 0.0,
+            "dependent": 1.0,
+        },
+        {
+            "filing_date": dt.date(2021, 5, 15),
+            "ff48_industry_id": 1,
+            "signal": 0.0,
+            "dependent": 1.0,
+        },
+        {
+            "filing_date": dt.date(2021, 5, 15),
+            "ff48_industry_id": 1,
+            "signal": 1.0,
+            "dependent": 3.0,
+        },
+    ]
+
+    bundle = regressions._run_lm2011_quarterly_fama_macbeth_bundle(
+        pl.DataFrame(rows).lazy(),
+        table_id="unit_test_table",
+        text_scope="full_10k",
+        dependent_variable="dependent",
+        signal_column="signal",
+        control_columns=(),
+        on_rank_deficient="skip",
+    )
+
+    assert bundle.results_df.height > 0
+    assert bundle.results_df.get_column("n_quarters").unique().to_list() == [1]
+    assert bundle.skipped_quarters_df.height == 0
+
+
 def test_run_lm2011_quarterly_fama_macbeth_keeps_near_singular_small_sample_quarter() -> None:
     rows: list[dict[str, object]] = []
     filing_date = dt.date(2021, 2, 15)
@@ -475,6 +552,47 @@ def test_run_lm2011_quarterly_fama_macbeth_keeps_near_singular_small_sample_quar
     assert by_name["signal"]["estimate"] == pytest.approx(1.75, abs=1e-6)
     assert by_name["control"]["estimate"] == pytest.approx(-0.5, abs=1e-6)
     assert by_name["signal"]["n_quarters"] == 1
+
+
+def test_run_signal_family_with_diagnostics_collects_skipped_quarters() -> None:
+    rows: list[dict[str, object]] = []
+    for industry_id in (1, 12):
+        for obs_idx in range(2):
+            rows.append(
+                {
+                    "filing_date": dt.date(2021, 2, 15),
+                    "ff48_industry_id": industry_id,
+                    "signal_a": 1.0 if industry_id == 12 else 0.0,
+                    "signal_b": 1.0 if industry_id == 12 else 0.0,
+                    "dependent": 2.0 + float(obs_idx) + (4.0 if industry_id == 12 else 0.0),
+                }
+            )
+    for industry_id, industry_effect in ((1, 0.0), (12, 0.5)):
+        for signal_value in (0.0, 1.0):
+            rows.append(
+                {
+                    "filing_date": dt.date(2021, 5, 15),
+                    "ff48_industry_id": industry_id,
+                    "signal_a": signal_value,
+                    "signal_b": signal_value + 0.5,
+                    "dependent": 1.0 + 2.0 * signal_value + industry_effect,
+                }
+            )
+
+    bundle = regressions._run_signal_family_with_diagnostics(
+        pl.DataFrame(rows).lazy(),
+        table_id="unit_test_table",
+        text_scope="full_10k",
+        dependent_variable="dependent",
+        signal_columns=("signal_a", "signal_b"),
+        control_columns=(),
+    )
+
+    assert bundle.results_df.height > 0
+    assert bundle.skipped_quarters_df.height == 2
+    assert bundle.skipped_quarters_df.get_column("skip_reason").unique().to_list() == ["rank_deficient_design"]
+    assert bundle.skipped_quarters_df.get_column("table_id").unique().to_list() == ["unit_test_table"]
+    assert bundle.skipped_quarters_df.get_column("duplicate_regressor_pairs").drop_nulls().len() == 2
 
 
 def test_build_lm2011_normalized_difference_panel_uses_prior_year_industry_prop_stats() -> None:
