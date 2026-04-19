@@ -400,3 +400,41 @@ def test_clean_item_scopes_fail_closed_when_authority_column_is_missing() -> Non
     assert audit_row["review_status"] == "required_unreviewed"
     assert audit_row["production_eligible"] is False
     assert cleaned_scopes_for_sentence_materialization(result.cleaned_scope_df).is_empty()
+
+
+def test_clean_item_scopes_handles_late_non_null_drop_reason_past_inference_window() -> None:
+    leading_row_count = 105
+    long_text = ("Business overview remains detailed and specific. " * 20).strip()
+    sections = pl.DataFrame(
+        {
+            "doc_id": [f"doc_{idx:03d}" for idx in range(leading_row_count)] + ["doc_drop"],
+            "cik_10": ["0000000001"] * (leading_row_count + 1),
+            "accession_nodash": [f"000000000100000{idx:03d}" for idx in range(leading_row_count)] + ["000000000100099999"],
+            "filing_date": [dt.date(2020, 3, 1)] * (leading_row_count + 1),
+            "filing_year": [2020] * (leading_row_count + 1),
+            "benchmark_row_id": [f"doc_{idx:03d}:item_1" for idx in range(leading_row_count)] + ["doc_drop:item_7"],
+            "benchmark_item_code": ["item_1"] * leading_row_count + ["item_7"],
+            "benchmark_item_label": ["10-K Item 1"] * leading_row_count + ["10-K Item 7"],
+            "item_id": ["1"] * leading_row_count + ["7"],
+            "canonical_item": ["I:1_BUSINESS"] * leading_row_count + ["II:7_MDA"],
+            "document_type": ["10-K"] * (leading_row_count + 1),
+            "document_type_raw": ["10-K"] * (leading_row_count + 1),
+            "document_type_normalized": ["10-K"] * (leading_row_count + 1),
+            "source_year_file": [2020] * (leading_row_count + 1),
+            "full_text": [long_text] * leading_row_count + ["short mda text"],
+            "boundary_authority_status": ["auto_accepted"] * (leading_row_count + 1),
+        }
+    )
+
+    result = clean_item_scopes_with_audit(
+        sections,
+        segment_policy_id=build_segment_policy_id(SentenceDatasetConfig(), ItemTextCleaningConfig()),
+    )
+
+    dropped_row = result.row_audit_df.filter(pl.col("doc_id") == "doc_drop").row(0, named=True)
+
+    assert result.row_audit_df.height == leading_row_count + 1
+    assert result.row_audit_df.schema["drop_reason"] == pl.Utf8
+    assert result.row_audit_df.schema["manual_audit_reason"] == pl.Utf8
+    assert dropped_row["drop_reason"] == "item7_below_lm_token_floor"
+    assert dropped_row["item7_lm_token_floor_failed"] is True

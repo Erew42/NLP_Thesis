@@ -282,6 +282,12 @@ def _empty_frame(schema: dict[str, pl.DataType]) -> pl.DataFrame:
     return pl.DataFrame(schema=schema)
 
 
+def _frame_from_rows(rows: list[dict[str, Any]], schema: dict[str, pl.DataType]) -> pl.DataFrame:
+    if not rows:
+        return _empty_frame(schema)
+    return _align_to_schema(pl.DataFrame(rows, schema=schema, strict=False), schema)
+
+
 def _align_to_schema(df: pl.DataFrame, schema: dict[str, pl.DataType]) -> pl.DataFrame:
     return df.select(
         [
@@ -835,12 +841,8 @@ def clean_item_scopes_with_audit(
                 }
             )
 
-    row_audit_df = _align_to_schema(pl.DataFrame(audit_rows), CLEANING_ROW_AUDIT_SCHEMA)
-    cleaned_scope_df = (
-        _align_to_schema(pl.DataFrame(cleaned_rows), CLEANED_ITEM_SCOPE_SCHEMA)
-        if cleaned_rows
-        else _empty_frame(CLEANED_ITEM_SCOPE_SCHEMA)
-    )
+    row_audit_df = _frame_from_rows(audit_rows, CLEANING_ROW_AUDIT_SCHEMA)
+    cleaned_scope_df = _frame_from_rows(cleaned_rows, CLEANED_ITEM_SCOPE_SCHEMA)
     flagged_rows_df = _flagged_rows(row_audit_df)
     diagnostics_df = _build_scope_diagnostics(row_audit_df)
     manual_audit_df = _build_manual_audit_sample(row_audit_df)
@@ -1027,4 +1029,4 @@ def _build_manual_audit_sample(row_audit_df: pl.DataFrame) -> pl.DataFrame:
 
     if not selected:
         return _empty_frame(MANUAL_AUDIT_SAMPLE_SCHEMA)
-    return _align_to_schema(pl.DataFrame(selected), MANUAL_AUDIT_SAMPLE_SCHEMA)
+    return _frame_from_rows(selected, MANUAL_AUDIT_SAMPLE_SCHEMA)
