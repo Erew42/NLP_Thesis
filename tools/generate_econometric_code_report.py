@@ -193,72 +193,72 @@ def _evidence_refs() -> list[EvidenceRef]:
     return [
         EvidenceRef(
             "E1",
-            "src/thesis_pkg/notebooks_and_scripts/lm2011_sample_post_refinitiv_runner.py:2504-2856, 2904-3030 and src/thesis_pkg/notebooks_and_scripts/sec_ccm_unified_runner.py:3094-3141",
+            "src/thesis_pkg/notebooks_and_scripts/lm2011_sample_post_refinitiv_runner.py::run_lm2011_extension_pipeline and staged LM2011 table materialization; src/thesis_pkg/notebooks_and_scripts/sec_ccm_unified_runner.py::SEC_CCM_RUN_LM2011_EXTENSION wiring and downstream extension call",
             "Standalone LM2011 stage materialization through Table IA.II, extension-pipeline materialization, and unified-runner wiring that invokes LM2011 extension after FinBERT.",
         ),
         EvidenceRef(
             "E2",
-            "src/thesis_pkg/core/ccm/lm2011.py:521-574",
+            "src/thesis_pkg/core/ccm/lm2011.py::derive_filing_trade_anchors",
             "Filing-trade and pre-filing-trade anchor rules.",
         ),
         EvidenceRef(
             "E3",
-            "src/thesis_pkg/core/ccm/lm2011.py:577-701",
+            "src/thesis_pkg/core/ccm/lm2011.py::build_annual_accounting_panel and ::attach_latest_annual_accounting",
             "Annual accounting formulas including preferred stock handling and book equity construction.",
         ),
         EvidenceRef(
             "E4",
-            "src/thesis_pkg/core/ccm/lm2011.py:899-1111 and src/thesis_pkg/core/ccm/sec_ccm_contracts.py:65-96",
+            "src/thesis_pkg/core/ccm/lm2011.py::attach_lm2011_industry_classifications and ::attach_pre_filing_market_data; src/thesis_pkg/core/ccm/sec_ccm_contracts.py::event_market_equity_millions",
             "FF48 industry assignment plus shared event-date market-equity normalization to millions of USD.",
         ),
         EvidenceRef(
             "E5",
-            "src/thesis_pkg/pipelines/lm2011_pipeline.py:734-946",
+            "src/thesis_pkg/pipelines/lm2011_pipeline.py::_fit_checked_ols, ::_regression_metrics_from_window, and ::build_lm2011_event_panel",
             "Shared OLS helper, factor-model alpha/RMSE helper, and event-screen arithmetic.",
         ),
         EvidenceRef(
             "E6",
-            "src/thesis_pkg/pipelines/lm2011_pipeline.py:361-378, 809-838, 1110-1138, 1338-1365",
+            "src/thesis_pkg/pipelines/lm2011_pipeline.py::_apply_lm2011_regression_transforms, ::build_lm2011_event_panel, and ::build_lm2011_sue_panel",
             "Ownership handling, log transforms, sample filters, winsorization, and event-panel output selection.",
         ),
         EvidenceRef(
             "E7",
-            "src/thesis_pkg/core/sec/lm2011_text.py:96-109, 310-400, 1004-1145",
+            "src/thesis_pkg/core/sec/lm2011_text.py::_lm2011_term_weight, ::_build_feature_rows, ::build_lm2011_text_features_full_10k, and ::build_lm2011_text_features_mda",
             "IDF and TF-IDF formulas, total-token document-length normalization, and text-feature builders.",
         ),
         EvidenceRef(
             "E8",
-            "src/thesis_pkg/core/ccm/lm2011.py:774-896 and src/thesis_pkg/pipelines/lm2011_pipeline.py:1444-1668",
+            "src/thesis_pkg/core/ccm/lm2011.py::attach_eligible_quarterly_accounting; src/thesis_pkg/pipelines/lm2011_pipeline.py::build_lm2011_sue_panel",
             "Quarterly accounting attachment, pre-filing and prior-month price attachment, and SUE variable construction.",
         ),
         EvidenceRef(
             "E9",
-            "src/thesis_pkg/pipelines/lm2011_regressions.py:144-472",
+            "src/thesis_pkg/pipelines/lm2011_regressions.py::build_lm2011_return_regression_panel, ::build_lm2011_normalized_difference_panel, and ::run_lm2011_quarterly_fama_macbeth",
             "Regression panels, normalized-difference panel, weighted means, Newey-West standard errors, and quarterly Fama-MacBeth estimation.",
         ),
         EvidenceRef(
             "E10",
-            "src/thesis_pkg/pipelines/lm2011_regressions.py:504-717",
+            "src/thesis_pkg/pipelines/lm2011_regressions.py::build_lm2011_table_iv_results, ::build_lm2011_table_v_results, ::build_lm2011_table_vi_results, ::build_lm2011_table_viii_results, ::build_lm2011_table_ia_i_results, and ::build_lm2011_table_ia_ii_results",
             "Table-specific specifications and Table IA.II output assembly.",
         ),
         EvidenceRef(
             "E11",
-            "src/thesis_pkg/pipelines/lm2011_pipeline.py:1780-2144",
+            "src/thesis_pkg/pipelines/lm2011_pipeline.py::build_lm2011_trading_strategy_monthly_returns and ::build_lm2011_trading_strategy_ff4_summary",
             "Trading-strategy assignment, equal/value weighting, long-short return construction, and FF4 loading regression.",
         ),
         EvidenceRef(
             "E12",
-            "src/thesis_pkg/benchmarking/finbert_analysis.py:159-275",
+            "src/thesis_pkg/benchmarking/finbert_analysis.py::aggregate_sentence_scores_to_item_features",
             "FinBERT length-weighted feature aggregation used by the extension scaffold.",
         ),
         EvidenceRef(
             "E13",
-            "src/thesis_pkg/pipelines/lm2011_extension.py:20-123, 565-1049",
+            "src/thesis_pkg/pipelines/lm2011_extension.py::build_lm2011_extension_control_ladder, ::build_lm2011_extension_specification_grid, ::build_lm2011_extension_dictionary_features_from_cleaned_scopes, ::build_lm2011_extension_analysis_panel, ::build_lm2011_extension_sample_loss_table, and ::run_lm2011_extension_estimation_scaffold",
             "Extension sample window, control/specification grids, cleaned-scope alignment, event-base assembly, sample-loss accounting, and extension estimation scaffold.",
         ),
         EvidenceRef(
             "E14",
-            "src/thesis_pkg/pipelines/lm2011_pipeline.py:276-298, 544-557, 1827-1845",
+            "src/thesis_pkg/pipelines/lm2011_pipeline.py::_ensure_factor_scale, ::_prepare_daily_factor_frame, and ::_prepare_monthly_factor_frame",
             "Daily and monthly factor scaling: divide by 100 when the factor columns appear to be stored in percent units.",
         ),
     ]
@@ -1218,7 +1218,7 @@ It then adds:
         "The central implemented estimator is quarterly Fama-MacBeth with observation-count weighting across quarters and Newey-West lag 1 standard errors on the quarterly coefficient path.",
         "The main return outcome is not cumulative abnormal return from a factor model; it is the difference between compounded stock and compounded market gross returns over filing days 0..3.",
         "postevent_return_volatility is a factor-model RMSE, not a raw realized-volatility measure.",
-        "LM2011 dictionary proportions use recognized master-dictionary words as the denominator, while separate total_token_count columns preserve the broader post-clean token totals.",
+        "LM2011 dictionary proportions and TF-IDF document-length normalization use total LM-tokenized length, while separate token_count columns preserve recognized master-dictionary word totals for diagnostics.",
         "The extension scaffold is now wired into sec_ccm_unified_runner after FinBERT and fails closed on cleaned-scope misalignment instead of silently mixing dictionary and model surfaces.",
     ]:
         story.append(_bullet(line, styles))

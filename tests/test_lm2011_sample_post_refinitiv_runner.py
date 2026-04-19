@@ -800,12 +800,41 @@ def test_parse_args_uses_memory_hardened_defaults() -> None:
     assert args.text_features_mda_path is None
     assert args.recompute_text_features_full_10k is False
     assert args.recompute_text_features_mda is False
+    assert args.recompute_event_screen_surface is False
+    assert args.recompute_event_panel is False
+    assert args.recompute_regression_tables is False
     assert args.doc_ownership_path is None
     assert args.doc_analyst_selected_path is None
     assert args.event_window_doc_batch_size == runner.DEFAULT_LM2011_EVENT_WINDOW_DOC_BATCH_SIZE
     assert args.local_work_root == runner.DEFAULT_LOCAL_WORK_ROOT
     assert args.print_ram_stats is False
     assert args.ram_log_interval_batches == runner.DEFAULT_RAM_LOG_INTERVAL_BATCHES
+
+
+def test_resolve_paths_threads_recompute_flags(tmp_path: Path) -> None:
+    sample_root, upstream_run_root, additional_data_dir, output_dir = _build_temp_layout(tmp_path)
+
+    paths = runner._resolve_paths(
+        runner.parse_args(
+            [
+                "--sample-root",
+                str(sample_root),
+                "--upstream-run-root",
+                str(upstream_run_root),
+                "--additional-data-dir",
+                str(additional_data_dir),
+                "--output-dir",
+                str(output_dir),
+                "--recompute-event-screen-surface",
+                "--recompute-event-panel",
+                "--recompute-regression-tables",
+            ]
+        )
+    )
+
+    assert paths.recompute_event_screen_surface is True
+    assert paths.recompute_event_panel is True
+    assert paths.recompute_regression_tables is True
 
 
 def test_resolve_paths_explicit_sample_backbone_takes_precedence(tmp_path: Path) -> None:
@@ -1260,6 +1289,274 @@ def test_pipeline_reuses_existing_text_feature_artifacts_in_output_dir(
     manifest = json.loads((output_dir / runner.MANIFEST_FILENAME).read_text(encoding="utf-8"))
     assert manifest["stages"]["text_features_full_10k"]["status"] == runner.STAGE_STATUS_REUSED_EXISTING_ARTIFACT
     assert manifest["stages"]["text_features_mda"]["status"] == runner.STAGE_STATUS_REUSED_EXISTING_ARTIFACT
+
+
+def test_pipeline_reuses_existing_event_screen_surface_artifact_in_output_dir(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sample_root, upstream_run_root, additional_data_dir, output_dir = _build_temp_layout(tmp_path)
+    _write_valid_text_feature_artifact(
+        output_dir / runner.STAGE_ARTIFACT_FILENAMES["text_features_full_10k"],
+        additional_data_dir=additional_data_dir,
+        stage_name="text_features_full_10k",
+    )
+    _write_text_feature_reuse_manifest(output_dir, additional_data_dir=additional_data_dir)
+    _write_parquet(
+        output_dir / runner.STAGE_ARTIFACT_FILENAMES["event_screen_surface"],
+        pl.DataFrame({"doc_id": ["d1"]}),
+    )
+
+    run_cfg = runner.build_lm2011_post_refinitiv_run_config(
+        runner.parse_args(
+            [
+                "--sample-root",
+                str(sample_root),
+                "--upstream-run-root",
+                str(upstream_run_root),
+                "--additional-data-dir",
+                str(additional_data_dir),
+                "--output-dir",
+                str(output_dir),
+            ]
+        ),
+        enabled_stages=("event_screen_surface",),
+    )
+
+    monkeypatch.setattr(
+        runner,
+        "_write_event_screen_surface_stage",
+        lambda *_, **__: (_ for _ in ()).throw(
+            AssertionError("event-screen surface writer should not run when reuse succeeds")
+        ),
+    )
+
+    assert runner.run_lm2011_post_refinitiv_pipeline(run_cfg) == 0
+
+    manifest = json.loads((output_dir / runner.MANIFEST_FILENAME).read_text(encoding="utf-8"))
+    assert manifest["stages"]["event_screen_surface"]["status"] == runner.STAGE_STATUS_REUSED_EXISTING_ARTIFACT
+
+
+def test_pipeline_reuses_existing_event_panel_artifact_in_output_dir(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sample_root, upstream_run_root, additional_data_dir, output_dir = _build_temp_layout(tmp_path)
+    _write_parquet(
+        output_dir / runner.STAGE_ARTIFACT_FILENAMES["event_panel"],
+        pl.DataFrame({"doc_id": ["d1"]}),
+    )
+
+    run_cfg = runner.build_lm2011_post_refinitiv_run_config(
+        runner.parse_args(
+            [
+                "--sample-root",
+                str(sample_root),
+                "--upstream-run-root",
+                str(upstream_run_root),
+                "--additional-data-dir",
+                str(additional_data_dir),
+                "--output-dir",
+                str(output_dir),
+            ]
+        ),
+        enabled_stages=("event_panel",),
+    )
+
+    monkeypatch.setattr(
+        runner,
+        "build_lm2011_event_panel",
+        lambda *_, **__: (_ for _ in ()).throw(
+            AssertionError("event-panel builder should not run when reuse succeeds")
+        ),
+    )
+
+    assert runner.run_lm2011_post_refinitiv_pipeline(run_cfg) == 0
+
+    manifest = json.loads((output_dir / runner.MANIFEST_FILENAME).read_text(encoding="utf-8"))
+    assert manifest["stages"]["event_panel"]["status"] == runner.STAGE_STATUS_REUSED_EXISTING_ARTIFACT
+
+
+def test_pipeline_reuses_existing_regression_table_artifacts_in_output_dir(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sample_root, upstream_run_root, additional_data_dir, output_dir = _build_temp_layout(tmp_path)
+    _write_valid_text_feature_artifact(
+        output_dir / runner.STAGE_ARTIFACT_FILENAMES["text_features_full_10k"],
+        additional_data_dir=additional_data_dir,
+        stage_name="text_features_full_10k",
+    )
+    _write_text_feature_reuse_manifest(output_dir, additional_data_dir=additional_data_dir)
+    table_iv_path = output_dir / runner.STAGE_ARTIFACT_FILENAMES["table_iv_results"]
+    _write_parquet(
+        table_iv_path,
+        pl.DataFrame({"table_id": ["table_iv_full_10k"], "estimate": [1.0]}),
+    )
+    skipped_quarters_parquet = output_dir / "lm2011_table_iv_results_skipped_quarters.parquet"
+    skipped_quarters_csv = output_dir / "lm2011_table_iv_results_skipped_quarters.csv"
+    skipped_quarters_df = _skipped_quarter_diagnostics_df()
+    skipped_quarters_df.write_parquet(skipped_quarters_parquet)
+    skipped_quarters_df.write_csv(skipped_quarters_csv)
+    _write_parquet(
+        output_dir / runner.STAGE_ARTIFACT_FILENAMES["table_ia_ii_results"],
+        pl.DataFrame({"table_id": ["table_ia_ii"], "estimate": [1.0]}),
+    )
+
+    run_cfg = runner.build_lm2011_post_refinitiv_run_config(
+        runner.parse_args(
+            [
+                "--sample-root",
+                str(sample_root),
+                "--upstream-run-root",
+                str(upstream_run_root),
+                "--additional-data-dir",
+                str(additional_data_dir),
+                "--output-dir",
+                str(output_dir),
+            ]
+        ),
+        enabled_stages=("table_iv_results", "table_ia_ii_results"),
+    )
+
+    monkeypatch.setattr(
+        runner,
+        "_build_lm2011_table_iv_results_bundle",
+        lambda *_, **__: (_ for _ in ()).throw(
+            AssertionError("table IV builder should not run when reuse succeeds")
+        ),
+    )
+    monkeypatch.setattr(
+        runner,
+        "build_lm2011_table_ia_ii_results",
+        lambda *_, **__: (_ for _ in ()).throw(
+            AssertionError("table IA.II builder should not run when reuse succeeds")
+        ),
+    )
+
+    assert runner.run_lm2011_post_refinitiv_pipeline(run_cfg) == 0
+
+    manifest = json.loads((output_dir / runner.MANIFEST_FILENAME).read_text(encoding="utf-8"))
+    assert manifest["stages"]["table_iv_results"]["status"] == runner.STAGE_STATUS_REUSED_EXISTING_ARTIFACT
+    assert manifest["stages"]["table_iv_results"]["extra_artifacts"] == {
+        "skipped_quarters_parquet": str(skipped_quarters_parquet.resolve()),
+        "skipped_quarters_csv": str(skipped_quarters_csv.resolve()),
+    }
+    assert manifest["stages"]["table_ia_ii_results"]["status"] == runner.STAGE_STATUS_REUSED_EXISTING_ARTIFACT
+
+
+def test_pipeline_recompute_event_panel_ignores_reusable_artifact(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sample_root, upstream_run_root, additional_data_dir, output_dir = _build_temp_layout(tmp_path)
+    _write_valid_text_feature_artifact(
+        output_dir / runner.STAGE_ARTIFACT_FILENAMES["text_features_full_10k"],
+        additional_data_dir=additional_data_dir,
+        stage_name="text_features_full_10k",
+    )
+    _write_text_feature_reuse_manifest(output_dir, additional_data_dir=additional_data_dir)
+    _write_parquet(
+        output_dir / runner.STAGE_ARTIFACT_FILENAMES["event_screen_surface"],
+        pl.DataFrame({"doc_id": ["d1"]}),
+    )
+    _write_parquet(
+        output_dir / runner.STAGE_ARTIFACT_FILENAMES["event_panel"],
+        pl.DataFrame({"doc_id": ["stale"]}),
+    )
+
+    run_cfg = runner.build_lm2011_post_refinitiv_run_config(
+        runner.parse_args(
+            [
+                "--sample-root",
+                str(sample_root),
+                "--upstream-run-root",
+                str(upstream_run_root),
+                "--additional-data-dir",
+                str(additional_data_dir),
+                "--output-dir",
+                str(output_dir),
+                "--recompute-event-panel",
+            ]
+        ),
+        enabled_stages=("event_screen_surface", "event_panel"),
+    )
+
+    captured: dict[str, bool] = {"called": False}
+
+    def _capture_event_panel(*_: object, **__: object) -> pl.LazyFrame:
+        captured["called"] = True
+        return pl.DataFrame({"doc_id": ["rebuilt"]}).lazy()
+
+    monkeypatch.setattr(runner, "build_lm2011_event_panel", _capture_event_panel)
+
+    assert runner.run_lm2011_post_refinitiv_pipeline(run_cfg) == 0
+
+    manifest = json.loads((output_dir / runner.MANIFEST_FILENAME).read_text(encoding="utf-8"))
+    assert captured["called"] is True
+    assert manifest["stages"]["event_screen_surface"]["status"] == runner.STAGE_STATUS_REUSED_EXISTING_ARTIFACT
+    assert manifest["stages"]["event_panel"]["status"] == "generated"
+    assert pl.read_parquet(output_dir / runner.STAGE_ARTIFACT_FILENAMES["event_panel"]).get_column("doc_id").to_list() == [
+        "rebuilt"
+    ]
+
+
+def test_pipeline_recompute_regression_tables_ignores_reusable_artifact(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sample_root, upstream_run_root, additional_data_dir, output_dir = _build_temp_layout(tmp_path)
+    _write_valid_text_feature_artifact(
+        output_dir / runner.STAGE_ARTIFACT_FILENAMES["text_features_full_10k"],
+        additional_data_dir=additional_data_dir,
+        stage_name="text_features_full_10k",
+    )
+    _write_text_feature_reuse_manifest(output_dir, additional_data_dir=additional_data_dir)
+    _write_parquet(
+        output_dir / runner.STAGE_ARTIFACT_FILENAMES["event_panel"],
+        pl.DataFrame({"doc_id": ["d1"]}),
+    )
+    _write_parquet(
+        output_dir / runner.STAGE_ARTIFACT_FILENAMES["table_iv_results"],
+        pl.DataFrame({"table_id": ["stale"], "estimate": [1.0]}),
+    )
+
+    run_cfg = runner.build_lm2011_post_refinitiv_run_config(
+        runner.parse_args(
+            [
+                "--sample-root",
+                str(sample_root),
+                "--upstream-run-root",
+                str(upstream_run_root),
+                "--additional-data-dir",
+                str(additional_data_dir),
+                "--output-dir",
+                str(output_dir),
+                "--recompute-regression-tables",
+            ]
+        ),
+        enabled_stages=("event_panel", "table_iv_results"),
+    )
+
+    captured: dict[str, bool] = {"called": False}
+
+    def _capture_table_iv(*_: object, **__: object) -> runner._QuarterlyFamaMacbethBundle:
+        captured["called"] = True
+        return _quarterly_bundle(
+            results_df=pl.DataFrame({"table_id": ["table_iv_full_10k"], "estimate": [2.0]}),
+        )
+
+    monkeypatch.setattr(runner, "_build_lm2011_table_iv_results_bundle", _capture_table_iv)
+
+    assert runner.run_lm2011_post_refinitiv_pipeline(run_cfg) == 0
+
+    manifest = json.loads((output_dir / runner.MANIFEST_FILENAME).read_text(encoding="utf-8"))
+    assert captured["called"] is True
+    assert manifest["stages"]["event_panel"]["status"] == runner.STAGE_STATUS_REUSED_EXISTING_ARTIFACT
+    assert manifest["stages"]["table_iv_results"]["status"] == "generated"
+    assert pl.read_parquet(output_dir / runner.STAGE_ARTIFACT_FILENAMES["table_iv_results"]).get_column("estimate").to_list() == [
+        2.0
+    ]
 
 
 def test_pipeline_explicit_text_feature_override_is_imported_and_reused(
@@ -2390,6 +2687,9 @@ def test_notebook_wrapper_honors_unified_env_contract_and_stage_semantics(
     monkeypatch.setenv("SEC_CCM_LM2011_FULL_10K_TEXT_FEATURE_BATCH_SIZE", "11")
     monkeypatch.setenv("SEC_CCM_LM2011_MDA_TEXT_FEATURE_BATCH_SIZE", "13")
     monkeypatch.setenv("SEC_CCM_LM2011_EVENT_WINDOW_DOC_BATCH_SIZE", "17")
+    monkeypatch.setenv("SEC_CCM_LM2011_RECOMPUTE_EVENT_SCREEN_SURFACE", "true")
+    monkeypatch.setenv("SEC_CCM_LM2011_RECOMPUTE_EVENT_PANEL", "true")
+    monkeypatch.setenv("SEC_CCM_LM2011_RECOMPUTE_REGRESSION_TABLES", "true")
     monkeypatch.setenv("SEC_CCM_PRINT_RAM_STATS", "true")
     monkeypatch.setenv("SEC_CCM_RAM_LOG_INTERVAL_BATCHES", "19")
     monkeypatch.setenv("SEC_CCM_RUN_LM2011_POST_REFINITIV", "true")
@@ -2437,6 +2737,9 @@ def test_notebook_wrapper_honors_unified_env_contract_and_stage_semantics(
     assert namespace["FULL_10K_TEXT_FEATURE_BATCH_SIZE"] == 11
     assert namespace["MDA_TEXT_FEATURE_BATCH_SIZE"] == 13
     assert namespace["EVENT_WINDOW_DOC_BATCH_SIZE"] == 17
+    assert namespace["RECOMPUTE_EVENT_SCREEN_SURFACE"] is True
+    assert namespace["RECOMPUTE_EVENT_PANEL"] is True
+    assert namespace["RECOMPUTE_REGRESSION_TABLES"] is True
     assert namespace["PRINT_RAM_STATS"] is True
     assert namespace["RAM_LOG_INTERVAL_BATCHES"] == 19
 
@@ -2448,6 +2751,9 @@ def test_notebook_wrapper_honors_unified_env_contract_and_stage_semantics(
     assert "--full-10k-text-feature-batch-size" in run_args
     assert "--mda-text-feature-batch-size" in run_args
     assert "--event-window-doc-batch-size" in run_args
+    assert "--recompute-event-screen-surface" in run_args
+    assert "--recompute-event-panel" in run_args
+    assert "--recompute-regression-tables" in run_args
     assert "--print-ram-stats" in run_args
 
     captured: dict[str, object] = {}
@@ -2468,6 +2774,9 @@ def test_notebook_wrapper_honors_unified_env_contract_and_stage_semantics(
     assert run_cfg.paths.full_10k_cleaning_contract == "current"
     assert run_cfg.paths.full_10k_text_feature_batch_size == 11
     assert run_cfg.paths.mda_text_feature_batch_size == 13
+    assert run_cfg.paths.recompute_event_screen_surface is True
+    assert run_cfg.paths.recompute_event_panel is True
+    assert run_cfg.paths.recompute_regression_tables is True
     assert run_cfg.paths.event_window_doc_batch_size == 17
     assert run_cfg.fail_closed_for_enabled_stages is True
     assert run_cfg.enabled_stages == runner.resolve_enabled_lm2011_stage_names_from_env()

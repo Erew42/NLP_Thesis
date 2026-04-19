@@ -284,6 +284,19 @@ STAGE_ARTIFACT_FILENAMES: dict[str, str] = {
     "trading_strategy_monthly_returns": "lm2011_trading_strategy_monthly_returns.parquet",
     "table_ia_ii_results": "lm2011_table_ia_ii_results.parquet",
 }
+FINAL_REGRESSION_TABLE_STAGE_NAMES: frozenset[str] = frozenset(
+    {
+        "table_iv_results",
+        "table_v_results",
+        "table_vi_results",
+        "table_viii_results",
+        "table_ia_i_results",
+        "table_ia_ii_results",
+    }
+)
+QUARTERLY_REGRESSION_TABLE_STAGE_NAMES: frozenset[str] = frozenset(
+    FINAL_REGRESSION_TABLE_STAGE_NAMES - {"table_ia_ii_results"}
+)
 MANIFEST_FILENAME = "lm2011_sample_run_manifest.json"
 LM2011_ALL_STAGE_NAMES: tuple[str, ...] = tuple(STAGE_ARTIFACT_FILENAMES)
 LM2011_OPTIONAL_STAGE_DEFAULTS_FALSE = frozenset(
@@ -351,6 +364,9 @@ class RunnerPaths:
     full_10k_cleaning_contract: str
     full_10k_text_feature_batch_size: int
     mda_text_feature_batch_size: int
+    recompute_event_screen_surface: bool
+    recompute_event_panel: bool
+    recompute_regression_tables: bool
     event_window_doc_batch_size: int
     print_ram_stats: bool
     ram_log_interval_batches: int
@@ -532,6 +548,30 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help=(
             "Force recomputation of MD&A text features by ignoring any reusable "
             "lm2011_text_features_mda.parquet artifact."
+        ),
+    )
+    parser.add_argument(
+        "--recompute-event-screen-surface",
+        action="store_true",
+        help=(
+            "Force recomputation of the LM2011 event-screen surface by ignoring any reusable "
+            "lm2011_event_screen_surface.parquet artifact."
+        ),
+    )
+    parser.add_argument(
+        "--recompute-event-panel",
+        action="store_true",
+        help=(
+            "Force recomputation of the LM2011 event panel by ignoring any reusable "
+            "lm2011_event_panel.parquet artifact."
+        ),
+    )
+    parser.add_argument(
+        "--recompute-regression-tables",
+        action="store_true",
+        help=(
+            "Force recomputation of the LM2011 final regression tables by ignoring any reusable "
+            "result-table artifacts in the output directory."
         ),
     )
     parser.add_argument("--items-analysis-dir", type=Path, default=None)
@@ -1438,6 +1478,9 @@ def _resolve_paths(args: argparse.Namespace) -> RunnerPaths:
         full_10k_cleaning_contract=str(args.full_10k_cleaning_contract),
         full_10k_text_feature_batch_size=full_10k_text_feature_batch_size,
         mda_text_feature_batch_size=mda_text_feature_batch_size,
+        recompute_event_screen_surface=bool(args.recompute_event_screen_surface),
+        recompute_event_panel=bool(args.recompute_event_panel),
+        recompute_regression_tables=bool(args.recompute_regression_tables),
         event_window_doc_batch_size=int(args.event_window_doc_batch_size),
         print_ram_stats=bool(args.print_ram_stats),
         ram_log_interval_batches=int(args.ram_log_interval_batches),
@@ -2008,6 +2051,9 @@ def _build_manifest(paths: RunnerPaths) -> dict[str, Any]:
             "text_feature_batch_size": paths.full_10k_text_feature_batch_size,
             "full_10k_text_feature_batch_size": paths.full_10k_text_feature_batch_size,
             "mda_text_feature_batch_size": paths.mda_text_feature_batch_size,
+            "recompute_event_screen_surface": paths.recompute_event_screen_surface,
+            "recompute_event_panel": paths.recompute_event_panel,
+            "recompute_regression_tables": paths.recompute_regression_tables,
             "event_window_doc_batch_size": paths.event_window_doc_batch_size,
             "print_ram_stats": paths.print_ram_stats,
             "ram_log_interval_batches": paths.ram_log_interval_batches,
@@ -2199,6 +2245,7 @@ def _record_reused_stage_artifact(
     stage_name: str,
     artifact_path: Path,
     source_path: Path,
+    extra_artifacts: dict[str, Path] | None = None,
     warnings: Sequence[str] | None = None,
 ) -> pl.LazyFrame:
     row_count = int(pl.scan_parquet(artifact_path).select(pl.len()).collect().item())
@@ -2210,7 +2257,10 @@ def _record_reused_stage_artifact(
         "artifact_path": _absolute_path_str(artifact_path),
         "row_count": row_count,
         "reason": None,
-        "extra_artifacts": {},
+        "extra_artifacts": {
+            name: _absolute_path_str(path)
+            for name, path in (extra_artifacts or {}).items()
+        },
         "source_path": _absolute_path_str(source_path),
         "warnings": list(warnings or []),
         "completed_at_utc": completed_at_utc,
@@ -2376,6 +2426,61 @@ def _text_feature_reuse_override_hint(stage_name: str) -> str:
     if stage_name == "text_features_mda":
         return "--text-features-mda-path / SEC_CCM_LM2011_TEXT_FEATURES_MDA_PATH"
     raise ValueError(f"Unsupported text-feature stage for reuse: {stage_name}")
+
+
+def _stage_recompute_enabled(paths: RunnerPaths, stage_name: str) -> bool:
+    if stage_name == "event_screen_surface":
+        return paths.recompute_event_screen_surface
+    if stage_name == "event_panel":
+        return paths.recompute_event_panel
+    if stage_name in FINAL_REGRESSION_TABLE_STAGE_NAMES:
+        return paths.recompute_regression_tables
+    return False
+
+
+def _existing_reused_stage_extra_artifacts(
+    output_dir: Path,
+    stage_name: str,
+) -> dict[str, Path]:
+    if stage_name not in QUARTERLY_REGRESSION_TABLE_STAGE_NAMES:
+        return {}
+    skipped_parquet_path, skipped_csv_path = _quarterly_regression_diag_paths(
+        output_dir,
+        stage_name,
+    )
+    extra_artifacts: dict[str, Path] = {}
+    if skipped_parquet_path.exists():
+        extra_artifacts["skipped_quarters_parquet"] = skipped_parquet_path
+    if skipped_csv_path.exists():
+        extra_artifacts["skipped_quarters_csv"] = skipped_csv_path
+    return extra_artifacts
+
+
+def _resolve_reusable_canonical_stage_artifact(
+    run_cfg: LM2011PostRefinitivRunConfig,
+    *,
+    manifest: dict[str, Any],
+    manifest_path: Path,
+    stage_name: str,
+) -> pl.LazyFrame | None:
+    if not _stage_enabled(run_cfg, stage_name):
+        return None
+    if _stage_recompute_enabled(run_cfg.paths, stage_name):
+        return None
+    artifact_path = _artifact_output_path(run_cfg.paths.output_dir, stage_name)
+    if not artifact_path.exists():
+        return None
+    return _record_reused_stage_artifact(
+        manifest,
+        manifest_path=manifest_path,
+        stage_name=stage_name,
+        artifact_path=artifact_path,
+        source_path=artifact_path,
+        extra_artifacts=_existing_reused_stage_extra_artifacts(
+            run_cfg.paths.output_dir,
+            stage_name,
+        ),
+    )
 
 
 def _enabled_text_feature_blocking_stages(
@@ -3011,6 +3116,15 @@ def run_lm2011_post_refinitiv_pipeline(run_cfg: LM2011PostRefinitivRunConfig) ->
         if _stage_disabled(run_cfg, manifest, manifest_path, "event_screen_surface"):
             pass
         elif (
+            event_screen_surface_lf := _resolve_reusable_canonical_stage_artifact(
+                run_cfg,
+                manifest=manifest,
+                manifest_path=manifest_path,
+                stage_name="event_screen_surface",
+            )
+        ) is not None:
+            pass
+        elif (
             sample_backbone_lf is not None
             and annual_accounting_panel_lf is not None
             and ff_factors_daily_lf is not None
@@ -3172,6 +3286,15 @@ def run_lm2011_post_refinitiv_pipeline(run_cfg: LM2011PostRefinitivRunConfig) ->
 
         current_stage_name = "event_panel"
         if _stage_disabled(run_cfg, manifest, manifest_path, "event_panel"):
+            pass
+        elif (
+            event_panel_lf := _resolve_reusable_canonical_stage_artifact(
+                run_cfg,
+                manifest=manifest,
+                manifest_path=manifest_path,
+                stage_name="event_panel",
+            )
+        ) is not None:
             pass
         elif (
             event_screen_surface_lf is not None
@@ -3433,6 +3556,16 @@ def run_lm2011_post_refinitiv_pipeline(run_cfg: LM2011PostRefinitivRunConfig) ->
             current_stage_name = stage_name
             if _stage_disabled(run_cfg, manifest, manifest_path, stage_name):
                 continue
+            if (
+                _resolve_reusable_canonical_stage_artifact(
+                    run_cfg,
+                    manifest=manifest,
+                    manifest_path=manifest_path,
+                    stage_name=stage_name,
+                )
+                is not None
+            ):
+                continue
             if should_run:
                 _write_quarterly_regression_table_stage(
                     manifest,
@@ -3492,6 +3625,16 @@ def run_lm2011_post_refinitiv_pipeline(run_cfg: LM2011PostRefinitivRunConfig) ->
 
         current_stage_name = "table_ia_ii_results"
         if _stage_disabled(run_cfg, manifest, manifest_path, "table_ia_ii_results"):
+            pass
+        elif (
+            _resolve_reusable_canonical_stage_artifact(
+                run_cfg,
+                manifest=manifest,
+                manifest_path=manifest_path,
+                stage_name="table_ia_ii_results",
+            )
+            is not None
+        ):
             pass
         elif (
             paths.monthly_stock_path is not None

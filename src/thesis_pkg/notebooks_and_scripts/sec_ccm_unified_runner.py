@@ -1356,6 +1356,18 @@ def main() -> None:
         "SEC_CCM_LM2011_RECOMPUTE_TEXT_FEATURES_MDA",
         False,
     )
+    LM2011_RECOMPUTE_EVENT_SCREEN_SURFACE = _env_bool(
+        "SEC_CCM_LM2011_RECOMPUTE_EVENT_SCREEN_SURFACE",
+        False,
+    )
+    LM2011_RECOMPUTE_EVENT_PANEL = _env_bool(
+        "SEC_CCM_LM2011_RECOMPUTE_EVENT_PANEL",
+        False,
+    )
+    LM2011_RECOMPUTE_REGRESSION_TABLES = _env_bool(
+        "SEC_CCM_LM2011_RECOMPUTE_REGRESSION_TABLES",
+        False,
+    )
     LM2011_ITEMS_ANALYSIS_DIR = _env_optional_path("SEC_CCM_LM2011_ITEMS_ANALYSIS_DIR")
     LM2011_CCM_BASE_DIR = _env_optional_path("SEC_CCM_LM2011_CCM_BASE_DIR")
     LM2011_YEAR_MERGED_DIR = _env_optional_path("SEC_CCM_LM2011_YEAR_MERGED_DIR")
@@ -2949,6 +2961,9 @@ def main() -> None:
                     else None
                 ),
                 "lm2011_recompute_text_features_mda": LM2011_RECOMPUTE_TEXT_FEATURES_MDA,
+                "lm2011_recompute_event_screen_surface": LM2011_RECOMPUTE_EVENT_SCREEN_SURFACE,
+                "lm2011_recompute_event_panel": LM2011_RECOMPUTE_EVENT_PANEL,
+                "lm2011_recompute_regression_tables": LM2011_RECOMPUTE_REGRESSION_TABLES,
                 "lm2011_items_analysis_dir": str(lm2011_items_analysis_dir),
                 "lm2011_items_analysis_year_files": len(lm2011_items_year_paths),
                 "lm2011_items_can_be_built_here": lm2011_items_can_be_built_here,
@@ -3059,6 +3074,9 @@ def main() -> None:
             full_10k_cleaning_contract=LM2011_FULL_10K_CLEANING_CONTRACT,
             full_10k_text_feature_batch_size=LM2011_FULL_10K_TEXT_FEATURE_BATCH_SIZE,
             mda_text_feature_batch_size=LM2011_MDA_TEXT_FEATURE_BATCH_SIZE,
+            recompute_event_screen_surface=LM2011_RECOMPUTE_EVENT_SCREEN_SURFACE,
+            recompute_event_panel=LM2011_RECOMPUTE_EVENT_PANEL,
+            recompute_regression_tables=LM2011_RECOMPUTE_REGRESSION_TABLES,
             event_window_doc_batch_size=LM2011_EVENT_WINDOW_DOC_BATCH_SIZE,
             print_ram_stats=PRINT_RAM_STATS,
             ram_log_interval_batches=RAM_LOG_INTERVAL_BATCHES,

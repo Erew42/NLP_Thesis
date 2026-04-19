@@ -314,6 +314,9 @@ def test_build_lm2011_extension_run_config_prefers_same_run_finbert_artifacts() 
         full_10k_cleaning_contract="lm2011_paper",
         full_10k_text_feature_batch_size=4,
         mda_text_feature_batch_size=20,
+        recompute_event_screen_surface=False,
+        recompute_event_panel=False,
+        recompute_regression_tables=False,
         event_window_doc_batch_size=50,
         print_ram_stats=False,
         ram_log_interval_batches=10,
@@ -375,6 +378,34 @@ def test_runner_and_notebook_share_lm2011_memory_hardened_defaults() -> None:
     assert 'LM2011_FULL_10K_TEXT_FEATURE_BATCH_SIZE = 4' in notebook_source
     assert 'LM2011_MDA_TEXT_FEATURE_BATCH_SIZE = 20' in notebook_source
     assert 'LM2011_EVENT_WINDOW_DOC_BATCH_SIZE = 50' in notebook_source
+
+
+def test_runner_and_notebook_export_lm2011_recompute_stage_env_keys() -> None:
+    runner_source = Path("src/thesis_pkg/notebooks_and_scripts/sec_ccm_unified_runner.py").read_text(
+        encoding="utf-8"
+    )
+    notebook_source = Path("src/thesis_pkg/notebooks_and_scripts/sec_ccm_unified_runner.ipynb").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'SEC_CCM_LM2011_RECOMPUTE_EVENT_SCREEN_SURFACE' in runner_source
+    assert 'SEC_CCM_LM2011_RECOMPUTE_EVENT_PANEL' in runner_source
+    assert 'SEC_CCM_LM2011_RECOMPUTE_REGRESSION_TABLES' in runner_source
+    assert 'LM2011_RECOMPUTE_EVENT_SCREEN_SURFACE = False' in notebook_source
+    assert 'LM2011_RECOMPUTE_EVENT_PANEL = False' in notebook_source
+    assert 'LM2011_RECOMPUTE_REGRESSION_TABLES = False' in notebook_source
+    assert (
+        '"    \\"SEC_CCM_LM2011_RECOMPUTE_EVENT_SCREEN_SURFACE\\": '
+        'LM2011_RECOMPUTE_EVENT_SCREEN_SURFACE,\\n"'
+    ) in notebook_source
+    assert (
+        '"    \\"SEC_CCM_LM2011_RECOMPUTE_EVENT_PANEL\\": '
+        'LM2011_RECOMPUTE_EVENT_PANEL,\\n"'
+    ) in notebook_source
+    assert (
+        '"    \\"SEC_CCM_LM2011_RECOMPUTE_REGRESSION_TABLES\\": '
+        'LM2011_RECOMPUTE_REGRESSION_TABLES,\\n"'
+    ) in notebook_source
 
 
 def test_runner_and_notebook_export_ram_logging_env_keys() -> None:
@@ -1402,6 +1433,38 @@ def test_main_lm2011_recompute_text_feature_env_disables_auto_reuse(
     assert lm2011_run_cfg.paths.text_features_full_10k_path_is_explicit is False
     assert lm2011_run_cfg.paths.text_features_mda_path is None
     assert lm2011_run_cfg.paths.text_features_mda_path_is_explicit is False
+
+
+def test_main_lm2011_recompute_stage_env_flags_propagate(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    paths = _configure_minimal_main_env(monkeypatch, tmp_path)
+    items_analysis_dir = paths["run_root"] / "items_analysis"
+    items_analysis_dir.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame({"doc_id": ["0000000001:1995000001"]}).write_parquet(items_analysis_dir / "1995.parquet")
+
+    monkeypatch.setenv("SEC_CCM_RUN_LM2011_POST_REFINITIV", "false")
+    monkeypatch.setenv("SEC_CCM_RUN_LM2011_EVENT_SCREEN_SURFACE", "true")
+    monkeypatch.setenv("SEC_CCM_RUN_FINBERT", "false")
+    monkeypatch.setenv("SEC_CCM_LM2011_RECOMPUTE_EVENT_SCREEN_SURFACE", "true")
+    monkeypatch.setenv("SEC_CCM_LM2011_RECOMPUTE_EVENT_PANEL", "true")
+    monkeypatch.setenv("SEC_CCM_LM2011_RECOMPUTE_REGRESSION_TABLES", "true")
+
+    captured: dict[str, object] = {}
+
+    def _lm2011_stub(run_cfg):
+        captured["run_cfg"] = run_cfg
+        return 0
+
+    monkeypatch.setattr(runner, "run_lm2011_post_refinitiv_pipeline", _lm2011_stub)
+
+    runner.main()
+
+    lm2011_run_cfg = captured["run_cfg"]
+    assert lm2011_run_cfg.paths.recompute_event_screen_surface is True
+    assert lm2011_run_cfg.paths.recompute_event_panel is True
+    assert lm2011_run_cfg.paths.recompute_regression_tables is True
 
 
 def test_main_lm2011_recompute_text_feature_env_conflicts_with_override(
