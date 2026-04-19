@@ -386,7 +386,7 @@ def test_lm2011_spec_encodes_exact_tfidf_formula_and_signal_surface() -> None:
 
     assert weighting["basis"] == "paper_explicit"
     assert weighting["formula"] == "w_i,j = ((1 + log(tf_i,j)) / (1 + log(a_j))) * log(N / df_i) when tf_i,j >= 1, else 0."
-    assert "a_j = LM master-dictionary recognized-word token count in document j" in weighting["inputs"]
+    assert "a_j = total LM-tokenized length of the relevant analyzed text unit for document j" in weighting["inputs"]
     assert "Do not use smoothed idf." in weighting["implementation_guardrails"]
     assert "Do not add a +1 idf offset." in weighting["implementation_guardrails"]
     assert "total_token_count_full_10k" in full_cols
@@ -396,6 +396,10 @@ def test_lm2011_spec_encodes_exact_tfidf_formula_and_signal_surface() -> None:
     assert "h4n_inf_tfidf" in mda_cols
     assert "lm_negative_tfidf" in mda_cols
     assert screen_count["exported_columns"] == ["total_token_count_full_10k", "total_token_count_mda"]
+    assert (
+        "`token_count_full_10k` and `token_count_mda` remain recognized-word totals for diagnostics and coverage."
+        in screen_count["notes"]
+    )
 
 
 def test_lm2011_spec_separates_raw_share_turnover_from_log_regression_transform() -> None:

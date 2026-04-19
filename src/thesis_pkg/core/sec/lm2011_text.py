@@ -388,7 +388,7 @@ def _build_feature_rows(
         token_total = int(doc_token_totals.get(doc_id, 0))
         recognized_word_total = int(doc_recognized_word_totals.get(doc_id, 0))
         counts = doc_token_counts.get(doc_id, Counter())
-        denominator = float(recognized_word_total) if recognized_word_total > 0 else None
+        denominator = float(token_total) if token_total > 0 else None
         out[total_token_count_col] = token_total
         out[token_count_col] = recognized_word_total
         for signal_stem, signal_tokens, include_tfidf in signal_specs:
@@ -400,7 +400,7 @@ def _build_feature_rows(
                         sum(
                             _lm2011_term_weight(
                                 term_frequency=counts.get(token, 0),
-                                document_length=recognized_word_total,
+                                document_length=token_total,
                                 inverse_document_frequency=idf_by_token.get(token, 0.0),
                             )
                             for token in signal_tokens
@@ -601,8 +601,8 @@ def _feature_row_from_pass1(
             for token, count in json.loads(str(row.get("_matched_counts_json") or "{}")).items()
         }
     )
-    recognized_word_total = int(out[token_count_col])
-    denominator = float(recognized_word_total) if recognized_word_total > 0 else None
+    token_total = int(out[total_token_count_col])
+    denominator = float(token_total) if token_total > 0 else None
     for signal_stem, signal_tokens, include_tfidf in signal_specs:
         matched_count = float(sum(counts.get(token, 0) for token in signal_tokens))
         out[f"{signal_stem}_prop"] = (matched_count / denominator) if denominator else None
@@ -612,7 +612,7 @@ def _feature_row_from_pass1(
                     sum(
                         _lm2011_term_weight(
                             term_frequency=counts.get(token, 0),
-                            document_length=recognized_word_total,
+                            document_length=token_total,
                             inverse_document_frequency=idf_by_token.get(token, 0.0),
                         )
                         for token in signal_tokens

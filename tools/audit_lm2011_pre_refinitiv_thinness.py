@@ -813,7 +813,7 @@ def _build_event_panel_ladder(paths: AuditPaths, backbone_df: pl.DataFrame) -> d
         ),
         (
             "Token count >= 2000",
-            pl.col("token_count_full_10k").cast(pl.Int32, strict=False) >= 2000,
+            pl.col("total_token_count_full_10k").cast(pl.Int32, strict=False) >= 2000,
             "Require full 10-K token count of at least 2,000.",
         ),
         (

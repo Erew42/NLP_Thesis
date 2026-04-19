@@ -650,7 +650,7 @@ def test_tokenize_lm2011_text_matches_appendix_contract() -> None:
     ]
 
 
-def test_lm2011_text_features_use_recognized_word_denominators_and_match_hyphenated_dictionary_entries() -> None:
+def test_lm2011_text_features_use_total_token_denominators_and_match_hyphenated_dictionary_entries() -> None:
     features = build_lm2011_text_features_full_10k(
         pl.DataFrame(
             {
@@ -676,8 +676,8 @@ def test_lm2011_text_features_use_recognized_word_denominators_and_match_hyphena
     row = features.row(0, named=True)
     assert row["total_token_count_full_10k"] == 3
     assert row["token_count_full_10k"] == 2
-    assert row["lm_negative_prop"] == pytest.approx(0.5)
-    assert row["h4n_inf_prop"] == pytest.approx(0.5)
+    assert row["lm_negative_prop"] == pytest.approx(1.0 / 3.0)
+    assert row["h4n_inf_prop"] == pytest.approx(1.0 / 3.0)
 
 
 def test_lm2011_text_feature_builders_use_exact_paper_tfidf_formula() -> None:
@@ -699,13 +699,15 @@ def test_lm2011_text_feature_builders_use_exact_paper_tfidf_formula() -> None:
 
     idf_loss = math.log(3.0 / 2.0)
     expected_d1_negative = ((1.0 + math.log(2.0)) / (1.0 + math.log(3.0))) * idf_loss
-    expected_d2_negative = idf_loss
-    expected_d2_h4n = math.log(3.0)
+    expected_d2_negative = (1.0 / (1.0 + math.log(2.0))) * idf_loss
+    expected_d2_h4n = math.log(3.0) / (1.0 + math.log(2.0))
 
     d1 = full_features.filter(pl.col("doc_id") == "d1").row(0, named=True)
     d2 = full_features.filter(pl.col("doc_id") == "d2").row(0, named=True)
     d3 = full_features.filter(pl.col("doc_id") == "d3").row(0, named=True)
 
+    assert d2["total_token_count_full_10k"] == 2
+    assert d2["token_count_full_10k"] == 1
     assert d1["lm_negative_tfidf"] == pytest.approx(expected_d1_negative)
     assert d2["lm_negative_tfidf"] == pytest.approx(expected_d2_negative)
     assert d2["h4n_inf_tfidf"] == pytest.approx(expected_d2_h4n)
