@@ -8,6 +8,7 @@ from pathlib import Path
 import polars as pl
 import pytest
 
+from thesis_pkg.core.sec import lm2011_text
 from thesis_pkg.notebooks_and_scripts import lm2011_sample_post_refinitiv_runner as runner
 
 
@@ -228,6 +229,72 @@ def _build_temp_layout(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
         ),
     )
     return sample_root, upstream_run_root, additional_data_dir, output_dir
+
+
+def _write_valid_text_feature_artifact(
+    path: Path,
+    *,
+    additional_data_dir: Path,
+    stage_name: str,
+    doc_id: str = "d1",
+) -> None:
+    dictionary_inputs = runner.load_lm2011_dictionary_inputs(additional_data_dir)
+    spec = runner.TEXT_FEATURE_REUSE_SPECS[stage_name]
+    normalized_dict = lm2011_text.normalize_lm2011_dictionary_lists(dictionary_inputs.dictionary_lists)
+    signal_specs = lm2011_text._build_lm2011_signal_specs(
+        normalized_dict=normalized_dict,
+        harvard_negative_word_list=dictionary_inputs.harvard_negative_word_list,
+    )
+    schema = lm2011_text._feature_schema(
+        include_item_id=spec.include_item_id,
+        include_cleaning_policy_id=spec.include_cleaning_policy_id,
+        raw_form_col="document_type_filename",
+        token_count_col=spec.token_count_col,
+        total_token_count_col=spec.total_token_count_col,
+        signal_specs=signal_specs,
+    )
+    row: dict[str, object] = {}
+    for name, dtype in schema.items():
+        if name == "doc_id":
+            row[name] = doc_id
+        elif name == "cik_10":
+            row[name] = "0000000001"
+        elif name == "filing_date":
+            row[name] = dt.date(1995, 1, 1)
+        elif name == "document_type_filename":
+            row[name] = "10-K"
+        elif name == "normalized_form":
+            row[name] = "10-K"
+        elif name == "item_id":
+            row[name] = "7"
+        elif name == "cleaning_policy_id":
+            row[name] = runner.RAW_ITEM_TEXT_CLEANING_POLICY_ID
+        elif dtype == pl.Int32:
+            row[name] = 1
+        elif dtype == pl.Float64:
+            row[name] = 0.1
+        else:
+            row[name] = "value"
+    _write_parquet(path, pl.DataFrame([row], schema_overrides=schema))
+
+
+def _write_text_feature_reuse_manifest(
+    directory: Path,
+    *,
+    additional_data_dir: Path,
+    full_10k_cleaning_contract: str = runner.DEFAULT_LM2011_FULL_10K_CLEANING_CONTRACT,
+    raw_mda_cleaning_policy_id: str = runner.RAW_ITEM_TEXT_CLEANING_POLICY_ID,
+) -> None:
+    dictionary_inputs = runner.load_lm2011_dictionary_inputs(additional_data_dir)
+    payload = {
+        "runner_name": "lm2011_sample_post_refinitiv_runner",
+        "config": {
+            "full_10k_cleaning_contract": full_10k_cleaning_contract,
+            "raw_mda_cleaning_policy_id": raw_mda_cleaning_policy_id,
+        },
+        "dictionary_inputs": dictionary_inputs.to_manifest_dict(),
+    }
+    _write_text(directory / runner.MANIFEST_FILENAME, json.dumps(payload))
 
 
 def _build_extension_inputs(tmp_path: Path, additional_data_dir: Path) -> dict[str, Path]:
@@ -686,6 +753,10 @@ def test_parse_args_uses_memory_hardened_defaults() -> None:
     assert args.full_10k_text_feature_batch_size is None
     assert args.mda_text_feature_batch_size is None
     assert args.text_feature_batch_size is None
+    assert args.text_features_full_10k_path is None
+    assert args.text_features_mda_path is None
+    assert args.recompute_text_features_full_10k is False
+    assert args.recompute_text_features_mda is False
     assert args.doc_ownership_path is None
     assert args.doc_analyst_selected_path is None
     assert args.event_window_doc_batch_size == runner.DEFAULT_LM2011_EVENT_WINDOW_DOC_BATCH_SIZE
@@ -775,6 +846,185 @@ def test_resolve_paths_explicit_doc_artifact_paths_take_precedence(tmp_path: Pat
     assert paths.doc_analyst_selected_path == explicit_doc_analyst.resolve()
 
 
+def test_resolve_paths_auto_detects_canonical_text_feature_artifacts(tmp_path: Path) -> None:
+    sample_root, upstream_run_root, additional_data_dir, output_dir = _build_temp_layout(tmp_path)
+    _write_valid_text_feature_artifact(
+        output_dir / runner.STAGE_ARTIFACT_FILENAMES["text_features_full_10k"],
+        additional_data_dir=additional_data_dir,
+        stage_name="text_features_full_10k",
+    )
+    _write_valid_text_feature_artifact(
+        output_dir / runner.STAGE_ARTIFACT_FILENAMES["text_features_mda"],
+        additional_data_dir=additional_data_dir,
+        stage_name="text_features_mda",
+    )
+
+    paths = runner._resolve_paths(
+        runner.parse_args(
+            [
+                "--sample-root",
+                str(sample_root),
+                "--upstream-run-root",
+                str(upstream_run_root),
+                "--additional-data-dir",
+                str(additional_data_dir),
+                "--output-dir",
+                str(output_dir),
+            ]
+        )
+    )
+
+    assert paths.text_features_full_10k_path == (
+        output_dir / runner.STAGE_ARTIFACT_FILENAMES["text_features_full_10k"]
+    ).resolve()
+    assert paths.text_features_full_10k_path_is_explicit is False
+    assert paths.text_features_mda_path == (
+        output_dir / runner.STAGE_ARTIFACT_FILENAMES["text_features_mda"]
+    ).resolve()
+    assert paths.text_features_mda_path_is_explicit is False
+
+
+def test_resolve_paths_explicit_text_feature_artifact_paths_take_precedence(tmp_path: Path) -> None:
+    sample_root, upstream_run_root, additional_data_dir, output_dir = _build_temp_layout(tmp_path)
+    explicit_full_10k = tmp_path / "explicit" / "full_10k.parquet"
+    explicit_mda = tmp_path / "explicit" / "mda.parquet"
+    _write_valid_text_feature_artifact(
+        explicit_full_10k,
+        additional_data_dir=additional_data_dir,
+        stage_name="text_features_full_10k",
+    )
+    _write_valid_text_feature_artifact(
+        explicit_mda,
+        additional_data_dir=additional_data_dir,
+        stage_name="text_features_mda",
+    )
+    _write_valid_text_feature_artifact(
+        output_dir / runner.STAGE_ARTIFACT_FILENAMES["text_features_full_10k"],
+        additional_data_dir=additional_data_dir,
+        stage_name="text_features_full_10k",
+    )
+
+    paths = runner._resolve_paths(
+        runner.parse_args(
+            [
+                "--sample-root",
+                str(sample_root),
+                "--upstream-run-root",
+                str(upstream_run_root),
+                "--additional-data-dir",
+                str(additional_data_dir),
+                "--output-dir",
+                str(output_dir),
+                "--text-features-full-10k-path",
+                str(explicit_full_10k),
+                "--text-features-mda-path",
+                str(explicit_mda),
+            ]
+        )
+    )
+
+    assert paths.text_features_full_10k_path == explicit_full_10k.resolve()
+    assert paths.text_features_full_10k_path_is_explicit is True
+    assert paths.text_features_mda_path == explicit_mda.resolve()
+    assert paths.text_features_mda_path_is_explicit is True
+
+
+def test_resolve_paths_recompute_text_feature_flags_disable_auto_reuse(tmp_path: Path) -> None:
+    sample_root, upstream_run_root, additional_data_dir, output_dir = _build_temp_layout(tmp_path)
+    _write_valid_text_feature_artifact(
+        output_dir / runner.STAGE_ARTIFACT_FILENAMES["text_features_full_10k"],
+        additional_data_dir=additional_data_dir,
+        stage_name="text_features_full_10k",
+    )
+    _write_valid_text_feature_artifact(
+        output_dir / runner.STAGE_ARTIFACT_FILENAMES["text_features_mda"],
+        additional_data_dir=additional_data_dir,
+        stage_name="text_features_mda",
+    )
+
+    paths = runner._resolve_paths(
+        runner.parse_args(
+            [
+                "--sample-root",
+                str(sample_root),
+                "--upstream-run-root",
+                str(upstream_run_root),
+                "--additional-data-dir",
+                str(additional_data_dir),
+                "--output-dir",
+                str(output_dir),
+                "--recompute-text-features-full-10k",
+                "--recompute-text-features-mda",
+            ]
+        )
+    )
+
+    assert paths.text_features_full_10k_path is None
+    assert paths.text_features_full_10k_path_is_explicit is False
+    assert paths.text_features_mda_path is None
+    assert paths.text_features_mda_path_is_explicit is False
+
+
+def test_resolve_paths_recompute_text_feature_flags_conflict_with_explicit_paths(tmp_path: Path) -> None:
+    sample_root, upstream_run_root, additional_data_dir, output_dir = _build_temp_layout(tmp_path)
+    explicit_full_10k = tmp_path / "explicit" / "full_10k.parquet"
+    explicit_mda = tmp_path / "explicit" / "mda.parquet"
+    _write_valid_text_feature_artifact(
+        explicit_full_10k,
+        additional_data_dir=additional_data_dir,
+        stage_name="text_features_full_10k",
+    )
+    _write_valid_text_feature_artifact(
+        explicit_mda,
+        additional_data_dir=additional_data_dir,
+        stage_name="text_features_mda",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="--recompute-text-features-full-10k cannot be combined with --text-features-full-10k-path",
+    ):
+        runner._resolve_paths(
+            runner.parse_args(
+                [
+                    "--sample-root",
+                    str(sample_root),
+                    "--upstream-run-root",
+                    str(upstream_run_root),
+                    "--additional-data-dir",
+                    str(additional_data_dir),
+                    "--output-dir",
+                    str(output_dir),
+                    "--text-features-full-10k-path",
+                    str(explicit_full_10k),
+                    "--recompute-text-features-full-10k",
+                ]
+            )
+        )
+
+    with pytest.raises(
+        ValueError,
+        match="--recompute-text-features-mda cannot be combined with --text-features-mda-path",
+    ):
+        runner._resolve_paths(
+            runner.parse_args(
+                [
+                    "--sample-root",
+                    str(sample_root),
+                    "--upstream-run-root",
+                    str(upstream_run_root),
+                    "--additional-data-dir",
+                    str(additional_data_dir),
+                    "--output-dir",
+                    str(output_dir),
+                    "--text-features-mda-path",
+                    str(explicit_mda),
+                    "--recompute-text-features-mda",
+                ]
+            )
+        )
+
+
 def test_prepare_lm2011_sec_backbone_input_excludes_full_text() -> None:
     out = runner._prepare_lm2011_sec_backbone_input_lf(
         pl.DataFrame(
@@ -848,6 +1098,341 @@ def test_write_stage_records_reused_source_path(tmp_path: Path) -> None:
     assert stage["source_path"] == str(source.resolve())
     assert stage["row_count"] == 1
     assert manifest_path.exists()
+
+
+def test_pipeline_reuses_existing_text_feature_artifacts_in_output_dir(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sample_root, upstream_run_root, additional_data_dir, output_dir = _build_temp_layout(tmp_path)
+    _write_valid_text_feature_artifact(
+        output_dir / runner.STAGE_ARTIFACT_FILENAMES["text_features_full_10k"],
+        additional_data_dir=additional_data_dir,
+        stage_name="text_features_full_10k",
+    )
+    _write_valid_text_feature_artifact(
+        output_dir / runner.STAGE_ARTIFACT_FILENAMES["text_features_mda"],
+        additional_data_dir=additional_data_dir,
+        stage_name="text_features_mda",
+    )
+    _write_text_feature_reuse_manifest(output_dir, additional_data_dir=additional_data_dir)
+
+    run_cfg = runner.build_lm2011_post_refinitiv_run_config(
+        runner.parse_args(
+            [
+                "--sample-root",
+                str(sample_root),
+                "--upstream-run-root",
+                str(upstream_run_root),
+                "--additional-data-dir",
+                str(additional_data_dir),
+                "--output-dir",
+                str(output_dir),
+            ]
+        ),
+        enabled_stages=("text_features_full_10k", "text_features_mda"),
+    )
+
+    monkeypatch.setattr(
+        runner,
+        "write_lm2011_text_features_full_10k_parquet",
+        lambda *_, **__: (_ for _ in ()).throw(
+            AssertionError("full-10-K writer should not run when reuse succeeds")
+        ),
+    )
+    monkeypatch.setattr(
+        runner,
+        "write_lm2011_text_features_mda_parquet",
+        lambda *_, **__: (_ for _ in ()).throw(
+            AssertionError("MD&A writer should not run when reuse succeeds")
+        ),
+    )
+
+    assert runner.run_lm2011_post_refinitiv_pipeline(run_cfg) == 0
+
+    manifest = json.loads((output_dir / runner.MANIFEST_FILENAME).read_text(encoding="utf-8"))
+    assert manifest["stages"]["text_features_full_10k"]["status"] == runner.STAGE_STATUS_REUSED_EXISTING_ARTIFACT
+    assert manifest["stages"]["text_features_mda"]["status"] == runner.STAGE_STATUS_REUSED_EXISTING_ARTIFACT
+
+
+def test_pipeline_explicit_text_feature_override_is_imported_and_reused(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sample_root, upstream_run_root, additional_data_dir, output_dir = _build_temp_layout(tmp_path)
+    external_artifact = tmp_path / "reuse_source" / "lm2011_text_features_full_10k.parquet"
+    _write_valid_text_feature_artifact(
+        external_artifact,
+        additional_data_dir=additional_data_dir,
+        stage_name="text_features_full_10k",
+    )
+
+    run_cfg = runner.build_lm2011_post_refinitiv_run_config(
+        runner.parse_args(
+            [
+                "--sample-root",
+                str(sample_root),
+                "--upstream-run-root",
+                str(upstream_run_root),
+                "--additional-data-dir",
+                str(additional_data_dir),
+                "--output-dir",
+                str(output_dir),
+                "--text-features-full-10k-path",
+                str(external_artifact),
+            ]
+        ),
+        enabled_stages=("text_features_full_10k",),
+    )
+
+    monkeypatch.setattr(
+        runner,
+        "write_lm2011_text_features_full_10k_parquet",
+        lambda *_, **__: (_ for _ in ()).throw(
+            AssertionError("full-10-K writer should not run when explicit reuse succeeds")
+        ),
+    )
+
+    assert runner.run_lm2011_post_refinitiv_pipeline(run_cfg) == 0
+
+    canonical_artifact = output_dir / runner.STAGE_ARTIFACT_FILENAMES["text_features_full_10k"]
+    manifest = json.loads((output_dir / runner.MANIFEST_FILENAME).read_text(encoding="utf-8"))
+    stage = manifest["stages"]["text_features_full_10k"]
+
+    assert canonical_artifact.exists()
+    assert pl.read_parquet(canonical_artifact).get_column("doc_id").to_list() == ["d1"]
+    assert stage["status"] == runner.STAGE_STATUS_REUSED_EXISTING_ARTIFACT
+    assert stage["artifact_path"] == str(canonical_artifact.resolve())
+    assert stage["source_path"] == str(external_artifact.resolve())
+    assert stage["row_count"] == 1
+    assert stage["warnings"] == [
+        "No sibling lm2011_sample_run_manifest.json was found for the explicit reuse artifact; semantic validation fell back to schema-only checks."
+    ]
+
+
+def test_pipeline_uses_reused_full_10k_text_features_for_downstream_stage_when_generation_disabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sample_root, upstream_run_root, additional_data_dir, output_dir = _build_temp_layout(tmp_path)
+    sample_backbone_path = tmp_path / "prebuilt_sample_backbone.parquet"
+    _write_parquet(
+        sample_backbone_path,
+        pl.DataFrame(
+            {
+                "doc_id": ["d1"],
+                "cik_10": ["0000000001"],
+                "filing_date": [dt.date(1995, 1, 1)],
+                "normalized_form": ["10-K"],
+                "KYPERMNO": [1],
+            }
+        ),
+    )
+    _write_valid_text_feature_artifact(
+        output_dir / runner.STAGE_ARTIFACT_FILENAMES["text_features_full_10k"],
+        additional_data_dir=additional_data_dir,
+        stage_name="text_features_full_10k",
+    )
+    _write_text_feature_reuse_manifest(output_dir, additional_data_dir=additional_data_dir)
+
+    run_cfg = runner.build_lm2011_post_refinitiv_run_config(
+        runner.parse_args(
+            [
+                "--sample-root",
+                str(sample_root),
+                "--upstream-run-root",
+                str(upstream_run_root),
+                "--additional-data-dir",
+                str(additional_data_dir),
+                "--output-dir",
+                str(output_dir),
+                "--sample-backbone-path",
+                str(sample_backbone_path),
+            ]
+        ),
+        enabled_stages=(
+            "sample_backbone",
+            "annual_accounting_panel",
+            "ff_factors_daily_normalized",
+            "event_screen_surface",
+        ),
+        fail_closed_for_enabled_stages=True,
+    )
+
+    monkeypatch.setattr(
+        runner,
+        "build_annual_accounting_panel",
+        lambda *_, **__: pl.DataFrame({"gvkey_int": [1]}).lazy(),
+    )
+
+    def _event_screen_surface_stub(
+        manifest: dict[str, object],
+        *,
+        manifest_path: Path | None,
+        output_dir: Path,
+        text_features_full_10k_lf: pl.LazyFrame,
+        **_: object,
+    ) -> pl.LazyFrame:
+        assert text_features_full_10k_lf.collect().get_column("doc_id").to_list() == ["d1"]
+        artifact_path = output_dir / runner.STAGE_ARTIFACT_FILENAMES["event_screen_surface"]
+        _write_parquet(artifact_path, pl.DataFrame({"doc_id": ["d1"]}))
+        return runner._record_existing_stage_artifact(
+            manifest,
+            manifest_path=manifest_path,
+            stage_name="event_screen_surface",
+            artifact_path=artifact_path,
+        )
+
+    monkeypatch.setattr(runner, "_write_event_screen_surface_stage", _event_screen_surface_stub)
+
+    assert runner.run_lm2011_post_refinitiv_pipeline(run_cfg) == 0
+
+    manifest = json.loads((output_dir / runner.MANIFEST_FILENAME).read_text(encoding="utf-8"))
+    assert manifest["stages"]["text_features_full_10k"]["status"] == runner.STAGE_STATUS_REUSED_EXISTING_ARTIFACT
+    assert manifest["stages"]["event_screen_surface"]["status"] == "generated"
+
+
+def test_pipeline_invalid_explicit_text_feature_override_fails_early(tmp_path: Path) -> None:
+    sample_root, upstream_run_root, additional_data_dir, output_dir = _build_temp_layout(tmp_path)
+    invalid_artifact = tmp_path / "invalid_full_10k.parquet"
+    _write_parquet(invalid_artifact, pl.DataFrame({"doc_id": ["d1"]}))
+
+    run_cfg = runner.build_lm2011_post_refinitiv_run_config(
+        runner.parse_args(
+            [
+                "--sample-root",
+                str(sample_root),
+                "--upstream-run-root",
+                str(upstream_run_root),
+                "--additional-data-dir",
+                str(additional_data_dir),
+                "--output-dir",
+                str(output_dir),
+                "--text-features-full-10k-path",
+                str(invalid_artifact),
+            ]
+        ),
+        enabled_stages=("text_features_full_10k",),
+    )
+
+    with pytest.raises(ValueError, match="Explicit reusable artifact for text_features_full_10k is incompatible"):
+        runner.run_lm2011_post_refinitiv_pipeline(run_cfg)
+
+
+def test_pipeline_ignores_incompatible_auto_text_feature_artifact_and_rebuilds(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sample_root, upstream_run_root, additional_data_dir, output_dir = _build_temp_layout(tmp_path)
+    invalid_artifact = output_dir / runner.STAGE_ARTIFACT_FILENAMES["text_features_full_10k"]
+    _write_parquet(invalid_artifact, pl.DataFrame({"doc_id": ["d1"]}))
+
+    run_cfg = runner.build_lm2011_post_refinitiv_run_config(
+        runner.parse_args(
+            [
+                "--sample-root",
+                str(sample_root),
+                "--upstream-run-root",
+                str(upstream_run_root),
+                "--additional-data-dir",
+                str(additional_data_dir),
+                "--output-dir",
+                str(output_dir),
+            ]
+        ),
+        enabled_stages=("text_features_full_10k",),
+    )
+
+    calls: dict[str, int] = {"count": 0}
+
+    def _full_10k_writer_stub(
+        sec_parsed_lf: pl.LazyFrame,
+        *,
+        output_path: Path,
+        **_: object,
+    ) -> int:
+        calls["count"] += 1
+        assert sec_parsed_lf.collect().get_column("doc_id").to_list() == ["d1"]
+        _write_valid_text_feature_artifact(
+            output_path,
+            additional_data_dir=additional_data_dir,
+            stage_name="text_features_full_10k",
+        )
+        return 1
+
+    monkeypatch.setattr(runner, "write_lm2011_text_features_full_10k_parquet", _full_10k_writer_stub)
+
+    assert runner.run_lm2011_post_refinitiv_pipeline(run_cfg) == 0
+
+    manifest = json.loads((output_dir / runner.MANIFEST_FILENAME).read_text(encoding="utf-8"))
+    assert calls["count"] == 1
+    assert manifest["stages"]["text_features_full_10k"]["status"] == "generated"
+    assert manifest["row_counts"]["text_features_full_10k"] == 1
+
+
+def test_pipeline_invalid_auto_text_feature_artifact_fails_early_when_downstream_requires_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sample_root, upstream_run_root, additional_data_dir, output_dir = _build_temp_layout(tmp_path)
+    sample_backbone_path = tmp_path / "prebuilt_sample_backbone.parquet"
+    _write_parquet(
+        sample_backbone_path,
+        pl.DataFrame(
+            {
+                "doc_id": ["d1"],
+                "cik_10": ["0000000001"],
+                "filing_date": [dt.date(1995, 1, 1)],
+                "normalized_form": ["10-K"],
+                "KYPERMNO": [1],
+            }
+        ),
+    )
+    _write_parquet(
+        output_dir / runner.STAGE_ARTIFACT_FILENAMES["text_features_full_10k"],
+        pl.DataFrame({"doc_id": ["d1"]}),
+    )
+    _write_text_feature_reuse_manifest(output_dir, additional_data_dir=additional_data_dir)
+
+    run_cfg = runner.build_lm2011_post_refinitiv_run_config(
+        runner.parse_args(
+            [
+                "--sample-root",
+                str(sample_root),
+                "--upstream-run-root",
+                str(upstream_run_root),
+                "--additional-data-dir",
+                str(additional_data_dir),
+                "--output-dir",
+                str(output_dir),
+                "--sample-backbone-path",
+                str(sample_backbone_path),
+            ]
+        ),
+        enabled_stages=(
+            "sample_backbone",
+            "annual_accounting_panel",
+            "ff_factors_daily_normalized",
+            "event_screen_surface",
+        ),
+        fail_closed_for_enabled_stages=True,
+    )
+
+    monkeypatch.setattr(
+        runner,
+        "build_annual_accounting_panel",
+        lambda *_, **__: pl.DataFrame({"gvkey_int": [1]}).lazy(),
+    )
+    monkeypatch.setattr(
+        runner,
+        "_write_event_screen_surface_stage",
+        lambda **_: (_ for _ in ()).throw(
+            AssertionError("downstream stage should not run after text-feature preload failure")
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="LM2011 stages require text_features_full_10k"):
+        runner.run_lm2011_post_refinitiv_pipeline(run_cfg)
 
 
 def test_filter_valid_annual_period_descriptor_rows_excludes_invalid_fallback_rows() -> None:

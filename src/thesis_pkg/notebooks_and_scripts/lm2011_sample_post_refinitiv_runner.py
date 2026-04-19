@@ -69,11 +69,15 @@ from thesis_pkg.core.sec.lm2011_text import (
     DEFAULT_PRODUCTION_FULL_10K_MICROBATCH_SIZE,
     DEFAULT_PRODUCTION_MDA_MICROBATCH_SIZE,
     RAW_ITEM_TEXT_CLEANING_POLICY_ID,
+    _build_lm2011_signal_specs,
+    _feature_schema,
     build_lm2011_text_features_full_10k,
     build_lm2011_text_features_mda,
+    normalize_lm2011_dictionary_lists,
     write_lm2011_text_features_full_10k_parquet,
     write_lm2011_text_features_mda_parquet,
 )
+from thesis_pkg.io.parquet import _copy_with_verify
 from thesis_pkg.pipelines.lm2011_pipeline import (
     build_lm2011_event_panel,
     build_lm2011_sue_panel,
@@ -288,6 +292,7 @@ LM2011_OPTIONAL_STAGE_DEFAULTS_FALSE = frozenset(
     }
 )
 SKIPPED_STAGE_DISABLED = "disabled_by_run_config"
+STAGE_STATUS_REUSED_EXISTING_ARTIFACT = "reused_existing_artifact"
 EXTENSION_MANIFEST_FILENAME = "lm2011_extension_run_manifest.json"
 EXTENSION_DICTIONARY_SOURCE_PREFER_CLEANED = "prefer_cleaned_scopes"
 EXTENSION_DICTIONARY_SOURCE_RAW = "raw_item_text"
@@ -316,6 +321,10 @@ class RunnerPaths:
     year_merged_dir: Path
     sample_backbone_path: Path | None
     daily_panel_path: Path
+    text_features_full_10k_path: Path | None
+    text_features_full_10k_path_is_explicit: bool
+    text_features_mda_path: Path | None
+    text_features_mda_path_is_explicit: bool
     ccm_base_dir: Path
     matched_clean_path: Path
     items_analysis_dir: Path
@@ -343,6 +352,53 @@ class RunnerPaths:
     event_window_doc_batch_size: int
     print_ram_stats: bool
     ram_log_interval_batches: int
+
+
+@dataclass(frozen=True)
+class _TextFeatureReuseSpec:
+    stage_name: str
+    token_count_col: str
+    total_token_count_col: str
+    include_item_id: bool
+    include_cleaning_policy_id: bool
+    blocking_stage_names: frozenset[str]
+
+
+TEXT_FEATURE_REUSE_SPECS: dict[str, _TextFeatureReuseSpec] = {
+    "text_features_full_10k": _TextFeatureReuseSpec(
+        stage_name="text_features_full_10k",
+        token_count_col="token_count_full_10k",
+        total_token_count_col="total_token_count_full_10k",
+        include_item_id=False,
+        include_cleaning_policy_id=False,
+        blocking_stage_names=frozenset(
+            {
+                "event_screen_surface",
+                "table_i_sample_creation",
+                "table_i_sample_creation_1994_2024",
+                "return_regression_panel_full_10k",
+                "sue_regression_panel",
+                "table_iv_results",
+                "table_vi_results",
+                "table_viii_results",
+                "table_ia_i_results",
+            }
+        ),
+    ),
+    "text_features_mda": _TextFeatureReuseSpec(
+        stage_name="text_features_mda",
+        token_count_col="token_count_mda",
+        total_token_count_col="total_token_count_mda",
+        include_item_id=True,
+        include_cleaning_policy_id=True,
+        blocking_stage_names=frozenset(
+            {
+                "return_regression_panel_mda",
+                "table_v_results",
+            }
+        ),
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -442,6 +498,40 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--matched-clean-path", type=Path, default=None)
     parser.add_argument("--daily-panel-path", type=Path, default=None)
+    parser.add_argument(
+        "--text-features-full-10k-path",
+        type=Path,
+        default=None,
+        help=(
+            "Optional reusable LM2011 full-10-K text-features parquet. If omitted, the runner "
+            "auto-reuses <output-dir>/lm2011_text_features_full_10k.parquet when present."
+        ),
+    )
+    parser.add_argument(
+        "--text-features-mda-path",
+        type=Path,
+        default=None,
+        help=(
+            "Optional reusable LM2011 MD&A text-features parquet. If omitted, the runner "
+            "auto-reuses <output-dir>/lm2011_text_features_mda.parquet when present."
+        ),
+    )
+    parser.add_argument(
+        "--recompute-text-features-full-10k",
+        action="store_true",
+        help=(
+            "Force recomputation of full-10-K text features by ignoring any reusable "
+            "lm2011_text_features_full_10k.parquet artifact."
+        ),
+    )
+    parser.add_argument(
+        "--recompute-text-features-mda",
+        action="store_true",
+        help=(
+            "Force recomputation of MD&A text features by ignoring any reusable "
+            "lm2011_text_features_mda.parquet artifact."
+        ),
+    )
     parser.add_argument("--items-analysis-dir", type=Path, default=None)
     parser.add_argument("--ccm-base-dir", type=Path, default=None)
     parser.add_argument(
@@ -1157,6 +1247,16 @@ def _resolve_paths(args: argparse.Namespace) -> RunnerPaths:
         raise ValueError("--event-window-doc-batch-size must be >= 1")
     if int(args.ram_log_interval_batches) < 1:
         raise ValueError("--ram-log-interval-batches must be >= 1")
+    if args.recompute_text_features_full_10k and args.text_features_full_10k_path is not None:
+        raise ValueError(
+            "--recompute-text-features-full-10k cannot be combined with "
+            "--text-features-full-10k-path"
+        )
+    if args.recompute_text_features_mda and args.text_features_mda_path is not None:
+        raise ValueError(
+            "--recompute-text-features-mda cannot be combined with "
+            "--text-features-mda-path"
+        )
     year_merged_dir = (
         Path(args.year_merged_dir).resolve()
         if args.year_merged_dir is not None
@@ -1199,6 +1299,40 @@ def _resolve_paths(args: argparse.Namespace) -> RunnerPaths:
         Path(args.sample_backbone_path).resolve()
         if args.sample_backbone_path is not None
         else (auto_sample_backbone_path.resolve() if auto_sample_backbone_path.exists() else None)
+    )
+    auto_text_features_full_10k_path = output_dir / STAGE_ARTIFACT_FILENAMES["text_features_full_10k"]
+    text_features_full_10k_path_is_explicit = (
+        (args.text_features_full_10k_path is not None) and not args.recompute_text_features_full_10k
+    )
+    text_features_full_10k_path = (
+        None
+        if args.recompute_text_features_full_10k
+        else (
+            Path(args.text_features_full_10k_path).resolve()
+            if args.text_features_full_10k_path is not None
+            else (
+                auto_text_features_full_10k_path.resolve()
+                if auto_text_features_full_10k_path.exists()
+                else None
+            )
+        )
+    )
+    auto_text_features_mda_path = output_dir / STAGE_ARTIFACT_FILENAMES["text_features_mda"]
+    text_features_mda_path_is_explicit = (
+        (args.text_features_mda_path is not None) and not args.recompute_text_features_mda
+    )
+    text_features_mda_path = (
+        None
+        if args.recompute_text_features_mda
+        else (
+            Path(args.text_features_mda_path).resolve()
+            if args.text_features_mda_path is not None
+            else (
+                auto_text_features_mda_path.resolve()
+                if auto_text_features_mda_path.exists()
+                else None
+            )
+        )
     )
     matched_clean_path = (
         Path(args.matched_clean_path).resolve()
@@ -1247,6 +1381,10 @@ def _resolve_paths(args: argparse.Namespace) -> RunnerPaths:
         year_merged_dir=year_merged_dir,
         sample_backbone_path=sample_backbone_path,
         daily_panel_path=daily_panel_path,
+        text_features_full_10k_path=text_features_full_10k_path,
+        text_features_full_10k_path_is_explicit=text_features_full_10k_path_is_explicit,
+        text_features_mda_path=text_features_mda_path,
+        text_features_mda_path_is_explicit=text_features_mda_path_is_explicit,
         ccm_base_dir=ccm_base_dir,
         matched_clean_path=matched_clean_path,
         items_analysis_dir=items_analysis_dir,
@@ -1820,6 +1958,8 @@ def _build_manifest(paths: RunnerPaths) -> dict[str, Any]:
             "year_merged_dir": _absolute_path_str(paths.year_merged_dir),
             "sample_backbone_path": _absolute_path_str(paths.sample_backbone_path),
             "daily_panel_path": _absolute_path_str(paths.daily_panel_path),
+            "text_features_full_10k_path": _absolute_path_str(paths.text_features_full_10k_path),
+            "text_features_mda_path": _absolute_path_str(paths.text_features_mda_path),
             "ccm_base_dir": _absolute_path_str(paths.ccm_base_dir),
             "matched_clean_path": _absolute_path_str(paths.matched_clean_path),
             "items_analysis_dir": _absolute_path_str(paths.items_analysis_dir),
@@ -1847,6 +1987,188 @@ def _build_manifest(paths: RunnerPaths) -> dict[str, Any]:
         "stages": {},
         "dictionary_inputs": {},
     }
+
+
+def _normalize_dictionary_inputs_manifest_for_compare(
+    payload: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    if payload is None:
+        return None
+    resources_out: list[dict[str, Any]] = []
+    raw_resources = payload.get("resources")
+    if isinstance(raw_resources, Sequence) and not isinstance(raw_resources, (str, bytes)):
+        for resource in raw_resources:
+            if not isinstance(resource, Mapping):
+                continue
+            resources_out.append(
+                {
+                    "name": resource.get("name"),
+                    "role": resource.get("role"),
+                    "provenance_status": resource.get("provenance_status"),
+                    "word_count": resource.get("word_count"),
+                }
+            )
+    resources_out.sort(
+        key=lambda resource: (
+            str(resource.get("role") or ""),
+            str(resource.get("name") or ""),
+        )
+    )
+    return {
+        "master_dictionary_provenance_status": payload.get("master_dictionary_provenance_status"),
+        "resources": resources_out,
+    }
+
+
+def _expected_text_feature_schema(
+    spec: _TextFeatureReuseSpec,
+    *,
+    dictionary_inputs,
+) -> dict[str, pl.DataType]:
+    normalized_dict = normalize_lm2011_dictionary_lists(dictionary_inputs.dictionary_lists)
+    signal_specs = _build_lm2011_signal_specs(
+        normalized_dict=normalized_dict,
+        harvard_negative_word_list=dictionary_inputs.harvard_negative_word_list,
+    )
+    return _feature_schema(
+        include_item_id=spec.include_item_id,
+        include_cleaning_policy_id=spec.include_cleaning_policy_id,
+        raw_form_col="document_type_filename",
+        token_count_col=spec.token_count_col,
+        total_token_count_col=spec.total_token_count_col,
+        signal_specs=signal_specs,
+    )
+
+
+def _validate_text_feature_artifact_schema(
+    artifact_path: Path,
+    *,
+    stage_name: str,
+    expected_schema: Mapping[str, pl.DataType],
+) -> None:
+    schema = pl.scan_parquet(artifact_path).collect_schema()
+    missing = [name for name in expected_schema if name not in schema]
+    if missing:
+        raise ValueError(
+            f"{stage_name} reusable artifact missing required columns: {missing}"
+        )
+    dtype_mismatches = [
+        f"{name} expected {dtype!r} got {schema[name]!r}"
+        for name, dtype in expected_schema.items()
+        if schema[name] != dtype
+    ]
+    if dtype_mismatches:
+        raise ValueError(
+            f"{stage_name} reusable artifact has incompatible schema: {dtype_mismatches}"
+        )
+
+
+def _load_reuse_source_manifest(artifact_path: Path) -> dict[str, Any] | None:
+    manifest_path = artifact_path.parent / MANIFEST_FILENAME
+    if not manifest_path.exists():
+        return None
+    return _read_json_payload(manifest_path)
+
+
+def _validate_text_feature_artifact_semantics(
+    artifact_path: Path,
+    *,
+    spec: _TextFeatureReuseSpec,
+    current_config: Mapping[str, Any],
+    current_dictionary_inputs_manifest: Mapping[str, Any] | None,
+    is_explicit_override: bool,
+    source_manifest_override: Mapping[str, Any] | None = None,
+) -> list[str]:
+    source_manifest_path = artifact_path.parent / MANIFEST_FILENAME
+    source_manifest = (
+        dict(source_manifest_override)
+        if source_manifest_override is not None
+        else _load_reuse_source_manifest(artifact_path)
+    )
+    if source_manifest is None:
+        if is_explicit_override:
+            return [
+                "No sibling lm2011_sample_run_manifest.json was found for the explicit reuse artifact; "
+                "semantic validation fell back to schema-only checks."
+            ]
+        raise ValueError(
+            f"{spec.stage_name} reusable artifact is missing sibling manifest {source_manifest_path}"
+        )
+
+    source_config = source_manifest.get("config")
+    if not isinstance(source_config, Mapping):
+        raise ValueError(
+            f"{spec.stage_name} reusable artifact manifest missing config section: {source_manifest_path}"
+        )
+    current_value: object | None
+    source_value: object | None
+    if spec.stage_name == "text_features_full_10k":
+        current_value = current_config.get("full_10k_cleaning_contract")
+        source_value = source_config.get("full_10k_cleaning_contract")
+        if source_value != current_value:
+            raise ValueError(
+                f"{spec.stage_name} reusable artifact manifest full_10k_cleaning_contract={source_value!r} "
+                f"does not match current run {current_value!r}"
+            )
+    else:
+        current_value = current_config.get("raw_mda_cleaning_policy_id")
+        source_value = source_config.get("raw_mda_cleaning_policy_id")
+        if source_value != current_value:
+            raise ValueError(
+                f"{spec.stage_name} reusable artifact manifest raw_mda_cleaning_policy_id={source_value!r} "
+                f"does not match current run {current_value!r}"
+            )
+
+    normalized_source_dictionary_inputs = _normalize_dictionary_inputs_manifest_for_compare(
+        source_manifest.get("dictionary_inputs")
+        if isinstance(source_manifest.get("dictionary_inputs"), Mapping)
+        else None
+    )
+    normalized_current_dictionary_inputs = _normalize_dictionary_inputs_manifest_for_compare(
+        current_dictionary_inputs_manifest
+    )
+    if normalized_source_dictionary_inputs != normalized_current_dictionary_inputs:
+        raise ValueError(
+            f"{spec.stage_name} reusable artifact manifest dictionary_inputs do not match the current run"
+        )
+    return []
+
+
+def _record_reused_stage_artifact(
+    manifest: dict[str, Any],
+    *,
+    manifest_path: Path | None,
+    stage_name: str,
+    artifact_path: Path,
+    source_path: Path,
+    warnings: Sequence[str] | None = None,
+) -> pl.LazyFrame:
+    row_count = int(pl.scan_parquet(artifact_path).select(pl.len()).collect().item())
+    completed_at_utc = _utc_timestamp()
+    manifest["artifacts"][stage_name] = _absolute_path_str(artifact_path)
+    manifest["row_counts"][stage_name] = row_count
+    manifest["stages"][stage_name] = {
+        "status": STAGE_STATUS_REUSED_EXISTING_ARTIFACT,
+        "artifact_path": _absolute_path_str(artifact_path),
+        "row_count": row_count,
+        "reason": None,
+        "extra_artifacts": {},
+        "source_path": _absolute_path_str(source_path),
+        "warnings": list(warnings or []),
+        "completed_at_utc": completed_at_utc,
+    }
+    print(
+        {
+            "stage": stage_name,
+            "status": STAGE_STATUS_REUSED_EXISTING_ARTIFACT,
+            "row_count": row_count,
+            "artifact_path": str(artifact_path),
+            "source_path": str(source_path),
+        }
+    )
+    if manifest_path is not None:
+        _checkpoint_manifest(manifest, manifest_path)
+    return pl.scan_parquet(artifact_path)
 
 
 def _record_stage_success(
@@ -1976,6 +2298,135 @@ def _record_existing_stage_artifact(
     if manifest_path is not None:
         _checkpoint_manifest(manifest, manifest_path)
     return pl.scan_parquet(artifact_path)
+
+
+def _text_feature_reuse_candidate(
+    paths: RunnerPaths,
+    *,
+    stage_name: str,
+) -> tuple[Path | None, bool]:
+    if stage_name == "text_features_full_10k":
+        return paths.text_features_full_10k_path, paths.text_features_full_10k_path_is_explicit
+    if stage_name == "text_features_mda":
+        return paths.text_features_mda_path, paths.text_features_mda_path_is_explicit
+    raise ValueError(f"Unsupported text-feature stage for reuse: {stage_name}")
+
+
+def _text_feature_reuse_override_hint(stage_name: str) -> str:
+    if stage_name == "text_features_full_10k":
+        return "--text-features-full-10k-path / SEC_CCM_LM2011_TEXT_FEATURES_FULL_10K_PATH"
+    if stage_name == "text_features_mda":
+        return "--text-features-mda-path / SEC_CCM_LM2011_TEXT_FEATURES_MDA_PATH"
+    raise ValueError(f"Unsupported text-feature stage for reuse: {stage_name}")
+
+
+def _enabled_text_feature_blocking_stages(
+    run_cfg: LM2011PostRefinitivRunConfig,
+    *,
+    spec: _TextFeatureReuseSpec,
+) -> tuple[str, ...]:
+    return tuple(
+        stage_name
+        for stage_name in run_cfg.enabled_stages
+        if stage_name in spec.blocking_stage_names
+    )
+
+
+def _text_feature_stage_needs_preload(
+    run_cfg: LM2011PostRefinitivRunConfig,
+    *,
+    spec: _TextFeatureReuseSpec,
+) -> bool:
+    return _stage_enabled(run_cfg, spec.stage_name) or bool(
+        _enabled_text_feature_blocking_stages(run_cfg, spec=spec)
+    )
+
+
+def _resolve_reusable_text_feature_stage(
+    run_cfg: LM2011PostRefinitivRunConfig,
+    *,
+    manifest: dict[str, Any],
+    manifest_path: Path,
+    paths: RunnerPaths,
+    dictionary_inputs,
+    spec: _TextFeatureReuseSpec,
+    preexisting_output_manifest: Mapping[str, Any] | None = None,
+) -> pl.LazyFrame | None:
+    candidate_path, is_explicit_override = _text_feature_reuse_candidate(
+        paths,
+        stage_name=spec.stage_name,
+    )
+    can_rebuild = _stage_enabled(run_cfg, spec.stage_name)
+    blocking_stages = _enabled_text_feature_blocking_stages(run_cfg, spec=spec)
+    if candidate_path is None:
+        if not can_rebuild and blocking_stages:
+            blocked = ", ".join(blocking_stages)
+            hint = _text_feature_reuse_override_hint(spec.stage_name)
+            raise RuntimeError(
+                f"LM2011 stages require {spec.stage_name}, but no compatible reusable artifact was available. "
+                f"Blocked stages: {blocked}. Enable {spec.stage_name} to rebuild it or provide {hint}."
+            )
+        return None
+
+    expected_schema = _expected_text_feature_schema(spec, dictionary_inputs=dictionary_inputs)
+    source_manifest_override = (
+        preexisting_output_manifest
+        if candidate_path.parent.resolve() == paths.output_dir.resolve()
+        else None
+    )
+    try:
+        _validate_text_feature_artifact_schema(
+            candidate_path,
+            stage_name=spec.stage_name,
+            expected_schema=expected_schema,
+        )
+        warnings = _validate_text_feature_artifact_semantics(
+            candidate_path,
+            spec=spec,
+            current_config=manifest["config"],
+            current_dictionary_inputs_manifest=manifest.get("dictionary_inputs"),
+            is_explicit_override=is_explicit_override,
+            source_manifest_override=source_manifest_override,
+        )
+    except Exception as exc:
+        if is_explicit_override:
+            raise ValueError(
+                f"Explicit reusable artifact for {spec.stage_name} is incompatible: {candidate_path}. {exc}"
+            ) from exc
+        if can_rebuild:
+            print(
+                {
+                    "stage": spec.stage_name,
+                    "status": "ignoring_incompatible_existing_artifact",
+                    "artifact_path": str(candidate_path),
+                    "reason": str(exc),
+                }
+            )
+            return None
+        if blocking_stages:
+            blocked = ", ".join(blocking_stages)
+            hint = _text_feature_reuse_override_hint(spec.stage_name)
+            raise RuntimeError(
+                f"LM2011 stages require {spec.stage_name}, but the canonical reusable artifact at "
+                f"{candidate_path} is incompatible. Blocked stages: {blocked}. Enable {spec.stage_name} "
+                f"to rebuild it or provide {hint}. Root cause: {exc}"
+            ) from exc
+        return None
+
+    canonical_artifact_path = _artifact_output_path(paths.output_dir, spec.stage_name)
+    load_path = canonical_artifact_path
+    if candidate_path.resolve() != canonical_artifact_path.resolve():
+        _copy_with_verify(candidate_path, canonical_artifact_path, validate="quick")
+    else:
+        load_path = candidate_path
+    return _record_reused_stage_artifact(
+        manifest,
+        manifest_path=manifest_path,
+        stage_name=spec.stage_name,
+        artifact_path=load_path,
+        source_path=candidate_path,
+        warnings=warnings,
+    )
 
 
 def _write_streaming_text_feature_stage(
@@ -2135,8 +2586,13 @@ def _skip_or_raise_stage(
 def run_lm2011_post_refinitiv_pipeline(run_cfg: LM2011PostRefinitivRunConfig) -> int:
     paths = run_cfg.paths
     paths.output_dir.mkdir(parents=True, exist_ok=True)
-    manifest = _build_manifest(paths)
     manifest_path = paths.output_dir / MANIFEST_FILENAME
+    preexisting_output_manifest = (
+        _read_json_payload(manifest_path)
+        if manifest_path.exists()
+        else None
+    )
+    manifest = _build_manifest(paths)
     current_stage_name = "initialization"
     _checkpoint_manifest(manifest, manifest_path)
     _print_ram_snapshot("lm2011_post_refinitiv_pipeline_start", enabled=paths.print_ram_stats)
@@ -2177,6 +2633,27 @@ def run_lm2011_post_refinitiv_pipeline(run_cfg: LM2011PostRefinitivRunConfig) ->
             if _parquet_glob_exists(paths.items_analysis_dir, ITEMS_ANALYSIS_GLOB)
             else None
         )
+
+        for spec in (
+            TEXT_FEATURE_REUSE_SPECS["text_features_full_10k"],
+            TEXT_FEATURE_REUSE_SPECS["text_features_mda"],
+        ):
+            if not _text_feature_stage_needs_preload(run_cfg, spec=spec):
+                continue
+            current_stage_name = spec.stage_name
+            resolved_lf = _resolve_reusable_text_feature_stage(
+                run_cfg,
+                manifest=manifest,
+                manifest_path=manifest_path,
+                paths=paths,
+                dictionary_inputs=dictionary_inputs,
+                spec=spec,
+                preexisting_output_manifest=preexisting_output_manifest,
+            )
+            if spec.stage_name == "text_features_full_10k":
+                text_features_full_10k_lf = resolved_lf
+            else:
+                text_features_mda_lf = resolved_lf
 
         current_stage_name = "sample_backbone"
         if _stage_disabled(run_cfg, manifest, manifest_path, "sample_backbone"):
@@ -2393,7 +2870,9 @@ def run_lm2011_post_refinitiv_pipeline(run_cfg: LM2011PostRefinitivRunConfig) ->
             )
 
         current_stage_name = "text_features_full_10k"
-        if _stage_disabled(run_cfg, manifest, manifest_path, "text_features_full_10k"):
+        if text_features_full_10k_lf is not None:
+            pass
+        elif _stage_disabled(run_cfg, manifest, manifest_path, "text_features_full_10k"):
             pass
         elif text_year_merged_lf is not None:
             _gc_cleanup("text_features_full_10k_pre", enabled=paths.print_ram_stats)
@@ -2432,7 +2911,9 @@ def run_lm2011_post_refinitiv_pipeline(run_cfg: LM2011PostRefinitivRunConfig) ->
             )
 
         current_stage_name = "text_features_mda"
-        if _stage_disabled(run_cfg, manifest, manifest_path, "text_features_mda"):
+        if text_features_mda_lf is not None:
+            pass
+        elif _stage_disabled(run_cfg, manifest, manifest_path, "text_features_mda"):
             pass
         elif text_items_analysis_lf is not None:
             text_features_mda_lf = _write_streaming_text_feature_stage(

@@ -286,6 +286,10 @@ def test_build_lm2011_extension_run_config_prefers_same_run_finbert_artifacts() 
         year_merged_dir=Path("year_merged"),
         sample_backbone_path=Path("backbone.parquet"),
         daily_panel_path=Path("daily.parquet"),
+        text_features_full_10k_path=None,
+        text_features_full_10k_path_is_explicit=False,
+        text_features_mda_path=None,
+        text_features_mda_path_is_explicit=False,
         ccm_base_dir=Path("ccm"),
         matched_clean_path=Path("matched.parquet"),
         items_analysis_dir=Path("items_analysis"),
@@ -1281,4 +1285,145 @@ def test_main_lm2011_daily_panel_override_fails_fast_when_not_daily_panel(
     )
 
     with pytest.raises(ValueError, match="LM2011 daily_panel_path must point to a CCM daily market panel parquet"):
+        runner.main()
+
+
+def test_main_lm2011_auto_detects_existing_text_feature_artifacts_from_output_dir(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    paths = _configure_minimal_main_env(monkeypatch, tmp_path)
+    items_analysis_dir = paths["run_root"] / "items_analysis"
+    items_analysis_dir.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame({"doc_id": ["0000000001:1995000001"]}).write_parquet(items_analysis_dir / "1995.parquet")
+    lm2011_output_dir = paths["run_root"] / "lm2011_post_refinitiv"
+    lm2011_output_dir.mkdir(parents=True, exist_ok=True)
+    full_10k_path = lm2011_output_dir / "lm2011_text_features_full_10k.parquet"
+    mda_path = lm2011_output_dir / "lm2011_text_features_mda.parquet"
+    pl.DataFrame({"doc_id": ["0000000001:1995000001"]}).write_parquet(full_10k_path)
+    pl.DataFrame({"doc_id": ["0000000001:1995000001"]}).write_parquet(mda_path)
+
+    monkeypatch.setenv("SEC_CCM_RUN_LM2011_POST_REFINITIV", "false")
+    monkeypatch.setenv("SEC_CCM_RUN_LM2011_TEXT_FEATURES_FULL_10K", "true")
+    monkeypatch.setenv("SEC_CCM_RUN_LM2011_TEXT_FEATURES_MDA", "true")
+    monkeypatch.setenv("SEC_CCM_RUN_FINBERT", "false")
+
+    captured: dict[str, object] = {}
+
+    def _lm2011_stub(run_cfg):
+        captured["run_cfg"] = run_cfg
+        return 0
+
+    monkeypatch.setattr(runner, "run_lm2011_post_refinitiv_pipeline", _lm2011_stub)
+
+    runner.main()
+
+    lm2011_run_cfg = captured["run_cfg"]
+    assert lm2011_run_cfg.paths.text_features_full_10k_path == full_10k_path
+    assert lm2011_run_cfg.paths.text_features_full_10k_path_is_explicit is False
+    assert lm2011_run_cfg.paths.text_features_mda_path == mda_path
+    assert lm2011_run_cfg.paths.text_features_mda_path_is_explicit is False
+
+
+def test_main_lm2011_text_feature_override_env_paths_take_precedence(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    paths = _configure_minimal_main_env(monkeypatch, tmp_path)
+    items_analysis_dir = paths["run_root"] / "items_analysis"
+    items_analysis_dir.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame({"doc_id": ["0000000001:1995000001"]}).write_parquet(items_analysis_dir / "1995.parquet")
+    explicit_full_10k = tmp_path / "explicit" / "full_10k.parquet"
+    explicit_mda = tmp_path / "explicit" / "mda.parquet"
+    explicit_full_10k.parent.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame({"doc_id": ["0000000001:1995000001"]}).write_parquet(explicit_full_10k)
+    pl.DataFrame({"doc_id": ["0000000001:1995000001"]}).write_parquet(explicit_mda)
+
+    monkeypatch.setenv("SEC_CCM_RUN_LM2011_POST_REFINITIV", "false")
+    monkeypatch.setenv("SEC_CCM_RUN_LM2011_TEXT_FEATURES_FULL_10K", "true")
+    monkeypatch.setenv("SEC_CCM_RUN_LM2011_TEXT_FEATURES_MDA", "true")
+    monkeypatch.setenv("SEC_CCM_RUN_FINBERT", "false")
+    monkeypatch.setenv("SEC_CCM_LM2011_TEXT_FEATURES_FULL_10K_PATH", str(explicit_full_10k))
+    monkeypatch.setenv("SEC_CCM_LM2011_TEXT_FEATURES_MDA_PATH", str(explicit_mda))
+
+    captured: dict[str, object] = {}
+
+    def _lm2011_stub(run_cfg):
+        captured["run_cfg"] = run_cfg
+        return 0
+
+    monkeypatch.setattr(runner, "run_lm2011_post_refinitiv_pipeline", _lm2011_stub)
+
+    runner.main()
+
+    lm2011_run_cfg = captured["run_cfg"]
+    assert lm2011_run_cfg.paths.text_features_full_10k_path == explicit_full_10k
+    assert lm2011_run_cfg.paths.text_features_full_10k_path_is_explicit is True
+    assert lm2011_run_cfg.paths.text_features_mda_path == explicit_mda
+    assert lm2011_run_cfg.paths.text_features_mda_path_is_explicit is True
+
+
+def test_main_lm2011_recompute_text_feature_env_disables_auto_reuse(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    paths = _configure_minimal_main_env(monkeypatch, tmp_path)
+    items_analysis_dir = paths["run_root"] / "items_analysis"
+    items_analysis_dir.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame({"doc_id": ["0000000001:1995000001"]}).write_parquet(items_analysis_dir / "1995.parquet")
+    lm2011_output_dir = paths["run_root"] / "lm2011_post_refinitiv"
+    lm2011_output_dir.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame({"doc_id": ["0000000001:1995000001"]}).write_parquet(
+        lm2011_output_dir / "lm2011_text_features_full_10k.parquet"
+    )
+    pl.DataFrame({"doc_id": ["0000000001:1995000001"]}).write_parquet(
+        lm2011_output_dir / "lm2011_text_features_mda.parquet"
+    )
+
+    monkeypatch.setenv("SEC_CCM_RUN_LM2011_POST_REFINITIV", "false")
+    monkeypatch.setenv("SEC_CCM_RUN_LM2011_TEXT_FEATURES_FULL_10K", "true")
+    monkeypatch.setenv("SEC_CCM_RUN_LM2011_TEXT_FEATURES_MDA", "true")
+    monkeypatch.setenv("SEC_CCM_RUN_FINBERT", "false")
+    monkeypatch.setenv("SEC_CCM_LM2011_RECOMPUTE_TEXT_FEATURES_FULL_10K", "true")
+    monkeypatch.setenv("SEC_CCM_LM2011_RECOMPUTE_TEXT_FEATURES_MDA", "true")
+
+    captured: dict[str, object] = {}
+
+    def _lm2011_stub(run_cfg):
+        captured["run_cfg"] = run_cfg
+        return 0
+
+    monkeypatch.setattr(runner, "run_lm2011_post_refinitiv_pipeline", _lm2011_stub)
+
+    runner.main()
+
+    lm2011_run_cfg = captured["run_cfg"]
+    assert lm2011_run_cfg.paths.text_features_full_10k_path is None
+    assert lm2011_run_cfg.paths.text_features_full_10k_path_is_explicit is False
+    assert lm2011_run_cfg.paths.text_features_mda_path is None
+    assert lm2011_run_cfg.paths.text_features_mda_path_is_explicit is False
+
+
+def test_main_lm2011_recompute_text_feature_env_conflicts_with_override(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    paths = _configure_minimal_main_env(monkeypatch, tmp_path)
+    items_analysis_dir = paths["run_root"] / "items_analysis"
+    items_analysis_dir.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame({"doc_id": ["0000000001:1995000001"]}).write_parquet(items_analysis_dir / "1995.parquet")
+    explicit_full_10k = tmp_path / "explicit" / "full_10k.parquet"
+    explicit_full_10k.parent.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame({"doc_id": ["0000000001:1995000001"]}).write_parquet(explicit_full_10k)
+
+    monkeypatch.setenv("SEC_CCM_RUN_LM2011_POST_REFINITIV", "false")
+    monkeypatch.setenv("SEC_CCM_RUN_LM2011_TEXT_FEATURES_FULL_10K", "true")
+    monkeypatch.setenv("SEC_CCM_RUN_FINBERT", "false")
+    monkeypatch.setenv("SEC_CCM_LM2011_TEXT_FEATURES_FULL_10K_PATH", str(explicit_full_10k))
+    monkeypatch.setenv("SEC_CCM_LM2011_RECOMPUTE_TEXT_FEATURES_FULL_10K", "true")
+
+    with pytest.raises(
+        ValueError,
+        match="SEC_CCM_LM2011_RECOMPUTE_TEXT_FEATURES_FULL_10K cannot be combined with SEC_CCM_LM2011_TEXT_FEATURES_FULL_10K_PATH",
+    ):
         runner.main()

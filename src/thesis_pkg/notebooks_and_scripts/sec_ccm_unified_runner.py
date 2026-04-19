@@ -92,6 +92,10 @@ def _env_optional_path(name: str) -> Path | None:
     return Path(stripped).expanduser()
 
 
+def _resolve_optional_existing_path(path: Path) -> Path | None:
+    return path.resolve() if path.exists() else None
+
+
 def _env_bool(name: str, default: bool) -> bool:
     value = os.environ.get(name)
     if value is None:
@@ -535,6 +539,7 @@ from thesis_pkg.notebooks_and_scripts.lm2011_sample_post_refinitiv_runner import
     LM2011PostRefinitivRunConfig,
     MONTHLY_STOCK_CANDIDATES,
     RunnerPaths as LM2011RunnerPaths,
+    STAGE_ARTIFACT_FILENAMES as LM2011_STAGE_ARTIFACT_FILENAMES,
     run_lm2011_extension_pipeline,
     run_lm2011_post_refinitiv_pipeline,
 )
@@ -571,6 +576,25 @@ LM2011_STAGES_REQUIRING_DOC_ANALYST: frozenset[str] = frozenset(
         "sue_panel",
         "sue_regression_panel",
         "table_viii_results",
+    }
+)
+LM2011_STAGES_REQUIRING_DAILY_PANEL: frozenset[str] = frozenset(
+    {
+        "event_screen_surface",
+        "table_i_sample_creation",
+        "table_i_sample_creation_1994_2024",
+        "event_panel",
+        "return_regression_panel_full_10k",
+        "return_regression_panel_mda",
+        "sue_panel",
+        "sue_regression_panel",
+        "table_ia_i_results",
+        "table_iv_results",
+        "table_v_results",
+        "table_vi_results",
+        "table_viii_results",
+        "trading_strategy_monthly_returns",
+        "table_ia_ii_results",
     }
 )
 
@@ -696,6 +720,41 @@ def _first_existing(schema: pl.Schema, candidates: tuple[str, ...], label: str) 
         if candidate in schema:
             return candidate
     raise ValueError(f"{label} missing candidates: {list(candidates)}")
+
+
+def _validate_lm2011_daily_panel_path(path: Path) -> None:
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(f"LM2011 daily panel path not found: {path}")
+
+    schema = pl.scan_parquet(path).collect_schema()
+    grouped_candidates = {
+        "permno": ("KYPERMNO", "kypermno"),
+        "trade_date": ("CALDT", "daily_caldt"),
+        "return": ("FINAL_RET", "RET"),
+        "price": ("FINAL_PRC", "PRC"),
+    }
+    required_singletons = ("VOL", "SHROUT", "SHRCD", "EXCHCD")
+
+    missing_group_labels = [
+        f"{label}={list(candidates)}"
+        for label, candidates in grouped_candidates.items()
+        if not any(candidate in schema for candidate in candidates)
+    ]
+    missing_required = [column for column in required_singletons if column not in schema]
+    if not missing_group_labels and not missing_required:
+        return
+
+    details = []
+    if missing_group_labels:
+        details.append("missing alternative column groups: " + ", ".join(missing_group_labels))
+    if missing_required:
+        details.append("missing required columns: " + ", ".join(missing_required))
+    raise ValueError(
+        "LM2011 daily_panel_path must point to a CCM daily market panel parquet. "
+        f"Selected path: {path}. "
+        + " ".join(details)
+    )
 
 
 def _row_count(path: Path) -> int | None:
@@ -1283,6 +1342,20 @@ def main() -> None:
     LM2011_SAMPLE_BACKBONE_PATH = _env_optional_path("SEC_CCM_LM2011_SAMPLE_BACKBONE_PATH")
     LM2011_MATCHED_CLEAN_PATH = _env_optional_path("SEC_CCM_LM2011_MATCHED_CLEAN_PATH")
     LM2011_DAILY_PANEL_PATH = _env_optional_path("SEC_CCM_LM2011_DAILY_PANEL_PATH")
+    LM2011_TEXT_FEATURES_FULL_10K_PATH = _env_optional_path(
+        "SEC_CCM_LM2011_TEXT_FEATURES_FULL_10K_PATH"
+    )
+    LM2011_TEXT_FEATURES_MDA_PATH = _env_optional_path(
+        "SEC_CCM_LM2011_TEXT_FEATURES_MDA_PATH"
+    )
+    LM2011_RECOMPUTE_TEXT_FEATURES_FULL_10K = _env_bool(
+        "SEC_CCM_LM2011_RECOMPUTE_TEXT_FEATURES_FULL_10K",
+        False,
+    )
+    LM2011_RECOMPUTE_TEXT_FEATURES_MDA = _env_bool(
+        "SEC_CCM_LM2011_RECOMPUTE_TEXT_FEATURES_MDA",
+        False,
+    )
     LM2011_ITEMS_ANALYSIS_DIR = _env_optional_path("SEC_CCM_LM2011_ITEMS_ANALYSIS_DIR")
     LM2011_CCM_BASE_DIR = _env_optional_path("SEC_CCM_LM2011_CCM_BASE_DIR")
     LM2011_YEAR_MERGED_DIR = _env_optional_path("SEC_CCM_LM2011_YEAR_MERGED_DIR")
@@ -2782,9 +2855,47 @@ def main() -> None:
             else SEC_CCM_OUTPUT_DIR / "sec_ccm_matched_clean.parquet"
         )
         lm2011_daily_panel_path = LM2011_DAILY_PANEL_PATH or (
-            Path(sec_ccm_paths["final_flagged_data"])
-            if sec_ccm_paths is not None and "final_flagged_data" in sec_ccm_paths
-            else SEC_CCM_OUTPUT_DIR / "final_flagged_data.parquet"
+            Path(ccm_daily_path)
+            if ccm_daily_path is not None
+            else SEC_CCM_OUTPUT_DIR / CCM_DAILY_NAME
+        )
+        if LM2011_RECOMPUTE_TEXT_FEATURES_FULL_10K and LM2011_TEXT_FEATURES_FULL_10K_PATH is not None:
+            raise ValueError(
+                "SEC_CCM_LM2011_RECOMPUTE_TEXT_FEATURES_FULL_10K cannot be combined with "
+                "SEC_CCM_LM2011_TEXT_FEATURES_FULL_10K_PATH"
+            )
+        if LM2011_RECOMPUTE_TEXT_FEATURES_MDA and LM2011_TEXT_FEATURES_MDA_PATH is not None:
+            raise ValueError(
+                "SEC_CCM_LM2011_RECOMPUTE_TEXT_FEATURES_MDA cannot be combined with "
+                "SEC_CCM_LM2011_TEXT_FEATURES_MDA_PATH"
+            )
+        lm2011_text_features_full_10k_path_is_explicit = (
+            LM2011_TEXT_FEATURES_FULL_10K_PATH is not None
+        ) and not LM2011_RECOMPUTE_TEXT_FEATURES_FULL_10K
+        lm2011_text_features_full_10k_path = (
+            None
+            if LM2011_RECOMPUTE_TEXT_FEATURES_FULL_10K
+            else (
+                LM2011_TEXT_FEATURES_FULL_10K_PATH
+                or _resolve_optional_existing_path(
+                    LM2011_POST_REFINITIV_DIR
+                    / LM2011_STAGE_ARTIFACT_FILENAMES["text_features_full_10k"]
+                )
+            )
+        )
+        lm2011_text_features_mda_path_is_explicit = (
+            LM2011_TEXT_FEATURES_MDA_PATH is not None
+        ) and not LM2011_RECOMPUTE_TEXT_FEATURES_MDA
+        lm2011_text_features_mda_path = (
+            None
+            if LM2011_RECOMPUTE_TEXT_FEATURES_MDA
+            else (
+                LM2011_TEXT_FEATURES_MDA_PATH
+                or _resolve_optional_existing_path(
+                    LM2011_POST_REFINITIV_DIR
+                    / LM2011_STAGE_ARTIFACT_FILENAMES["text_features_mda"]
+                )
+            )
         )
         lm2011_items_analysis_dir = LM2011_ITEMS_ANALYSIS_DIR or SEC_ITEMS_ANALYSIS_DIR
         lm2011_monthly_stock_path = LM2011_MONTHLY_STOCK_PATH or _resolve_optional_ccm_parquet_artifact(
@@ -2825,6 +2936,19 @@ def main() -> None:
         print(
             {
                 "lm2011_enabled_stages": lm2011_enabled_stage_names,
+                "lm2011_daily_panel_path": str(lm2011_daily_panel_path),
+                "lm2011_text_features_full_10k_path": (
+                    str(lm2011_text_features_full_10k_path)
+                    if lm2011_text_features_full_10k_path is not None
+                    else None
+                ),
+                "lm2011_recompute_text_features_full_10k": LM2011_RECOMPUTE_TEXT_FEATURES_FULL_10K,
+                "lm2011_text_features_mda_path": (
+                    str(lm2011_text_features_mda_path)
+                    if lm2011_text_features_mda_path is not None
+                    else None
+                ),
+                "lm2011_recompute_text_features_mda": LM2011_RECOMPUTE_TEXT_FEATURES_MDA,
                 "lm2011_items_analysis_dir": str(lm2011_items_analysis_dir),
                 "lm2011_items_analysis_year_files": len(lm2011_items_year_paths),
                 "lm2011_items_can_be_built_here": lm2011_items_can_be_built_here,
@@ -2866,6 +2990,8 @@ def main() -> None:
                 "Set SEC_CCM_RUN_REFINITIV_DOC_ANALYST_LM2011_SELECT=true to build it in this run, or place the "
                 "existing parquet at the expected location."
             )
+        if any(stage_name in LM2011_STAGES_REQUIRING_DAILY_PANEL for stage_name in lm2011_enabled_stage_names):
+            _validate_lm2011_daily_panel_path(lm2011_daily_panel_path)
         lm2011_paths = LM2011RunnerPaths(
             sample_root=WORK_ROOT,
             upstream_run_root=RUN_ROOT,
@@ -2875,6 +3001,10 @@ def main() -> None:
             year_merged_dir=lm2011_year_merged_dir,
             sample_backbone_path=lm2011_sample_backbone_path,
             daily_panel_path=lm2011_daily_panel_path,
+            text_features_full_10k_path=lm2011_text_features_full_10k_path,
+            text_features_full_10k_path_is_explicit=lm2011_text_features_full_10k_path_is_explicit,
+            text_features_mda_path=lm2011_text_features_mda_path,
+            text_features_mda_path_is_explicit=lm2011_text_features_mda_path_is_explicit,
             ccm_base_dir=lm2011_ccm_base_dir,
             matched_clean_path=lm2011_matched_clean_path,
             items_analysis_dir=lm2011_items_analysis_dir,
