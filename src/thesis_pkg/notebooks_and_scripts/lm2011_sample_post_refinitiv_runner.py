@@ -101,10 +101,15 @@ from thesis_pkg.pipelines.lm2011_extension import (
 from thesis_pkg.pipelines.lm2011_regressions import (
     _QuarterlyFamaMacbethBundle,
     _build_lm2011_table_ia_i_results_bundle,
+    _build_lm2011_table_ia_i_results_no_ownership_bundle,
     _build_lm2011_table_iv_results_bundle,
+    _build_lm2011_table_iv_results_no_ownership_bundle,
     _build_lm2011_table_v_results_bundle,
+    _build_lm2011_table_v_results_no_ownership_bundle,
     _build_lm2011_table_vi_results_bundle,
+    _build_lm2011_table_vi_results_no_ownership_bundle,
     _build_lm2011_table_viii_results_bundle,
+    _build_lm2011_table_viii_results_no_ownership_bundle,
     build_lm2011_return_regression_panel,
     build_lm2011_sue_regression_panel,
     build_lm2011_table_ia_ii_results,
@@ -277,20 +282,30 @@ STAGE_ARTIFACT_FILENAMES: dict[str, str] = {
     "return_regression_panel_mda": "lm2011_return_regression_panel_mda.parquet",
     "sue_regression_panel": "lm2011_sue_regression_panel.parquet",
     "table_iv_results": "lm2011_table_iv_results.parquet",
+    "table_iv_results_no_ownership": "lm2011_table_iv_results_no_ownership.parquet",
     "table_v_results": "lm2011_table_v_results.parquet",
+    "table_v_results_no_ownership": "lm2011_table_v_results_no_ownership.parquet",
     "table_vi_results": "lm2011_table_vi_results.parquet",
+    "table_vi_results_no_ownership": "lm2011_table_vi_results_no_ownership.parquet",
     "table_viii_results": "lm2011_table_viii_results.parquet",
+    "table_viii_results_no_ownership": "lm2011_table_viii_results_no_ownership.parquet",
     "table_ia_i_results": "lm2011_table_ia_i_results.parquet",
+    "table_ia_i_results_no_ownership": "lm2011_table_ia_i_results_no_ownership.parquet",
     "trading_strategy_monthly_returns": "lm2011_trading_strategy_monthly_returns.parquet",
     "table_ia_ii_results": "lm2011_table_ia_ii_results.parquet",
 }
 FINAL_REGRESSION_TABLE_STAGE_NAMES: frozenset[str] = frozenset(
     {
         "table_iv_results",
+        "table_iv_results_no_ownership",
         "table_v_results",
+        "table_v_results_no_ownership",
         "table_vi_results",
+        "table_vi_results_no_ownership",
         "table_viii_results",
+        "table_viii_results_no_ownership",
         "table_ia_i_results",
+        "table_ia_i_results_no_ownership",
         "table_ia_ii_results",
     }
 )
@@ -397,9 +412,13 @@ TEXT_FEATURE_REUSE_SPECS: dict[str, _TextFeatureReuseSpec] = {
                 "return_regression_panel_full_10k",
                 "sue_regression_panel",
                 "table_iv_results",
+                "table_iv_results_no_ownership",
                 "table_vi_results",
+                "table_vi_results_no_ownership",
                 "table_viii_results",
+                "table_viii_results_no_ownership",
                 "table_ia_i_results",
+                "table_ia_i_results_no_ownership",
             }
         ),
     ),
@@ -413,6 +432,7 @@ TEXT_FEATURE_REUSE_SPECS: dict[str, _TextFeatureReuseSpec] = {
             {
                 "return_regression_panel_mda",
                 "table_v_results",
+                "table_v_results_no_ownership",
             }
         ),
     ),
@@ -3508,8 +3528,30 @@ def run_lm2011_post_refinitiv_pipeline(run_cfg: LM2011PostRefinitivRunConfig) ->
                 event_panel_lf is not None and text_features_full_10k_lf is not None and can_run_regressions,
             ),
             (
+                "table_iv_results_no_ownership",
+                lambda: _build_lm2011_table_iv_results_no_ownership_bundle(
+                    event_panel_lf,
+                    text_features_full_10k_lf,
+                    pl.scan_parquet(paths.company_history_path),
+                    pl.scan_parquet(paths.company_description_path),
+                    ff48_siccodes_path=paths.ff48_siccodes_path,
+                ),
+                event_panel_lf is not None and text_features_full_10k_lf is not None and can_run_regressions,
+            ),
+            (
                 "table_v_results",
                 lambda: _build_lm2011_table_v_results_bundle(
+                    event_panel_lf,
+                    text_features_mda_lf,
+                    pl.scan_parquet(paths.company_history_path),
+                    pl.scan_parquet(paths.company_description_path),
+                    ff48_siccodes_path=paths.ff48_siccodes_path,
+                ),
+                event_panel_lf is not None and text_features_mda_lf is not None and can_run_regressions,
+            ),
+            (
+                "table_v_results_no_ownership",
+                lambda: _build_lm2011_table_v_results_no_ownership_bundle(
                     event_panel_lf,
                     text_features_mda_lf,
                     pl.scan_parquet(paths.company_history_path),
@@ -3530,6 +3572,17 @@ def run_lm2011_post_refinitiv_pipeline(run_cfg: LM2011PostRefinitivRunConfig) ->
                 event_panel_lf is not None and text_features_full_10k_lf is not None and can_run_regressions,
             ),
             (
+                "table_vi_results_no_ownership",
+                lambda: _build_lm2011_table_vi_results_no_ownership_bundle(
+                    event_panel_lf,
+                    text_features_full_10k_lf,
+                    pl.scan_parquet(paths.company_history_path),
+                    pl.scan_parquet(paths.company_description_path),
+                    ff48_siccodes_path=paths.ff48_siccodes_path,
+                ),
+                event_panel_lf is not None and text_features_full_10k_lf is not None and can_run_regressions,
+            ),
+            (
                 "table_viii_results",
                 lambda: _build_lm2011_table_viii_results_bundle(
                     sue_panel_lf,
@@ -3541,8 +3594,30 @@ def run_lm2011_post_refinitiv_pipeline(run_cfg: LM2011PostRefinitivRunConfig) ->
                 sue_panel_lf is not None and text_features_full_10k_lf is not None and can_run_regressions,
             ),
             (
+                "table_viii_results_no_ownership",
+                lambda: _build_lm2011_table_viii_results_no_ownership_bundle(
+                    sue_panel_lf,
+                    text_features_full_10k_lf,
+                    pl.scan_parquet(paths.company_history_path),
+                    pl.scan_parquet(paths.company_description_path),
+                    ff48_siccodes_path=paths.ff48_siccodes_path,
+                ),
+                sue_panel_lf is not None and text_features_full_10k_lf is not None and can_run_regressions,
+            ),
+            (
                 "table_ia_i_results",
                 lambda: _build_lm2011_table_ia_i_results_bundle(
+                    event_panel_lf,
+                    text_features_full_10k_lf,
+                    pl.scan_parquet(paths.company_history_path),
+                    pl.scan_parquet(paths.company_description_path),
+                    ff48_siccodes_path=paths.ff48_siccodes_path,
+                ),
+                event_panel_lf is not None and text_features_full_10k_lf is not None and can_run_regressions,
+            ),
+            (
+                "table_ia_i_results_no_ownership",
+                lambda: _build_lm2011_table_ia_i_results_no_ownership_bundle(
                     event_panel_lf,
                     text_features_full_10k_lf,
                     pl.scan_parquet(paths.company_history_path),

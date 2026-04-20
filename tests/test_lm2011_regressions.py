@@ -782,6 +782,87 @@ def test_table_wrappers_follow_revised_spec_signal_scopes(tmp_path) -> None:
     }
 
 
+def test_no_ownership_core_table_wrappers_preserve_signals_and_drop_only_ownership(tmp_path) -> None:
+    inputs = _regression_test_inputs(tmp_path)
+    builder_specs = (
+        (
+            build_lm2011_table_iv_results,
+            regressions.build_lm2011_table_iv_results_no_ownership,
+            (
+                inputs["event_panel"].lazy(),
+                inputs["full_text_features"].lazy(),
+                inputs["company_history"].lazy(),
+                inputs["company_description"].lazy(),
+            ),
+        ),
+        (
+            build_lm2011_table_v_results,
+            regressions.build_lm2011_table_v_results_no_ownership,
+            (
+                inputs["event_panel"].lazy(),
+                inputs["mda_text_features"].lazy(),
+                inputs["company_history"].lazy(),
+                inputs["company_description"].lazy(),
+            ),
+        ),
+        (
+            build_lm2011_table_vi_results,
+            regressions.build_lm2011_table_vi_results_no_ownership,
+            (
+                inputs["event_panel"].lazy(),
+                inputs["full_text_features"].lazy(),
+                inputs["company_history"].lazy(),
+                inputs["company_description"].lazy(),
+            ),
+        ),
+        (
+            build_lm2011_table_viii_results,
+            regressions.build_lm2011_table_viii_results_no_ownership,
+            (
+                inputs["sue_panel"].lazy(),
+                inputs["full_text_features"].lazy(),
+                inputs["company_history"].lazy(),
+                inputs["company_description"].lazy(),
+            ),
+        ),
+        (
+            build_lm2011_table_ia_i_results,
+            regressions.build_lm2011_table_ia_i_results_no_ownership,
+            (
+                inputs["event_panel"].lazy(),
+                inputs["full_text_features"].lazy(),
+                inputs["company_history"].lazy(),
+                inputs["company_description"].lazy(),
+            ),
+        ),
+    )
+
+    for ownership_builder, no_ownership_builder, builder_args in builder_specs:
+        ownership_df = ownership_builder(*builder_args, ff48_siccodes_path=inputs["ff48_path"])
+        no_ownership_df = no_ownership_builder(*builder_args, ff48_siccodes_path=inputs["ff48_path"])
+
+        assert ownership_df.height > 0
+        assert no_ownership_df.height > 0
+        assert ownership_df.get_column("table_id").unique().to_list() == no_ownership_df.get_column(
+            "table_id"
+        ).unique().to_list()
+        assert ownership_df.get_column("text_scope").unique().to_list() == no_ownership_df.get_column(
+            "text_scope"
+        ).unique().to_list()
+        assert ownership_df.get_column("dependent_variable").unique().to_list() == no_ownership_df.get_column(
+            "dependent_variable"
+        ).unique().to_list()
+        assert set(ownership_df.get_column("signal_name").unique().to_list()) == set(
+            no_ownership_df.get_column("signal_name").unique().to_list()
+        )
+
+        ownership_coefficients = set(ownership_df.get_column("coefficient_name").unique().to_list())
+        no_ownership_coefficients = set(no_ownership_df.get_column("coefficient_name").unique().to_list())
+        assert "institutional_ownership" in ownership_coefficients
+        assert "institutional_ownership" not in no_ownership_coefficients
+        assert no_ownership_coefficients == ownership_coefficients - {"institutional_ownership"}
+
+
 def test_build_lm2011_table_v_results_enforces_mda_token_count_floor(tmp_path) -> None:
     inputs = _regression_test_inputs(tmp_path)
 
@@ -793,6 +874,28 @@ def test_build_lm2011_table_v_results_enforces_mda_token_count_floor(tmp_path) -
         ff48_siccodes_path=inputs["ff48_path"],
     )
     boundary_table_v = build_lm2011_table_v_results(
+        inputs["event_panel"].lazy(),
+        inputs["mda_text_features"].with_columns(pl.lit(250).alias("total_token_count_mda")).lazy(),
+        inputs["company_history"].lazy(),
+        inputs["company_description"].lazy(),
+        ff48_siccodes_path=inputs["ff48_path"],
+    )
+
+    assert low_token_table_v.height == 0
+    assert boundary_table_v.height > 0
+
+
+def test_build_lm2011_table_v_results_no_ownership_enforces_mda_token_count_floor(tmp_path) -> None:
+    inputs = _regression_test_inputs(tmp_path)
+
+    low_token_table_v = regressions.build_lm2011_table_v_results_no_ownership(
+        inputs["event_panel"].lazy(),
+        inputs["mda_text_features"].with_columns(pl.lit(249).alias("total_token_count_mda")).lazy(),
+        inputs["company_history"].lazy(),
+        inputs["company_description"].lazy(),
+        ff48_siccodes_path=inputs["ff48_path"],
+    )
+    boundary_table_v = regressions.build_lm2011_table_v_results_no_ownership(
         inputs["event_panel"].lazy(),
         inputs["mda_text_features"].with_columns(pl.lit(250).alias("total_token_count_mda")).lazy(),
         inputs["company_history"].lazy(),

@@ -811,6 +811,28 @@ def test_parse_args_uses_memory_hardened_defaults() -> None:
     assert args.ram_log_interval_batches == runner.DEFAULT_RAM_LOG_INTERVAL_BATCHES
 
 
+def test_no_ownership_stage_names_are_registered_and_block_text_feature_reuse() -> None:
+    no_ownership_stages = {
+        "table_iv_results_no_ownership",
+        "table_v_results_no_ownership",
+        "table_vi_results_no_ownership",
+        "table_viii_results_no_ownership",
+        "table_ia_i_results_no_ownership",
+    }
+
+    assert no_ownership_stages.issubset(runner.STAGE_ARTIFACT_FILENAMES)
+    assert no_ownership_stages.issubset(runner.LM2011_ALL_STAGE_NAMES)
+    assert no_ownership_stages.issubset(runner.FINAL_REGRESSION_TABLE_STAGE_NAMES)
+    assert no_ownership_stages.issubset(runner.QUARTERLY_REGRESSION_TABLE_STAGE_NAMES)
+    assert {
+        "table_iv_results_no_ownership",
+        "table_vi_results_no_ownership",
+        "table_viii_results_no_ownership",
+        "table_ia_i_results_no_ownership",
+    }.issubset(runner.TEXT_FEATURE_REUSE_SPECS["text_features_full_10k"].blocking_stage_names)
+    assert "table_v_results_no_ownership" in runner.TEXT_FEATURE_REUSE_SPECS["text_features_mda"].blocking_stage_names
+
+
 def test_resolve_paths_threads_recompute_flags(tmp_path: Path) -> None:
     sample_root, upstream_run_root, additional_data_dir, output_dir = _build_temp_layout(tmp_path)
 
@@ -1236,6 +1258,32 @@ def test_write_quarterly_regression_table_stage_marks_all_skipped_output_empty(t
     assert stage["reason"] == runner.NO_ESTIMABLE_QUARTERLY_FAMA_MACBETH_QUARTERS
 
 
+def test_write_quarterly_regression_table_stage_supports_no_ownership_stage_artifacts(tmp_path: Path) -> None:
+    output_dir = tmp_path / "output"
+    manifest_path = tmp_path / "manifest.json"
+    manifest: dict[str, object] = {
+        "roots": {"output_dir": str(output_dir)},
+        "artifacts": {},
+        "row_counts": {},
+        "stages": {},
+    }
+
+    runner._write_quarterly_regression_table_stage(
+        manifest,
+        manifest_path=manifest_path,
+        output_dir=output_dir,
+        stage_name="table_iv_results_no_ownership",
+        bundle=_quarterly_bundle(skipped_quarters_df=_skipped_quarter_diagnostics_df()),
+    )
+
+    stage = manifest["stages"]["table_iv_results_no_ownership"]  # type: ignore[index]
+    assert (output_dir / "lm2011_table_iv_results_no_ownership.parquet").exists()
+    assert (output_dir / "lm2011_table_iv_results_no_ownership_skipped_quarters.parquet").exists()
+    assert (output_dir / "lm2011_table_iv_results_no_ownership_skipped_quarters.csv").exists()
+    assert stage["status"] == "generated_empty"
+    assert stage["reason"] == runner.NO_ESTIMABLE_QUARTERLY_FAMA_MACBETH_QUARTERS
+
+
 def test_pipeline_reuses_existing_text_feature_artifacts_in_output_dir(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1443,6 +1491,65 @@ def test_pipeline_reuses_existing_regression_table_artifacts_in_output_dir(
         "skipped_quarters_csv": str(skipped_quarters_csv.resolve()),
     }
     assert manifest["stages"]["table_ia_ii_results"]["status"] == runner.STAGE_STATUS_REUSED_EXISTING_ARTIFACT
+
+
+def test_pipeline_reuses_existing_no_ownership_regression_artifacts_in_output_dir(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sample_root, upstream_run_root, additional_data_dir, output_dir = _build_temp_layout(tmp_path)
+    _write_valid_text_feature_artifact(
+        output_dir / runner.STAGE_ARTIFACT_FILENAMES["text_features_full_10k"],
+        additional_data_dir=additional_data_dir,
+        stage_name="text_features_full_10k",
+    )
+    _write_text_feature_reuse_manifest(output_dir, additional_data_dir=additional_data_dir)
+    table_path = output_dir / runner.STAGE_ARTIFACT_FILENAMES["table_iv_results_no_ownership"]
+    _write_parquet(
+        table_path,
+        pl.DataFrame({"table_id": ["table_iv_full_10k"], "estimate": [1.0]}),
+    )
+    skipped_quarters_parquet = output_dir / "lm2011_table_iv_results_no_ownership_skipped_quarters.parquet"
+    skipped_quarters_csv = output_dir / "lm2011_table_iv_results_no_ownership_skipped_quarters.csv"
+    skipped_quarters_df = _skipped_quarter_diagnostics_df()
+    skipped_quarters_df.write_parquet(skipped_quarters_parquet)
+    skipped_quarters_df.write_csv(skipped_quarters_csv)
+
+    run_cfg = runner.build_lm2011_post_refinitiv_run_config(
+        runner.parse_args(
+            [
+                "--sample-root",
+                str(sample_root),
+                "--upstream-run-root",
+                str(upstream_run_root),
+                "--additional-data-dir",
+                str(additional_data_dir),
+                "--output-dir",
+                str(output_dir),
+            ]
+        ),
+        enabled_stages=("table_iv_results_no_ownership",),
+    )
+
+    monkeypatch.setattr(
+        runner,
+        "_build_lm2011_table_iv_results_no_ownership_bundle",
+        lambda *_, **__: (_ for _ in ()).throw(
+            AssertionError("table IV no-ownership builder should not run when reuse succeeds")
+        ),
+    )
+
+    assert runner.run_lm2011_post_refinitiv_pipeline(run_cfg) == 0
+
+    manifest = json.loads((output_dir / runner.MANIFEST_FILENAME).read_text(encoding="utf-8"))
+    assert (
+        manifest["stages"]["table_iv_results_no_ownership"]["status"]
+        == runner.STAGE_STATUS_REUSED_EXISTING_ARTIFACT
+    )
+    assert manifest["stages"]["table_iv_results_no_ownership"]["extra_artifacts"] == {
+        "skipped_quarters_parquet": str(skipped_quarters_parquet.resolve()),
+        "skipped_quarters_csv": str(skipped_quarters_csv.resolve()),
+    }
 
 
 def test_pipeline_recompute_event_panel_ignores_reusable_artifact(
@@ -2156,10 +2263,35 @@ def test_main_writes_expected_artifacts_and_manifest_for_stubbed_run(
     )
     empty_quarterly_bundle = _quarterly_bundle()
     monkeypatch.setattr(runner, "_build_lm2011_table_iv_results_bundle", lambda *_, **__: empty_quarterly_bundle)
+    monkeypatch.setattr(
+        runner,
+        "_build_lm2011_table_iv_results_no_ownership_bundle",
+        lambda *_, **__: empty_quarterly_bundle,
+    )
     monkeypatch.setattr(runner, "_build_lm2011_table_v_results_bundle", lambda *_, **__: empty_quarterly_bundle)
+    monkeypatch.setattr(
+        runner,
+        "_build_lm2011_table_v_results_no_ownership_bundle",
+        lambda *_, **__: empty_quarterly_bundle,
+    )
     monkeypatch.setattr(runner, "_build_lm2011_table_vi_results_bundle", lambda *_, **__: empty_quarterly_bundle)
+    monkeypatch.setattr(
+        runner,
+        "_build_lm2011_table_vi_results_no_ownership_bundle",
+        lambda *_, **__: empty_quarterly_bundle,
+    )
     monkeypatch.setattr(runner, "_build_lm2011_table_viii_results_bundle", lambda *_, **__: empty_quarterly_bundle)
+    monkeypatch.setattr(
+        runner,
+        "_build_lm2011_table_viii_results_no_ownership_bundle",
+        lambda *_, **__: empty_quarterly_bundle,
+    )
     monkeypatch.setattr(runner, "_build_lm2011_table_ia_i_results_bundle", lambda *_, **__: empty_quarterly_bundle)
+    monkeypatch.setattr(
+        runner,
+        "_build_lm2011_table_ia_i_results_no_ownership_bundle",
+        lambda *_, **__: empty_quarterly_bundle,
+    )
     monkeypatch.setattr(
         runner,
         "build_lm2011_trading_strategy_monthly_returns",
@@ -2350,10 +2482,35 @@ def test_runner_builds_event_screen_surface_twice_and_reuses_default_surface(
     monkeypatch.setattr(runner, "build_lm2011_return_regression_panel", lambda *_, **__: pl.DataFrame({"doc_id": ["d1"]}).lazy())
     monkeypatch.setattr(runner, "build_lm2011_sue_regression_panel", lambda *_, **__: pl.DataFrame({"doc_id": ["d1"]}).lazy())
     monkeypatch.setattr(runner, "_build_lm2011_table_iv_results_bundle", lambda *_, **__: empty_quarterly_bundle)
+    monkeypatch.setattr(
+        runner,
+        "_build_lm2011_table_iv_results_no_ownership_bundle",
+        lambda *_, **__: empty_quarterly_bundle,
+    )
     monkeypatch.setattr(runner, "_build_lm2011_table_v_results_bundle", lambda *_, **__: empty_quarterly_bundle)
+    monkeypatch.setattr(
+        runner,
+        "_build_lm2011_table_v_results_no_ownership_bundle",
+        lambda *_, **__: empty_quarterly_bundle,
+    )
     monkeypatch.setattr(runner, "_build_lm2011_table_vi_results_bundle", lambda *_, **__: empty_quarterly_bundle)
+    monkeypatch.setattr(
+        runner,
+        "_build_lm2011_table_vi_results_no_ownership_bundle",
+        lambda *_, **__: empty_quarterly_bundle,
+    )
     monkeypatch.setattr(runner, "_build_lm2011_table_viii_results_bundle", lambda *_, **__: empty_quarterly_bundle)
+    monkeypatch.setattr(
+        runner,
+        "_build_lm2011_table_viii_results_no_ownership_bundle",
+        lambda *_, **__: empty_quarterly_bundle,
+    )
     monkeypatch.setattr(runner, "_build_lm2011_table_ia_i_results_bundle", lambda *_, **__: empty_quarterly_bundle)
+    monkeypatch.setattr(
+        runner,
+        "_build_lm2011_table_ia_i_results_no_ownership_bundle",
+        lambda *_, **__: empty_quarterly_bundle,
+    )
     monkeypatch.setattr(runner, "build_lm2011_table_ia_ii_results", lambda *_, **__: _empty_quarterly_results_df())
     monkeypatch.setattr(
         runner,
@@ -2434,10 +2591,35 @@ def test_runner_failure_manifest_preserves_completed_stages_before_extended_tabl
     monkeypatch.setattr(runner, "build_lm2011_sue_regression_panel", lambda *_, **__: pl.DataFrame({"doc_id": ["d1"]}).lazy())
     empty_quarterly_bundle = _quarterly_bundle()
     monkeypatch.setattr(runner, "_build_lm2011_table_iv_results_bundle", lambda *_, **__: empty_quarterly_bundle)
+    monkeypatch.setattr(
+        runner,
+        "_build_lm2011_table_iv_results_no_ownership_bundle",
+        lambda *_, **__: empty_quarterly_bundle,
+    )
     monkeypatch.setattr(runner, "_build_lm2011_table_v_results_bundle", lambda *_, **__: empty_quarterly_bundle)
+    monkeypatch.setattr(
+        runner,
+        "_build_lm2011_table_v_results_no_ownership_bundle",
+        lambda *_, **__: empty_quarterly_bundle,
+    )
     monkeypatch.setattr(runner, "_build_lm2011_table_vi_results_bundle", lambda *_, **__: empty_quarterly_bundle)
+    monkeypatch.setattr(
+        runner,
+        "_build_lm2011_table_vi_results_no_ownership_bundle",
+        lambda *_, **__: empty_quarterly_bundle,
+    )
     monkeypatch.setattr(runner, "_build_lm2011_table_viii_results_bundle", lambda *_, **__: empty_quarterly_bundle)
+    monkeypatch.setattr(
+        runner,
+        "_build_lm2011_table_viii_results_no_ownership_bundle",
+        lambda *_, **__: empty_quarterly_bundle,
+    )
     monkeypatch.setattr(runner, "_build_lm2011_table_ia_i_results_bundle", lambda *_, **__: empty_quarterly_bundle)
+    monkeypatch.setattr(
+        runner,
+        "_build_lm2011_table_ia_i_results_no_ownership_bundle",
+        lambda *_, **__: empty_quarterly_bundle,
+    )
     monkeypatch.setattr(runner, "build_lm2011_table_ia_ii_results", lambda *_, **__: _empty_quarterly_results_df())
     monkeypatch.setattr(
         runner,

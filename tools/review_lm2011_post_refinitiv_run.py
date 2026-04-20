@@ -33,13 +33,22 @@ SAMPLE_TABLE_FILES: tuple[str, ...] = (
 )
 TRADE_RESULTS_FILE = "lm2011_table_ia_ii_results.parquet"
 TRADING_RETURNS_FILE = "lm2011_trading_strategy_monthly_returns.parquet"
-RETAINED_ARTIFACT_FILES: tuple[str, ...] = (
-    MANIFEST_FILENAME,
-    "lm2011_table_i_sample_creation.csv",
-    "lm2011_table_i_sample_creation.md",
-    "lm2011_table_i_sample_creation.parquet",
-    TRADE_RESULTS_FILE,
-    TRADING_RETURNS_FILE,
+EXTENSION_RESULTS_FILE = "lm2011_extension_results.parquet"
+EXTENSION_SAMPLE_LOSS_FILE = "lm2011_extension_sample_loss.parquet"
+CORE_TABLE_EXPORT_SPECS: tuple[tuple[str, str, str], ...] = (
+    ("Table I Sample Creation (1994--2008)", "lm2011_table_i_sample_creation.parquet", "sample"),
+    ("Table I Sample Creation (1994--2024)", "lm2011_table_i_sample_creation_1994_2024.parquet", "sample"),
+    ("Table IV (With Ownership Control)", "lm2011_table_iv_results.parquet", "quarterly"),
+    ("Table IV (No Ownership Control)", "lm2011_table_iv_results_no_ownership.parquet", "quarterly"),
+    ("Table V (With Ownership Control)", "lm2011_table_v_results.parquet", "quarterly"),
+    ("Table V (No Ownership Control)", "lm2011_table_v_results_no_ownership.parquet", "quarterly"),
+    ("Table VI (With Ownership Control)", "lm2011_table_vi_results.parquet", "quarterly"),
+    ("Table VI (No Ownership Control)", "lm2011_table_vi_results_no_ownership.parquet", "quarterly"),
+    ("Table VIII (With Ownership Control)", "lm2011_table_viii_results.parquet", "quarterly"),
+    ("Table VIII (No Ownership Control)", "lm2011_table_viii_results_no_ownership.parquet", "quarterly"),
+    ("Table IA.I (With Ownership Control)", "lm2011_table_ia_i_results.parquet", "quarterly"),
+    ("Table IA.I (No Ownership Control)", "lm2011_table_ia_i_results_no_ownership.parquet", "quarterly"),
+    ("Table IA.II Trading Strategy Summary", TRADE_RESULTS_FILE, "trade"),
 )
 
 
@@ -330,11 +339,15 @@ def _column_spec(columns: Sequence[str]) -> str:
     text_widths = {
         "Filter": "7.6cm",
         "Status": "2.3cm",
+        "Text scope": "2.6cm",
         "Signal": "3.1cm",
         "Coefficient": "3.4cm",
         "Specification": "3.0cm",
+        "Control set": "2.1cm",
+        "Outcome": "2.9cm",
         "Quarter": "2.4cm",
         "Reason": "3.0cm",
+        "Failure reason": "3.8cm",
         "Duplicate regressors": "4.7cm",
         "File": "5.0cm",
         "Type": "1.6cm",
@@ -353,9 +366,15 @@ def _column_spec(columns: Sequence[str]) -> str:
         "NW lags",
         "Observations",
         "Industries",
+        "Year",
         "Rank",
         "Columns",
         "Rows",
+        "Control-set rows",
+        "Estimation rows",
+        "Missing outcome",
+        "Missing signal",
+        "Missing controls",
         "Size (MB)",
         "Elapsed seconds",
         "Mean long-short",
@@ -429,20 +448,92 @@ def _figure_block(path: Path, caption: str) -> str:
     )
 
 
-def _build_review_notes(context: RunContext, run_dir: Path) -> list[str]:
+def _summarize_quarterly_results(path: Path) -> pl.DataFrame:
+    return (
+        pl.read_parquet(path)
+        .select(
+            pl.col("signal_name").alias("Signal"),
+            pl.col("coefficient_name").alias("Coefficient"),
+            pl.col("estimate").alias("Estimate"),
+            pl.col("standard_error").alias("Std. error"),
+            pl.col("t_stat").alias("t-stat"),
+            pl.col("n_quarters").alias("Quarters"),
+            pl.col("mean_quarter_n").alias("Mean quarter n"),
+            pl.col("nw_lags").alias("NW lags"),
+        )
+        .sort("Signal", "Coefficient")
+    )
+
+
+def _summarize_extension_results(path: Path) -> pl.DataFrame:
+    return (
+        pl.read_parquet(path)
+        .select(
+            pl.col("text_scope").alias("Text scope"),
+            pl.col("specification_name").alias("Specification"),
+            pl.col("control_set_id").alias("Control set"),
+            pl.col("coefficient_name").alias("Coefficient"),
+            pl.col("estimate").alias("Estimate"),
+            pl.col("standard_error").alias("Std. error"),
+            pl.col("t_stat").alias("t-stat"),
+            pl.col("n_obs").alias("Observations"),
+            pl.col("n_quarters").alias("Quarters"),
+            pl.col("mean_quarter_n").alias("Mean quarter n"),
+            pl.col("estimator_status").alias("Status"),
+            pl.col("failure_reason").alias("Failure reason"),
+        )
+        .sort("Text scope", "Specification", "Control set", "Coefficient")
+    )
+
+
+def _summarize_extension_sample_loss(path: Path) -> pl.DataFrame:
+    return (
+        pl.read_parquet(path)
+        .select(
+            pl.col("calendar_year").alias("Year"),
+            pl.col("text_scope").alias("Text scope"),
+            pl.col("specification_name").alias("Specification"),
+            pl.col("control_set_id").alias("Control set"),
+            pl.col("outcome_name").alias("Outcome"),
+            pl.col("n_control_set_rows").alias("Control-set rows"),
+            pl.col("n_estimation_rows").alias("Estimation rows"),
+            pl.col("n_missing_outcome").alias("Missing outcome"),
+            pl.col("n_missing_signal").alias("Missing signal"),
+            pl.col("n_missing_controls").alias("Missing controls"),
+        )
+        .sort("Year", "Text scope", "Specification", "Control set")
+    )
+
+
+def _build_review_notes(
+    context: RunContext,
+    run_dir: Path,
+    *,
+    full_export: bool,
+    extension_run_dir: Path | None,
+) -> list[str]:
     notes = [
-        "Ownership-dependent quarterly regression tables and their related visuals are intentionally omitted from this thesis-facing export because ownership coverage is too sparse for reliable thesis use.",
-        "This export now retains only the sample-construction tables and the IA.II monthly trading-strategy summary plus its cumulative-return visualization.",
-        "The 1994-2024 sample-screen artifact is omitted because it is not the operative sample window for this run and the manifest marks the extended sample-creation stage as disabled.",
+        "This export retains the operative 1994-2008 sample-attrition figure and cumulative long-short return figure for the selected lm2011_post_refinitiv run.",
     ]
-    trade = _summarize_trade_results(run_dir / TRADE_RESULTS_FILE)
-    if trade.height > 0:
-        mean_returns = [float(value) for value in trade["Mean long-short"].to_list() if value is not None]
-        alphas = [float(value) for value in trade["FF4 alpha"].to_list() if value is not None]
-        if mean_returns and alphas and all(value < 0 for value in mean_returns) and all(value < 0 for value in alphas):
-            notes.append(
-                "All four IA.II long-short strategy means and FF4 alphas are negative in the current run, which is consistent with the cumulative-return chart below."
-            )
+    extended_stage = (context.manifest.get("stages", {}) or {}).get("table_i_sample_creation_1994_2024")
+    if isinstance(extended_stage, dict) and extended_stage.get("status") == "disabled_by_run_config":
+        notes.append(
+            "The 1994-2024 sample-creation artifact is present in the run directory but its manifest stage is marked disabled_by_run_config, so it should be treated as a carry-forward artifact rather than a confirmed regenerated output."
+        )
+    trade_path = run_dir / TRADE_RESULTS_FILE
+    if trade_path.exists():
+        trade = _summarize_trade_results(trade_path)
+        if trade.height > 0:
+            mean_returns = [float(value) for value in trade["Mean long-short"].to_list() if value is not None]
+            alphas = [float(value) for value in trade["FF4 alpha"].to_list() if value is not None]
+            if mean_returns and alphas and all(value < 0 for value in mean_returns) and all(value < 0 for value in alphas):
+                notes.append(
+                    "All four IA.II long-short strategy means and FF4 alphas are negative in the current run, which is consistent with the cumulative-return chart below."
+                )
+    if full_export and extension_run_dir is not None:
+        notes.append(
+            f"Full export mode includes extension tables from {extension_run_dir} using lm2011_extension_results.parquet and lm2011_extension_sample_loss.parquet as the authoritative extension artifacts."
+        )
     return notes
 
 
@@ -482,8 +573,7 @@ def _report_metadata_table(context: RunContext, inventory: pl.DataFrame) -> pl.D
 
 
 def _artifact_inventory_table(inventory: pl.DataFrame) -> pl.DataFrame:
-    retained_inventory = inventory.filter(pl.col("file_name").is_in(RETAINED_ARTIFACT_FILES))
-    return retained_inventory.select(
+    return inventory.select(
         pl.col("file_name").alias("File"),
         pl.col("suffix").alias("Type"),
         pl.col("row_count").alias("Rows"),
@@ -494,14 +584,74 @@ def _artifact_inventory_table(inventory: pl.DataFrame) -> pl.DataFrame:
     )
 
 
-def _write_report(context: RunContext, output_dir: Path) -> Path:
+def _resolve_extension_run_dir(core_run_dir: Path, explicit_extension_run_dir: Path | None) -> Path:
+    candidates = (
+        [explicit_extension_run_dir.resolve()]
+        if explicit_extension_run_dir is not None
+        else [(core_run_dir.parent / "lm2011_extension").resolve()]
+    )
+    for candidate in candidates:
+        if (candidate / EXTENSION_RESULTS_FILE).exists() and (candidate / EXTENSION_SAMPLE_LOSS_FILE).exists():
+            return candidate
+    raise FileNotFoundError(
+        "Full export requires extension artifacts, but lm2011_extension_results.parquet and "
+        "lm2011_extension_sample_loss.parquet were not resolved. "
+        f"Tried: {[str(candidate) for candidate in candidates]}"
+    )
+
+
+def _core_table_sections(run_dir: Path) -> list[tuple[str, pl.DataFrame, str]]:
+    sections: list[tuple[str, pl.DataFrame, str]] = []
+    for title, filename, kind in CORE_TABLE_EXPORT_SPECS:
+        path = run_dir / filename
+        if not path.exists():
+            continue
+        if kind == "sample":
+            df = _summarize_sample_table(pl.read_parquet(path))
+        elif kind == "trade":
+            df = _summarize_trade_results(path)
+        else:
+            df = _summarize_quarterly_results(path)
+        sections.append((title, df, title))
+    return sections
+
+
+def _extension_table_sections(extension_run_dir: Path) -> list[tuple[str, pl.DataFrame, str]]:
+    return [
+        (
+            "LM2011 Extension Sample Loss",
+            _summarize_extension_sample_loss(extension_run_dir / EXTENSION_SAMPLE_LOSS_FILE),
+            "LM2011 extension sample-loss summary",
+        ),
+        (
+            "LM2011 Extension Results",
+            _summarize_extension_results(extension_run_dir / EXTENSION_RESULTS_FILE),
+            "LM2011 extension regression results",
+        ),
+    ]
+
+
+def _write_report(
+    context: RunContext,
+    output_dir: Path,
+    *,
+    full_export: bool,
+    extension_run_dir: Path | None,
+) -> Path:
     figure_dir = _ensure_dir(output_dir / FIGURE_SUBDIR)
     for stale_png in figure_dir.glob("*.png"):
         stale_png.unlink()
     inventory = _artifact_inventory(context.run_dir, context.manifest)
     report_metadata = _report_metadata_table(context, inventory)
     artifact_inventory = _artifact_inventory_table(inventory)
-    review_notes = _build_review_notes(context, context.run_dir)
+    review_notes = _build_review_notes(
+        context,
+        context.run_dir,
+        full_export=full_export,
+        extension_run_dir=extension_run_dir,
+    )
+    core_sections = _core_table_sections(context.run_dir)
+    extension_sections = _extension_table_sections(extension_run_dir) if extension_run_dir is not None else []
 
     figures = {
         "sample_attrition": _plot_sample_attrition(context.run_dir, figure_dir),
@@ -518,7 +668,7 @@ def _write_report(context: RunContext, output_dir: Path) -> Path:
         r"\setlength{\parskip}{0.6em}",
         r"\begin{document}",
         r"\begin{center}",
-        r"{\LARGE \textbf{LM2011 Post-Refinitiv Thesis-Facing Tables}}\\[0.6em]",
+        r"{\LARGE \textbf{LM2011 Post-Refinitiv Review Export}}\\[0.6em]",
         rf"{{\large \texttt{{{_latex_escape(str(context.run_dir))}}}}}",
         r"\end{center}",
         r"\section*{Run Metadata}",
@@ -534,25 +684,31 @@ def _write_report(context: RunContext, output_dir: Path) -> Path:
         [
             r"\end{itemize}",
             r"\section*{Figures}",
-            _figure_block(figures["sample_attrition"].relative_to(output_dir), "Sample attrition across the 1994--2008 LM2011 screening table used for the thesis-facing export."),
+            _figure_block(figures["sample_attrition"].relative_to(output_dir), "Sample attrition across the 1994--2008 LM2011 screening table used for the selected run."),
             _figure_block(figures["trading_cumulative_returns"].relative_to(output_dir), "Cumulative long-short returns by LM2011 sort signal using the IA.II monthly strategy output."),
             r"\clearpage",
-            r"\section*{Retained Artifact Inventory}",
-            _longtable_block(artifact_inventory, caption="Run artifacts retained in this thesis-facing export", landscape=True),
+            r"\section*{Artifact Inventory}",
+            _longtable_block(artifact_inventory, caption="Run artifacts discovered in the selected lm2011_post_refinitiv directory", landscape=True),
             r"\clearpage",
             r"\section*{Logical Table Outputs}",
-            r"\subsection*{Table I Sample Creation (1994--2008)}",
-            _longtable_block(
-                _summarize_sample_table(pl.read_parquet(context.run_dir / SAMPLE_TABLE_FILES[0])),
-                caption="LM2011 Table I sample creation, 1994--2008",
-            ),
-            r"\subsection*{Table IA.II Trading Strategy Summary}",
-            _longtable_block(
-                _summarize_trade_results(context.run_dir / TRADE_RESULTS_FILE),
-                caption="Table IA.II trading-strategy summary",
-            ),
         ]
     )
+    for title, table_df, caption in core_sections:
+        sections.extend(
+            [
+                rf"\subsection*{{{_latex_escape(title)}}}",
+                _longtable_block(table_df, caption=caption),
+            ]
+        )
+    if extension_sections:
+        sections.extend([r"\clearpage", r"\section*{Extension Tables}"])
+        for title, table_df, caption in extension_sections:
+            sections.extend(
+                [
+                    rf"\subsection*{{{_latex_escape(title)}}}",
+                    _longtable_block(table_df, caption=caption),
+                ]
+            )
 
     sections.append(r"\end{document}")
     tex_path = output_dir / f"{REPORT_BASENAME}.tex"
@@ -573,6 +729,17 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         type=Path,
         default=None,
         help="Directory for generated LaTeX and figure assets. Defaults to output/latex/lm2011_post_refinitiv_review.",
+    )
+    parser.add_argument(
+        "--extension-run-dir",
+        type=Path,
+        default=None,
+        help="Optional lm2011_extension run directory. Required only for --full-export if sibling auto-resolution fails.",
+    )
+    parser.add_argument(
+        "--full-export",
+        action="store_true",
+        help="Include extension tables in addition to the core lm2011_post_refinitiv outputs.",
     )
     return parser.parse_args(argv)
 
@@ -595,11 +762,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
 
     output_dir = _ensure_dir((repo_root / args.output_dir) if args.output_dir is not None else (repo_root / REPORT_OUTPUT_DIR))
-    tex_path = _write_report(context, output_dir)
+    extension_run_dir = (
+        _resolve_extension_run_dir(context.run_dir, args.extension_run_dir)
+        if args.full_export
+        else None
+    )
+    tex_path = _write_report(
+        context,
+        output_dir,
+        full_export=args.full_export,
+        extension_run_dir=extension_run_dir,
+    )
     pdf_path = output_dir / f"{REPORT_BASENAME}.pdf"
     summary = {
         "run_dir": str(context.run_dir),
         "manifest_path": str(context.manifest_path),
+        "extension_run_dir": str(extension_run_dir) if extension_run_dir is not None else None,
         "tex_path": str(tex_path),
         "expected_pdf_path": str(pdf_path),
     }
