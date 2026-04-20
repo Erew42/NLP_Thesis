@@ -188,6 +188,34 @@ def _write_sentence_year(path: Path, *, year: int) -> None:
     ).write_parquet(path)
 
 
+def _write_empty_sentence_year(path: Path, *, year: int) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame(
+        schema={
+            "benchmark_sentence_id": pl.Utf8,
+            "benchmark_row_id": pl.Utf8,
+            "doc_id": pl.Utf8,
+            "cik_10": pl.Utf8,
+            "accession_nodash": pl.Utf8,
+            "filing_date": pl.Utf8,
+            "filing_year": pl.Int32,
+            "benchmark_item_code": pl.Utf8,
+            "benchmark_item_label": pl.Utf8,
+            "source_year_file": pl.Int32,
+            "document_type": pl.Utf8,
+            "document_type_raw": pl.Utf8,
+            "document_type_normalized": pl.Utf8,
+            "sentence_index": pl.Int32,
+            "sentence_text": pl.Utf8,
+            "sentence_char_count": pl.Int32,
+            "sentencizer_backend": pl.Utf8,
+            "sentencizer_version": pl.Utf8,
+            "finbert_token_count_512": pl.Int32,
+            "finbert_token_bucket_512": pl.Utf8,
+        }
+    ).write_parquet(path)
+
+
 def test_run_finbert_tokenizer_profile_writes_and_reuses_year_outputs(
     tmp_path: Path,
     monkeypatch,
@@ -319,6 +347,40 @@ def test_run_finbert_sentence_parquet_inference_can_skip_sentence_score_artifact
     assert item_features.height == 2
     assert manifest["write_sentence_scores"] is False
     assert manifest["artifacts"]["sentence_scores_dir"] is None
+
+
+def test_run_finbert_sentence_parquet_inference_writes_empty_year_outputs(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    sentence_dataset_dir = tmp_path / "sentence_dataset" / "by_year"
+    _write_empty_sentence_year(sentence_dataset_dir / "2008.parquet", year=2008)
+
+    from thesis_pkg.benchmarking import finbert_benchmark
+    from thesis_pkg.benchmarking import finbert_staged_inference
+
+    monkeypatch.setattr(finbert_benchmark, "_import_torch", lambda: _FakeTorch())
+    monkeypatch.setattr(finbert_staged_inference, "load_finbert_tokenizer", lambda authority: _FakeTokenizer())
+    monkeypatch.setattr(finbert_staged_inference, "load_finbert_model", lambda authority, runtime: _FakeModel())
+
+    artifacts = run_finbert_sentence_parquet_inference(
+        FinbertSentenceParquetInferenceRunConfig(
+            sentence_dataset_dir=sentence_dataset_dir,
+            out_root=tmp_path / "runs",
+            batch_config=BucketBatchConfig(name="baseline", short_batch_size=2, medium_batch_size=1, long_batch_size=1),
+            write_sentence_scores=True,
+            run_name="sentence_parquet_inference_empty_year",
+        )
+    )
+
+    yearly_summary = pl.read_parquet(artifacts.yearly_summary_path)
+    item_features = pl.read_parquet(artifacts.item_features_long_path)
+    sentence_scores = pl.read_parquet(artifacts.sentence_scores_dir / "2008.parquet")
+
+    assert yearly_summary.select("status").item() == "processed_empty"
+    assert item_features.is_empty()
+    assert sentence_scores.is_empty()
+    assert (artifacts.run_dir / "item_features" / "by_year" / "2008.parquet").exists()
 
 
 def test_run_finbert_sentence_parquet_inference_rejects_changed_sentence_manifest(

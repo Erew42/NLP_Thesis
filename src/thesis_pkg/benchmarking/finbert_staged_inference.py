@@ -1095,6 +1095,7 @@ def run_finbert_sentence_parquet_inference(
 
         score_shard_paths: list[Path] = []
         if sentence_rows == 0:
+            year_item_features_path.parent.mkdir(parents=True, exist_ok=True)
             _empty_item_features_long_frame().write_parquet(
                 year_item_features_path,
                 compression=_STREAMING_PARQUET_COMPRESSION,
