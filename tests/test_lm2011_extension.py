@@ -6,6 +6,7 @@ from pathlib import Path
 import random
 
 import polars as pl
+import pytest
 
 from thesis_pkg.pipeline import build_lm2011_extension_analysis_panel
 from thesis_pkg.pipeline import build_lm2011_extension_control_ladder
@@ -14,6 +15,7 @@ from thesis_pkg.pipeline import build_lm2011_extension_dictionary_features_from_
 from thesis_pkg.pipeline import build_lm2011_extension_sample_loss_table
 from thesis_pkg.pipeline import build_lm2011_extension_specification_grid
 from thesis_pkg.pipeline import run_lm2011_extension_estimation_scaffold
+from thesis_pkg.pipeline import run_lm2011_extension_fit_comparison_scaffold
 
 
 def _write_ff48_mapping(tmp_path: Path) -> str:
@@ -328,3 +330,93 @@ def test_extension_estimation_scaffold_runs_primary_comparison_grid() -> None:
     )
     assert horse_race.height > 0
     assert all(value is None or math.isfinite(value) for value in results.get_column("p_value").to_list())
+
+
+def test_extension_fit_comparison_scaffold_uses_common_sample_only_for_fit_artifacts() -> None:
+    panel = (
+        _estimation_panel()
+        .with_row_index("_row")
+        .with_columns(
+            pl.when((pl.col("_row") % 5) == 0)
+            .then(None)
+            .otherwise(pl.col("finbert_neg_prob_lenw_mean"))
+            .alias("finbert_neg_prob_lenw_mean")
+        )
+        .drop("_row")
+    )
+
+    coefficient_results = run_lm2011_extension_estimation_scaffold(
+        panel.lazy(),
+        run_id="unit_test_extension",
+        text_scopes=("item_7_mda",),
+        control_set_ids=("C0",),
+    )
+    fit_artifacts = run_lm2011_extension_fit_comparison_scaffold(
+        panel.lazy(),
+        run_id="unit_test_extension",
+        text_scopes=("item_7_mda",),
+        control_set_ids=("C0",),
+    )
+
+    dictionary_coef_n_obs = coefficient_results.filter(
+        (pl.col("specification_name") == "dictionary_only")
+        & (pl.col("control_set_id") == "C0")
+        & (pl.col("coefficient_name") == "lm_negative_tfidf")
+    ).item(0, "n_obs")
+    dictionary_fit_summary = fit_artifacts.summary_df.filter(
+        (pl.col("specification_name") == "dictionary_only")
+        & (pl.col("control_set_id") == "C0")
+    ).row(0, named=True)
+    joint_fit_summary = fit_artifacts.summary_df.filter(
+        (pl.col("specification_name") == "dictionary_finbert_joint")
+        & (pl.col("control_set_id") == "C0")
+    ).row(0, named=True)
+    joint_minus_dictionary = fit_artifacts.comparison_df.filter(
+        (pl.col("comparison_name") == "joint_minus_dictionary")
+        & (pl.col("control_set_id") == "C0")
+    ).row(0, named=True)
+    difference_rows = fit_artifacts.quarterly_difference_df.filter(
+        (pl.col("comparison_name") == "joint_minus_dictionary")
+        & (pl.col("control_set_id") == "C0")
+    ).sort("quarter_start")
+    weights = difference_rows.get_column("weight").to_list()
+    deltas = difference_rows.get_column("delta_adj_r2").to_list()
+    weighted_delta = sum(weight * delta for weight, delta in zip(weights, deltas, strict=True)) / sum(weights)
+
+    assert dictionary_coef_n_obs > dictionary_fit_summary["total_n_obs"]
+    assert joint_fit_summary["signal_name"] == "lm_negative_tfidf,finbert_neg_prob_lenw_mean"
+    assert joint_fit_summary["signal_inputs"] == ["lm_negative_tfidf", "finbert_neg_prob_lenw_mean"]
+    assert joint_minus_dictionary["weighted_avg_delta_adj_r2"] == pytest.approx(weighted_delta, abs=1e-12)
+    assert all(
+        value >= -1e-10
+        for value in difference_rows.get_column("delta_raw_r2").to_list()
+    )
+    assert dictionary_fit_summary["equal_quarter_avg_raw_r2"] is not None
+    assert joint_minus_dictionary["equal_quarter_avg_delta_adj_r2"] is not None
+
+
+def test_extension_fit_comparison_scaffold_records_insufficient_dof_skips() -> None:
+    panel = (
+        _estimation_panel()
+        .filter(pl.col("filing_date") == dt.date(2009, 2, 16))
+        .with_row_index("_row")
+        .with_columns(
+            pl.when((pl.col("_row") % 2) == 0)
+            .then(None)
+            .otherwise(pl.col("finbert_neg_prob_lenw_mean"))
+            .alias("finbert_neg_prob_lenw_mean")
+        )
+        .drop("_row")
+    )
+
+    fit_artifacts = run_lm2011_extension_fit_comparison_scaffold(
+        panel.lazy(),
+        run_id="unit_test_extension",
+        text_scopes=("item_7_mda",),
+        control_set_ids=("C0",),
+    )
+
+    assert fit_artifacts.quarterly_fit_df.height == 0
+    assert fit_artifacts.skipped_quarters_df.height > 0
+    assert "insufficient_degrees_of_freedom" in fit_artifacts.skipped_quarters_df.get_column("skip_reason").to_list()
+    assert fit_artifacts.summary_df.get_column("estimator_status").unique().to_list() == ["insufficient_sample"]

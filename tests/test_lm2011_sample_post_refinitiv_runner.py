@@ -517,6 +517,12 @@ def test_extension_pipeline_writes_manifest_and_fully_enumerated_results(tmp_pat
     manifest_path = output_dir / runner.EXTENSION_MANIFEST_FILENAME
     results_path = output_dir / runner.EXTENSION_STAGE_ARTIFACT_FILENAMES["extension_results"]
     sample_loss_path = output_dir / runner.EXTENSION_STAGE_ARTIFACT_FILENAMES["extension_sample_loss"]
+    fit_quarterly_path = output_dir / runner.EXTENSION_STAGE_ARTIFACT_FILENAMES["extension_fit_quarterly"]
+    fit_difference_path = output_dir / runner.EXTENSION_STAGE_ARTIFACT_FILENAMES["extension_fit_difference_quarterly"]
+    fit_summary_path = output_dir / runner.EXTENSION_STAGE_ARTIFACT_FILENAMES["extension_fit_summary"]
+    fit_comparisons_path = output_dir / runner.EXTENSION_STAGE_ARTIFACT_FILENAMES["extension_fit_comparisons"]
+    fit_skips_path = output_dir / runner.EXTENSION_STAGE_ARTIFACT_FILENAMES["extension_fit_skipped_quarters"]
+    fit_skips_csv_path = output_dir / "lm2011_extension_fit_skipped_quarters.csv"
     dictionary_surface_path = output_dir / runner.EXTENSION_STAGE_ARTIFACT_FILENAMES["extension_dictionary_surface"]
     finbert_surface_path = output_dir / runner.EXTENSION_STAGE_ARTIFACT_FILENAMES["extension_finbert_surface"]
     analysis_panel_path = output_dir / runner.EXTENSION_STAGE_ARTIFACT_FILENAMES["extension_analysis_panel"]
@@ -525,6 +531,12 @@ def test_extension_pipeline_writes_manifest_and_fully_enumerated_results(tmp_pat
         manifest_path,
         results_path,
         sample_loss_path,
+        fit_quarterly_path,
+        fit_difference_path,
+        fit_summary_path,
+        fit_comparisons_path,
+        fit_skips_path,
+        fit_skips_csv_path,
         dictionary_surface_path,
         finbert_surface_path,
         analysis_panel_path,
@@ -544,7 +556,17 @@ def test_extension_pipeline_writes_manifest_and_fully_enumerated_results(tmp_pat
     )
     assert manifest["stages"]["extension_dictionary_surface"]["status"] == "generated"
     assert manifest["stages"]["extension_finbert_surface"]["status"] == "generated"
+    assert manifest["stages"]["extension_fit_quarterly"]["status"] in {"generated", "generated_empty"}
+    assert manifest["stages"]["extension_fit_difference_quarterly"]["status"] in {"generated", "generated_empty"}
+    assert manifest["stages"]["extension_fit_summary"]["status"] == "generated"
+    assert manifest["stages"]["extension_fit_comparisons"]["status"] == "generated"
+    assert manifest["stages"]["extension_fit_skipped_quarters"]["status"] in {"generated", "generated_empty"}
+    assert manifest["stages"]["extension_fit_skipped_quarters"]["extra_artifacts"]["csv"] == str(
+        fit_skips_csv_path.resolve()
+    )
     assert manifest["stages"]["extension_results"]["status"] == "generated"
+    assert "extension_fit_summary" in manifest["row_counts"]
+    assert "extension_fit_comparisons" in manifest["row_counts"]
     assert manifest["row_counts"]["extension_results"] >= 18
 
     panel = pl.read_parquet(analysis_panel_path).sort("doc_id", "text_scope")
@@ -562,8 +584,22 @@ def test_extension_pipeline_writes_manifest_and_fully_enumerated_results(tmp_pat
     assert "item_1" not in finbert_surface.get_column("text_scope").to_list()
 
     results = pl.read_parquet(results_path)
+    fit_summary = pl.read_parquet(fit_summary_path)
+    fit_comparisons = pl.read_parquet(fit_comparisons_path)
+    fit_skips = pl.read_parquet(fit_skips_path)
     assert "estimator_status" in results.columns
     assert results.get_column("estimator_status").null_count() == 0
+    assert {
+        "equal_quarter_avg_raw_r2",
+        "equal_quarter_avg_adj_r2",
+        "signal_inputs",
+    }.issubset(set(fit_summary.columns))
+    assert {
+        "left_signal_inputs",
+        "right_signal_inputs",
+        "equal_quarter_avg_delta_adj_r2",
+    }.issubset(set(fit_comparisons.columns))
+    assert "signal_inputs" in fit_skips.columns
     observed_grid = {
         (
             row["text_scope"],

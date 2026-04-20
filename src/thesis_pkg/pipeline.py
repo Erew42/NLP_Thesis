@@ -94,6 +94,7 @@ from thesis_pkg.pipelines.lm2011_regressions import (
     build_lm2011_table_vi_results,
     build_lm2011_table_viii_results,
     run_lm2011_quarterly_fama_macbeth,
+    run_lm2011_quarterly_fama_macbeth_with_diagnostics,
 )
 from thesis_pkg.pipelines.lm2011_extension import (
     build_lm2011_extension_analysis_panel,
@@ -103,6 +104,7 @@ from thesis_pkg.pipelines.lm2011_extension import (
     build_lm2011_extension_sample_loss_table,
     build_lm2011_extension_specification_grid,
     run_lm2011_extension_estimation_scaffold,
+    run_lm2011_extension_fit_comparison_scaffold,
 )
 from thesis_pkg.pipelines.refinitiv import (
     build_refinitiv_analyst_normalized_outputs,

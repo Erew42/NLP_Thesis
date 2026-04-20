@@ -89,6 +89,7 @@ from thesis_pkg.pipelines import lm2011_pipeline
 from thesis_pkg.pipelines.lm2011_extension import (
     EXTENSION_ITEM_SCOPE_IDS,
     EXTENSION_PRIMARY_TEXT_SCOPES,
+    Lm2011ExtensionFitComparisonArtifacts,
     build_lm2011_extension_analysis_panel,
     build_lm2011_extension_control_ladder,
     build_lm2011_extension_dictionary_features,
@@ -97,6 +98,7 @@ from thesis_pkg.pipelines.lm2011_extension import (
     build_lm2011_extension_specification_grid,
     normalize_lm2011_extension_text_scope_expr,
     run_lm2011_extension_estimation_scaffold,
+    run_lm2011_extension_fit_comparison_scaffold,
 )
 from thesis_pkg.pipelines.lm2011_regressions import (
     _QuarterlyFamaMacbethBundle,
@@ -337,6 +339,11 @@ EXTENSION_STAGE_ARTIFACT_FILENAMES: dict[str, str] = {
     "extension_specification_grid": "lm2011_extension_specification_grid.parquet",
     "extension_analysis_panel": "lm2011_extension_analysis_panel.parquet",
     "extension_sample_loss": "lm2011_extension_sample_loss.parquet",
+    "extension_fit_quarterly": "lm2011_extension_fit_quarterly.parquet",
+    "extension_fit_difference_quarterly": "lm2011_extension_fit_difference_quarterly.parquet",
+    "extension_fit_summary": "lm2011_extension_fit_summary.parquet",
+    "extension_fit_comparisons": "lm2011_extension_fit_comparisons.parquet",
+    "extension_fit_skipped_quarters": "lm2011_extension_fit_skipped_quarters.parquet",
     "extension_results": "lm2011_extension_results.parquet",
 }
 
@@ -1096,6 +1103,10 @@ def _write_extension_stage(
     if manifest_path is not None:
         _checkpoint_manifest(manifest, manifest_path)
     return pl.scan_parquet(written_path)
+
+
+def _extension_csv_companion_path(output_dir: Path, stage_name: str) -> Path:
+    return output_dir / f"{Path(EXTENSION_STAGE_ARTIFACT_FILENAMES[stage_name]).stem}.csv"
 
 
 def _scan_year_sharded_parquet_dir(directory: Path, *, label: str) -> pl.LazyFrame:
@@ -3885,6 +3896,77 @@ def run_lm2011_extension_pipeline(run_cfg: LM2011ExtensionRunConfig) -> int:
             output_dir=output_dir,
             stage_name="extension_sample_loss",
             frame=build_lm2011_extension_sample_loss_table(extension_panel_lf),
+        )
+
+        current_stage_name = "extension_fit_quarterly"
+        fit_artifacts: Lm2011ExtensionFitComparisonArtifacts = run_lm2011_extension_fit_comparison_scaffold(
+            extension_panel_lf,
+            run_id=run_cfg.run_id,
+            sample_window="2009_2024",
+            text_scopes=_normalized_extension_text_scopes(run_cfg.text_scopes),
+        )
+        _write_extension_stage(
+            manifest,
+            manifest_path=manifest_path,
+            output_dir=output_dir,
+            stage_name="extension_fit_quarterly",
+            frame=fit_artifacts.quarterly_fit_df,
+        )
+
+        current_stage_name = "extension_fit_difference_quarterly"
+        _write_extension_stage(
+            manifest,
+            manifest_path=manifest_path,
+            output_dir=output_dir,
+            stage_name="extension_fit_difference_quarterly",
+            frame=fit_artifacts.quarterly_difference_df,
+        )
+
+        current_stage_name = "extension_fit_summary"
+        _write_extension_stage(
+            manifest,
+            manifest_path=manifest_path,
+            output_dir=output_dir,
+            stage_name="extension_fit_summary",
+            frame=fit_artifacts.summary_df,
+        )
+
+        current_stage_name = "extension_fit_comparisons"
+        _write_extension_stage(
+            manifest,
+            manifest_path=manifest_path,
+            output_dir=output_dir,
+            stage_name="extension_fit_comparisons",
+            frame=fit_artifacts.comparison_df,
+        )
+
+        current_stage_name = "extension_fit_skipped_quarters"
+        skipped_quarters_csv_path = _extension_csv_companion_path(
+            output_dir,
+            "extension_fit_skipped_quarters",
+        )
+        (
+            fit_artifacts.skipped_quarters_df.with_columns(
+                pl.col("signal_inputs")
+                .map_elements(
+                    lambda values: json.dumps(
+                        values.to_list() if hasattr(values, "to_list") else values
+                    )
+                    if values is not None
+                    else None,
+                    return_dtype=pl.Utf8,
+                )
+                .alias("signal_inputs")
+            )
+            .write_csv(skipped_quarters_csv_path)
+        )
+        _write_extension_stage(
+            manifest,
+            manifest_path=manifest_path,
+            output_dir=output_dir,
+            stage_name="extension_fit_skipped_quarters",
+            frame=fit_artifacts.skipped_quarters_df,
+            extra_artifacts={"csv": skipped_quarters_csv_path},
         )
 
         current_stage_name = "extension_results"

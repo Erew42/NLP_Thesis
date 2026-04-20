@@ -17,6 +17,7 @@ from thesis_pkg.pipeline import (
     build_lm2011_table_vi_results,
     build_lm2011_table_viii_results,
     run_lm2011_quarterly_fama_macbeth,
+    run_lm2011_quarterly_fama_macbeth_with_diagnostics,
 )
 from thesis_pkg.pipelines import lm2011_regressions as regressions
 from thesis_pkg.pipelines.lm2011_pipeline import (
@@ -485,7 +486,7 @@ def test_run_lm2011_quarterly_fama_macbeth_skip_mode_skips_rank_deficient_quarte
     assert by_name["intercept"]["estimate"] == pytest.approx(1.0, abs=1e-10)
 
 
-def test_run_lm2011_quarterly_fama_macbeth_skip_mode_keeps_insufficient_n_silent() -> None:
+def test_run_lm2011_quarterly_fama_macbeth_skip_mode_records_insufficient_degrees_of_freedom() -> None:
     rows = [
         {
             "filing_date": dt.date(2021, 2, 15),
@@ -517,9 +518,115 @@ def test_run_lm2011_quarterly_fama_macbeth_skip_mode_keeps_insufficient_n_silent
         on_rank_deficient="skip",
     )
 
-    assert bundle.results_df.height > 0
-    assert bundle.results_df.get_column("n_quarters").unique().to_list() == [1]
+    assert bundle.results_df.height == 0
+    assert bundle.quarter_fit_df.height == 0
+    assert bundle.skipped_quarters_df.height == 2
+    assert bundle.skipped_quarters_df.get_column("skip_reason").unique().to_list() == [
+        "insufficient_degrees_of_freedom"
+    ]
+
+
+def test_run_lm2011_quarterly_fama_macbeth_with_diagnostics_defaults_to_skip_mode() -> None:
+    rows = [
+        {
+            "filing_date": dt.date(2021, 2, 15),
+            "ff48_industry_id": 1,
+            "signal": 1.0,
+            "dependent": 1.0,
+        },
+        {
+            "filing_date": dt.date(2021, 2, 15),
+            "ff48_industry_id": 12,
+            "signal": 2.0,
+            "dependent": 3.0,
+        },
+    ]
+
+    bundle = run_lm2011_quarterly_fama_macbeth_with_diagnostics(
+        pl.DataFrame(rows).lazy(),
+        table_id="unit_test_table",
+        text_scope="full_10k",
+        dependent_variable="dependent",
+        signal_column="signal",
+        control_columns=(),
+    )
+
+    assert bundle.results_df.height == 0
+    assert bundle.quarter_fit_df.height == 0
+    assert bundle.skipped_quarters_df.height == 1
+    assert bundle.skipped_quarters_df.item(0, "skip_reason") == "insufficient_degrees_of_freedom"
+
+
+def test_run_lm2011_quarterly_fama_macbeth_with_diagnostics_emits_quarter_fit_rows() -> None:
+    rows: list[dict[str, object]] = []
+    for filing_date, slope, x_values in (
+        (dt.date(2021, 2, 15), 1.0, [0.0, 1.0, 2.0]),
+        (dt.date(2021, 5, 15), 3.0, [0.0, 1.0, 2.0, 3.0]),
+    ):
+        for industry_id in (1, 12):
+            for x_value in x_values:
+                rows.append(
+                    {
+                        "filing_date": filing_date,
+                        "ff48_industry_id": industry_id,
+                        "signal": x_value,
+                        "dependent": 1.0 + slope * x_value + (5.0 if industry_id == 12 else 0.0),
+                    }
+                )
+
+    plain_results = run_lm2011_quarterly_fama_macbeth(
+        pl.DataFrame(rows).lazy(),
+        table_id="unit_test_table",
+        text_scope="full_10k",
+        dependent_variable="dependent",
+        signal_column="signal",
+        control_columns=(),
+    ).sort("coefficient_name")
+    bundle = run_lm2011_quarterly_fama_macbeth_with_diagnostics(
+        pl.DataFrame(rows).lazy(),
+        table_id="unit_test_table",
+        text_scope="full_10k",
+        dependent_variable="dependent",
+        signal_column="signal",
+        control_columns=(),
+    )
+
+    assert bundle.results_df.sort("coefficient_name").to_dicts() == plain_results.to_dicts()
     assert bundle.skipped_quarters_df.height == 0
+    assert bundle.quarter_fit_df.height == 2
+    assert bundle.quarter_fit_df.get_column("signal_inputs").to_list() == [["signal"], ["signal"]]
+    assert all(value is not None and math.isfinite(value) for value in bundle.quarter_fit_df.get_column("raw_r2").to_list())
+    assert all(value is not None and math.isfinite(value) for value in bundle.quarter_fit_df.get_column("adj_r2").to_list())
+
+
+def test_run_lm2011_quarterly_fama_macbeth_with_diagnostics_marks_nonfinite_fit_statistics() -> None:
+    rows: list[dict[str, object]] = []
+    for industry_id in (1, 12):
+        for signal_value in (0.0, 1.0, 2.0):
+            rows.append(
+                {
+                    "filing_date": dt.date(2021, 2, 15),
+                    "ff48_industry_id": industry_id,
+                    "signal": signal_value,
+                    "dependent": 1.0,
+                }
+            )
+
+    bundle = run_lm2011_quarterly_fama_macbeth_with_diagnostics(
+        pl.DataFrame(rows).lazy(),
+        table_id="unit_test_table",
+        text_scope="full_10k",
+        dependent_variable="dependent",
+        signal_column="signal",
+        control_columns=(),
+        on_rank_deficient="skip",
+    )
+
+    assert bundle.results_df.height > 0
+    assert bundle.quarter_fit_df.height == 0
+    assert bundle.skipped_quarters_df.get_column("skip_reason").unique().to_list() == [
+        "non_finite_fit_statistics"
+    ]
 
 
 def test_run_lm2011_quarterly_fama_macbeth_keeps_near_singular_small_sample_quarter() -> None:

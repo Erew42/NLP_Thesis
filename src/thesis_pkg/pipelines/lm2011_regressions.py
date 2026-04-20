@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import datetime as dt
 import json
 import math
@@ -57,6 +57,7 @@ _TABLE_RESULT_SCHEMA: dict[str, pl.DataType] = {
 }
 _SKIPPED_QUARTER_SCHEMA: dict[str, pl.DataType] = {
     "table_id": pl.Utf8,
+    "specification_id": pl.Utf8,
     "text_scope": pl.Utf8,
     "dependent_variable": pl.Utf8,
     "signal_name": pl.Utf8,
@@ -71,9 +72,35 @@ _SKIPPED_QUARTER_SCHEMA: dict[str, pl.DataType] = {
     "duplicate_regressor_pairs": pl.Utf8,
     "restoring_drop_candidates": pl.Utf8,
 }
+_QUARTER_FIT_SCHEMA: dict[str, pl.DataType] = {
+    "table_id": pl.Utf8,
+    "specification_id": pl.Utf8,
+    "text_scope": pl.Utf8,
+    "signal_name": pl.Utf8,
+    "signal_inputs": pl.List(pl.Utf8),
+    "dependent_variable": pl.Utf8,
+    "quarter_start": pl.Date,
+    "n_obs": pl.Int32,
+    "industry_count": pl.Int32,
+    "industry_dummy_count": pl.Int32,
+    "visible_regressor_count": pl.Int32,
+    "full_regressor_count": pl.Int32,
+    "rank": pl.Int32,
+    "df_model": pl.Float64,
+    "df_resid": pl.Float64,
+    "condition_number": pl.Float64,
+    "raw_r2": pl.Float64,
+    "adj_r2": pl.Float64,
+    "ssr": pl.Float64,
+    "centered_tss": pl.Float64,
+    "weight": pl.Float64,
+    "weighting_rule": pl.Utf8,
+}
 _QUARTER_WEIGHTING_RULE = "quarter_observation_count"
 _INTERCEPT_NAME = "intercept"
 _RANK_DEFICIENT_SKIP_REASON = "rank_deficient_design"
+_INSUFFICIENT_DOF_SKIP_REASON = "insufficient_degrees_of_freedom"
+_NONFINITE_FIT_SKIP_REASON = "non_finite_fit_statistics"
 
 
 def _empty_lm2011_table_results_df() -> pl.DataFrame:
@@ -84,16 +111,22 @@ def _empty_skipped_quarters_df() -> pl.DataFrame:
     return pl.DataFrame(schema=_SKIPPED_QUARTER_SCHEMA)
 
 
+def _empty_quarter_fit_df() -> pl.DataFrame:
+    return pl.DataFrame(schema=_QUARTER_FIT_SCHEMA)
+
+
 @dataclass(frozen=True)
 class _QuarterlyFamaMacbethBundle:
     results_df: pl.DataFrame
     skipped_quarters_df: pl.DataFrame
+    quarter_fit_df: pl.DataFrame = field(default_factory=_empty_quarter_fit_df)
 
 
 @dataclass(frozen=True)
 class _CrossSectionalOlsOutcome:
     coefficients: dict[str, float] | None
     n_obs: int | None
+    quarter_fit_row: dict[str, object] | None = None
     skipped_quarter_row: dict[str, object] | None = None
 
 
@@ -414,6 +447,7 @@ def _fit_cross_sectional_ols(
     df: pl.DataFrame,
     *,
     table_id: str,
+    specification_id: str,
     text_scope: str,
     dependent_variable: str,
     signal_column: str,
@@ -421,6 +455,7 @@ def _fit_cross_sectional_ols(
     industry_col: str,
     label: str,
     quarter_start: dt.date,
+    signal_inputs: Sequence[str] | None = None,
     on_rank_deficient: Literal["raise", "skip"] = "raise",
 ) -> _CrossSectionalOlsOutcome | None:
     industries = sorted(
@@ -438,8 +473,32 @@ def _fit_cross_sectional_ols(
     )
     n_obs = df.height
     column_count = len(full_names)
-    if n_obs < column_count:
-        return None
+    effective_signal_inputs = tuple(signal_inputs or (signal_column,))
+    if n_obs <= column_count:
+        if on_rank_deficient != "skip":
+            return None
+        skipped_quarter_row = {
+            "table_id": table_id,
+            "specification_id": specification_id,
+            "text_scope": text_scope,
+            "dependent_variable": dependent_variable,
+            "signal_name": ",".join(effective_signal_inputs),
+            "quarter_start": quarter_start,
+            "skip_reason": _INSUFFICIENT_DOF_SKIP_REASON,
+            "n_obs": n_obs,
+            "industry_count": len(industries),
+            "rank": None,
+            "column_count": column_count,
+            "condition_number": None,
+            "regressors": ", ".join(full_names),
+            "duplicate_regressor_pairs": None,
+            "restoring_drop_candidates": None,
+        }
+        return _CrossSectionalOlsOutcome(
+            coefficients=None,
+            n_obs=None,
+            skipped_quarter_row=skipped_quarter_row,
+        )
 
     endog: list[float] = []
     exog_rows: list[list[float]] = []
@@ -480,9 +539,10 @@ def _fit_cross_sectional_ols(
             condition_number = _best_effort_condition_number(design)
             skipped_quarter_row = {
                 "table_id": table_id,
+                "specification_id": specification_id,
                 "text_scope": text_scope,
                 "dependent_variable": dependent_variable,
-                "signal_name": signal_column,
+                "signal_name": ",".join(effective_signal_inputs),
                 "quarter_start": quarter_start,
                 "skip_reason": _RANK_DEFICIENT_SKIP_REASON,
                 "n_obs": n_obs,
@@ -497,9 +557,10 @@ def _fit_cross_sectional_ols(
             print(
                 {
                     "table_id": table_id,
+                    "specification_id": specification_id,
                     "text_scope": text_scope,
                     "dependent_variable": dependent_variable,
-                    "signal_name": signal_column,
+                    "signal_name": ",".join(effective_signal_inputs),
                     "quarter_start": str(quarter_start),
                     "skip_reason": _RANK_DEFICIENT_SKIP_REASON,
                     "n_obs": n_obs,
@@ -516,9 +577,89 @@ def _fit_cross_sectional_ols(
                 skipped_quarter_row=skipped_quarter_row,
             )
         raise
+    df_resid_value = float(results.df_resid)
+    if not math.isfinite(df_resid_value) or df_resid_value <= 0:
+        if on_rank_deficient != "skip":
+            return None
+        skipped_quarter_row = {
+            "table_id": table_id,
+            "specification_id": specification_id,
+            "text_scope": text_scope,
+            "dependent_variable": dependent_variable,
+            "signal_name": ",".join(effective_signal_inputs),
+            "quarter_start": quarter_start,
+            "skip_reason": _INSUFFICIENT_DOF_SKIP_REASON,
+            "n_obs": n_obs,
+            "industry_count": len(industries),
+            "rank": rank,
+            "column_count": column_count,
+            "condition_number": _best_effort_condition_number(design),
+            "regressors": ", ".join(full_names),
+            "duplicate_regressor_pairs": None,
+            "restoring_drop_candidates": None,
+        }
+        return _CrossSectionalOlsOutcome(
+            coefficients=None,
+            n_obs=None,
+            skipped_quarter_row=skipped_quarter_row,
+        )
+    raw_r2 = float(results.rsquared)
+    adj_r2 = float(results.rsquared_adj)
+    quarter_fit_row = None
+    skipped_quarter_row = None
+    if math.isfinite(raw_r2) and math.isfinite(adj_r2):
+        df_model_value = float(results.df_model)
+        quarter_fit_row = {
+            "table_id": table_id,
+            "specification_id": specification_id,
+            "text_scope": text_scope,
+            "signal_name": ",".join(effective_signal_inputs),
+            "signal_inputs": list(effective_signal_inputs),
+            "dependent_variable": dependent_variable,
+            "quarter_start": quarter_start,
+            "n_obs": n_obs,
+            "industry_count": len(industries),
+            "industry_dummy_count": len(dummy_industries),
+            "visible_regressor_count": len(visible_names),
+            "full_regressor_count": column_count,
+            "rank": rank,
+            "df_model": df_model_value if math.isfinite(df_model_value) else None,
+            "df_resid": df_resid_value,
+            "condition_number": _best_effort_condition_number(design),
+            "raw_r2": raw_r2,
+            "adj_r2": adj_r2,
+            "ssr": float(results.ssr) if math.isfinite(float(results.ssr)) else None,
+            "centered_tss": (
+                float(results.centered_tss)
+                if math.isfinite(float(results.centered_tss))
+                else None
+            ),
+            "weight": float(n_obs),
+            "weighting_rule": _QUARTER_WEIGHTING_RULE,
+        }
+    elif on_rank_deficient == "skip":
+        skipped_quarter_row = {
+            "table_id": table_id,
+            "specification_id": specification_id,
+            "text_scope": text_scope,
+            "dependent_variable": dependent_variable,
+            "signal_name": ",".join(effective_signal_inputs),
+            "quarter_start": quarter_start,
+            "skip_reason": _NONFINITE_FIT_SKIP_REASON,
+            "n_obs": n_obs,
+            "industry_count": len(industries),
+            "rank": rank,
+            "column_count": column_count,
+            "condition_number": _best_effort_condition_number(design),
+            "regressors": ", ".join(full_names),
+            "duplicate_regressor_pairs": None,
+            "restoring_drop_candidates": None,
+        }
     return _CrossSectionalOlsOutcome(
         coefficients={name: float(value) for name, value in zip(full_names, results.params, strict=True)},
         n_obs=n_obs,
+        quarter_fit_row=quarter_fit_row,
+        skipped_quarter_row=skipped_quarter_row,
     )
 
 
@@ -534,6 +675,7 @@ def _run_lm2011_quarterly_fama_macbeth_bundle(
     filing_date_col: str = "filing_date",
     industry_col: str = "ff48_industry_id",
     nw_lags: int = 1,
+    signal_inputs: Sequence[str] | None = None,
     on_rank_deficient: Literal["raise", "skip"] = "raise",
 ) -> _QuarterlyFamaMacbethBundle:
     ordered_controls = _unique_preserving_order(tuple(control_columns))
@@ -581,12 +723,15 @@ def _run_lm2011_quarterly_fama_macbeth_bundle(
     quarter_sizes: list[float] = []
     retained_quarters = 0
     skipped_quarter_rows: list[dict[str, object]] = []
+    quarter_fit_rows: list[dict[str, object]] = []
+    resolved_specification_id = specification_id or signal_column
 
     for quarter_df in with_quarters_df.partition_by("_quarter_start", maintain_order=True):
         quarter_start = quarter_df.item(0, "_quarter_start")
         outcome = _fit_cross_sectional_ols(
             quarter_df,
             table_id=table_id,
+            specification_id=resolved_specification_id,
             text_scope=text_scope,
             dependent_variable=dependent_variable,
             signal_column=signal_column,
@@ -597,12 +742,16 @@ def _run_lm2011_quarterly_fama_macbeth_bundle(
                 f"dependent={dependent_variable} signal={signal_column}"
             ),
             quarter_start=quarter_start,
+            signal_inputs=signal_inputs,
             on_rank_deficient=on_rank_deficient,
         )
         if outcome is None:
             continue
         if outcome.skipped_quarter_row is not None:
             skipped_quarter_rows.append(outcome.skipped_quarter_row)
+        if outcome.quarter_fit_row is not None:
+            quarter_fit_rows.append(outcome.quarter_fit_row)
+        if outcome.coefficients is None or outcome.n_obs is None:
             continue
         assert outcome.coefficients is not None
         assert outcome.n_obs is not None
@@ -620,6 +769,11 @@ def _run_lm2011_quarterly_fama_macbeth_bundle(
                 if skipped_quarter_rows
                 else _empty_skipped_quarters_df()
             ),
+            quarter_fit_df=(
+                pl.DataFrame(quarter_fit_rows, schema_overrides=_QUARTER_FIT_SCHEMA)
+                if quarter_fit_rows
+                else _empty_quarter_fit_df()
+            ),
         )
 
     mean_quarter_n = sum(quarter_sizes) / float(retained_quarters)
@@ -633,7 +787,7 @@ def _run_lm2011_quarterly_fama_macbeth_bundle(
         rows.append(
             {
                 "table_id": table_id,
-                "specification_id": specification_id or signal_column,
+                "specification_id": resolved_specification_id,
                 "text_scope": text_scope,
                 "signal_name": signal_column,
                 "dependent_variable": dependent_variable,
@@ -653,6 +807,11 @@ def _run_lm2011_quarterly_fama_macbeth_bundle(
             pl.DataFrame(skipped_quarter_rows, schema_overrides=_SKIPPED_QUARTER_SCHEMA)
             if skipped_quarter_rows
             else _empty_skipped_quarters_df()
+        ),
+        quarter_fit_df=(
+            pl.DataFrame(quarter_fit_rows, schema_overrides=_QUARTER_FIT_SCHEMA)
+            if quarter_fit_rows
+            else _empty_quarter_fit_df()
         ),
     )
 
@@ -686,6 +845,37 @@ def run_lm2011_quarterly_fama_macbeth(
     ).results_df
 
 
+def run_lm2011_quarterly_fama_macbeth_with_diagnostics(
+    panel_lf: pl.LazyFrame,
+    *,
+    table_id: str,
+    text_scope: str,
+    dependent_variable: str,
+    signal_column: str,
+    control_columns: Sequence[str],
+    specification_id: str | None = None,
+    filing_date_col: str = "filing_date",
+    industry_col: str = "ff48_industry_id",
+    nw_lags: int = 1,
+    signal_inputs: Sequence[str] | None = None,
+    on_rank_deficient: Literal["raise", "skip"] = "skip",
+) -> _QuarterlyFamaMacbethBundle:
+    return _run_lm2011_quarterly_fama_macbeth_bundle(
+        panel_lf,
+        table_id=table_id,
+        text_scope=text_scope,
+        dependent_variable=dependent_variable,
+        signal_column=signal_column,
+        control_columns=control_columns,
+        specification_id=specification_id,
+        filing_date_col=filing_date_col,
+        industry_col=industry_col,
+        nw_lags=nw_lags,
+        signal_inputs=signal_inputs,
+        on_rank_deficient=on_rank_deficient,
+    )
+
+
 def _run_signal_family_with_diagnostics(
     panel_lf: pl.LazyFrame,
     *,
@@ -706,6 +896,7 @@ def _run_signal_family_with_diagnostics(
             control_columns=control_columns,
             specification_id=signal_column,
             nw_lags=nw_lags,
+            signal_inputs=(signal_column,),
             on_rank_deficient="skip",
         )
         for signal_column in signal_columns
@@ -715,6 +906,11 @@ def _run_signal_family_with_diagnostics(
         output.skipped_quarters_df
         for output in outputs
         if output.skipped_quarters_df.height > 0
+    ]
+    nonempty_quarter_fits = [
+        output.quarter_fit_df
+        for output in outputs
+        if output.quarter_fit_df.height > 0
     ]
     return _QuarterlyFamaMacbethBundle(
         results_df=(
@@ -726,6 +922,11 @@ def _run_signal_family_with_diagnostics(
             pl.concat(nonempty_skips, how="vertical_relaxed")
             if nonempty_skips
             else _empty_skipped_quarters_df()
+        ),
+        quarter_fit_df=(
+            pl.concat(nonempty_quarter_fits, how="vertical_relaxed")
+            if nonempty_quarter_fits
+            else _empty_quarter_fit_df()
         ),
     )
 
@@ -1407,6 +1608,7 @@ __all__ = [
     "build_lm2011_sue_regression_panel",
     "build_lm2011_normalized_difference_panel",
     "run_lm2011_quarterly_fama_macbeth",
+    "run_lm2011_quarterly_fama_macbeth_with_diagnostics",
     "build_lm2011_table_iv_results",
     "build_lm2011_table_v_results",
     "build_lm2011_table_vi_results",
