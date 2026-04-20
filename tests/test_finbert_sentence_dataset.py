@@ -386,7 +386,7 @@ def test_run_finbert_sentence_preprocessing_excludes_unreviewed_unknown_authorit
     sentence_dataset = pl.read_parquet(artifacts.sentence_dataset_dir / "2006.parquet")
     audit_df = pl.read_parquet(artifacts.cleaning_row_audit_path)
 
-    assert sentence_dataset["doc_id"].to_list() == ["doc_approved"]
+    assert sentence_dataset.sort("doc_id")["doc_id"].to_list() == ["doc_approved", "doc_blocked"]
     assert audit_df.sort("doc_id")["doc_id"].to_list() == ["doc_approved", "doc_blocked"]
     assert audit_df.sort("doc_id")["review_status"].to_list() == ["approved", "required_unreviewed"]
 

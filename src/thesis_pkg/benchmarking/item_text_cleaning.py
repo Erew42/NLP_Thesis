@@ -861,12 +861,9 @@ def cleaned_scopes_for_sentence_materialization(cleaned_scope_df: pl.DataFrame) 
             pl.lit(None, dtype=pl.Utf8).alias("full_text"),
             pl.lit(None, dtype=pl.Int32).alias("char_count"),
         )
-    return cleaned_scope_df.filter(
-        pl.col("review_status")
-        .cast(pl.Utf8, strict=False)
-        .is_in([REVIEW_STATUS_NOT_REQUIRED, REVIEW_STATUS_APPROVED])
-        .fill_null(False)
-    ).with_columns(
+    # Preserve all cleaned scopes for sentence materialization. Review metadata remains
+    # available downstream for diagnostics and selective audit harnesses.
+    return cleaned_scope_df.with_columns(
         pl.col("cleaned_text").alias("full_text"),
         pl.col("cleaned_char_count").cast(pl.Int32, strict=False).alias("char_count"),
     )

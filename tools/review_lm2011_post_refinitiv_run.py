@@ -38,9 +38,6 @@ RETAINED_ARTIFACT_FILES: tuple[str, ...] = (
     "lm2011_table_i_sample_creation.csv",
     "lm2011_table_i_sample_creation.md",
     "lm2011_table_i_sample_creation.parquet",
-    "lm2011_table_i_sample_creation_1994_2024.csv",
-    "lm2011_table_i_sample_creation_1994_2024.md",
-    "lm2011_table_i_sample_creation_1994_2024.parquet",
     TRADE_RESULTS_FILE,
     TRADING_RETURNS_FILE,
 )
@@ -228,33 +225,22 @@ def _plot_sample_attrition(run_dir: Path, figure_dir: Path) -> Path:
     first = pl.read_parquet(run_dir / SAMPLE_TABLE_FILES[0]).filter(
         (pl.col("section_id") == "full_10k_document") & (pl.col("sample_size_kind") == "count")
     )
-    second = pl.read_parquet(run_dir / SAMPLE_TABLE_FILES[1]).filter(
-        (pl.col("section_id") == "full_10k_document") & (pl.col("sample_size_kind") == "count")
-    )
-    fig, axes = plt.subplots(1, 2, figsize=(14, 8), sharex=False)
-    palettes = ["#1f5aa6", "#8c3b00"]
-    for ax, frame, title, color in zip(
-        axes,
-        (first, second),
-        ("1994-2008 Sample Screen", "1994-2024 Sample Screen"),
-        palettes,
-        strict=True,
-    ):
-        labels = [textwrap.fill(value, width=34) for value in frame["display_label"].to_list()]
-        counts = [float(value) for value in frame["sample_size_value"].to_list()]
-        positions = list(range(len(labels)))
-        ax.plot(counts, positions, marker="o", color=color, linewidth=2.3)
-        ax.fill_betweenx(positions, counts, color=color, alpha=0.08)
-        ax.set_yticks(positions)
-        ax.set_yticklabels(labels, fontsize=8.5)
-        ax.invert_yaxis()
-        ax.set_title(title, fontsize=12, fontweight="bold")
-        ax.grid(axis="x", alpha=0.25)
-        ax.xaxis.set_major_formatter(FuncFormatter(lambda value, _: f"{int(value / 1000):,}k"))
-        for xpos, ypos in zip(counts, positions, strict=True):
-            ax.text(xpos, ypos, f" {int(round(xpos)):,}", va="center", ha="left", fontsize=8)
-    axes[0].set_xlabel("Observations")
-    axes[1].set_xlabel("Observations")
+    fig, ax = plt.subplots(figsize=(8.8, 7.6))
+    color = "#1f5aa6"
+    labels = [textwrap.fill(value, width=34) for value in first["display_label"].to_list()]
+    counts = [float(value) for value in first["sample_size_value"].to_list()]
+    positions = list(range(len(labels)))
+    ax.plot(counts, positions, marker="o", color=color, linewidth=2.3)
+    ax.fill_betweenx(positions, counts, color=color, alpha=0.08)
+    ax.set_yticks(positions)
+    ax.set_yticklabels(labels, fontsize=8.5)
+    ax.invert_yaxis()
+    ax.set_title("1994-2008 Sample Screen", fontsize=12, fontweight="bold")
+    ax.grid(axis="x", alpha=0.25)
+    ax.xaxis.set_major_formatter(FuncFormatter(lambda value, _: f"{int(value / 1000):,}k"))
+    for xpos, ypos in zip(counts, positions, strict=True):
+        ax.text(xpos, ypos, f" {int(round(xpos)):,}", va="center", ha="left", fontsize=8)
+    ax.set_xlabel("Observations")
     fig.suptitle("LM2011 Sample Attrition", fontsize=14, fontweight="bold")
     out_path = figure_dir / "sample_attrition.png"
     _figure_save(fig, out_path)
@@ -447,6 +433,7 @@ def _build_review_notes(context: RunContext, run_dir: Path) -> list[str]:
     notes = [
         "Ownership-dependent quarterly regression tables and their related visuals are intentionally omitted from this thesis-facing export because ownership coverage is too sparse for reliable thesis use.",
         "This export now retains only the sample-construction tables and the IA.II monthly trading-strategy summary plus its cumulative-return visualization.",
+        "The 1994-2024 sample-screen artifact is omitted because it is not the operative sample window for this run and the manifest marks the extended sample-creation stage as disabled.",
     ]
     trade = _summarize_trade_results(run_dir / TRADE_RESULTS_FILE)
     if trade.height > 0:
@@ -547,7 +534,7 @@ def _write_report(context: RunContext, output_dir: Path) -> Path:
         [
             r"\end{itemize}",
             r"\section*{Figures}",
-            _figure_block(figures["sample_attrition"].relative_to(output_dir), "Sample attrition across the 1994--2008 and 1994--2024 LM2011 screening tables."),
+            _figure_block(figures["sample_attrition"].relative_to(output_dir), "Sample attrition across the 1994--2008 LM2011 screening table used for the thesis-facing export."),
             _figure_block(figures["trading_cumulative_returns"].relative_to(output_dir), "Cumulative long-short returns by LM2011 sort signal using the IA.II monthly strategy output."),
             r"\clearpage",
             r"\section*{Retained Artifact Inventory}",
@@ -558,11 +545,6 @@ def _write_report(context: RunContext, output_dir: Path) -> Path:
             _longtable_block(
                 _summarize_sample_table(pl.read_parquet(context.run_dir / SAMPLE_TABLE_FILES[0])),
                 caption="LM2011 Table I sample creation, 1994--2008",
-            ),
-            r"\subsection*{Table I Sample Creation (1994--2024)}",
-            _longtable_block(
-                _summarize_sample_table(pl.read_parquet(context.run_dir / SAMPLE_TABLE_FILES[1])),
-                caption="LM2011 Table I sample creation, 1994--2024",
             ),
             r"\subsection*{Table IA.II Trading Strategy Summary}",
             _longtable_block(

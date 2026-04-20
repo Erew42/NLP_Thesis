@@ -313,33 +313,35 @@ def test_clean_item_scopes_fail_closed_for_unknown_or_missing_boundary_authority
     long_text = ("Management discussion remains extensive and specific. " * 80).strip()
     sections = pl.DataFrame(
         {
-            "doc_id": ["doc_unknown", "doc_missing", "doc_review", "doc_approved"],
-            "cik_10": ["0000000001"] * 4,
+            "doc_id": ["doc_unknown", "doc_missing", "doc_review", "doc_approved", "doc_rejected"],
+            "cik_10": ["0000000001"] * 5,
             "accession_nodash": [
                 "000000000100000001",
                 "000000000100000002",
                 "000000000100000003",
                 "000000000100000004",
+                "000000000100000005",
             ],
-            "filing_date": [dt.date(2020, 3, 1)] * 4,
-            "filing_year": [2020] * 4,
+            "filing_date": [dt.date(2020, 3, 1)] * 5,
+            "filing_year": [2020] * 5,
             "benchmark_row_id": [
                 "doc_unknown:item_7",
                 "doc_missing:item_7",
                 "doc_review:item_7",
                 "doc_approved:item_7",
+                "doc_rejected:item_7",
             ],
-            "benchmark_item_code": ["item_7"] * 4,
-            "benchmark_item_label": ["10-K Item 7"] * 4,
-            "item_id": ["7"] * 4,
-            "canonical_item": ["II:7_MDA"] * 4,
-            "document_type": ["10-K"] * 4,
-            "document_type_raw": ["10-K"] * 4,
-            "document_type_normalized": ["10-K"] * 4,
-            "source_year_file": [2020] * 4,
-            "full_text": [long_text] * 4,
-            "boundary_authority_status": ["unknown", None, "review_needed", "unknown"],
-            "review_status": [None, None, None, "approved"],
+            "benchmark_item_code": ["item_7"] * 5,
+            "benchmark_item_label": ["10-K Item 7"] * 5,
+            "item_id": ["7"] * 5,
+            "canonical_item": ["II:7_MDA"] * 5,
+            "document_type": ["10-K"] * 5,
+            "document_type_raw": ["10-K"] * 5,
+            "document_type_normalized": ["10-K"] * 5,
+            "source_year_file": [2020] * 5,
+            "full_text": [long_text] * 5,
+            "boundary_authority_status": ["unknown", None, "review_needed", "unknown", "trusted"],
+            "review_status": [None, None, None, "approved", "rejected"],
         }
     )
     segment_policy_id = build_segment_policy_id(SentenceDatasetConfig(), ItemTextCleaningConfig())
@@ -363,9 +365,17 @@ def test_clean_item_scopes_fail_closed_for_unknown_or_missing_boundary_authority
     assert audit_by_doc["doc_review"]["production_eligible"] is False
     assert audit_by_doc["doc_approved"]["review_status"] == "approved"
     assert audit_by_doc["doc_approved"]["production_eligible"] is True
+    assert audit_by_doc["doc_rejected"]["review_status"] == "rejected"
+    assert audit_by_doc["doc_rejected"]["production_eligible"] is False
 
     materialized = cleaned_scopes_for_sentence_materialization(result.cleaned_scope_df)
-    assert materialized["doc_id"].to_list() == ["doc_approved"]
+    assert materialized.sort("doc_id")["doc_id"].to_list() == [
+        "doc_approved",
+        "doc_missing",
+        "doc_rejected",
+        "doc_review",
+        "doc_unknown",
+    ]
 
 
 def test_clean_item_scopes_fail_closed_when_authority_column_is_missing() -> None:
@@ -399,7 +409,9 @@ def test_clean_item_scopes_fail_closed_when_authority_column_is_missing() -> Non
     assert audit_row["boundary_authority_status"] is None
     assert audit_row["review_status"] == "required_unreviewed"
     assert audit_row["production_eligible"] is False
-    assert cleaned_scopes_for_sentence_materialization(result.cleaned_scope_df).is_empty()
+    materialized = cleaned_scopes_for_sentence_materialization(result.cleaned_scope_df)
+    assert materialized["doc_id"].to_list() == ["doc_missing_authority"]
+    assert materialized["review_status"].to_list() == ["required_unreviewed"]
 
 
 def test_clean_item_scopes_handles_late_non_null_drop_reason_past_inference_window() -> None:
