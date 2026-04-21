@@ -8,6 +8,7 @@ import os
 import sys
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -65,7 +66,9 @@ from thesis_pkg.core.sec.lm2011_cleaning import FULL_10K_CLEANING_CONTRACTS
 from thesis_pkg.core.sec.lm2011_dictionary import load_lm2011_dictionary_inputs
 from thesis_pkg.core.sec.lm2011_dictionary import load_lm2011_master_dictionary_words
 from thesis_pkg.core.sec.lm2011_dictionary import load_lm2011_word_list
+from thesis_pkg.core.sec.lm2011_dictionary import EXTENDED_DICTIONARY_FAMILY_NAME
 from thesis_pkg.core.sec.lm2011_dictionary import materialize_lm2011_dictionary_families
+from thesis_pkg.core.sec.lm2011_dictionary import REPLICATION_DICTIONARY_FAMILY_NAME
 from thesis_pkg.core.sec.lm2011_text import (
     DEFAULT_PRODUCTION_FULL_10K_MICROBATCH_SIZE,
     DEFAULT_PRODUCTION_MDA_MICROBATCH_SIZE,
@@ -88,6 +91,7 @@ from thesis_pkg.pipelines.lm2011_pipeline import (
 )
 from thesis_pkg.pipelines import lm2011_pipeline
 from thesis_pkg.pipelines.lm2011_extension import (
+    EXTENSION_DICTIONARY_FAMILY_LM2011,
     EXTENSION_ITEM_SCOPE_IDS,
     EXTENSION_PRIMARY_TEXT_SCOPES,
     Lm2011ExtensionFitComparisonArtifacts,
@@ -333,6 +337,10 @@ EXTENSION_ALLOWED_DICTIONARY_SOURCE_MODES = (
     EXTENSION_DICTIONARY_SOURCE_PREFER_CLEANED,
     EXTENSION_DICTIONARY_SOURCE_RAW,
 )
+EXTENSION_DICTIONARY_FAMILY_COMPARISON_FAMILY_NAMES: tuple[str, ...] = (
+    REPLICATION_DICTIONARY_FAMILY_NAME,
+    EXTENDED_DICTIONARY_FAMILY_NAME,
+)
 EXTENSION_STAGE_ARTIFACT_FILENAMES: dict[str, str] = {
     "extension_dictionary_surface": "lm2011_extension_dictionary_surface.parquet",
     "extension_finbert_surface": "lm2011_extension_finbert_surface.parquet",
@@ -506,6 +514,7 @@ class LM2011ExtensionRunConfig:
     finbert_preprocessing_manifest_path: Path | None = None
     require_cleaned_scope_match: bool = True
     dictionary_source_mode: str = EXTENSION_DICTIONARY_SOURCE_PREFER_CLEANED
+    dictionary_family_label: str = EXTENSION_DICTIONARY_FAMILY_LM2011
     text_scopes: tuple[str, ...] = EXTENSION_PRIMARY_TEXT_SCOPES
     run_id: str = "lm2011_extension"
     note: str = ""
@@ -1023,6 +1032,7 @@ def _build_extension_manifest(
             "note": run_cfg.note,
             "require_cleaned_scope_match": run_cfg.require_cleaned_scope_match,
             "dictionary_source_mode": run_cfg.dictionary_source_mode,
+            "dictionary_family_label": run_cfg.dictionary_family_label,
             "text_scopes": list(_normalized_extension_text_scopes(run_cfg.text_scopes)),
         },
         "resolved_inputs": {
@@ -1108,6 +1118,24 @@ def _write_extension_stage(
 
 def _extension_csv_companion_path(output_dir: Path, stage_name: str) -> Path:
     return output_dir / f"{Path(EXTENSION_STAGE_ARTIFACT_FILENAMES[stage_name]).stem}.csv"
+
+
+def _write_extension_csv_companion(frame: pl.DataFrame, csv_path: Path) -> None:
+    csv_ready = frame
+    for column in ("signal_inputs", "left_signal_inputs", "right_signal_inputs"):
+        if column not in csv_ready.columns:
+            continue
+        csv_ready = csv_ready.with_columns(
+            pl.col(column)
+            .map_elements(
+                lambda values: json.dumps(values.to_list() if hasattr(values, "to_list") else values)
+                if values is not None
+                else None,
+                return_dtype=pl.Utf8,
+            )
+            .alias(column)
+        )
+    csv_ready.write_csv(csv_path)
 
 
 def _scan_year_sharded_parquet_dir(directory: Path, *, label: str) -> pl.LazyFrame:
@@ -1235,6 +1263,7 @@ def _build_extension_dictionary_surface_lf(
                 dictionary_lists=dictionary_inputs.dictionary_lists,
                 harvard_negative_word_list=dictionary_inputs.harvard_negative_word_list,
                 master_dictionary_words=dictionary_inputs.master_dictionary_words,
+                dictionary_family=run_cfg.dictionary_family_label,
             ).filter(pl.col("text_scope").is_in(list(normalized_text_scopes)))
         if run_cfg.require_cleaned_scope_match:
             raise FileNotFoundError(
@@ -1260,6 +1289,7 @@ def _build_extension_dictionary_surface_lf(
         harvard_negative_word_list=dictionary_inputs.harvard_negative_word_list,
         master_dictionary_words=dictionary_inputs.master_dictionary_words,
         text_scope_item_ids=text_scope_item_ids,
+        dictionary_family=run_cfg.dictionary_family_label,
     ).filter(pl.col("text_scope").is_in(list(normalized_text_scopes)))
 
 
@@ -3961,21 +3991,7 @@ def run_lm2011_extension_pipeline(run_cfg: LM2011ExtensionRunConfig) -> int:
             output_dir,
             "extension_fit_skipped_quarters",
         )
-        (
-            fit_artifacts.skipped_quarters_df.with_columns(
-                pl.col("signal_inputs")
-                .map_elements(
-                    lambda values: json.dumps(
-                        values.to_list() if hasattr(values, "to_list") else values
-                    )
-                    if values is not None
-                    else None,
-                    return_dtype=pl.Utf8,
-                )
-                .alias("signal_inputs")
-            )
-            .write_csv(skipped_quarters_csv_path)
-        )
+        _write_extension_csv_companion(fit_artifacts.skipped_quarters_df, skipped_quarters_csv_path)
         _write_extension_stage(
             manifest,
             manifest_path=manifest_path,
@@ -4023,6 +4039,256 @@ def run_lm2011_extension_pipeline(run_cfg: LM2011ExtensionRunConfig) -> int:
             str(manifest["started_at_utc"]),
             completed_at_utc,
         )
+        manifest["failed_stage"] = current_stage_name
+        manifest["error"] = {
+            "stage": current_stage_name,
+            "type": type(exc).__name__,
+            "message": str(exc),
+        }
+        _checkpoint_manifest(manifest, manifest_path)
+        raise
+
+
+def _build_extension_family_comparison_manifest(
+    run_cfg: LM2011ExtensionRunConfig,
+    *,
+    resolved_finbert_inputs: dict[str, Any],
+    generated_dictionary_families: Any,
+) -> dict[str, Any]:
+    manifest = _build_extension_manifest(
+        run_cfg,
+        resolved_finbert_inputs=resolved_finbert_inputs,
+    )
+    manifest["runner_name"] = "lm2011_extension_dictionary_family_comparison_runner"
+    manifest["config"]["dictionary_family_comparison"] = True
+    manifest["config"]["dictionary_families"] = list(EXTENSION_DICTIONARY_FAMILY_COMPARISON_FAMILY_NAMES)
+    manifest["resolved_inputs"]["generated_dictionary_family_root"] = _absolute_path_str(
+        generated_dictionary_families.root_dir
+    )
+    manifest["dictionary_inputs"] = {
+        "source_additional_data_dir": _absolute_path_str(run_cfg.additional_data_dir),
+        "generated_dictionary_family_root": _absolute_path_str(generated_dictionary_families.root_dir),
+        "generated_dictionary_families": generated_dictionary_families.to_manifest_dict()["families"],
+    }
+    manifest["family_runs"] = {}
+    return manifest
+
+
+def _extension_family_run_output_dir(output_dir: Path, family_name: str) -> Path:
+    return output_dir / family_name
+
+
+def _extension_family_output_artifact_path(
+    output_dir: Path,
+    *,
+    family_name: str,
+    stage_name: str,
+) -> Path:
+    return _extension_family_run_output_dir(output_dir, family_name) / EXTENSION_STAGE_ARTIFACT_FILENAMES[stage_name]
+
+
+def _write_stacked_extension_family_stage(
+    manifest: dict[str, Any],
+    *,
+    manifest_path: Path,
+    output_dir: Path,
+    stage_name: str,
+    family_names: Sequence[str],
+    copy_from_family: str | None = None,
+    write_csv_companion: bool = False,
+) -> pl.LazyFrame:
+    if copy_from_family is not None:
+        source_path = _extension_family_output_artifact_path(
+            output_dir,
+            family_name=copy_from_family,
+            stage_name=stage_name,
+        )
+        out_lf = _write_extension_stage(
+            manifest,
+            manifest_path=manifest_path,
+            output_dir=output_dir,
+            stage_name=stage_name,
+            frame=pl.scan_parquet(source_path),
+            warnings=[
+                f"Copied invariant artifact from {copy_from_family} family run for root comparison output."
+            ],
+        )
+    else:
+        stacked_lf = pl.concat(
+            [
+                pl.scan_parquet(
+                    _extension_family_output_artifact_path(
+                        output_dir,
+                        family_name=family_name,
+                        stage_name=stage_name,
+                    )
+                ).with_columns(pl.lit(family_name, dtype=pl.Utf8).alias("dictionary_family_source"))
+                for family_name in family_names
+            ],
+            how="vertical_relaxed",
+        )
+        out_lf = _write_extension_stage(
+            manifest,
+            manifest_path=manifest_path,
+            output_dir=output_dir,
+            stage_name=stage_name,
+            frame=stacked_lf,
+        )
+
+    if write_csv_companion:
+        csv_path = _extension_csv_companion_path(output_dir, stage_name)
+        _write_extension_csv_companion(
+            pl.scan_parquet(_extension_artifact_output_path(output_dir, stage_name)).collect(),
+            csv_path,
+        )
+        stage_payload = manifest["stages"][stage_name]
+        stage_payload["extra_artifacts"] = {
+            **dict(stage_payload.get("extra_artifacts") or {}),
+            "csv": str(csv_path.resolve()),
+        }
+        _checkpoint_manifest(manifest, manifest_path)
+    return out_lf
+
+
+def run_lm2011_extension_dictionary_family_comparison_pipeline(
+    run_cfg: LM2011ExtensionRunConfig,
+) -> int:
+    output_dir = Path(run_cfg.output_dir).resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    resolved_finbert_inputs = _resolve_finbert_extension_inputs(run_cfg)
+    generated_dictionary_families = materialize_lm2011_dictionary_families(run_cfg.additional_data_dir)
+    manifest = _build_extension_family_comparison_manifest(
+        run_cfg,
+        resolved_finbert_inputs=resolved_finbert_inputs,
+        generated_dictionary_families=generated_dictionary_families,
+    )
+    manifest_path = output_dir / EXTENSION_MANIFEST_FILENAME
+    current_stage_name = "initialization"
+    _checkpoint_manifest(manifest, manifest_path)
+
+    try:
+        current_stage_name = "configuration_validation"
+        _validate_extension_comparison_mode(
+            run_cfg,
+            cleaned_item_scopes_dir=resolved_finbert_inputs["cleaned_item_scopes_dir"],
+        )
+
+        family_runs: dict[str, Any] = {}
+        for family_name in EXTENSION_DICTIONARY_FAMILY_COMPARISON_FAMILY_NAMES:
+            current_stage_name = f"family_run_{family_name}"
+            family_definition = getattr(generated_dictionary_families, family_name)
+            family_output_dir = _extension_family_run_output_dir(output_dir, family_name)
+            child_cfg = replace(
+                run_cfg,
+                output_dir=family_output_dir,
+                additional_data_dir=family_definition.directory,
+                dictionary_family_label=family_name,
+                run_id=f"{run_cfg.run_id}_{family_name}",
+                note=(
+                    f"{run_cfg.note} | dictionary_family={family_name}"
+                    if run_cfg.note
+                    else f"dictionary_family={family_name}"
+                ),
+            )
+            run_lm2011_extension_pipeline(child_cfg)
+            child_manifest_path = family_output_dir / EXTENSION_MANIFEST_FILENAME
+            child_manifest = _read_json_payload(child_manifest_path)
+            family_runs[family_name] = {
+                "output_dir": str(family_output_dir.resolve()),
+                "manifest_path": str(child_manifest_path.resolve()),
+                "dictionary_input_dir": str(family_definition.directory.resolve()),
+                "run_id": child_cfg.run_id,
+                "run_status": child_manifest.get("run_status"),
+            }
+            manifest["family_runs"][family_name] = family_runs[family_name]
+            _checkpoint_manifest(manifest, manifest_path)
+
+        current_stage_name = "extension_dictionary_surface"
+        _write_stacked_extension_family_stage(
+            manifest,
+            manifest_path=manifest_path,
+            output_dir=output_dir,
+            stage_name="extension_dictionary_surface",
+            family_names=EXTENSION_DICTIONARY_FAMILY_COMPARISON_FAMILY_NAMES,
+        )
+
+        current_stage_name = "extension_finbert_surface"
+        _write_stacked_extension_family_stage(
+            manifest,
+            manifest_path=manifest_path,
+            output_dir=output_dir,
+            stage_name="extension_finbert_surface",
+            family_names=EXTENSION_DICTIONARY_FAMILY_COMPARISON_FAMILY_NAMES,
+            copy_from_family=REPLICATION_DICTIONARY_FAMILY_NAME,
+        )
+
+        current_stage_name = "extension_control_ladder"
+        _write_stacked_extension_family_stage(
+            manifest,
+            manifest_path=manifest_path,
+            output_dir=output_dir,
+            stage_name="extension_control_ladder",
+            family_names=EXTENSION_DICTIONARY_FAMILY_COMPARISON_FAMILY_NAMES,
+            copy_from_family=REPLICATION_DICTIONARY_FAMILY_NAME,
+        )
+
+        current_stage_name = "extension_specification_grid"
+        _write_stacked_extension_family_stage(
+            manifest,
+            manifest_path=manifest_path,
+            output_dir=output_dir,
+            stage_name="extension_specification_grid",
+            family_names=EXTENSION_DICTIONARY_FAMILY_COMPARISON_FAMILY_NAMES,
+            copy_from_family=REPLICATION_DICTIONARY_FAMILY_NAME,
+        )
+
+        for stage_name in (
+            "extension_analysis_panel",
+            "extension_sample_loss",
+            "extension_fit_quarterly",
+            "extension_fit_difference_quarterly",
+            "extension_fit_summary",
+            "extension_fit_comparisons",
+            "extension_results",
+        ):
+            current_stage_name = stage_name
+            _write_stacked_extension_family_stage(
+                manifest,
+                manifest_path=manifest_path,
+                output_dir=output_dir,
+                stage_name=stage_name,
+                family_names=EXTENSION_DICTIONARY_FAMILY_COMPARISON_FAMILY_NAMES,
+            )
+
+        current_stage_name = "extension_fit_skipped_quarters"
+        _write_stacked_extension_family_stage(
+            manifest,
+            manifest_path=manifest_path,
+            output_dir=output_dir,
+            stage_name="extension_fit_skipped_quarters",
+            family_names=EXTENSION_DICTIONARY_FAMILY_COMPARISON_FAMILY_NAMES,
+            write_csv_companion=True,
+        )
+
+        completed_at_utc = _utc_timestamp()
+        manifest["run_status"] = "completed"
+        manifest["completed_at_utc"] = completed_at_utc
+        manifest["elapsed_seconds"] = _elapsed_seconds(str(manifest["started_at_utc"]), completed_at_utc)
+        manifest["failed_stage"] = None
+        _checkpoint_manifest(manifest, manifest_path)
+        return 0
+    except Exception as exc:
+        _record_extension_stage_failed(
+            manifest,
+            output_dir=output_dir,
+            stage_name=current_stage_name,
+            exc=exc,
+            manifest_path=manifest_path,
+        )
+        completed_at_utc = _utc_timestamp()
+        manifest["run_status"] = "failed"
+        manifest["completed_at_utc"] = completed_at_utc
+        manifest["elapsed_seconds"] = _elapsed_seconds(str(manifest["started_at_utc"]), completed_at_utc)
         manifest["failed_stage"] = current_stage_name
         manifest["error"] = {
             "stage": current_stage_name,

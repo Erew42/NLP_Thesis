@@ -244,7 +244,7 @@ def test_runner_exposes_lm2011_extension_env_flags_and_orders_stage_after_finber
     assert 'LM2011_EXTENSION_REQUIRE_CLEANED_SCOPE_MATCH = _env_bool(' in source
     assert 'LM2011_EXTENSION_FINBERT_ANALYSIS_RUN_DIR = _env_optional_path(' in source
     assert 'LM2011_EXTENSION_FINBERT_PREPROCESS_RUN_DIR = _env_optional_path(' in source
-    assert "run_lm2011_extension_pipeline(extension_cfg)" in source
+    assert "run_lm2011_extension_dictionary_family_comparison_pipeline(extension_cfg)" in source
 
     finbert_marker = "if RUN_FINBERT_PREPROCESS or RUN_FINBERT_ANALYSIS:"
     extension_marker = "if RUN_LM2011_EXTENSION:"

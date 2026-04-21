@@ -674,6 +674,71 @@ def test_extension_pipeline_writes_manifest_and_fully_enumerated_results(tmp_pat
     assert observed_grid == expected_grid
 
 
+def test_extension_dictionary_family_comparison_pipeline_writes_root_and_family_artifacts(
+    tmp_path: Path,
+) -> None:
+    _, _, additional_data_dir, _ = _build_temp_layout(tmp_path)
+    extension_inputs = _build_extension_inputs(tmp_path, additional_data_dir)
+    output_dir = tmp_path / "lm2011_extension_family_compare"
+
+    exit_code = runner.run_lm2011_extension_dictionary_family_comparison_pipeline(
+        runner.LM2011ExtensionRunConfig(
+            output_dir=output_dir,
+            additional_data_dir=additional_data_dir,
+            items_analysis_dir=extension_inputs["items_analysis_dir"],
+            event_panel_path=extension_inputs["event_panel_path"],
+            company_history_path=extension_inputs["company_history_path"],
+            company_description_path=extension_inputs["company_description_path"],
+            ff48_siccodes_path=extension_inputs["ff48_siccodes_path"],
+            finbert_item_features_long_path=extension_inputs["item_features_long_path"],
+            finbert_analysis_run_dir=extension_inputs["finbert_analysis_run_dir"],
+            finbert_preprocessing_run_dir=extension_inputs["finbert_preprocessing_run_dir"],
+            require_cleaned_scope_match=True,
+            run_id="unit_test_extension_family_compare",
+        )
+    )
+
+    assert exit_code == 0
+    manifest_path = output_dir / runner.EXTENSION_MANIFEST_FILENAME
+    results_path = output_dir / runner.EXTENSION_STAGE_ARTIFACT_FILENAMES["extension_results"]
+    sample_loss_path = output_dir / runner.EXTENSION_STAGE_ARTIFACT_FILENAMES["extension_sample_loss"]
+    fit_summary_path = output_dir / runner.EXTENSION_STAGE_ARTIFACT_FILENAMES["extension_fit_summary"]
+    fit_skips_csv_path = output_dir / "lm2011_extension_fit_skipped_quarters.csv"
+
+    for path in (
+        manifest_path,
+        results_path,
+        sample_loss_path,
+        fit_summary_path,
+        fit_skips_csv_path,
+        output_dir / "replication" / runner.EXTENSION_MANIFEST_FILENAME,
+        output_dir / "extended" / runner.EXTENSION_MANIFEST_FILENAME,
+    ):
+        assert path.exists()
+
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["runner_name"] == "lm2011_extension_dictionary_family_comparison_runner"
+    assert manifest["run_status"] == "completed"
+    assert manifest["config"]["dictionary_family_comparison"] is True
+    assert manifest["config"]["dictionary_families"] == ["replication", "extended"]
+    assert set(manifest["family_runs"]) == {"replication", "extended"}
+    assert manifest["family_runs"]["replication"]["run_status"] == "completed"
+    assert manifest["family_runs"]["extended"]["run_status"] == "completed"
+
+    results = pl.read_parquet(results_path)
+    sample_loss = pl.read_parquet(sample_loss_path)
+    fit_summary = pl.read_parquet(fit_summary_path)
+    assert set(results.get_column("dictionary_family_source").unique().to_list()) == {"replication", "extended"}
+    assert set(sample_loss.get_column("dictionary_family_source").unique().to_list()) == {"replication", "extended"}
+    assert set(fit_summary.get_column("dictionary_family_source").unique().to_list()) == {"replication", "extended"}
+    assert set(
+        results.filter(pl.col("specification_name") == "dictionary_only")
+        .get_column("dictionary_family_source")
+        .unique()
+        .to_list()
+    ) == {"replication", "extended"}
+
+
 def test_extension_pipeline_strict_cleaned_scope_match_fails_closed(tmp_path: Path) -> None:
     _, _, additional_data_dir, _ = _build_temp_layout(tmp_path)
     extension_inputs = _build_extension_inputs(tmp_path, additional_data_dir)

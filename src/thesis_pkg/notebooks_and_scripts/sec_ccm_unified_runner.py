@@ -540,7 +540,7 @@ from thesis_pkg.notebooks_and_scripts.lm2011_sample_post_refinitiv_runner import
     MONTHLY_STOCK_CANDIDATES,
     RunnerPaths as LM2011RunnerPaths,
     STAGE_ARTIFACT_FILENAMES as LM2011_STAGE_ARTIFACT_FILENAMES,
-    run_lm2011_extension_pipeline,
+    run_lm2011_extension_dictionary_family_comparison_pipeline,
     run_lm2011_post_refinitiv_pipeline,
 )
 from thesis_pkg.pipelines.refinitiv.doc_ownership import _build_lm2011_doc_ownership_universe_diagnostics
@@ -3283,7 +3283,7 @@ def main() -> None:
                 ),
             }
         )
-        run_lm2011_extension_pipeline(extension_cfg)
+        run_lm2011_extension_dictionary_family_comparison_pipeline(extension_cfg)
         _record_downstream_stage(
             "lm2011_extension",
             _lm2011_extension_stage_paths(LM2011_EXTENSION_OUTPUT_DIR),
