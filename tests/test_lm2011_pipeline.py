@@ -1768,6 +1768,46 @@ def test_write_lm2011_event_screen_surface_parquet_matches_batched_builder(tmp_p
     _assert_frames_equal_with_float_tolerance(eager, streamed, sort_by=["doc_id"])
 
 
+def test_write_lm2011_event_screen_surface_parquet_never_collects_more_than_doc_batch_size(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    inputs = _table_i_market_inputs()
+    observed_doc_batch_sizes: list[int] = []
+    original = lm2011_pipeline._collect_staged_event_doc_batch
+
+    def _capture_staged_docs_batch(
+        staged_docs_lf: pl.LazyFrame,
+        *,
+        batch_start: int,
+        batch_size: int,
+    ) -> pl.DataFrame:
+        docs_batch = original(
+            staged_docs_lf,
+            batch_start=batch_start,
+            batch_size=batch_size,
+        )
+        observed_doc_batch_sizes.append(int(docs_batch.height))
+        return docs_batch
+
+    monkeypatch.setattr(lm2011_pipeline, "_collect_staged_event_doc_batch", _capture_staged_docs_batch)
+
+    output_path = tmp_path / "event_surface_batched_writer.parquet"
+    row_count = write_lm2011_event_screen_surface_parquet(
+        inputs["sample_backbone"].lazy(),
+        inputs["daily"].lazy(),
+        inputs["annual_panel"].lazy(),
+        inputs["ff"].lazy(),
+        inputs["text_features"].lazy(),
+        output_path=output_path,
+        event_window_doc_batch_size=2,
+    )
+
+    assert row_count == inputs["sample_backbone"].height
+    assert observed_doc_batch_sizes
+    assert max(observed_doc_batch_sizes) <= 2
+
+
 def test_write_lm2011_event_screen_surface_parquet_materializes_doc_base_once(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -513,6 +513,19 @@ def _collect_event_doc_batch(docs_df: pl.DataFrame, *, batch_start: int, batch_s
     return docs_df.slice(batch_start, batch_size)
 
 
+def _collect_staged_event_doc_batch(
+    staged_docs_lf: pl.LazyFrame,
+    *,
+    batch_start: int,
+    batch_size: int,
+) -> pl.DataFrame:
+    return (
+        staged_docs_lf.slice(batch_start, batch_size)
+        .collect()
+        .sort("filing_date", "KYPERMNO", "doc_id")
+    )
+
+
 def _prepare_daily_event_source_lf(
     daily_lf: pl.LazyFrame,
 ) -> pl.LazyFrame:
@@ -1056,19 +1069,24 @@ def write_lm2011_event_screen_surface_parquet(
         annual_accounting_panel_lf,
         full_10k_text_features_lf,
     )
-    # Materialize the doc base once here so the heavy upstream joins are not rerun for
-    # every event-window shard.
-    docs_df = docs_base_lf.collect().sort("filing_date", "KYPERMNO", "doc_id")
-    docs_manifest = _build_event_doc_manifest(docs_df)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     resolved_temp_root = temp_root or output_path.parent / f".{output_path.stem}_tmp"
     if resolved_temp_root.exists():
         shutil.rmtree(resolved_temp_root)
     resolved_temp_root.mkdir(parents=True, exist_ok=True)
+    staged_docs_path = resolved_temp_root / "docs_base.parquet"
     shard_dir = resolved_temp_root / "shards"
     shard_dir.mkdir(parents=True, exist_ok=True)
 
     try:
+        # Stage the full sorted doc base once so the heavy upstream joins are reused
+        # across shards without keeping the entire doc surface in memory.
+        docs_base_lf.sort("filing_date", "KYPERMNO", "doc_id").sink_parquet(
+            staged_docs_path,
+            compression=_STREAMING_PARQUET_COMPRESSION,
+        )
+        staged_docs_lf = pl.scan_parquet(staged_docs_path)
+        docs_manifest = _build_event_doc_manifest(staged_docs_lf)
         if docs_manifest.height == 0:
             _empty_event_screen_surface_df().write_parquet(
                 output_path,
@@ -1086,8 +1104,8 @@ def write_lm2011_event_screen_surface_parquet(
         shard_paths: list[Path] = []
 
         for batch_start in range(0, total_docs, batch_size):
-            docs_batch = _collect_event_doc_batch(
-                docs_df,
+            docs_batch = _collect_staged_event_doc_batch(
+                staged_docs_lf,
                 batch_start=batch_start,
                 batch_size=batch_size,
             )
