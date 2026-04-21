@@ -1532,34 +1532,16 @@ def build_lm2011_table_ia_i_results_no_ownership(
     )
 
 
-def build_lm2011_table_ia_ii_results(
-    event_panel_lf: pl.LazyFrame,
-    sec_parsed_lf: pl.LazyFrame,
-    monthly_stock_lf: pl.LazyFrame,
+def build_lm2011_table_ia_ii_results_from_monthly_returns(
+    trading_strategy_monthly_returns_lf: pl.LazyFrame,
     ff_factors_monthly_with_mom_lf: pl.LazyFrame,
-    *,
-    lm_dictionary_lists: Mapping[str, Iterable[str]],
-    harvard_negative_word_list: Iterable[str] | None,
-    master_dictionary_words: Iterable[str],
-    portfolio_weighting: str = "equal",
-    monthly_return_col: str = "MRET",
 ) -> pl.DataFrame:
-    monthly_returns_lf = build_lm2011_trading_strategy_monthly_returns(
-        event_panel_lf,
-        sec_parsed_lf,
-        monthly_stock_lf,
-        lm_dictionary_lists=lm_dictionary_lists,
-        harvard_negative_word_list=harvard_negative_word_list,
-        master_dictionary_words=master_dictionary_words,
-        portfolio_weighting=portfolio_weighting,
-        monthly_return_col=monthly_return_col,
-    )
-    monthly_returns_df = monthly_returns_lf.collect()
+    monthly_returns_df = trading_strategy_monthly_returns_lf.collect()
     if monthly_returns_df.height == 0:
         return _empty_lm2011_table_results_df()
 
     summary_df = build_lm2011_trading_strategy_ff4_summary(
-        monthly_returns_lf,
+        trading_strategy_monthly_returns_lf,
         ff_factors_monthly_with_mom_lf,
     ).collect()
     mean_returns_df = monthly_returns_df.group_by("sort_signal_name").agg(
@@ -1603,6 +1585,34 @@ def build_lm2011_table_ia_ii_results(
     return pl.DataFrame(rows, schema_overrides=_TABLE_RESULT_SCHEMA)
 
 
+def build_lm2011_table_ia_ii_results(
+    event_panel_lf: pl.LazyFrame,
+    sec_parsed_lf: pl.LazyFrame,
+    monthly_stock_lf: pl.LazyFrame,
+    ff_factors_monthly_with_mom_lf: pl.LazyFrame,
+    *,
+    lm_dictionary_lists: Mapping[str, Iterable[str]],
+    harvard_negative_word_list: Iterable[str] | None,
+    master_dictionary_words: Iterable[str],
+    portfolio_weighting: str = "equal",
+    monthly_return_col: str = "MRET",
+) -> pl.DataFrame:
+    monthly_returns_lf = build_lm2011_trading_strategy_monthly_returns(
+        event_panel_lf,
+        sec_parsed_lf,
+        monthly_stock_lf,
+        lm_dictionary_lists=lm_dictionary_lists,
+        harvard_negative_word_list=harvard_negative_word_list,
+        master_dictionary_words=master_dictionary_words,
+        portfolio_weighting=portfolio_weighting,
+        monthly_return_col=monthly_return_col,
+    )
+    return build_lm2011_table_ia_ii_results_from_monthly_returns(
+        monthly_returns_lf,
+        ff_factors_monthly_with_mom_lf,
+    )
+
+
 __all__ = [
     "build_lm2011_return_regression_panel",
     "build_lm2011_sue_regression_panel",
@@ -1615,4 +1625,5 @@ __all__ = [
     "build_lm2011_table_viii_results",
     "build_lm2011_table_ia_i_results",
     "build_lm2011_table_ia_ii_results",
+    "build_lm2011_table_ia_ii_results_from_monthly_returns",
 ]

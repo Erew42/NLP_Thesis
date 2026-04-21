@@ -45,6 +45,12 @@ _STRATEGY_SIGNAL_COLUMNS: tuple[str, ...] = (
     "h4n_inf_prop",
     "h4n_inf_tfidf",
 )
+_TEXT_FEATURE_STRATEGY_SIGNAL_CANDIDATES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("fin_neg_prop", ("fin_neg_prop", "lm_negative_prop")),
+    ("fin_neg_tfidf", ("fin_neg_tfidf", "lm_negative_tfidf")),
+    ("h4n_inf_prop", ("h4n_inf_prop",)),
+    ("h4n_inf_tfidf", ("h4n_inf_tfidf",)),
+)
 _LM2011_TABLE_I_FULL_10K_SECTION_ID = "full_10k_document"
 _LM2011_TABLE_I_FULL_10K_SECTION_LABEL = "Full 10-K Document"
 _LM2011_TABLE_I_FIRM_YEAR_SECTION_ID = "firm_year_sample"
@@ -2057,6 +2063,60 @@ def _compute_long_short_returns(holdings_df: pl.DataFrame, *, portfolio_weightin
     )
 
 
+def _prepare_trading_strategy_doc_universe_df(event_panel_lf: pl.LazyFrame) -> pl.DataFrame:
+    _require_columns(event_panel_lf, ("doc_id", "KYPERMNO", "filing_date"), "event_panel")
+    return (
+        event_panel_lf.select(
+            pl.col("doc_id").cast(pl.Utf8, strict=False),
+            pl.col("KYPERMNO").cast(pl.Int32, strict=False),
+            pl.col("filing_date").cast(pl.Date, strict=False),
+        )
+        .drop_nulls(subset=["doc_id", "KYPERMNO", "filing_date"])
+        .collect()
+        .unique(subset=["doc_id"], keep="first")
+    )
+
+
+def _build_trading_strategy_monthly_returns_from_strategy_docs_df(
+    strategy_docs_df: pl.DataFrame,
+    monthly_stock_lf: pl.LazyFrame,
+    *,
+    portfolio_weighting: str,
+    monthly_return_col: str,
+) -> pl.DataFrame:
+    assignments = _build_strategy_assignment_frame(strategy_docs_df)
+    if assignments.height == 0:
+        return _empty_trading_strategy_monthly_returns_df()
+
+    allowed_permnos = [int(value) for value in assignments.get_column("KYPERMNO").unique().to_list()]
+    monthly_start = _STRATEGY_START_DATE
+    if portfolio_weighting == "lagged_value":
+        monthly_start = _STRATEGY_START_DATE.replace(day=1) - dt.timedelta(days=1)
+    monthly_df = _prepare_monthly_stock_frame(
+        monthly_stock_lf,
+        monthly_return_col=monthly_return_col,
+        portfolio_weighting=portfolio_weighting,
+        allowed_permnos=allowed_permnos,
+        month_start=monthly_start,
+        month_end=_STRATEGY_END_DATE,
+    ).filter(
+        pl.col("portfolio_month").is_between(pl.lit(_STRATEGY_START_DATE), pl.lit(_STRATEGY_END_DATE), closed="both")
+    )
+    monthly_df = monthly_df.with_columns(_strategy_sort_year_expr()).filter(
+        pl.col("sort_year").is_between(_STRATEGY_MIN_SORT_YEAR, _STRATEGY_MAX_SORT_YEAR, closed="both")
+    )
+
+    holdings_df = monthly_df.join(
+        assignments.select("KYPERMNO", "sort_year", "sort_signal_name", "quintile"),
+        on=["KYPERMNO", "sort_year"],
+        how="inner",
+    )
+    long_short_df = _compute_long_short_returns(holdings_df, portfolio_weighting=portfolio_weighting)
+    if long_short_df.height == 0:
+        return _empty_trading_strategy_monthly_returns_df()
+    return long_short_df.sort("portfolio_month", "sort_signal_name")
+
+
 def _ols_coefficients_and_r2(
     df: pl.DataFrame,
     *,
@@ -2127,18 +2187,7 @@ def _build_trading_strategy_monthly_returns_df(
 ) -> pl.DataFrame:
     if portfolio_weighting not in {"equal", "lagged_value"}:
         raise ValueError("portfolio_weighting must be one of {'equal', 'lagged_value'}")
-    _require_columns(event_panel_lf, ("doc_id", "KYPERMNO", "filing_date"), "event_panel")
-
-    docs_df = (
-        event_panel_lf.select(
-            pl.col("doc_id").cast(pl.Utf8, strict=False),
-            pl.col("KYPERMNO").cast(pl.Int32, strict=False),
-            pl.col("filing_date").cast(pl.Date, strict=False),
-        )
-        .drop_nulls(subset=["doc_id", "KYPERMNO", "filing_date"])
-        .collect()
-        .unique(subset=["doc_id"], keep="first")
-    )
+    docs_df = _prepare_trading_strategy_doc_universe_df(event_panel_lf)
     if docs_df.height == 0:
         return _empty_trading_strategy_monthly_returns_df()
 
@@ -2150,37 +2199,12 @@ def _build_trading_strategy_monthly_returns_df(
         cleaning_contract=cleaning_contract,
     ).collect()
     strategy_docs_df = docs_df.join(signal_df, on="doc_id", how="inner")
-    assignments = _build_strategy_assignment_frame(strategy_docs_df)
-    if assignments.height == 0:
-        return _empty_trading_strategy_monthly_returns_df()
-
-    allowed_permnos = [int(value) for value in assignments.get_column("KYPERMNO").unique().to_list()]
-    monthly_start = _STRATEGY_START_DATE
-    if portfolio_weighting == "lagged_value":
-        monthly_start = _STRATEGY_START_DATE.replace(day=1) - dt.timedelta(days=1)
-    monthly_df = _prepare_monthly_stock_frame(
+    return _build_trading_strategy_monthly_returns_from_strategy_docs_df(
+        strategy_docs_df,
         monthly_stock_lf,
-        monthly_return_col=monthly_return_col,
         portfolio_weighting=portfolio_weighting,
-        allowed_permnos=allowed_permnos,
-        month_start=monthly_start,
-        month_end=_STRATEGY_END_DATE,
-    ).filter(
-        pl.col("portfolio_month").is_between(pl.lit(_STRATEGY_START_DATE), pl.lit(_STRATEGY_END_DATE), closed="both")
+        monthly_return_col=monthly_return_col,
     )
-    monthly_df = monthly_df.with_columns(_strategy_sort_year_expr()).filter(
-        pl.col("sort_year").is_between(_STRATEGY_MIN_SORT_YEAR, _STRATEGY_MAX_SORT_YEAR, closed="both")
-    )
-
-    holdings_df = monthly_df.join(
-        assignments.select("KYPERMNO", "sort_year", "sort_signal_name", "quintile"),
-        on=["KYPERMNO", "sort_year"],
-        how="inner",
-    )
-    long_short_df = _compute_long_short_returns(holdings_df, portfolio_weighting=portfolio_weighting)
-    if long_short_df.height == 0:
-        return _empty_trading_strategy_monthly_returns_df()
-    return long_short_df.sort("portfolio_month", "sort_signal_name")
 
 
 def build_lm2011_trading_strategy_monthly_returns(
@@ -2205,6 +2229,46 @@ def build_lm2011_trading_strategy_monthly_returns(
         portfolio_weighting=portfolio_weighting,
         monthly_return_col=monthly_return_col,
         cleaning_contract=cleaning_contract,
+    ).lazy()
+
+
+def build_lm2011_trading_strategy_monthly_returns_from_text_features(
+    event_panel_lf: pl.LazyFrame,
+    full_10k_text_features_lf: pl.LazyFrame,
+    monthly_stock_lf: pl.LazyFrame,
+    *,
+    portfolio_weighting: str = "equal",
+    monthly_return_col: str = "MRET",
+) -> pl.LazyFrame:
+    if portfolio_weighting not in {"equal", "lagged_value"}:
+        raise ValueError("portfolio_weighting must be one of {'equal', 'lagged_value'}")
+    docs_df = _prepare_trading_strategy_doc_universe_df(event_panel_lf)
+    if docs_df.height == 0:
+        return _empty_trading_strategy_monthly_returns_df().lazy()
+
+    _require_columns(full_10k_text_features_lf, ("doc_id",), "full_10k_text_features")
+    text_feature_schema = full_10k_text_features_lf.collect_schema()
+    signal_exprs = [
+        pl.col(_resolve_first_existing(text_feature_schema, candidates, "full_10k_text_features"))
+        .cast(pl.Float64, strict=False)
+        .alias(signal_name)
+        for signal_name, candidates in _TEXT_FEATURE_STRATEGY_SIGNAL_CANDIDATES
+    ]
+    strategy_signal_df = (
+        full_10k_text_features_lf.join(docs_df.lazy().select("doc_id"), on="doc_id", how="semi")
+        .select(
+            pl.col("doc_id").cast(pl.Utf8, strict=False),
+            *signal_exprs,
+        )
+        .collect()
+        .unique(subset=["doc_id"], keep="first")
+    )
+    strategy_docs_df = docs_df.join(strategy_signal_df, on="doc_id", how="inner")
+    return _build_trading_strategy_monthly_returns_from_strategy_docs_df(
+        strategy_docs_df,
+        monthly_stock_lf,
+        portfolio_weighting=portfolio_weighting,
+        monthly_return_col=monthly_return_col,
     ).lazy()
 
 
@@ -2257,5 +2321,6 @@ __all__ = [
     "build_lm2011_sue_panel",
     "write_lm2011_sue_panel_parquet",
     "build_lm2011_trading_strategy_monthly_returns",
+    "build_lm2011_trading_strategy_monthly_returns_from_text_features",
     "build_lm2011_trading_strategy_ff4_summary",
 ]

@@ -12,6 +12,7 @@ from thesis_pkg.pipeline import (
     build_lm2011_sue_regression_panel,
     build_lm2011_table_ia_i_results,
     build_lm2011_table_ia_ii_results,
+    build_lm2011_table_ia_ii_results_from_monthly_returns,
     build_lm2011_table_iv_results,
     build_lm2011_table_v_results,
     build_lm2011_table_vi_results,
@@ -1166,3 +1167,33 @@ def test_build_lm2011_table_ia_ii_results_matches_strategy_artifacts() -> None:
                 rel_tol=0.0,
                 abs_tol=1e-12,
             )
+
+
+def test_build_lm2011_table_ia_ii_results_from_monthly_returns_matches_legacy_wrapper() -> None:
+    event_panel, sec_parsed, monthly_stock, monthly_factors = _build_strategy_inputs()
+    monthly_returns = build_lm2011_trading_strategy_monthly_returns(
+        event_panel.lazy(),
+        sec_parsed.lazy(),
+        monthly_stock.lazy(),
+        lm_dictionary_lists=_lm_dictionary_lists(),
+        harvard_negative_word_list=_harvard_negative_word_list(),
+        master_dictionary_words=_master_dictionary_words(),
+    )
+
+    legacy = build_lm2011_table_ia_ii_results(
+        event_panel.lazy(),
+        sec_parsed.lazy(),
+        monthly_stock.lazy(),
+        monthly_factors.lazy(),
+        lm_dictionary_lists=_lm_dictionary_lists(),
+        harvard_negative_word_list=_harvard_negative_word_list(),
+        master_dictionary_words=_master_dictionary_words(),
+    )
+    from_monthly_returns = build_lm2011_table_ia_ii_results_from_monthly_returns(
+        monthly_returns,
+        monthly_factors.lazy(),
+    )
+
+    assert legacy.sort("signal_name", "coefficient_name").equals(
+        from_monthly_returns.sort("signal_name", "coefficient_name")
+    )

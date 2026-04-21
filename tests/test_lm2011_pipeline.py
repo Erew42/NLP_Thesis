@@ -21,6 +21,7 @@ from thesis_pkg.pipeline import (
     build_lm2011_text_features_mda,
     build_lm2011_trading_strategy_ff4_summary,
     build_lm2011_trading_strategy_monthly_returns,
+    build_lm2011_trading_strategy_monthly_returns_from_text_features,
     tokenize_lm2011_text,
 )
 from thesis_pkg.core.sec.lm2011_text import (
@@ -2593,6 +2594,64 @@ def test_build_lm2011_trading_strategy_monthly_returns_pin_direction_and_support
         merged.filter((pl.col("long_short_return") - pl.col("lagged_long_short_return")).abs() > 1e-12).height
         > 0
     )
+
+
+def test_build_lm2011_trading_strategy_monthly_returns_from_text_features_matches_legacy_builder() -> None:
+    event_panel, sec_parsed, monthly_stock, _ = _build_strategy_inputs()
+    full_10k_text_features = build_lm2011_text_features_full_10k(
+        sec_parsed.lazy(),
+        dictionary_lists=_lm_dictionary_lists(),
+        harvard_negative_word_list=_harvard_negative_word_list(),
+        master_dictionary_words=_master_dictionary_words(),
+        batch_size=2,
+    ).collect()
+
+    legacy_equal = build_lm2011_trading_strategy_monthly_returns(
+        event_panel.lazy(),
+        sec_parsed.lazy(),
+        monthly_stock.lazy(),
+        lm_dictionary_lists=_lm_dictionary_lists(),
+        harvard_negative_word_list=_harvard_negative_word_list(),
+        master_dictionary_words=_master_dictionary_words(),
+    ).collect()
+    from_text_features_equal = build_lm2011_trading_strategy_monthly_returns_from_text_features(
+        event_panel.lazy(),
+        full_10k_text_features.lazy(),
+        monthly_stock.lazy(),
+    ).collect()
+    legacy_lagged_value = build_lm2011_trading_strategy_monthly_returns(
+        event_panel.lazy(),
+        sec_parsed.lazy(),
+        monthly_stock.lazy(),
+        lm_dictionary_lists=_lm_dictionary_lists(),
+        harvard_negative_word_list=_harvard_negative_word_list(),
+        master_dictionary_words=_master_dictionary_words(),
+        portfolio_weighting="lagged_value",
+    ).collect()
+    from_text_features_lagged_value = build_lm2011_trading_strategy_monthly_returns_from_text_features(
+        event_panel.lazy(),
+        full_10k_text_features.lazy(),
+        monthly_stock.lazy(),
+        portfolio_weighting="lagged_value",
+    ).collect()
+
+    _assert_frames_equal_with_float_tolerance(
+        legacy_equal,
+        from_text_features_equal,
+        sort_by=["portfolio_month", "sort_signal_name"],
+    )
+    _assert_frames_equal_with_float_tolerance(
+        legacy_lagged_value,
+        from_text_features_lagged_value,
+        sort_by=["portfolio_month", "sort_signal_name"],
+    )
+    assert set(from_text_features_equal.get_column("sort_signal_name").unique().to_list()) == {
+        "fin_neg_prop",
+        "fin_neg_tfidf",
+        "h4n_inf_prop",
+        "h4n_inf_tfidf",
+    }
+    assert from_text_features_equal.get_column("portfolio_month").unique().sort().to_list() == _strategy_months()
 
 
 def test_build_lm2011_trading_strategy_monthly_returns_use_prior_year_signal_year() -> None:

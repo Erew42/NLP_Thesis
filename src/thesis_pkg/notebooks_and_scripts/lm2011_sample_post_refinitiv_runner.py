@@ -87,6 +87,7 @@ from thesis_pkg.pipelines.lm2011_pipeline import (
     build_lm2011_sue_panel,
     build_lm2011_table_i_sample_creation,
     build_lm2011_trading_strategy_monthly_returns,
+    build_lm2011_trading_strategy_monthly_returns_from_text_features,
     write_lm2011_sue_panel_parquet,
 )
 from thesis_pkg.pipelines import lm2011_pipeline
@@ -122,6 +123,7 @@ from thesis_pkg.pipelines.lm2011_regressions import (
     build_lm2011_return_regression_panel,
     build_lm2011_sue_regression_panel,
     build_lm2011_table_ia_ii_results,
+    build_lm2011_table_ia_ii_results_from_monthly_returns,
 )
 
 
@@ -3220,6 +3222,7 @@ def run_lm2011_post_refinitiv_pipeline(run_cfg: LM2011PostRefinitivRunConfig) ->
         return_regression_panel_full_10k_lf: pl.LazyFrame | None = None
         return_regression_panel_mda_lf: pl.LazyFrame | None = None
         sue_regression_panel_lf: pl.LazyFrame | None = None
+        trading_strategy_monthly_returns_lf: pl.LazyFrame | None = None
         year_merged_lf = (
             _prepare_lm2011_sec_input_lf(pl.scan_parquet(str(paths.year_merged_dir / YEAR_MERGED_GLOB)))
             if _parquet_glob_exists(paths.year_merged_dir, YEAR_MERGED_GLOB)
@@ -4087,24 +4090,29 @@ def run_lm2011_post_refinitiv_pipeline(run_cfg: LM2011PostRefinitivRunConfig) ->
         ):
             pass
         elif (
+            trading_strategy_monthly_returns_lf := _resolve_reusable_canonical_stage_artifact(
+                run_cfg,
+                manifest=manifest,
+                manifest_path=manifest_path,
+                stage_name="trading_strategy_monthly_returns",
+            )
+        ) is not None:
+            pass
+        elif (
             paths.monthly_stock_path is not None
             and paths.monthly_stock_path.exists()
             and event_panel_lf is not None
-            and year_merged_lf is not None
+            and text_features_full_10k_lf is not None
         ):
-            _write_stage(
+            trading_strategy_monthly_returns_lf = _write_stage(
                 manifest,
                 manifest_path=manifest_path,
                 output_dir=paths.output_dir,
                 stage_name="trading_strategy_monthly_returns",
-                frame=build_lm2011_trading_strategy_monthly_returns(
+                frame=build_lm2011_trading_strategy_monthly_returns_from_text_features(
                     event_panel_lf,
-                    year_merged_lf,
+                    text_features_full_10k_lf,
                     pl.scan_parquet(paths.monthly_stock_path),
-                    lm_dictionary_lists=dictionary_lists,
-                    harvard_negative_word_list=harvard_negative_word_list,
-                    master_dictionary_words=master_dictionary_words,
-                    cleaning_contract=paths.full_10k_cleaning_contract,
                 ),
             )
         else:
@@ -4114,7 +4122,15 @@ def run_lm2011_post_refinitiv_pipeline(run_cfg: LM2011PostRefinitivRunConfig) ->
                 manifest_path,
                 stage_name="trading_strategy_monthly_returns",
                 reason=SKIPPED_MISSING_OPTIONAL_INPUT,
-                detail="monthly_stock_path",
+                detail=_describe_missing_paths(
+                    {
+                        "monthly_stock_path": paths.monthly_stock_path,
+                        "event_panel": Path(manifest["artifacts"]["event_panel"]) if "event_panel" in manifest["artifacts"] else None,
+                        "text_features_full_10k": Path(manifest["artifacts"]["text_features_full_10k"])
+                        if "text_features_full_10k" in manifest["artifacts"]
+                        else None,
+                    }
+                ),
             )
 
         current_stage_name = "table_ia_ii_results"
@@ -4130,49 +4146,61 @@ def run_lm2011_post_refinitiv_pipeline(run_cfg: LM2011PostRefinitivRunConfig) ->
             is not None
         ):
             pass
-        elif (
-            paths.monthly_stock_path is not None
-            and paths.monthly_stock_path.exists()
-            and ff_factors_monthly_with_mom_lf is not None
-            and event_panel_lf is not None
-            and year_merged_lf is not None
-        ):
-            _write_stage(
-                manifest,
-                manifest_path=manifest_path,
-                output_dir=paths.output_dir,
-                stage_name="table_ia_ii_results",
-                frame=build_lm2011_table_ia_ii_results(
-                    event_panel_lf,
-                    year_merged_lf,
-                    pl.scan_parquet(paths.monthly_stock_path),
-                    ff_factors_monthly_with_mom_lf,
-                    lm_dictionary_lists=dictionary_lists,
-                    harvard_negative_word_list=harvard_negative_word_list,
-                    master_dictionary_words=master_dictionary_words,
-                ),
-                empty_reason=EMPTY_TABLE_REASON,
-            )
         else:
-            _skip_or_raise_stage(
-                run_cfg,
-                manifest,
-                manifest_path,
-                stage_name="table_ia_ii_results",
-                reason=SKIPPED_MISSING_OPTIONAL_INPUT,
-                detail=_describe_missing_paths(
-                    {
-                        "monthly_stock_path": paths.monthly_stock_path,
-                        "ff_factors_monthly_with_mom_normalized": Path(
-                            manifest["artifacts"]["ff_factors_monthly_with_mom_normalized"]
-                        )
-                        if "ff_factors_monthly_with_mom_normalized" in manifest["artifacts"]
-                        else None,
-                        "event_panel": Path(manifest["artifacts"]["event_panel"]) if "event_panel" in manifest["artifacts"] else None,
-                        "year_merged": paths.year_merged_dir if year_merged_lf is not None else None,
-                    }
-                ),
-            )
+            monthly_returns_for_ia_ii_lf = trading_strategy_monthly_returns_lf
+            if (
+                monthly_returns_for_ia_ii_lf is None
+                and paths.monthly_stock_path is not None
+                and paths.monthly_stock_path.exists()
+                and event_panel_lf is not None
+                and text_features_full_10k_lf is not None
+            ):
+                monthly_returns_for_ia_ii_lf = build_lm2011_trading_strategy_monthly_returns_from_text_features(
+                    event_panel_lf,
+                    text_features_full_10k_lf,
+                    pl.scan_parquet(paths.monthly_stock_path),
+                )
+            if monthly_returns_for_ia_ii_lf is not None and ff_factors_monthly_with_mom_lf is not None:
+                _write_stage(
+                    manifest,
+                    manifest_path=manifest_path,
+                    output_dir=paths.output_dir,
+                    stage_name="table_ia_ii_results",
+                    frame=build_lm2011_table_ia_ii_results_from_monthly_returns(
+                        monthly_returns_for_ia_ii_lf,
+                        ff_factors_monthly_with_mom_lf,
+                    ),
+                    empty_reason=EMPTY_TABLE_REASON,
+                )
+            else:
+                _skip_or_raise_stage(
+                    run_cfg,
+                    manifest,
+                    manifest_path,
+                    stage_name="table_ia_ii_results",
+                    reason=SKIPPED_MISSING_OPTIONAL_INPUT,
+                    detail=_describe_missing_paths(
+                        {
+                            "monthly_stock_path": paths.monthly_stock_path,
+                            "ff_factors_monthly_with_mom_normalized": Path(
+                                manifest["artifacts"]["ff_factors_monthly_with_mom_normalized"]
+                            )
+                            if "ff_factors_monthly_with_mom_normalized" in manifest["artifacts"]
+                            else None,
+                            "event_panel": Path(manifest["artifacts"]["event_panel"])
+                            if "event_panel" in manifest["artifacts"]
+                            else None,
+                            "text_features_full_10k": Path(manifest["artifacts"]["text_features_full_10k"])
+                            if "text_features_full_10k" in manifest["artifacts"]
+                            else None,
+                            "trading_strategy_monthly_returns": Path(
+                                manifest["artifacts"]["trading_strategy_monthly_returns"]
+                            )
+                            if "trading_strategy_monthly_returns" in manifest["artifacts"]
+                            else None,
+                        }
+                    ),
+                )
 
         completed_at_utc = _utc_timestamp()
         manifest["run_status"] = "completed"

@@ -81,6 +81,7 @@ from thesis_pkg.pipelines.lm2011_pipeline import (
     build_lm2011_sue_panel,
     build_lm2011_trading_strategy_ff4_summary,
     build_lm2011_trading_strategy_monthly_returns,
+    build_lm2011_trading_strategy_monthly_returns_from_text_features,
 )
 from thesis_pkg.pipelines.lm2011_regressions import (
     build_lm2011_normalized_difference_panel,
@@ -88,6 +89,7 @@ from thesis_pkg.pipelines.lm2011_regressions import (
     build_lm2011_sue_regression_panel,
     build_lm2011_table_ia_i_results,
     build_lm2011_table_ia_ii_results,
+    build_lm2011_table_ia_ii_results_from_monthly_returns,
     build_lm2011_table_iv_results,
     build_lm2011_table_v_results,
     build_lm2011_table_vi_results,
@@ -190,7 +192,9 @@ __all__ = [
     "build_lm2011_table_viii_results",
     "build_lm2011_table_ia_i_results",
     "build_lm2011_table_ia_ii_results",
+    "build_lm2011_table_ia_ii_results_from_monthly_returns",
     "build_lm2011_trading_strategy_monthly_returns",
+    "build_lm2011_trading_strategy_monthly_returns_from_text_features",
     "build_lm2011_trading_strategy_ff4_summary",
     "build_match_status_doc",
     "build_unmatched_diagnostics_doc",

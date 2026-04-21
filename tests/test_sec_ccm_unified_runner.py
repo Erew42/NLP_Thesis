@@ -1254,6 +1254,80 @@ def test_main_lm2011_contract_env_override_wins(monkeypatch: MonkeyPatch, tmp_pa
     assert lm2011_run_cfg.paths.local_work_root == (paths["root"] / "local_work" / "lm2011_post_refinitiv")
 
 
+def test_main_runs_pre_extension_gc_barrier_before_extension_entrypoint(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    paths = _configure_minimal_main_env(monkeypatch, tmp_path)
+    items_analysis_dir = paths["run_root"] / "items_analysis"
+    items_analysis_dir.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame({"doc_id": ["0000000001:1995000001"]}).write_parquet(items_analysis_dir / "1995.parquet")
+    doc_ownership_dir = paths["run_root"] / "refinitiv_doc_ownership_lm2011"
+    doc_ownership_dir.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame({"doc_id": ["0000000001:1995000001"]}).write_parquet(
+        doc_ownership_dir / "refinitiv_lm2011_doc_ownership.parquet"
+    )
+    doc_analyst_dir = paths["run_root"] / "refinitiv_doc_analyst_lm2011"
+    doc_analyst_dir.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame({"doc_id": ["0000000001:1995000001"]}).write_parquet(
+        doc_analyst_dir / "refinitiv_doc_analyst_selected.parquet"
+    )
+
+    monkeypatch.setenv("SEC_CCM_RUN_LM2011_POST_REFINITIV", "true")
+    monkeypatch.setenv("SEC_CCM_RUN_FINBERT", "false")
+    monkeypatch.setenv("SEC_CCM_RUN_LM2011_EXTENSION", "true")
+
+    events: list[str] = []
+
+    def _lm2011_stub(run_cfg):
+        events.append("lm2011")
+        run_cfg.paths.output_dir.mkdir(parents=True, exist_ok=True)
+        (run_cfg.paths.output_dir / "lm2011_sample_run_manifest.json").write_text("{}", encoding="utf-8")
+        return 0
+
+    def _capture_snapshot(label: str, *, enabled: bool) -> None:
+        if label in {
+            "sec_ccm_unified_runner_after_lm2011",
+            "sec_ccm_unified_runner_before_extension_gc",
+            "sec_ccm_unified_runner_after_pre_extension_gc",
+        }:
+            events.append(f"ram:{label}")
+
+    monkeypatch.setattr(runner, "run_lm2011_post_refinitiv_pipeline", _lm2011_stub)
+    monkeypatch.setattr(
+        runner,
+        "_build_lm2011_extension_run_config",
+        lambda **_: events.append("build_extension_cfg") or SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        runner,
+        "run_lm2011_extension_dictionary_family_comparison_pipeline",
+        lambda _cfg: events.append("extension"),
+    )
+    monkeypatch.setattr(runner, "_print_ram_snapshot", _capture_snapshot)
+    monkeypatch.setattr(runner.gc, "collect", lambda: events.append("gc"))
+
+    runner.main()
+
+    after_lm2011_idx = events.index("ram:sec_ccm_unified_runner_after_lm2011")
+    before_extension_gc_idx = events.index("ram:sec_ccm_unified_runner_before_extension_gc")
+    extension_gc_idx = next(
+        idx for idx, event in enumerate(events) if idx > before_extension_gc_idx and event == "gc"
+    )
+    after_extension_gc_idx = events.index("ram:sec_ccm_unified_runner_after_pre_extension_gc")
+    build_extension_cfg_idx = events.index("build_extension_cfg")
+    extension_idx = events.index("extension")
+
+    assert (
+        after_lm2011_idx
+        < before_extension_gc_idx
+        < extension_gc_idx
+        < after_extension_gc_idx
+        < build_extension_cfg_idx
+        < extension_idx
+    )
+
+
 def test_main_lm2011_defaults_daily_panel_to_ccm_daily_path(
     monkeypatch: MonkeyPatch,
     tmp_path: Path,

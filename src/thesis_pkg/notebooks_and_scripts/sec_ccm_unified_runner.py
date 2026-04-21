@@ -3266,6 +3266,9 @@ def main() -> None:
             raise RuntimeError(
                 "LM2011 extension requires LM2011 post-Refinitiv runner paths, but the LM2011 block did not run."
             )
+        _print_ram_snapshot("sec_ccm_unified_runner_before_extension_gc", enabled=PRINT_RAM_STATS)
+        gc.collect()
+        _print_ram_snapshot("sec_ccm_unified_runner_after_pre_extension_gc", enabled=PRINT_RAM_STATS)
         finbert_analysis_artifacts = (
             finbert_artifacts.analysis_artifacts if finbert_artifacts is not None else None
         )

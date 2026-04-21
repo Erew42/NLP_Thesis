@@ -2041,6 +2041,99 @@ def test_pipeline_reuses_existing_regression_table_artifacts_in_output_dir(
     assert manifest["stages"]["table_ia_ii_results"]["status"] == runner.STAGE_STATUS_REUSED_EXISTING_ARTIFACT
 
 
+def test_pipeline_reuses_trading_strategy_artifact_and_builds_table_ia_ii_from_monthly_returns(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sample_root, upstream_run_root, additional_data_dir, output_dir = _build_temp_layout(tmp_path)
+    _write_valid_text_feature_artifact(
+        output_dir / runner.STAGE_ARTIFACT_FILENAMES["text_features_full_10k"],
+        additional_data_dir=additional_data_dir,
+        stage_name="text_features_full_10k",
+    )
+    _write_text_feature_reuse_manifest(output_dir, additional_data_dir=additional_data_dir)
+    monthly_returns_path = output_dir / runner.STAGE_ARTIFACT_FILENAMES["trading_strategy_monthly_returns"]
+    expected_monthly_returns = pl.DataFrame(
+        {
+            "portfolio_month": [dt.date(2000, 1, 31)],
+            "sort_signal_name": ["fin_neg_prop"],
+            "long_short_return": [0.01],
+        }
+    )
+    _write_parquet(monthly_returns_path, expected_monthly_returns)
+
+    run_cfg = runner.build_lm2011_post_refinitiv_run_config(
+        runner.parse_args(
+            [
+                "--sample-root",
+                str(sample_root),
+                "--upstream-run-root",
+                str(upstream_run_root),
+                "--additional-data-dir",
+                str(additional_data_dir),
+                "--output-dir",
+                str(output_dir),
+            ]
+        ),
+        enabled_stages=(
+            "ff_factors_monthly_with_mom_normalized",
+            "trading_strategy_monthly_returns",
+            "table_ia_ii_results",
+        ),
+    )
+
+    captured: dict[str, pl.DataFrame] = {}
+
+    monkeypatch.setattr(
+        runner,
+        "build_lm2011_trading_strategy_monthly_returns",
+        lambda *_, **__: (_ for _ in ()).throw(
+            AssertionError("legacy raw-text trading-strategy builder should not run")
+        ),
+    )
+    monkeypatch.setattr(
+        runner,
+        "build_lm2011_trading_strategy_monthly_returns_from_text_features",
+        lambda *_, **__: (_ for _ in ()).throw(
+            AssertionError("precomputed trading-strategy helper should not run when artifact reuse succeeds")
+        ),
+    )
+    monkeypatch.setattr(
+        runner,
+        "build_lm2011_table_ia_ii_results",
+        lambda *_, **__: (_ for _ in ()).throw(
+            AssertionError("legacy IA.II wrapper should not run")
+        ),
+    )
+
+    def _capture_table_ia_ii_from_monthly_returns(
+        trading_strategy_monthly_returns_lf: pl.LazyFrame,
+        ff_factors_monthly_with_mom_lf: pl.LazyFrame,
+    ) -> pl.DataFrame:
+        captured["monthly_returns"] = trading_strategy_monthly_returns_lf.collect().sort(
+            "portfolio_month",
+            "sort_signal_name",
+        )
+        captured["monthly_factors"] = ff_factors_monthly_with_mom_lf.collect().sort("month_end")
+        return _empty_quarterly_results_df()
+
+    monkeypatch.setattr(
+        runner,
+        "build_lm2011_table_ia_ii_results_from_monthly_returns",
+        _capture_table_ia_ii_from_monthly_returns,
+    )
+
+    assert runner.run_lm2011_post_refinitiv_pipeline(run_cfg) == 0
+
+    assert captured["monthly_returns"].equals(expected_monthly_returns.sort("portfolio_month", "sort_signal_name"))
+    assert captured["monthly_factors"].height == 2
+
+    manifest = json.loads((output_dir / runner.MANIFEST_FILENAME).read_text(encoding="utf-8"))
+    assert manifest["stages"]["trading_strategy_monthly_returns"]["status"] == runner.STAGE_STATUS_REUSED_EXISTING_ARTIFACT
+    assert manifest["stages"]["table_ia_ii_results"]["status"] == "generated_empty"
+    assert manifest["stages"]["table_ia_ii_results"]["reason"] == runner.EMPTY_TABLE_REASON
+
+
 def test_pipeline_reuses_existing_no_ownership_regression_artifacts_in_output_dir(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2902,7 +2995,7 @@ def test_main_writes_expected_artifacts_and_manifest_for_stubbed_run(
     )
     monkeypatch.setattr(
         runner,
-        "build_lm2011_trading_strategy_monthly_returns",
+        "build_lm2011_trading_strategy_monthly_returns_from_text_features",
         lambda *_, **__: pl.DataFrame(
             {
                 "portfolio_month": [dt.date(2000, 1, 31)],
@@ -2911,7 +3004,11 @@ def test_main_writes_expected_artifacts_and_manifest_for_stubbed_run(
             }
         ).lazy(),
     )
-    monkeypatch.setattr(runner, "build_lm2011_table_ia_ii_results", lambda *_, **__: _empty_quarterly_results_df())
+    monkeypatch.setattr(
+        runner,
+        "build_lm2011_table_ia_ii_results_from_monthly_returns",
+        lambda *_, **__: _empty_quarterly_results_df(),
+    )
     exit_code = runner.main(
         [
             "--sample-root",
@@ -3139,10 +3236,14 @@ def test_runner_builds_event_screen_surface_twice_and_reuses_default_surface(
         "_build_lm2011_table_ia_i_results_no_ownership_bundle",
         lambda *_, **__: empty_quarterly_bundle,
     )
-    monkeypatch.setattr(runner, "build_lm2011_table_ia_ii_results", lambda *_, **__: _empty_quarterly_results_df())
     monkeypatch.setattr(
         runner,
-        "build_lm2011_trading_strategy_monthly_returns",
+        "build_lm2011_table_ia_ii_results_from_monthly_returns",
+        lambda *_, **__: _empty_quarterly_results_df(),
+    )
+    monkeypatch.setattr(
+        runner,
+        "build_lm2011_trading_strategy_monthly_returns_from_text_features",
         lambda *_, **__: pl.DataFrame({"portfolio_month": [dt.date(2000, 1, 31)], "sort_signal_name": ["fin_neg_prop"], "long_short_return": [0.01]}).lazy(),
     )
 
@@ -3248,10 +3349,14 @@ def test_runner_failure_manifest_preserves_completed_stages_before_extended_tabl
         "_build_lm2011_table_ia_i_results_no_ownership_bundle",
         lambda *_, **__: empty_quarterly_bundle,
     )
-    monkeypatch.setattr(runner, "build_lm2011_table_ia_ii_results", lambda *_, **__: _empty_quarterly_results_df())
     monkeypatch.setattr(
         runner,
-        "build_lm2011_trading_strategy_monthly_returns",
+        "build_lm2011_table_ia_ii_results_from_monthly_returns",
+        lambda *_, **__: _empty_quarterly_results_df(),
+    )
+    monkeypatch.setattr(
+        runner,
+        "build_lm2011_trading_strategy_monthly_returns_from_text_features",
         lambda *_, **__: pl.DataFrame({"portfolio_month": [dt.date(2000, 1, 31)], "sort_signal_name": ["fin_neg_prop"], "long_short_return": [0.01]}).lazy(),
     )
 
