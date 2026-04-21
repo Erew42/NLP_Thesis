@@ -94,6 +94,8 @@ from thesis_pkg.pipelines.lm2011_extension import (
     EXTENSION_DICTIONARY_FAMILY_LM2011,
     EXTENSION_ITEM_SCOPE_IDS,
     EXTENSION_PRIMARY_TEXT_SCOPES,
+    EXTENSION_SAMPLE_END,
+    EXTENSION_SAMPLE_START,
     Lm2011ExtensionFitComparisonArtifacts,
     build_lm2011_extension_analysis_panel,
     build_lm2011_extension_control_ladder,
@@ -355,6 +357,12 @@ EXTENSION_STAGE_ARTIFACT_FILENAMES: dict[str, str] = {
     "extension_fit_skipped_quarters": "lm2011_extension_fit_skipped_quarters.parquet",
     "extension_results": "lm2011_extension_results.parquet",
 }
+EXTENSION_SHARED_PREREQ_FILENAMES: dict[str, str] = {
+    "sample_backbone": "lm2011_extension_sample_backbone.parquet",
+    "full_10k_token_counts": "lm2011_extension_full_10k_token_counts.parquet",
+    "event_screen_surface": "lm2011_extension_event_screen_surface.parquet",
+    "event_panel": "lm2011_extension_event_panel.parquet",
+}
 
 
 @dataclass(frozen=True)
@@ -502,10 +510,28 @@ class LM2011ExtensionRunConfig:
     output_dir: Path
     additional_data_dir: Path
     items_analysis_dir: Path
-    event_panel_path: Path
     company_history_path: Path
     company_description_path: Path
     ff48_siccodes_path: Path
+    event_panel_path: Path | None = None
+    year_merged_dir: Path | None = None
+    matched_clean_path: Path | None = None
+    filingdates_path: Path | None = None
+    daily_panel_path: Path | None = None
+    doc_ownership_path: Path | None = None
+    annual_balance_sheet_path: Path | None = None
+    annual_income_statement_path: Path | None = None
+    annual_period_descriptor_path: Path | None = None
+    annual_fiscal_market_path: Path | None = None
+    ff_daily_csv_path: Path | None = None
+    local_work_root: Path | None = None
+    full_10k_cleaning_contract: str | None = None
+    full_10k_text_feature_batch_size: int | None = None
+    event_window_doc_batch_size: int | None = None
+    recompute_text_features_full_10k: bool = False
+    recompute_text_features_mda: bool = False
+    recompute_event_screen_surface: bool = False
+    recompute_event_panel: bool = False
     finbert_item_features_long_path: Path | None = None
     finbert_analysis_run_dir: Path | None = None
     finbert_analysis_manifest_path: Path | None = None
@@ -527,6 +553,58 @@ class LM2011ExtensionRunConfig:
             )
         if not self.text_scopes:
             raise ValueError("LM2011 extension text_scopes must be non-empty.")
+        if self.event_panel_path is None and not any(
+            value is not None
+            for value in (
+                self.year_merged_dir,
+                self.matched_clean_path,
+                self.filingdates_path,
+                self.daily_panel_path,
+                self.doc_ownership_path,
+                self.annual_balance_sheet_path,
+                self.annual_income_statement_path,
+                self.annual_period_descriptor_path,
+                self.annual_fiscal_market_path,
+                self.ff_daily_csv_path,
+            )
+        ):
+            raise ValueError(
+                "LM2011 extension requires either event_panel_path or the raw shared-prereq "
+                "inputs needed to rebuild the extension event panel."
+            )
+        if self.full_10k_cleaning_contract is not None and (
+            self.full_10k_cleaning_contract not in FULL_10K_CLEANING_CONTRACTS
+        ):
+            raise ValueError(
+                "Unknown LM2011 extension full_10k_cleaning_contract: "
+                f"{self.full_10k_cleaning_contract!r}"
+            )
+        if self.full_10k_text_feature_batch_size is not None and self.full_10k_text_feature_batch_size < 1:
+            raise ValueError("LM2011 extension full_10k_text_feature_batch_size must be >= 1.")
+        if self.event_window_doc_batch_size is not None and self.event_window_doc_batch_size < 1:
+            raise ValueError("LM2011 extension event_window_doc_batch_size must be >= 1.")
+
+
+@dataclass(frozen=True)
+class _ExtensionSharedPrereqArtifacts:
+    sample_backbone_path: Path
+    full_10k_token_counts_path: Path
+    event_screen_surface_path: Path
+    event_panel_path: Path
+    row_counts: dict[str, int]
+
+
+def _extension_shared_prereq_recompute_enabled(
+    run_cfg: LM2011ExtensionRunConfig,
+    artifact_name: str,
+) -> bool:
+    if artifact_name == "full_10k_token_counts":
+        return run_cfg.recompute_text_features_full_10k
+    if artifact_name == "event_screen_surface":
+        return run_cfg.recompute_event_screen_surface
+    if artifact_name == "event_panel":
+        return run_cfg.recompute_event_panel
+    return False
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -1009,6 +1087,269 @@ def _resolve_finbert_extension_inputs(
     }
 
 
+def _extension_shared_prereq_output_path(output_dir: Path, artifact_name: str) -> Path:
+    return output_dir / EXTENSION_SHARED_PREREQ_FILENAMES[artifact_name]
+
+
+def _extension_shared_prereq_paths(output_dir: Path) -> dict[str, Path]:
+    return {
+        name: _extension_shared_prereq_output_path(output_dir, name)
+        for name in EXTENSION_SHARED_PREREQ_FILENAMES
+    }
+
+
+def _extension_shared_prereq_row_counts(paths: Mapping[str, Path]) -> dict[str, int]:
+    return {
+        name: int(pl.scan_parquet(path).select(pl.len()).collect().item())
+        for name, path in paths.items()
+    }
+
+
+def _resolve_extension_shared_prereq_inputs(
+    run_cfg: LM2011ExtensionRunConfig,
+    *,
+    output_dir: Path,
+) -> dict[str, Any] | None:
+    path_values: dict[str, Path | None] = {
+        "year_merged_dir": run_cfg.year_merged_dir,
+        "matched_clean_path": run_cfg.matched_clean_path,
+        "filingdates_path": run_cfg.filingdates_path,
+        "daily_panel_path": run_cfg.daily_panel_path,
+        "doc_ownership_path": run_cfg.doc_ownership_path,
+        "annual_balance_sheet_path": run_cfg.annual_balance_sheet_path,
+        "annual_income_statement_path": run_cfg.annual_income_statement_path,
+        "annual_period_descriptor_path": run_cfg.annual_period_descriptor_path,
+        "annual_fiscal_market_path": run_cfg.annual_fiscal_market_path,
+        "ff_daily_csv_path": run_cfg.ff_daily_csv_path,
+    }
+    provided_names = [name for name, value in path_values.items() if value is not None]
+    if not provided_names:
+        return None
+    missing_names = [name for name, value in path_values.items() if value is None]
+    if missing_names:
+        raise ValueError(
+            "LM2011 extension shared prereq build requires a complete raw input set when enabled. "
+            f"Missing: {sorted(missing_names)}"
+        )
+
+    resolved_paths = {name: Path(value).resolve() for name, value in path_values.items() if value is not None}
+    missing_fs_inputs = [
+        "year_merged_dir"
+        if not _parquet_glob_exists(resolved_paths["year_merged_dir"], YEAR_MERGED_GLOB)
+        else None,
+        *[
+            name
+            for name in (
+                "matched_clean_path",
+                "filingdates_path",
+                "daily_panel_path",
+                "doc_ownership_path",
+                "annual_balance_sheet_path",
+                "annual_income_statement_path",
+                "annual_period_descriptor_path",
+                "annual_fiscal_market_path",
+                "ff_daily_csv_path",
+            )
+            if not resolved_paths[name].exists()
+        ],
+    ]
+    missing_fs_inputs = [name for name in missing_fs_inputs if name is not None]
+    if missing_fs_inputs:
+        raise FileNotFoundError(
+            "LM2011 extension shared prereq build is missing required filesystem inputs: "
+            f"{sorted(missing_fs_inputs)}"
+        )
+
+    local_work_root = (
+        Path(run_cfg.local_work_root).resolve()
+        if run_cfg.local_work_root is not None
+        else (output_dir / ".extension_shared_prereqs_work").resolve()
+    )
+    return {
+        **resolved_paths,
+        "local_work_root": local_work_root,
+        "full_10k_cleaning_contract": (
+            run_cfg.full_10k_cleaning_contract or DEFAULT_LM2011_FULL_10K_CLEANING_CONTRACT
+        ),
+        "full_10k_text_feature_batch_size": (
+            run_cfg.full_10k_text_feature_batch_size or DEFAULT_LM2011_FULL_10K_TEXT_FEATURE_BATCH_SIZE
+        ),
+        "event_window_doc_batch_size": (
+            run_cfg.event_window_doc_batch_size or DEFAULT_LM2011_EVENT_WINDOW_DOC_BATCH_SIZE
+        ),
+    }
+
+
+def _build_or_reuse_extension_shared_prereqs(
+    run_cfg: LM2011ExtensionRunConfig,
+    *,
+    output_dir: Path,
+    dictionary_inputs,
+) -> _ExtensionSharedPrereqArtifacts | None:
+    resolved_inputs = _resolve_extension_shared_prereq_inputs(run_cfg, output_dir=output_dir)
+    if resolved_inputs is None:
+        return None
+
+    artifact_paths = _extension_shared_prereq_paths(output_dir)
+    rebuild_full_10k_token_counts = _extension_shared_prereq_recompute_enabled(
+        run_cfg,
+        "full_10k_token_counts",
+    ) or not artifact_paths["full_10k_token_counts"].exists()
+    rebuild_event_screen_surface = _extension_shared_prereq_recompute_enabled(
+        run_cfg,
+        "event_screen_surface",
+    ) or not artifact_paths["event_screen_surface"].exists()
+    rebuild_event_panel = _extension_shared_prereq_recompute_enabled(
+        run_cfg,
+        "event_panel",
+    ) or not artifact_paths["event_panel"].exists()
+    rebuild_sample_backbone = (
+        not artifact_paths["sample_backbone"].exists()
+        or rebuild_full_10k_token_counts
+        or rebuild_event_screen_surface
+        or rebuild_event_panel
+    )
+    if not any(
+        (
+            rebuild_sample_backbone,
+            rebuild_full_10k_token_counts,
+            rebuild_event_screen_surface,
+            rebuild_event_panel,
+        )
+    ):
+        return _ExtensionSharedPrereqArtifacts(
+            sample_backbone_path=artifact_paths["sample_backbone"],
+            full_10k_token_counts_path=artifact_paths["full_10k_token_counts"],
+            event_screen_surface_path=artifact_paths["event_screen_surface"],
+            event_panel_path=artifact_paths["event_panel"],
+            row_counts=_extension_shared_prereq_row_counts(artifact_paths),
+        )
+
+    local_work_root = resolved_inputs["local_work_root"]
+    local_work_root.mkdir(parents=True, exist_ok=True)
+
+    year_merged_lf: pl.LazyFrame | None = None
+    if rebuild_sample_backbone or rebuild_full_10k_token_counts:
+        year_merged_glob = str(Path(resolved_inputs["year_merged_dir"]) / YEAR_MERGED_GLOB)
+        year_merged_backbone_lf = _prepare_lm2011_sec_backbone_input_lf(pl.scan_parquet(year_merged_glob))
+        year_merged_lf = _prepare_lm2011_sec_input_lf(pl.scan_parquet(year_merged_glob))
+        matched_clean_lf = pl.scan_parquet(resolved_inputs["matched_clean_path"])
+        filingdates_lf = pl.scan_parquet(resolved_inputs["filingdates_path"])
+
+    if rebuild_sample_backbone:
+        sample_backbone_lf = build_lm2011_sample_backbone(
+            year_merged_backbone_lf,
+            matched_clean_lf,
+            ccm_filingdates_lf=filingdates_lf,
+            sample_start=EXTENSION_SAMPLE_START,
+            sample_end=EXTENSION_SAMPLE_END,
+        )
+        artifact_paths["sample_backbone"].unlink(missing_ok=True)
+        _write_frame_artifact(sample_backbone_lf, artifact_paths["sample_backbone"])
+    sample_backbone_lf = pl.scan_parquet(artifact_paths["sample_backbone"])
+
+    if rebuild_full_10k_token_counts:
+        if year_merged_lf is None:
+            raise RuntimeError("extension shared full-10-K token counts require year_merged input.")
+        filtered_year_merged_lf = _filter_to_sample_doc_ids_lf(year_merged_lf, sample_backbone_lf)
+        temp_full_10k_features_path = local_work_root / "lm2011_extension_full_10k_features_tmp.parquet"
+        temp_full_10k_features_path.unlink(missing_ok=True)
+        write_lm2011_text_features_full_10k_parquet(
+            filtered_year_merged_lf,
+            output_path=temp_full_10k_features_path,
+            dictionary_lists=dictionary_inputs.dictionary_lists,
+            harvard_negative_word_list=dictionary_inputs.harvard_negative_word_list,
+            master_dictionary_words=dictionary_inputs.master_dictionary_words,
+            cleaning_contract=resolved_inputs["full_10k_cleaning_contract"],
+            batch_size=resolved_inputs["full_10k_text_feature_batch_size"],
+            temp_root=local_work_root / "lm2011_extension_full_10k_features_tmp",
+        )
+        token_counts_lf = pl.scan_parquet(temp_full_10k_features_path).select(
+            pl.col("doc_id").cast(pl.Utf8, strict=False),
+            pl.col("total_token_count_full_10k").cast(pl.Int32, strict=False).alias("total_token_count_full_10k"),
+        )
+        artifact_paths["full_10k_token_counts"].unlink(missing_ok=True)
+        _write_frame_artifact(token_counts_lf, artifact_paths["full_10k_token_counts"])
+        temp_full_10k_features_path.unlink(missing_ok=True)
+
+    annual_accounting_panel_lf: pl.LazyFrame | None = None
+    ff_factors_daily_lf: pl.LazyFrame | None = None
+    if rebuild_event_screen_surface or rebuild_event_panel:
+        annual_balance_sheet_lf, annual_income_statement_lf, annual_period_descriptor_lf, annual_fiscal_market_lf = (
+            _prepare_annual_accounting_inputs(
+                resolved_inputs["annual_balance_sheet_path"],
+                resolved_inputs["annual_income_statement_path"],
+                resolved_inputs["annual_period_descriptor_path"],
+                resolved_inputs["annual_fiscal_market_path"],
+            )
+        )
+        annual_accounting_panel_lf = build_annual_accounting_panel(
+            annual_balance_sheet_lf,
+            annual_income_statement_lf,
+            annual_period_descriptor_lf,
+            annual_fiscal_market_lf=annual_fiscal_market_lf,
+        )
+        ff_factors_daily_lf = _load_ff_factors_daily_lf(resolved_inputs["ff_daily_csv_path"])
+
+    if rebuild_event_screen_surface:
+        artifact_paths["event_screen_surface"].unlink(missing_ok=True)
+        lm2011_pipeline.write_lm2011_event_screen_surface_parquet(
+            sample_backbone_lf,
+            pl.scan_parquet(resolved_inputs["daily_panel_path"]),
+            annual_accounting_panel_lf,
+            ff_factors_daily_lf,
+            pl.scan_parquet(artifact_paths["full_10k_token_counts"]),
+            output_path=artifact_paths["event_screen_surface"],
+            event_window_doc_batch_size=resolved_inputs["event_window_doc_batch_size"],
+            temp_root=local_work_root / "lm2011_extension_event_screen_surface",
+        )
+
+    if rebuild_event_panel:
+        event_panel_lf = build_lm2011_event_panel(
+            sample_backbone_lf=sample_backbone_lf,
+            daily_lf=pl.scan_parquet(resolved_inputs["daily_panel_path"]),
+            annual_accounting_panel_lf=annual_accounting_panel_lf,
+            ff_factors_daily_lf=ff_factors_daily_lf,
+            ownership_lf=pl.scan_parquet(resolved_inputs["doc_ownership_path"]),
+            full_10k_text_features_lf=pl.scan_parquet(artifact_paths["full_10k_token_counts"]),
+            event_window_doc_batch_size=resolved_inputs["event_window_doc_batch_size"],
+            _precomputed_event_screen_surface_lf=pl.scan_parquet(artifact_paths["event_screen_surface"]),
+        )
+        artifact_paths["event_panel"].unlink(missing_ok=True)
+        _write_frame_artifact(event_panel_lf, artifact_paths["event_panel"])
+
+    return _ExtensionSharedPrereqArtifacts(
+        sample_backbone_path=artifact_paths["sample_backbone"],
+        full_10k_token_counts_path=artifact_paths["full_10k_token_counts"],
+        event_screen_surface_path=artifact_paths["event_screen_surface"],
+        event_panel_path=artifact_paths["event_panel"],
+        row_counts=_extension_shared_prereq_row_counts(artifact_paths),
+    )
+
+
+def _record_extension_shared_prereqs(
+    manifest: dict[str, Any],
+    *,
+    shared_prereqs: _ExtensionSharedPrereqArtifacts | None,
+    effective_event_panel_path: Path,
+    manifest_path: Path | None = None,
+) -> None:
+    manifest["resolved_inputs"]["effective_event_panel_path"] = _absolute_path_str(effective_event_panel_path)
+    if shared_prereqs is None:
+        manifest["shared_prereq_artifacts"] = {}
+        manifest["shared_prereq_row_counts"] = {}
+    else:
+        manifest["shared_prereq_artifacts"] = {
+            "sample_backbone": _absolute_path_str(shared_prereqs.sample_backbone_path),
+            "full_10k_token_counts": _absolute_path_str(shared_prereqs.full_10k_token_counts_path),
+            "event_screen_surface": _absolute_path_str(shared_prereqs.event_screen_surface_path),
+            "event_panel": _absolute_path_str(shared_prereqs.event_panel_path),
+        }
+        manifest["shared_prereq_row_counts"] = dict(shared_prereqs.row_counts)
+    if manifest_path is not None:
+        _checkpoint_manifest(manifest, manifest_path)
+
+
 def _build_extension_manifest(
     run_cfg: LM2011ExtensionRunConfig,
     *,
@@ -1034,13 +1375,32 @@ def _build_extension_manifest(
             "dictionary_source_mode": run_cfg.dictionary_source_mode,
             "dictionary_family_label": run_cfg.dictionary_family_label,
             "text_scopes": list(_normalized_extension_text_scopes(run_cfg.text_scopes)),
+            "full_10k_cleaning_contract": run_cfg.full_10k_cleaning_contract,
+            "full_10k_text_feature_batch_size": run_cfg.full_10k_text_feature_batch_size,
+            "event_window_doc_batch_size": run_cfg.event_window_doc_batch_size,
+            "recompute_text_features_full_10k": run_cfg.recompute_text_features_full_10k,
+            "recompute_text_features_mda": run_cfg.recompute_text_features_mda,
+            "recompute_event_screen_surface": run_cfg.recompute_event_screen_surface,
+            "recompute_event_panel": run_cfg.recompute_event_panel,
         },
         "resolved_inputs": {
             "items_analysis_dir": _absolute_path_str(run_cfg.items_analysis_dir),
             "event_panel_path": _absolute_path_str(run_cfg.event_panel_path),
+            "effective_event_panel_path": None,
             "company_history_path": _absolute_path_str(run_cfg.company_history_path),
             "company_description_path": _absolute_path_str(run_cfg.company_description_path),
             "ff48_siccodes_path": _absolute_path_str(run_cfg.ff48_siccodes_path),
+            "year_merged_dir": _absolute_path_str(run_cfg.year_merged_dir),
+            "matched_clean_path": _absolute_path_str(run_cfg.matched_clean_path),
+            "filingdates_path": _absolute_path_str(run_cfg.filingdates_path),
+            "daily_panel_path": _absolute_path_str(run_cfg.daily_panel_path),
+            "doc_ownership_path": _absolute_path_str(run_cfg.doc_ownership_path),
+            "annual_balance_sheet_path": _absolute_path_str(run_cfg.annual_balance_sheet_path),
+            "annual_income_statement_path": _absolute_path_str(run_cfg.annual_income_statement_path),
+            "annual_period_descriptor_path": _absolute_path_str(run_cfg.annual_period_descriptor_path),
+            "annual_fiscal_market_path": _absolute_path_str(run_cfg.annual_fiscal_market_path),
+            "ff_daily_csv_path": _absolute_path_str(run_cfg.ff_daily_csv_path),
+            "local_work_root": _absolute_path_str(run_cfg.local_work_root),
             "finbert_analysis_run_dir": _absolute_path_str(resolved_finbert_inputs["analysis_run_dir"]),
             "finbert_analysis_manifest_path": _absolute_path_str(
                 resolved_finbert_inputs["analysis_manifest_path"]
@@ -1061,6 +1421,8 @@ def _build_extension_manifest(
         "artifacts": {},
         "row_counts": {},
         "stages": {},
+        "shared_prereq_artifacts": {},
+        "shared_prereq_row_counts": {},
         "dictionary_inputs": {},
     }
 
@@ -3865,8 +4227,29 @@ def run_lm2011_extension_pipeline(run_cfg: LM2011ExtensionRunConfig) -> int:
 
         dictionary_inputs = load_lm2011_dictionary_inputs(run_cfg.additional_data_dir)
         manifest["dictionary_inputs"] = dictionary_inputs.to_manifest_dict()
+        current_stage_name = "shared_prereqs"
+        shared_prereqs = _build_or_reuse_extension_shared_prereqs(
+            run_cfg,
+            output_dir=output_dir,
+            dictionary_inputs=dictionary_inputs,
+        )
+        if shared_prereqs is not None:
+            effective_event_panel_path = shared_prereqs.event_panel_path
+        elif run_cfg.event_panel_path is not None:
+            effective_event_panel_path = Path(run_cfg.event_panel_path).resolve()
+        else:
+            raise ValueError(
+                "LM2011 extension requires either event_panel_path or raw shared-prereq "
+                "inputs that can rebuild the extension event panel."
+            )
+        _record_extension_shared_prereqs(
+            manifest,
+            shared_prereqs=shared_prereqs,
+            effective_event_panel_path=effective_event_panel_path,
+            manifest_path=manifest_path,
+        )
 
-        event_panel_lf = pl.scan_parquet(run_cfg.event_panel_path)
+        event_panel_lf = pl.scan_parquet(effective_event_panel_path)
         event_doc_ids_lf = event_panel_lf.select(
             pl.col("doc_id").cast(pl.Utf8, strict=False)
         ).unique()
@@ -4172,6 +4555,28 @@ def run_lm2011_extension_dictionary_family_comparison_pipeline(
             run_cfg,
             cleaned_item_scopes_dir=resolved_finbert_inputs["cleaned_item_scopes_dir"],
         )
+        current_stage_name = "shared_prereqs"
+        dictionary_inputs = load_lm2011_dictionary_inputs(run_cfg.additional_data_dir)
+        shared_prereqs = _build_or_reuse_extension_shared_prereqs(
+            run_cfg,
+            output_dir=output_dir,
+            dictionary_inputs=dictionary_inputs,
+        )
+        if shared_prereqs is not None:
+            effective_event_panel_path = shared_prereqs.event_panel_path
+        elif run_cfg.event_panel_path is not None:
+            effective_event_panel_path = Path(run_cfg.event_panel_path).resolve()
+        else:
+            raise ValueError(
+                "LM2011 extension requires either event_panel_path or raw shared-prereq "
+                "inputs that can rebuild the extension event panel."
+            )
+        _record_extension_shared_prereqs(
+            manifest,
+            shared_prereqs=shared_prereqs,
+            effective_event_panel_path=effective_event_panel_path,
+            manifest_path=manifest_path,
+        )
 
         family_runs: dict[str, Any] = {}
         for family_name in EXTENSION_DICTIONARY_FAMILY_COMPARISON_FAMILY_NAMES:
@@ -4182,6 +4587,21 @@ def run_lm2011_extension_dictionary_family_comparison_pipeline(
                 run_cfg,
                 output_dir=family_output_dir,
                 additional_data_dir=family_definition.directory,
+                event_panel_path=effective_event_panel_path,
+                year_merged_dir=None,
+                matched_clean_path=None,
+                filingdates_path=None,
+                daily_panel_path=None,
+                doc_ownership_path=None,
+                annual_balance_sheet_path=None,
+                annual_income_statement_path=None,
+                annual_period_descriptor_path=None,
+                annual_fiscal_market_path=None,
+                ff_daily_csv_path=None,
+                local_work_root=None,
+                full_10k_cleaning_contract=None,
+                full_10k_text_feature_batch_size=None,
+                event_window_doc_batch_size=None,
                 dictionary_family_label=family_name,
                 run_id=f"{run_cfg.run_id}_{family_name}",
                 note=(

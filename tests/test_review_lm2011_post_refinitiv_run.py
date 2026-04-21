@@ -116,6 +116,71 @@ def _trading_returns_df() -> pl.DataFrame:
     )
 
 
+def _return_regression_panel_full_10k_df() -> pl.DataFrame:
+    rows: list[dict[str, object]] = []
+    for idx in range(10):
+        rows.append(
+            {
+                "doc_id": f"doc-{idx:02d}",
+                "filing_period_excess_return": -0.05 + (idx * 0.01),
+                "size_event": 1000.0 + (idx * 50.0),
+                "bm_event": 0.4 + (idx * 0.02),
+                "share_turnover": 0.8 + (idx * 0.1),
+                "pre_ffalpha": -0.002 + (idx * 0.0004),
+                "institutional_ownership": None if idx >= 7 else 0.20 + (idx * 0.04),
+                "nasdaq_dummy": idx % 2,
+                "h4n_inf_prop": 0.020 + (idx * 0.002),
+                "lm_negative_prop": 0.010 + (idx * 0.001),
+                "lm_positive_prop": 0.005 + (idx * 0.0004),
+                "lm_uncertainty_prop": 0.008 + (idx * 0.0005),
+                "lm_litigious_prop": 0.004 + (idx * 0.0003),
+                "lm_modal_strong_prop": 0.001 + (idx * 0.0001),
+                "lm_modal_weak_prop": 0.002 + (idx * 0.0002),
+            }
+        )
+    return pl.DataFrame(rows)
+
+
+def _return_regression_panel_mda_df() -> pl.DataFrame:
+    rows: list[dict[str, object]] = []
+    for idx in range(10):
+        rows.append(
+            {
+                "doc_id": f"doc-{idx:02d}",
+                "filing_period_excess_return": -0.045 + (idx * 0.009),
+                "size_event": 900.0 + (idx * 45.0),
+                "bm_event": 0.35 + (idx * 0.018),
+                "share_turnover": 0.7 + (idx * 0.09),
+                "pre_ffalpha": -0.0018 + (idx * 0.00035),
+                "institutional_ownership": None if idx >= 7 else 0.18 + (idx * 0.035),
+                "nasdaq_dummy": (idx + 1) % 2,
+                "h4n_inf_prop": 0.025 + (idx * 0.0025),
+                "lm_negative_prop": 0.012 + (idx * 0.0012),
+                "lm_positive_prop": 0.006 + (idx * 0.0004),
+                "lm_uncertainty_prop": 0.009 + (idx * 0.0006),
+                "lm_litigious_prop": 0.0045 + (idx * 0.0003),
+                "lm_modal_strong_prop": 0.0012 + (idx * 0.0001),
+                "lm_modal_weak_prop": 0.0022 + (idx * 0.0002),
+                "total_token_count_mda": 400 if idx < 8 else 150,
+            }
+        )
+    return pl.DataFrame(rows)
+
+
+def _sue_panel_df() -> pl.DataFrame:
+    rows: list[dict[str, object]] = []
+    for idx in range(7):
+        rows.append(
+            {
+                "doc_id": f"doc-{idx:02d}",
+                "sue": -0.001 + (idx * 0.0004),
+                "analyst_dispersion": 0.0005 + (idx * 0.0001),
+                "analyst_revisions": -0.0007 + (idx * 0.00015),
+            }
+        )
+    return pl.DataFrame(rows)
+
+
 def _extension_results_df() -> pl.DataFrame:
     return pl.DataFrame(
         {
@@ -181,6 +246,9 @@ def _build_core_run(tmp_path: Path) -> Path:
         run_dir / "lm2011_table_iv_results_no_ownership.parquet",
         _quarterly_results_no_ownership_df(),
     )
+    _write_parquet(run_dir / review.FULL_RETURN_PANEL_FILE, _return_regression_panel_full_10k_df())
+    _write_parquet(run_dir / review.MDA_RETURN_PANEL_FILE, _return_regression_panel_mda_df())
+    _write_parquet(run_dir / review.SUE_PANEL_FILE, _sue_panel_df())
     _write_parquet(run_dir / "lm2011_table_ia_ii_results.parquet", _trade_results_df())
     _write_parquet(run_dir / "lm2011_trading_strategy_monthly_returns.parquet", _trading_returns_df())
 
@@ -236,9 +304,12 @@ def test_core_export_includes_existing_quarterly_tables_and_no_ownership_sibling
 
     assert exit_code == 0
     tex = (output_dir / "lm2011_post_refinitiv_review.tex").read_text(encoding="utf-8")
+    assert "Table II" in tex
+    assert "Summary Statistics for the 1994 to 2008 10-K Sample" in tex
     assert "Table IV (With Ownership Control)" in tex
     assert "Table IV (No Ownership Control)" in tex
-    assert "Table IA.II Trading Strategy Summary" in tex
+    assert "Figure 1." in tex
+    assert (output_dir / "tables" / "lm2011_table_ii_summary_statistics.csv").exists()
 
 
 def test_full_export_fails_when_extension_artifacts_cannot_be_resolved(tmp_path: Path) -> None:

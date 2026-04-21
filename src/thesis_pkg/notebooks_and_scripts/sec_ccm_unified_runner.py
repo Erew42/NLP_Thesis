@@ -611,6 +611,10 @@ def _build_lm2011_extension_run_config(
     lm2011_output_dir: Path,
     output_dir: Path,
     require_cleaned_scope_match: bool,
+    recompute_text_features_full_10k: bool,
+    recompute_text_features_mda: bool,
+    recompute_event_screen_surface: bool,
+    recompute_event_panel: bool,
     finbert_analysis_run_dir: Path | None,
     finbert_preprocessing_run_dir: Path | None,
     finbert_analysis_artifacts: object | None = None,
@@ -642,6 +646,24 @@ def _build_lm2011_extension_run_config(
         if lm2011_paths.company_description_path is not None
         else lm2011_paths.ccm_base_dir / "companydescription.parquet",
         ff48_siccodes_path=lm2011_paths.ff48_siccodes_path,
+        year_merged_dir=lm2011_paths.year_merged_dir,
+        matched_clean_path=lm2011_paths.matched_clean_path,
+        filingdates_path=lm2011_paths.filingdates_path,
+        daily_panel_path=lm2011_paths.daily_panel_path,
+        doc_ownership_path=lm2011_paths.doc_ownership_path,
+        annual_balance_sheet_path=lm2011_paths.annual_balance_sheet_path,
+        annual_income_statement_path=lm2011_paths.annual_income_statement_path,
+        annual_period_descriptor_path=lm2011_paths.annual_period_descriptor_path,
+        annual_fiscal_market_path=lm2011_paths.annual_fiscal_market_path,
+        ff_daily_csv_path=lm2011_paths.ff_daily_csv_path,
+        local_work_root=lm2011_paths.local_work_root / "lm2011_extension",
+        full_10k_cleaning_contract=lm2011_paths.full_10k_cleaning_contract,
+        full_10k_text_feature_batch_size=lm2011_paths.full_10k_text_feature_batch_size,
+        event_window_doc_batch_size=lm2011_paths.event_window_doc_batch_size,
+        recompute_text_features_full_10k=recompute_text_features_full_10k,
+        recompute_text_features_mda=recompute_text_features_mda,
+        recompute_event_screen_surface=recompute_event_screen_surface,
+        recompute_event_panel=recompute_event_panel,
         finbert_item_features_long_path=(
             Path(same_run_item_features_long_path)
             if same_run_item_features_long_path is not None
@@ -3244,13 +3266,6 @@ def main() -> None:
             raise RuntimeError(
                 "LM2011 extension requires LM2011 post-Refinitiv runner paths, but the LM2011 block did not run."
             )
-        extension_event_panel_path = LM2011_POST_REFINITIV_DIR / "lm2011_event_panel.parquet"
-        if not extension_event_panel_path.exists():
-            raise RuntimeError(
-                "LM2011 extension requires the materialized LM2011 event panel.\n"
-                f"Expected path: {extension_event_panel_path}\n"
-                "Enable the LM2011 event_panel stage in this run before running the extension."
-            )
         finbert_analysis_artifacts = (
             finbert_artifacts.analysis_artifacts if finbert_artifacts is not None else None
         )
@@ -3262,6 +3277,10 @@ def main() -> None:
             lm2011_output_dir=LM2011_POST_REFINITIV_DIR,
             output_dir=LM2011_EXTENSION_OUTPUT_DIR,
             require_cleaned_scope_match=LM2011_EXTENSION_REQUIRE_CLEANED_SCOPE_MATCH,
+            recompute_text_features_full_10k=LM2011_RECOMPUTE_TEXT_FEATURES_FULL_10K,
+            recompute_text_features_mda=LM2011_RECOMPUTE_TEXT_FEATURES_MDA,
+            recompute_event_screen_surface=LM2011_RECOMPUTE_EVENT_SCREEN_SURFACE,
+            recompute_event_panel=LM2011_RECOMPUTE_EVENT_PANEL,
             finbert_analysis_run_dir=LM2011_EXTENSION_FINBERT_ANALYSIS_RUN_DIR,
             finbert_preprocessing_run_dir=LM2011_EXTENSION_FINBERT_PREPROCESS_RUN_DIR,
             finbert_analysis_artifacts=finbert_analysis_artifacts,
@@ -3271,6 +3290,14 @@ def main() -> None:
             {
                 "lm2011_extension_output_dir": str(LM2011_EXTENSION_OUTPUT_DIR),
                 "lm2011_extension_require_cleaned_scope_match": LM2011_EXTENSION_REQUIRE_CLEANED_SCOPE_MATCH,
+                "lm2011_extension_recompute_text_features_full_10k": (
+                    LM2011_RECOMPUTE_TEXT_FEATURES_FULL_10K
+                ),
+                "lm2011_extension_recompute_text_features_mda": LM2011_RECOMPUTE_TEXT_FEATURES_MDA,
+                "lm2011_extension_recompute_event_screen_surface": (
+                    LM2011_RECOMPUTE_EVENT_SCREEN_SURFACE
+                ),
+                "lm2011_extension_recompute_event_panel": LM2011_RECOMPUTE_EVENT_PANEL,
                 "lm2011_extension_finbert_analysis_run_dir": (
                     str(LM2011_EXTENSION_FINBERT_ANALYSIS_RUN_DIR)
                     if LM2011_EXTENSION_FINBERT_ANALYSIS_RUN_DIR is not None

@@ -4,6 +4,7 @@ import datetime as dt
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import polars as pl
 import pytest
@@ -537,6 +538,247 @@ def _build_extension_inputs(tmp_path: Path, additional_data_dir: Path) -> dict[s
     }
 
 
+def _write_extension_shared_prereq_artifacts(
+    output_dir: Path,
+    *,
+    event_panel_df: pl.DataFrame | None = None,
+) -> runner._ExtensionSharedPrereqArtifacts:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    sample_backbone_path = output_dir / runner.EXTENSION_SHARED_PREREQ_FILENAMES["sample_backbone"]
+    token_counts_path = output_dir / runner.EXTENSION_SHARED_PREREQ_FILENAMES["full_10k_token_counts"]
+    event_screen_surface_path = output_dir / runner.EXTENSION_SHARED_PREREQ_FILENAMES["event_screen_surface"]
+    event_panel_path = output_dir / runner.EXTENSION_SHARED_PREREQ_FILENAMES["event_panel"]
+    if event_panel_df is None:
+        event_panel_df = pl.DataFrame(
+            {
+                "doc_id": ["doc1", "doc2"],
+                "gvkey_int": [1001, 1002],
+                "KYPERMNO": [5001, 5002],
+                "filing_date": [dt.date(2009, 3, 2), dt.date(2009, 5, 15)],
+                "filing_trade_date": [dt.date(2009, 3, 2), dt.date(2009, 5, 15)],
+                "pre_filing_trade_date": [dt.date(2009, 2, 27), dt.date(2009, 5, 14)],
+                "size_event": [100.0, 125.0],
+                "bm_event": [0.8, 0.9],
+                "share_turnover": [0.05, 0.08],
+                "pre_ffalpha": [0.01, -0.02],
+                "institutional_ownership": [None, 45.0],
+                "nasdaq_dummy": [1, 0],
+                "filing_period_excess_return": [0.02, -0.01],
+                "abnormal_volume": [0.3, 0.4],
+                "postevent_return_volatility": [0.04, 0.05],
+            }
+        )
+    _write_parquet(
+        sample_backbone_path,
+        pl.DataFrame(
+            {
+                "doc_id": ["doc1", "doc2"],
+                "gvkey_int": [1001, 1002],
+                "KYPERMNO": [5001, 5002],
+                "filing_date": [dt.date(2009, 3, 2), dt.date(2009, 5, 15)],
+                "normalized_form": ["10-K", "10-K"],
+            }
+        ),
+    )
+    _write_parquet(
+        token_counts_path,
+        pl.DataFrame(
+            {
+                "doc_id": ["doc1", "doc2"],
+                "total_token_count_full_10k": [2500, 2500],
+            }
+        ),
+    )
+    _write_parquet(
+        event_screen_surface_path,
+        pl.DataFrame(
+            {
+                "doc_id": ["doc1", "doc2"],
+                "gvkey_int": [1001, 1002],
+                "KYPERMNO": [5001, 5002],
+                "filing_date": [dt.date(2009, 3, 2), dt.date(2009, 5, 15)],
+                "filing_trade_date": [dt.date(2009, 3, 2), dt.date(2009, 5, 15)],
+                "pre_filing_trade_date": [dt.date(2009, 2, 27), dt.date(2009, 5, 14)],
+                "size_event": [100.0, 125.0],
+                "bm_event": [0.8, 0.9],
+                "pre_filing_price": [10.0, 11.0],
+                "share_turnover": [0.05, 0.08],
+                "pre_ffalpha": [0.01, -0.02],
+                "event_shares": [10.0, 10.0],
+                "event_shrcd": [10, 10],
+                "event_exchcd": [3, 1],
+                "event_return_day_count": [4, 4],
+                "event_volume_day_count": [4, 4],
+                "pre_turnover_obs": [100, 100],
+                "abnormal_volume_pre_obs": [60, 60],
+                "pre_alpha_obs": [100, 100],
+                "post_alpha_obs": [100, 100],
+                "abnormal_volume": [0.3, 0.4],
+                "postevent_return_volatility": [0.04, 0.05],
+                "filing_period_excess_return": [0.02, -0.01],
+                "nasdaq_dummy": [1, 0],
+            }
+        ),
+    )
+    _write_parquet(event_panel_path, event_panel_df)
+    return runner._ExtensionSharedPrereqArtifacts(
+        sample_backbone_path=sample_backbone_path,
+        full_10k_token_counts_path=token_counts_path,
+        event_screen_surface_path=event_screen_surface_path,
+        event_panel_path=event_panel_path,
+        row_counts={
+            "sample_backbone": 2,
+            "full_10k_token_counts": 2,
+            "event_screen_surface": 2,
+            "event_panel": int(event_panel_df.height),
+        },
+    )
+
+
+def test_extension_shared_prereq_recompute_text_features_full_10k_does_not_force_downstream_rebuild(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output_dir = tmp_path / "lm2011_extension_shared_prereq_recompute"
+    existing_artifacts = _write_extension_shared_prereq_artifacts(output_dir)
+    raw_year_merged_dir = tmp_path / "raw_year_merged"
+    raw_year_merged_dir.mkdir(parents=True, exist_ok=True)
+    _write_parquet(raw_year_merged_dir / "2009.parquet", pl.DataFrame({"doc_id": ["doc1"]}))
+
+    raw_parquet_paths = {
+        "matched_clean_path": tmp_path / "raw_matched_clean.parquet",
+        "filingdates_path": tmp_path / "raw_filingdates.parquet",
+        "daily_panel_path": tmp_path / "raw_daily.parquet",
+        "doc_ownership_path": tmp_path / "raw_doc_ownership.parquet",
+        "annual_balance_sheet_path": tmp_path / "raw_annual_bs.parquet",
+        "annual_income_statement_path": tmp_path / "raw_annual_is.parquet",
+        "annual_period_descriptor_path": tmp_path / "raw_annual_pd.parquet",
+        "annual_fiscal_market_path": tmp_path / "raw_annual_fm.parquet",
+    }
+    for path in raw_parquet_paths.values():
+        _write_parquet(path, pl.DataFrame({"dummy": [1]}))
+    ff_daily_csv_path = tmp_path / "raw_ff_daily.csv"
+    _write_text(ff_daily_csv_path, "raw_date,mkt_rf,smb,hml,rf\n20090102,0.0,0.0,0.0,0.0\n")
+
+    monkeypatch.setattr(
+        runner,
+        "_resolve_extension_shared_prereq_inputs",
+        lambda *_args, **_kwargs: {
+            "year_merged_dir": raw_year_merged_dir,
+            **raw_parquet_paths,
+            "ff_daily_csv_path": ff_daily_csv_path,
+            "local_work_root": tmp_path / "local_work",
+            "full_10k_cleaning_contract": "lm2011_paper",
+            "full_10k_text_feature_batch_size": 4,
+            "event_window_doc_batch_size": 50,
+        },
+    )
+    monkeypatch.setattr(runner, "_prepare_lm2011_sec_backbone_input_lf", lambda lf: lf)
+    monkeypatch.setattr(runner, "_prepare_lm2011_sec_input_lf", lambda lf: lf)
+    monkeypatch.setattr(runner, "_filter_to_sample_doc_ids_lf", lambda lf, *_args, **_kwargs: lf)
+
+    call_counts = {
+        "sample_backbone": 0,
+        "full_10k": 0,
+        "event_screen_surface": 0,
+        "event_panel": 0,
+    }
+
+    def _fake_build_sample_backbone(*_args: object, **_kwargs: object) -> pl.LazyFrame:
+        call_counts["sample_backbone"] += 1
+        return pl.DataFrame(
+            {
+                "doc_id": ["doc1"],
+                "gvkey_int": [1001],
+                "KYPERMNO": [5001],
+                "filing_date": [dt.date(2009, 3, 2)],
+                "normalized_form": ["10-K"],
+            }
+        ).lazy()
+
+    def _fake_write_full_10k(*_args: object, output_path: Path, **_kwargs: object) -> None:
+        call_counts["full_10k"] += 1
+        _write_parquet(
+            output_path,
+            pl.DataFrame(
+                {
+                    "doc_id": ["doc1"],
+                    "total_token_count_full_10k": [3000],
+                }
+            ),
+        )
+
+    def _fake_prepare_annual_inputs(*_args: object, **_kwargs: object) -> tuple[pl.LazyFrame, ...]:
+        frame = pl.DataFrame({"dummy": [1]}).lazy()
+        return frame, frame, frame, frame
+
+    def _fake_build_annual_accounting_panel(*_args: object, **_kwargs: object) -> pl.LazyFrame:
+        return pl.DataFrame({"dummy": [1]}).lazy()
+
+    def _fake_load_ff_factors_daily(*_args: object, **_kwargs: object) -> pl.LazyFrame:
+        return pl.DataFrame({"dummy": [1]}).lazy()
+
+    def _unexpected_event_screen(*_args: object, **_kwargs: object) -> None:
+        call_counts["event_screen_surface"] += 1
+        raise AssertionError("event_screen_surface should be reused when recompute_event_screen_surface is false")
+
+    def _unexpected_event_panel(*_args: object, **_kwargs: object) -> pl.LazyFrame:
+        call_counts["event_panel"] += 1
+        raise AssertionError("event_panel should be reused when recompute_event_panel is false")
+
+    monkeypatch.setattr(runner, "build_lm2011_sample_backbone", _fake_build_sample_backbone)
+    monkeypatch.setattr(runner, "write_lm2011_text_features_full_10k_parquet", _fake_write_full_10k)
+    monkeypatch.setattr(runner, "_prepare_annual_accounting_inputs", _fake_prepare_annual_inputs)
+    monkeypatch.setattr(runner, "build_annual_accounting_panel", _fake_build_annual_accounting_panel)
+    monkeypatch.setattr(runner, "_load_ff_factors_daily_lf", _fake_load_ff_factors_daily)
+    monkeypatch.setattr(runner.lm2011_pipeline, "write_lm2011_event_screen_surface_parquet", _unexpected_event_screen)
+    monkeypatch.setattr(runner, "build_lm2011_event_panel", _unexpected_event_panel)
+
+    artifacts = runner._build_or_reuse_extension_shared_prereqs(
+        runner.LM2011ExtensionRunConfig(
+            output_dir=output_dir,
+            additional_data_dir=tmp_path / "additional_data",
+            items_analysis_dir=tmp_path / "items_analysis",
+            event_panel_path=None,
+            company_history_path=tmp_path / "companyhistory.parquet",
+            company_description_path=tmp_path / "companydescription.parquet",
+            ff48_siccodes_path=tmp_path / "ff48.txt",
+            year_merged_dir=raw_year_merged_dir,
+            matched_clean_path=raw_parquet_paths["matched_clean_path"],
+            filingdates_path=raw_parquet_paths["filingdates_path"],
+            daily_panel_path=raw_parquet_paths["daily_panel_path"],
+            doc_ownership_path=raw_parquet_paths["doc_ownership_path"],
+            annual_balance_sheet_path=raw_parquet_paths["annual_balance_sheet_path"],
+            annual_income_statement_path=raw_parquet_paths["annual_income_statement_path"],
+            annual_period_descriptor_path=raw_parquet_paths["annual_period_descriptor_path"],
+            annual_fiscal_market_path=raw_parquet_paths["annual_fiscal_market_path"],
+            ff_daily_csv_path=ff_daily_csv_path,
+            local_work_root=tmp_path / "local_work",
+            recompute_text_features_full_10k=True,
+            recompute_text_features_mda=True,
+            recompute_event_screen_surface=False,
+            recompute_event_panel=False,
+        ),
+        output_dir=output_dir,
+        dictionary_inputs=SimpleNamespace(
+            dictionary_lists={"negative": ["loss"]},
+            harvard_negative_word_list=["decline"],
+            master_dictionary_words={"loss", "decline"},
+        ),
+    )
+
+    assert artifacts is not None
+    assert call_counts["sample_backbone"] == 1
+    assert call_counts["full_10k"] == 1
+    assert call_counts["event_screen_surface"] == 0
+    assert call_counts["event_panel"] == 0
+    assert pl.read_parquet(artifacts.full_10k_token_counts_path).get_column(
+        "total_token_count_full_10k"
+    ).to_list() == [3000]
+    assert pl.read_parquet(existing_artifacts.event_screen_surface_path).height == 2
+    assert pl.read_parquet(existing_artifacts.event_panel_path).height == 2
+
+
 def test_extension_pipeline_writes_manifest_and_fully_enumerated_results(tmp_path: Path) -> None:
     _, _, additional_data_dir, _ = _build_temp_layout(tmp_path)
     extension_inputs = _build_extension_inputs(tmp_path, additional_data_dir)
@@ -595,12 +837,21 @@ def test_extension_pipeline_writes_manifest_and_fully_enumerated_results(tmp_pat
     assert manifest["failed_stage"] is None
     assert manifest["config"]["dictionary_source_mode"] == runner.EXTENSION_DICTIONARY_SOURCE_PREFER_CLEANED
     assert manifest["config"]["effective_dictionary_source_mode"] == runner.EXTENSION_DICTIONARY_SOURCE_PREFER_CLEANED
+    assert manifest["config"]["recompute_text_features_full_10k"] is False
+    assert manifest["config"]["recompute_text_features_mda"] is False
+    assert manifest["config"]["recompute_event_screen_surface"] is False
+    assert manifest["config"]["recompute_event_panel"] is False
     assert manifest["resolved_inputs"]["finbert_item_features_long_path"] == str(
         extension_inputs["item_features_long_path"].resolve()
     )
     assert manifest["resolved_inputs"]["finbert_cleaned_item_scopes_dir"] == str(
         extension_inputs["cleaned_item_scopes_dir"].resolve()
     )
+    assert manifest["resolved_inputs"]["effective_event_panel_path"] == str(
+        extension_inputs["event_panel_path"].resolve()
+    )
+    assert manifest["shared_prereq_artifacts"] == {}
+    assert manifest["shared_prereq_row_counts"] == {}
     assert manifest["stages"]["extension_dictionary_surface"]["status"] == "generated"
     assert manifest["stages"]["extension_finbert_surface"]["status"] == "generated"
     assert manifest["stages"]["extension_fit_quarterly"]["status"] in {"generated", "generated_empty"}
@@ -674,6 +925,80 @@ def test_extension_pipeline_writes_manifest_and_fully_enumerated_results(tmp_pat
     assert observed_grid == expected_grid
 
 
+def test_extension_pipeline_prefers_built_shared_event_panel_when_raw_prereqs_present(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, _, additional_data_dir, _ = _build_temp_layout(tmp_path)
+    extension_inputs = _build_extension_inputs(tmp_path, additional_data_dir)
+    output_dir = tmp_path / "lm2011_extension_shared_prereqs"
+    captured: dict[str, object] = {}
+
+    def _fake_shared_prereqs(
+        cfg: runner.LM2011ExtensionRunConfig,
+        *,
+        output_dir: Path,
+        dictionary_inputs: object,
+    ) -> runner._ExtensionSharedPrereqArtifacts:
+        captured["year_merged_dir"] = cfg.year_merged_dir
+        captured["matched_clean_path"] = cfg.matched_clean_path
+        return _write_extension_shared_prereq_artifacts(output_dir)
+
+    monkeypatch.setattr(
+        runner,
+        "_build_or_reuse_extension_shared_prereqs",
+        _fake_shared_prereqs,
+    )
+
+    exit_code = runner.run_lm2011_extension_pipeline(
+        runner.LM2011ExtensionRunConfig(
+            output_dir=output_dir,
+            additional_data_dir=additional_data_dir,
+            items_analysis_dir=extension_inputs["items_analysis_dir"],
+            event_panel_path=None,
+            company_history_path=extension_inputs["company_history_path"],
+            company_description_path=extension_inputs["company_description_path"],
+            ff48_siccodes_path=extension_inputs["ff48_siccodes_path"],
+            year_merged_dir=tmp_path / "raw_year_merged",
+            matched_clean_path=tmp_path / "raw_matched_clean.parquet",
+            filingdates_path=tmp_path / "raw_filingdates.parquet",
+            daily_panel_path=tmp_path / "raw_daily.parquet",
+            doc_ownership_path=tmp_path / "raw_doc_ownership.parquet",
+            annual_balance_sheet_path=tmp_path / "raw_annual_bs.parquet",
+            annual_income_statement_path=tmp_path / "raw_annual_is.parquet",
+            annual_period_descriptor_path=tmp_path / "raw_annual_pd.parquet",
+            annual_fiscal_market_path=tmp_path / "raw_annual_fm.parquet",
+            ff_daily_csv_path=tmp_path / "raw_ff_daily.csv",
+            local_work_root=tmp_path / "raw_local_work",
+            full_10k_cleaning_contract="lm2011_paper",
+            full_10k_text_feature_batch_size=4,
+            event_window_doc_batch_size=50,
+            finbert_item_features_long_path=extension_inputs["item_features_long_path"],
+            finbert_analysis_run_dir=extension_inputs["finbert_analysis_run_dir"],
+            finbert_preprocessing_run_dir=extension_inputs["finbert_preprocessing_run_dir"],
+            require_cleaned_scope_match=True,
+            run_id="unit_test_extension_shared_prereq",
+        )
+    )
+
+    assert exit_code == 0
+    assert captured["year_merged_dir"] == tmp_path / "raw_year_merged"
+    assert captured["matched_clean_path"] == tmp_path / "raw_matched_clean.parquet"
+    manifest = json.loads((output_dir / runner.EXTENSION_MANIFEST_FILENAME).read_text(encoding="utf-8"))
+    expected_effective_path = (
+        output_dir / runner.EXTENSION_SHARED_PREREQ_FILENAMES["event_panel"]
+    ).resolve()
+    assert manifest["resolved_inputs"]["event_panel_path"] is None
+    assert manifest["resolved_inputs"]["effective_event_panel_path"] == str(expected_effective_path)
+    assert manifest["shared_prereq_artifacts"]["event_panel"] == str(expected_effective_path)
+    assert manifest["shared_prereq_row_counts"]["event_panel"] == 2
+    analysis_panel = pl.read_parquet(
+        output_dir / runner.EXTENSION_STAGE_ARTIFACT_FILENAMES["extension_analysis_panel"]
+    )
+    assert analysis_panel.height > 0
+    assert set(analysis_panel.get_column("doc_id").unique().to_list()) == {"doc1", "doc2"}
+
+
 def test_extension_dictionary_family_comparison_pipeline_writes_root_and_family_artifacts(
     tmp_path: Path,
 ) -> None:
@@ -737,6 +1062,81 @@ def test_extension_dictionary_family_comparison_pipeline_writes_root_and_family_
         .unique()
         .to_list()
     ) == {"replication", "extended"}
+
+
+def test_extension_dictionary_family_comparison_builds_shared_prereqs_once_at_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, _, additional_data_dir, _ = _build_temp_layout(tmp_path)
+    extension_inputs = _build_extension_inputs(tmp_path, additional_data_dir)
+    output_dir = tmp_path / "lm2011_extension_family_compare_shared"
+    calls: list[tuple[Path, Path | None]] = []
+
+    def _fake_shared_prereqs(
+        cfg: runner.LM2011ExtensionRunConfig,
+        *,
+        output_dir: Path,
+        dictionary_inputs: object,
+    ) -> runner._ExtensionSharedPrereqArtifacts | None:
+        calls.append((output_dir, cfg.year_merged_dir))
+        if cfg.year_merged_dir is None:
+            return None
+        return _write_extension_shared_prereq_artifacts(output_dir)
+
+    monkeypatch.setattr(
+        runner,
+        "_build_or_reuse_extension_shared_prereqs",
+        _fake_shared_prereqs,
+    )
+
+    exit_code = runner.run_lm2011_extension_dictionary_family_comparison_pipeline(
+        runner.LM2011ExtensionRunConfig(
+            output_dir=output_dir,
+            additional_data_dir=additional_data_dir,
+            items_analysis_dir=extension_inputs["items_analysis_dir"],
+            event_panel_path=extension_inputs["event_panel_path"],
+            company_history_path=extension_inputs["company_history_path"],
+            company_description_path=extension_inputs["company_description_path"],
+            ff48_siccodes_path=extension_inputs["ff48_siccodes_path"],
+            year_merged_dir=tmp_path / "raw_year_merged",
+            matched_clean_path=tmp_path / "raw_matched_clean.parquet",
+            filingdates_path=tmp_path / "raw_filingdates.parquet",
+            daily_panel_path=tmp_path / "raw_daily.parquet",
+            doc_ownership_path=tmp_path / "raw_doc_ownership.parquet",
+            annual_balance_sheet_path=tmp_path / "raw_annual_bs.parquet",
+            annual_income_statement_path=tmp_path / "raw_annual_is.parquet",
+            annual_period_descriptor_path=tmp_path / "raw_annual_pd.parquet",
+            annual_fiscal_market_path=tmp_path / "raw_annual_fm.parquet",
+            ff_daily_csv_path=tmp_path / "raw_ff_daily.csv",
+            local_work_root=tmp_path / "raw_local_work",
+            full_10k_cleaning_contract="lm2011_paper",
+            full_10k_text_feature_batch_size=4,
+            event_window_doc_batch_size=50,
+            finbert_item_features_long_path=extension_inputs["item_features_long_path"],
+            finbert_analysis_run_dir=extension_inputs["finbert_analysis_run_dir"],
+            finbert_preprocessing_run_dir=extension_inputs["finbert_preprocessing_run_dir"],
+            require_cleaned_scope_match=True,
+            run_id="unit_test_extension_family_shared_prereq",
+        )
+    )
+
+    assert exit_code == 0
+    assert sum(1 for _, year_dir in calls if year_dir is not None) == 1
+    root_shared_event_panel_path = (
+        output_dir / runner.EXTENSION_SHARED_PREREQ_FILENAMES["event_panel"]
+    ).resolve()
+    root_manifest = json.loads((output_dir / runner.EXTENSION_MANIFEST_FILENAME).read_text(encoding="utf-8"))
+    replication_manifest = json.loads(
+        (output_dir / "replication" / runner.EXTENSION_MANIFEST_FILENAME).read_text(encoding="utf-8")
+    )
+    extended_manifest = json.loads(
+        (output_dir / "extended" / runner.EXTENSION_MANIFEST_FILENAME).read_text(encoding="utf-8")
+    )
+    assert root_manifest["resolved_inputs"]["effective_event_panel_path"] == str(root_shared_event_panel_path)
+    assert root_manifest["shared_prereq_artifacts"]["event_panel"] == str(root_shared_event_panel_path)
+    assert replication_manifest["resolved_inputs"]["effective_event_panel_path"] == str(root_shared_event_panel_path)
+    assert extended_manifest["resolved_inputs"]["effective_event_panel_path"] == str(root_shared_event_panel_path)
 
 
 def test_extension_pipeline_strict_cleaned_scope_match_fails_closed(tmp_path: Path) -> None:

@@ -337,6 +337,10 @@ def test_build_lm2011_extension_run_config_prefers_same_run_finbert_artifacts() 
         lm2011_output_dir=Path("lm2011_post_refinitiv"),
         output_dir=Path("lm2011_extension"),
         require_cleaned_scope_match=True,
+        recompute_text_features_full_10k=True,
+        recompute_text_features_mda=True,
+        recompute_event_screen_surface=False,
+        recompute_event_panel=False,
         finbert_analysis_run_dir=Path("explicit_analysis"),
         finbert_preprocessing_run_dir=Path("explicit_preprocess"),
         finbert_analysis_artifacts=analysis_artifacts,
@@ -355,6 +359,24 @@ def test_build_lm2011_extension_run_config_prefers_same_run_finbert_artifacts() 
     assert cfg.finbert_cleaned_item_scopes_dir == (
         Path("same_run_finbert_preprocess") / "cleaned_item_scopes" / "by_year"
     )
+    assert cfg.year_merged_dir == Path("year_merged")
+    assert cfg.matched_clean_path == Path("matched.parquet")
+    assert cfg.filingdates_path == Path("filingdates.parquet")
+    assert cfg.daily_panel_path == Path("daily.parquet")
+    assert cfg.doc_ownership_path == Path("doc_ownership.parquet")
+    assert cfg.annual_balance_sheet_path == Path("bsa.parquet")
+    assert cfg.annual_income_statement_path == Path("isa.parquet")
+    assert cfg.annual_period_descriptor_path == Path("pda.parquet")
+    assert cfg.annual_fiscal_market_path == Path("fma.parquet")
+    assert cfg.ff_daily_csv_path == Path("ff_daily.csv")
+    assert cfg.local_work_root == Path("work") / "lm2011_extension"
+    assert cfg.full_10k_cleaning_contract == "lm2011_paper"
+    assert cfg.full_10k_text_feature_batch_size == 4
+    assert cfg.event_window_doc_batch_size == 50
+    assert cfg.recompute_text_features_full_10k is True
+    assert cfg.recompute_text_features_mda is True
+    assert cfg.recompute_event_screen_surface is False
+    assert cfg.recompute_event_panel is False
     assert cfg.event_panel_path == Path("lm2011_post_refinitiv") / "lm2011_event_panel.parquet"
 
 
