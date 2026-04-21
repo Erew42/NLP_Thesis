@@ -380,6 +380,35 @@ def test_build_lm2011_extension_run_config_prefers_same_run_finbert_artifacts() 
     assert cfg.event_panel_path == Path("lm2011_post_refinitiv") / "lm2011_event_panel.parquet"
 
 
+def test_resolve_lm2011_extension_finbert_run_dirs_falls_back_to_named_finbert_outputs(
+    tmp_path: Path,
+) -> None:
+    finbert_output_dir = tmp_path / "finbert_item_analysis"
+    analysis_run_dir = finbert_output_dir / "shared_finbert"
+    preprocess_run_dir = (
+        finbert_output_dir
+        / "_staged_intermediates"
+        / "shared_finbert_sentence_preprocessing"
+    )
+    analysis_run_dir.mkdir(parents=True, exist_ok=True)
+    preprocess_run_dir.mkdir(parents=True, exist_ok=True)
+    (analysis_run_dir / "item_features_long.parquet").write_text("placeholder", encoding="utf-8")
+    (preprocess_run_dir / "run_manifest.json").write_text("{}", encoding="utf-8")
+    (preprocess_run_dir / "cleaned_item_scopes" / "by_year").mkdir(parents=True, exist_ok=True)
+
+    resolved_analysis_run_dir, resolved_preprocess_run_dir = (
+        runner._resolve_lm2011_extension_finbert_run_dirs(
+            finbert_output_dir=finbert_output_dir,
+            finbert_run_name="shared_finbert",
+            finbert_analysis_run_dir=None,
+            finbert_preprocessing_run_dir=None,
+        )
+    )
+
+    assert resolved_analysis_run_dir == analysis_run_dir.resolve()
+    assert resolved_preprocess_run_dir == preprocess_run_dir.resolve()
+
+
 def test_runner_and_notebook_share_lm2011_memory_hardened_defaults() -> None:
     runner_source = Path("src/thesis_pkg/notebooks_and_scripts/sec_ccm_unified_runner.py").read_text(
         encoding="utf-8"
@@ -1326,6 +1355,73 @@ def test_main_runs_pre_extension_gc_barrier_before_extension_entrypoint(
         < build_extension_cfg_idx
         < extension_idx
     )
+
+
+def test_main_resolves_extension_finbert_dirs_from_finbert_run_name(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    paths = _configure_minimal_main_env(monkeypatch, tmp_path)
+    items_analysis_dir = paths["run_root"] / "items_analysis"
+    items_analysis_dir.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame({"doc_id": ["0000000001:1995000001"]}).write_parquet(items_analysis_dir / "1995.parquet")
+    doc_ownership_dir = paths["run_root"] / "refinitiv_doc_ownership_lm2011"
+    doc_ownership_dir.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame({"doc_id": ["0000000001:1995000001"]}).write_parquet(
+        doc_ownership_dir / "refinitiv_lm2011_doc_ownership.parquet"
+    )
+    doc_analyst_dir = paths["run_root"] / "refinitiv_doc_analyst_lm2011"
+    doc_analyst_dir.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame({"doc_id": ["0000000001:1995000001"]}).write_parquet(
+        doc_analyst_dir / "refinitiv_doc_analyst_selected.parquet"
+    )
+
+    finbert_output_dir = paths["run_root"] / "finbert_item_analysis"
+    analysis_run_dir = finbert_output_dir / "shared_finbert"
+    preprocess_run_dir = (
+        finbert_output_dir
+        / "_staged_intermediates"
+        / "shared_finbert_sentence_preprocessing"
+    )
+    analysis_run_dir.mkdir(parents=True, exist_ok=True)
+    preprocess_run_dir.mkdir(parents=True, exist_ok=True)
+    (analysis_run_dir / "item_features_long.parquet").write_text("placeholder", encoding="utf-8")
+    (preprocess_run_dir / "run_manifest.json").write_text("{}", encoding="utf-8")
+    (preprocess_run_dir / "cleaned_item_scopes" / "by_year").mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setenv("SEC_CCM_RUN_LM2011_POST_REFINITIV", "true")
+    monkeypatch.setenv("SEC_CCM_RUN_FINBERT", "false")
+    monkeypatch.setenv("SEC_CCM_RUN_LM2011_EXTENSION", "true")
+    monkeypatch.setenv("SEC_CCM_FINBERT_OUTPUT_DIR", str(finbert_output_dir))
+    monkeypatch.setenv("SEC_CCM_FINBERT_RUN_NAME", "shared_finbert")
+
+    captured: dict[str, object] = {}
+
+    def _lm2011_stub(run_cfg):
+        run_cfg.paths.output_dir.mkdir(parents=True, exist_ok=True)
+        (run_cfg.paths.output_dir / "lm2011_sample_run_manifest.json").write_text(
+            "{}",
+            encoding="utf-8",
+        )
+        return 0
+
+    def _capture_extension_cfg(**kwargs):
+        captured["kwargs"] = kwargs
+        return SimpleNamespace()
+
+    monkeypatch.setattr(runner, "run_lm2011_post_refinitiv_pipeline", _lm2011_stub)
+    monkeypatch.setattr(runner, "_build_lm2011_extension_run_config", _capture_extension_cfg)
+    monkeypatch.setattr(
+        runner,
+        "run_lm2011_extension_dictionary_family_comparison_pipeline",
+        lambda _cfg: None,
+    )
+
+    runner.main()
+
+    kwargs = captured["kwargs"]
+    assert kwargs["finbert_analysis_run_dir"] == analysis_run_dir.resolve()
+    assert kwargs["finbert_preprocessing_run_dir"] == preprocess_run_dir.resolve()
 
 
 def test_main_lm2011_defaults_daily_panel_to_ccm_daily_path(

@@ -605,6 +605,102 @@ class _ArtifactStage:
     paths: dict[str, Path]
 
 
+def _resolve_existing_finbert_analysis_run_dir(
+    *,
+    finbert_output_dir: Path,
+    finbert_run_name: str | None,
+    finbert_preprocessing_run_dir: Path | None = None,
+) -> Path | None:
+    candidate_names: list[str] = []
+    if finbert_run_name is not None:
+        candidate_names.append(finbert_run_name)
+    if finbert_preprocessing_run_dir is not None:
+        preprocessing_name = finbert_preprocessing_run_dir.name
+        suffix = "_sentence_preprocessing"
+        if preprocessing_name.endswith(suffix):
+            candidate_names.append(preprocessing_name[: -len(suffix)])
+
+    seen_names: set[str] = set()
+    for candidate_name in candidate_names:
+        if candidate_name in seen_names:
+            continue
+        seen_names.add(candidate_name)
+        candidate = finbert_output_dir / candidate_name
+        if (candidate / "item_features_long.parquet").exists():
+            return candidate.resolve()
+
+    candidates = sorted(
+        {
+            path.parent.resolve()
+            for path in finbert_output_dir.glob("*/item_features_long.parquet")
+            if path.is_file()
+        }
+    )
+    if len(candidates) == 1:
+        return candidates[0]
+    return None
+
+
+def _resolve_existing_finbert_preprocessing_run_dir(
+    *,
+    finbert_output_dir: Path,
+    finbert_run_name: str | None,
+    finbert_analysis_run_dir: Path | None = None,
+) -> Path | None:
+    staged_root = finbert_output_dir / "_staged_intermediates"
+    candidate_names: list[str] = []
+    if finbert_run_name is not None:
+        candidate_names.append(f"{finbert_run_name}_sentence_preprocessing")
+    if finbert_analysis_run_dir is not None:
+        candidate_names.append(f"{finbert_analysis_run_dir.name}_sentence_preprocessing")
+
+    seen_names: set[str] = set()
+    for candidate_name in candidate_names:
+        if candidate_name in seen_names:
+            continue
+        seen_names.add(candidate_name)
+        candidate = staged_root / candidate_name
+        if (candidate / "cleaned_item_scopes" / "by_year").exists():
+            return candidate.resolve()
+
+    candidates = sorted(
+        {
+            path.parent.parent.resolve()
+            for path in staged_root.glob("*/cleaned_item_scopes/by_year")
+            if path.is_dir()
+        }
+    )
+    if len(candidates) == 1:
+        return candidates[0]
+    return None
+
+
+def _resolve_lm2011_extension_finbert_run_dirs(
+    *,
+    finbert_output_dir: Path,
+    finbert_run_name: str | None,
+    finbert_analysis_run_dir: Path | None,
+    finbert_preprocessing_run_dir: Path | None,
+) -> tuple[Path | None, Path | None]:
+    resolved_analysis_run_dir = finbert_analysis_run_dir
+    if resolved_analysis_run_dir is None:
+        resolved_analysis_run_dir = _resolve_existing_finbert_analysis_run_dir(
+            finbert_output_dir=finbert_output_dir,
+            finbert_run_name=finbert_run_name,
+            finbert_preprocessing_run_dir=finbert_preprocessing_run_dir,
+        )
+
+    resolved_preprocessing_run_dir = finbert_preprocessing_run_dir
+    if resolved_preprocessing_run_dir is None:
+        resolved_preprocessing_run_dir = _resolve_existing_finbert_preprocessing_run_dir(
+            finbert_output_dir=finbert_output_dir,
+            finbert_run_name=finbert_run_name,
+            finbert_analysis_run_dir=resolved_analysis_run_dir,
+        )
+
+    return resolved_analysis_run_dir, resolved_preprocessing_run_dir
+
+
 def _build_lm2011_extension_run_config(
     *,
     lm2011_paths: LM2011RunnerPaths,
@@ -1486,6 +1582,15 @@ def main() -> None:
         short_max_length=FINBERT_SHORT_MAX_LENGTH,
         medium_max_length=FINBERT_MEDIUM_MAX_LENGTH,
         long_max_length=FINBERT_LONG_MAX_LENGTH,
+    )
+    (
+        LM2011_EXTENSION_FINBERT_ANALYSIS_RUN_DIR,
+        LM2011_EXTENSION_FINBERT_PREPROCESS_RUN_DIR,
+    ) = _resolve_lm2011_extension_finbert_run_dirs(
+        finbert_output_dir=FINBERT_OUTPUT_DIR,
+        finbert_run_name=FINBERT_RUN_NAME,
+        finbert_analysis_run_dir=LM2011_EXTENSION_FINBERT_ANALYSIS_RUN_DIR,
+        finbert_preprocessing_run_dir=LM2011_EXTENSION_FINBERT_PREPROCESS_RUN_DIR,
     )
 
     if IN_COLAB:
