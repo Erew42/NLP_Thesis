@@ -1019,6 +1019,71 @@ def test_main_rebuilds_lm2011_backbone_from_lm2011_year_override(
     assert captured["sec_year_paths"] == [override_year_dir / "1996.parquet"]
 
 
+def test_write_lm2011_backbone_artifact_narrows_sec_input_before_backbone_build(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    year_path = tmp_path / "1997.parquet"
+    pl.DataFrame(
+        {
+            "doc_id": ["0000000003:1997000001"],
+            "cik_10": ["0000000003"],
+            "accession_nodash": ["00000000031997000001"],
+            "document_type_filename": ["10-K"],
+            "file_date_filename": [runner.dt.date(1997, 2, 14)],
+            "full_text": ["large filing payload"],
+        }
+    ).write_parquet(year_path)
+    matched_clean_path = tmp_path / "matched_clean.parquet"
+    filingdates_path = tmp_path / "filingdates.parquet"
+    output_path = tmp_path / "lm2011_sample_backbone.parquet"
+    pl.DataFrame({"doc_id": ["0000000003:1997000001"]}).write_parquet(matched_clean_path)
+    pl.DataFrame({"LPERMNO": [103], "FILEDATE": [runner.dt.date(1997, 2, 14)], "SRCTYPE": ["10K"]}).write_parquet(
+        filingdates_path
+    )
+    captured: dict[str, object] = {}
+
+    def _build_stub(
+        sec_parsed_lf: pl.LazyFrame,
+        matched_clean_lf: pl.LazyFrame,
+        *,
+        ccm_filingdates_lf: pl.LazyFrame | None = None,
+        **_: object,
+    ) -> pl.LazyFrame:
+        del matched_clean_lf, ccm_filingdates_lf
+        captured["schema_names"] = sec_parsed_lf.collect_schema().names()
+        captured["sec_df"] = sec_parsed_lf.collect()
+        return pl.DataFrame(
+            {
+                "doc_id": ["0000000003:1997000001"],
+                "cik_10": ["0000000003"],
+                "filing_date": [runner.dt.date(1997, 2, 14)],
+                "normalized_form": ["10-K"],
+            }
+        ).lazy()
+
+    monkeypatch.setattr(runner, "build_lm2011_sample_backbone", _build_stub)
+
+    runner._write_lm2011_backbone_artifact(
+        sec_year_paths=[year_path],
+        matched_clean_path=matched_clean_path,
+        filingdates_path=filingdates_path,
+        output_path=output_path,
+    )
+
+    assert output_path.exists()
+    assert captured["schema_names"] == [
+        "doc_id",
+        "cik_10",
+        "accession_nodash",
+        "document_type_filename",
+        "filing_date",
+    ]
+    sec_df = captured["sec_df"]
+    assert "full_text" not in sec_df.columns
+    assert sec_df.item(0, "filing_date") == runner.dt.date(1997, 2, 14)
+
+
 def test_main_doc_ownership_exact_uses_canonical_lm2011_backbone(
     monkeypatch: MonkeyPatch,
     tmp_path: Path,

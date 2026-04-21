@@ -123,10 +123,8 @@ def _build_sample_audit_layout(tmp_path: Path) -> _AuditLayout:
                 "filing_date": [filing_date, second_filing_date],
                 "normalized_form": ["10-K", "10-K405"],
                 "document_type_filename": ["10-K", "10-K405"],
-                "period_end": [period_end, period_end],
                 "gvkey_int": [1, 2],
                 "KYPERMNO": [10001, 10002],
-                "full_text": [_structured_filing_text("alpha"), _structured_filing_text("beta")],
             }
         ),
     )
@@ -479,6 +477,7 @@ def test_packet_d_reconciles_dictionary_and_finbert_universe(tmp_path: Path) -> 
         removal_df.filter(pl.col("stage_name") == "deduped_final").item(0, "row_count")
     )
     assert regime_df.height > 0
+    assert regime_df.filter(pl.col("error").is_not_null()).is_empty()
 
 
 def test_resolve_latest_valid_finbert_run_prefers_newest_compatible_backbone_contract(tmp_path: Path) -> None:

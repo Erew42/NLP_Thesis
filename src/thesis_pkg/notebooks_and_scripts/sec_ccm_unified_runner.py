@@ -971,6 +971,36 @@ def _same_normalized_path(left: Path, right: Path) -> bool:
     return left.expanduser().resolve() == right.expanduser().resolve()
 
 
+def _normalize_filing_date_expr(schema_names: set[str]) -> pl.Expr:
+    if "filing_date" in schema_names and "file_date_filename" in schema_names:
+        return pl.coalesce(
+            [
+                pl.col("filing_date").cast(pl.Date, strict=False),
+                pl.col("file_date_filename").cast(pl.Date, strict=False),
+            ]
+        ).alias("filing_date")
+    if "filing_date" in schema_names:
+        return pl.col("filing_date").cast(pl.Date, strict=False).alias("filing_date")
+    if "file_date_filename" in schema_names:
+        return pl.col("file_date_filename").cast(pl.Date, strict=False).alias("filing_date")
+    raise ValueError("SEC input files must contain filing_date or file_date_filename.")
+
+
+def _prepare_lm2011_sec_backbone_input_lf(lf: pl.LazyFrame) -> pl.LazyFrame:
+    schema_names = set(lf.collect_schema().names())
+    required_columns = ("doc_id", "cik_10", "accession_nodash", "document_type_filename")
+    missing = [name for name in required_columns if name not in schema_names]
+    if missing:
+        raise ValueError(f"SEC input files missing LM2011 backbone columns: {missing}")
+    return lf.select(
+        pl.col("doc_id"),
+        pl.col("cik_10"),
+        pl.col("accession_nodash"),
+        pl.col("document_type_filename"),
+        _normalize_filing_date_expr(schema_names),
+    )
+
+
 def _write_lm2011_backbone_artifact(
     *,
     sec_year_paths: list[Path],
@@ -985,8 +1015,9 @@ def _write_lm2011_backbone_artifact(
     if not filingdates_path.exists():
         raise FileNotFoundError(f"filingdates parquet not found: {filingdates_path}")
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    sec_lf = _prepare_lm2011_sec_backbone_input_lf(pl.scan_parquet([str(path) for path in sec_year_paths]))
     build_lm2011_sample_backbone(
-        pl.scan_parquet([str(path) for path in sec_year_paths]),
+        sec_lf,
         pl.scan_parquet(matched_clean_path),
         ccm_filingdates_lf=pl.scan_parquet(filingdates_path),
     ).sink_parquet(output_path, compression="zstd")

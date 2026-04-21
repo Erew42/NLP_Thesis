@@ -525,13 +525,17 @@ def _run_packet_d(
             blocked_reason="No valid sampled FinBERT item-analysis run was found.",
             top_findings=["Packet D was blocked because no sampled FinBERT run with item features and coverage was available."],
         )
-    if not paths.items_analysis_dir.exists() or not paths.sample_backbone_path.exists():
+    if (
+        not paths.items_analysis_dir.exists()
+        or not paths.sample_backbone_path.exists()
+        or not paths.year_merged_dir.exists()
+    ):
         return _PacketResult(
             status=STATUS_BLOCKED_MISSING_INPUT,
             output_paths={},
             summary={},
-            blocked_reason="Packet D requires sampled items_analysis shards and the sampled backbone artifact.",
-            top_findings=["Packet D was blocked because the sampled item universe could not be resolved."],
+            blocked_reason="Packet D requires sampled items_analysis shards, the sampled backbone artifact, and year_merged files.",
+            top_findings=["Packet D was blocked because the sampled item universe or raw filing text inputs could not be resolved."],
         )
 
     run_manifest_path = finbert_run_dir / "run_manifest.json"
@@ -2379,19 +2383,47 @@ def _packet_d_extraction_regime_comparison(
             }
         )
     sample_doc_ids = dictionary_universe_df.select("doc_id").unique().head(cfg.regime_compare_doc_limit)
-    docs_df = (
-        pl.scan_parquet(paths.sample_backbone_path)
-        .select(
+    backbone_lf = pl.scan_parquet(paths.sample_backbone_path)
+    backbone_schema = backbone_lf.collect_schema()
+    metadata_lf = (
+        backbone_lf.select(
             pl.col("doc_id").cast(pl.Utf8, strict=False).alias("doc_id"),
             pl.col("filing_date").cast(pl.Date, strict=False).alias("filing_date"),
-            pl.col("period_end").cast(pl.Date, strict=False).alias("period_end"),
+            (
+                pl.col("period_end").cast(pl.Date, strict=False)
+                if "period_end" in backbone_schema
+                else pl.lit(None, dtype=pl.Date)
+            ).alias("period_end"),
             pl.col("document_type_filename").cast(pl.Utf8, strict=False).alias("document_type_filename"),
-            pl.col("full_text").cast(pl.Utf8, strict=False).alias("full_text"),
         )
         .filter(_year_filter_expr("filing_date", year_filter, use_date_year=True))
         .join(sample_doc_ids.lazy(), on="doc_id", how="inner")
-        .collect()
     )
+    year_paths = _resolve_year_paths(paths.year_merged_dir, year_filter)
+    if not year_paths:
+        return pl.DataFrame(
+            schema={
+                "doc_id": pl.Utf8,
+                "filing_year": pl.Int32,
+                "legacy_item_count": pl.Int32,
+                "v2_item_count": pl.Int32,
+                "legacy_item_ids": pl.Utf8,
+                "v2_item_ids": pl.Utf8,
+                "same_item_set": pl.Boolean,
+                "legacy_total_chars": pl.Int32,
+                "v2_total_chars": pl.Int32,
+                "error": pl.Utf8,
+            }
+        )
+    text_lf = (
+        pl.scan_parquet([str(path) for path in year_paths])
+        .select(
+            pl.col("doc_id").cast(pl.Utf8, strict=False).alias("doc_id"),
+            pl.col("full_text").cast(pl.Utf8, strict=False).alias("full_text"),
+        )
+        .unique(subset=["doc_id"], keep="first")
+    )
+    docs_df = metadata_lf.join(text_lf, on="doc_id", how="left").collect()
     rows: list[dict[str, Any]] = []
     for row in docs_df.iter_rows(named=True):
         full_text = row.get("full_text")
