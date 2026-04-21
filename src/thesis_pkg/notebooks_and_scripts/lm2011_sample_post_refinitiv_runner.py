@@ -65,6 +65,7 @@ from thesis_pkg.core.sec.lm2011_cleaning import FULL_10K_CLEANING_CONTRACTS
 from thesis_pkg.core.sec.lm2011_dictionary import load_lm2011_dictionary_inputs
 from thesis_pkg.core.sec.lm2011_dictionary import load_lm2011_master_dictionary_words
 from thesis_pkg.core.sec.lm2011_dictionary import load_lm2011_word_list
+from thesis_pkg.core.sec.lm2011_dictionary import materialize_lm2011_dictionary_families
 from thesis_pkg.core.sec.lm2011_text import (
     DEFAULT_PRODUCTION_FULL_10K_MICROBATCH_SIZE,
     DEFAULT_PRODUCTION_MDA_MICROBATCH_SIZE,
@@ -2792,11 +2793,26 @@ def run_lm2011_post_refinitiv_pipeline(run_cfg: LM2011PostRefinitivRunConfig) ->
     _print_ram_snapshot("lm2011_post_refinitiv_pipeline_start", enabled=paths.print_ram_stats)
 
     try:
-        dictionary_inputs = load_lm2011_dictionary_inputs(paths.additional_data_dir)
+        current_stage_name = "dictionary_family_materialization"
+        generated_dictionary_families = materialize_lm2011_dictionary_families(paths.additional_data_dir)
+        effective_dictionary_input_dir = generated_dictionary_families.replication.directory
+        manifest["resolved_inputs"]["generated_dictionary_family_root"] = _absolute_path_str(
+            generated_dictionary_families.root_dir
+        )
+        manifest["resolved_inputs"]["effective_dictionary_input_dir"] = _absolute_path_str(
+            effective_dictionary_input_dir
+        )
+        dictionary_inputs = load_lm2011_dictionary_inputs(effective_dictionary_input_dir)
         dictionary_lists = dictionary_inputs.dictionary_lists
         harvard_negative_word_list = dictionary_inputs.harvard_negative_word_list
         master_dictionary_words = dictionary_inputs.master_dictionary_words
-        manifest["dictionary_inputs"] = dictionary_inputs.to_manifest_dict()
+        manifest["dictionary_inputs"] = {
+            **dictionary_inputs.to_manifest_dict(),
+            "source_additional_data_dir": _absolute_path_str(paths.additional_data_dir),
+            "generated_dictionary_family_root": _absolute_path_str(generated_dictionary_families.root_dir),
+            "effective_dictionary_input_dir": _absolute_path_str(effective_dictionary_input_dir),
+            "generated_dictionary_families": generated_dictionary_families.to_manifest_dict()["families"],
+        }
 
         sample_backbone_lf: pl.LazyFrame | None = None
         annual_accounting_panel_lf: pl.LazyFrame | None = None

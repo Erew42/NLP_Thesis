@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import csv
+import json
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -27,6 +30,89 @@ MASTER_DICTIONARY_CANDIDATES: tuple[tuple[str, str], ...] = (
     ("LM2011_MasterDictionary.txt", UPDATED_MASTER_DICTIONARY_INPUT),
     ("Loughran-McDonald_MasterDictionary_1993-2024.csv", UPDATED_NON_PAPER_ERA_RESOURCE),
 )
+GENERATED_DICTIONARY_FAMILIES_DIRNAME = "generated_dictionary_families"
+REPLICATION_DICTIONARY_FAMILY_NAME = "replication"
+EXTENDED_DICTIONARY_FAMILY_NAME = "extended"
+PAPER_ERA_SENTIMENT_YEAR = "2009"
+PAPER_ERA_MASTER_SOURCES: tuple[str, ...] = ("12of12inf", "10K_2008", "10K_2009")
+
+
+@dataclass(frozen=True)
+class _GeneratedListSelectionRule:
+    category: str
+    source_column: str
+    output_filename: str
+    selected_value: str | None = None
+    required: bool = True
+
+
+REPLICATION_LIST_SELECTION_RULES: tuple[_GeneratedListSelectionRule, ...] = (
+    _GeneratedListSelectionRule("negative", "Negative", "Fin-Neg.txt", selected_value=PAPER_ERA_SENTIMENT_YEAR),
+    _GeneratedListSelectionRule("positive", "Positive", "Fin-Pos.txt", selected_value=PAPER_ERA_SENTIMENT_YEAR),
+    _GeneratedListSelectionRule("uncertainty", "Uncertainty", "Fin-Unc.txt", selected_value=PAPER_ERA_SENTIMENT_YEAR),
+    _GeneratedListSelectionRule("litigious", "Litigious", "Fin-Lit.txt", selected_value=PAPER_ERA_SENTIMENT_YEAR),
+    _GeneratedListSelectionRule("modal_strong", "Modal", "MW-Strong.txt", selected_value="1"),
+    _GeneratedListSelectionRule("modal_weak", "Modal", "MW-Weak.txt", selected_value="3"),
+)
+EXTENDED_LIST_SELECTION_RULES: tuple[_GeneratedListSelectionRule, ...] = (
+    _GeneratedListSelectionRule("negative", "Negative", "Fin-Neg.txt"),
+    _GeneratedListSelectionRule("positive", "Positive", "Fin-Pos.txt"),
+    _GeneratedListSelectionRule("uncertainty", "Uncertainty", "Fin-Unc.txt"),
+    _GeneratedListSelectionRule("litigious", "Litigious", "Fin-Lit.txt"),
+    _GeneratedListSelectionRule("modal_strong", "Strong_Modal", "MW-Strong.txt"),
+    _GeneratedListSelectionRule("modal_weak", "Weak_Modal", "MW-Weak.txt"),
+    _GeneratedListSelectionRule("constraining", "Constraining", "Constraining.txt", required=False),
+    _GeneratedListSelectionRule("complexity", "Complexity", "Complexity.txt", required=False),
+)
+
+
+@dataclass(frozen=True)
+class Lm2011GeneratedDictionaryFamily:
+    family_name: str
+    directory: Path
+    manifest_path: Path
+    master_dictionary_path: Path
+    master_dictionary_word_count: int
+    dictionary_list_paths: dict[str, Path]
+    dictionary_list_counts: dict[str, int]
+    source_resources: dict[str, str]
+    selection_rules: dict[str, Any]
+
+    def to_manifest_dict(self) -> dict[str, Any]:
+        return {
+            "family_name": self.family_name,
+            "directory": str(self.directory.resolve()),
+            "manifest_path": str(self.manifest_path.resolve()),
+            "source_resources": dict(self.source_resources),
+            "selection_rules": dict(self.selection_rules),
+            "dictionary_lists": {
+                category: {
+                    "path": str(path.resolve()),
+                    "word_count": self.dictionary_list_counts[category],
+                }
+                for category, path in self.dictionary_list_paths.items()
+            },
+            "master_dictionary": {
+                "path": str(self.master_dictionary_path.resolve()),
+                "word_count": self.master_dictionary_word_count,
+            },
+        }
+
+
+@dataclass(frozen=True)
+class Lm2011GeneratedDictionaryFamilies:
+    root_dir: Path
+    replication: Lm2011GeneratedDictionaryFamily
+    extended: Lm2011GeneratedDictionaryFamily
+
+    def to_manifest_dict(self) -> dict[str, Any]:
+        return {
+            "root_dir": str(self.root_dir.resolve()),
+            "families": {
+                self.replication.family_name: self.replication.to_manifest_dict(),
+                self.extended.family_name: self.extended.to_manifest_dict(),
+            },
+        }
 
 
 @dataclass(frozen=True)
@@ -78,6 +164,336 @@ def _require_existing_nonempty_path(path: Path, *, label: str) -> Path:
     if path.stat().st_size <= 0:
         raise ValueError(f"{label} is empty: {path}")
     return path
+
+
+def _normalize_cell(value: str | None) -> str:
+    if value is None:
+        return ""
+    return value.strip()
+
+
+def _unique_preserve_order(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    unique_values: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        unique_values.append(value)
+    return unique_values
+
+
+def _require_csv_columns(
+    *,
+    fieldnames: list[str] | None,
+    required_columns: tuple[str, ...],
+    label: str,
+) -> list[str]:
+    available = list(fieldnames or ())
+    missing = [name for name in required_columns if name not in available]
+    if missing:
+        raise ValueError(f"{label} is missing required columns: {missing}")
+    return available
+
+
+def _read_csv_rows(
+    path: Path,
+    *,
+    label: str,
+    required_columns: tuple[str, ...],
+) -> tuple[list[str], list[dict[str, str]]]:
+    resolved_path = _require_existing_nonempty_path(path, label=label)
+    with resolved_path.open("r", encoding="utf-8", errors="ignore", newline="") as handle:
+        reader = csv.DictReader(handle)
+        fieldnames = _require_csv_columns(
+            fieldnames=reader.fieldnames,
+            required_columns=required_columns,
+            label=label,
+        )
+        rows = [{key: value or "" for key, value in row.items()} for row in reader]
+    if not rows:
+        raise ValueError(f"{label} contained no data rows: {resolved_path}")
+    return fieldnames, rows
+
+
+def _write_word_list(path: Path, words: list[str]) -> None:
+    path.write_text("\n".join(words) + "\n", encoding="utf-8")
+
+
+def _copy_word_list(source_path: Path, destination_path: Path) -> int:
+    source_words = load_lm2011_word_list(source_path)
+    shutil.copy2(source_path, destination_path)
+    return len(source_words)
+
+
+def _write_csv_rows(
+    path: Path,
+    *,
+    fieldnames: list[str],
+    rows: list[dict[str, str]],
+) -> None:
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def _select_equal_match_words(
+    rows: list[dict[str, str]],
+    *,
+    column: str,
+    selected_value: str,
+) -> list[str]:
+    selected_words = [
+        _normalize_cell(row.get("Word"))
+        for row in rows
+        if _normalize_cell(row.get(column)) == selected_value and _normalize_cell(row.get("Word"))
+    ]
+    return _unique_preserve_order(selected_words)
+
+
+def _is_active_extended_membership(value: str | None) -> bool:
+    normalized = _normalize_cell(value)
+    if not normalized or normalized == "0":
+        return False
+    return not normalized.startswith("-")
+
+
+def _select_active_words(
+    rows: list[dict[str, str]],
+    *,
+    column: str,
+) -> list[str]:
+    selected_words = [
+        _normalize_cell(row.get("Word"))
+        for row in rows
+        if _normalize_cell(row.get("Word")) and _is_active_extended_membership(row.get(column))
+    ]
+    return _unique_preserve_order(selected_words)
+
+
+def _reset_generated_dictionary_family_root(root_dir: Path) -> None:
+    if root_dir.exists():
+        shutil.rmtree(root_dir)
+    root_dir.mkdir(parents=True, exist_ok=True)
+
+
+def _write_family_manifest(
+    family_dir: Path,
+    *,
+    payload: dict[str, Any],
+) -> Path:
+    manifest_path = family_dir / "manifest.json"
+    manifest_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    return manifest_path
+
+
+def _materialize_replication_dictionary_family(
+    base_dir: Path,
+    family_dir: Path,
+) -> Lm2011GeneratedDictionaryFamily:
+    source_master_dictionary_path = base_dir / "LM2011_MasterDictionary.txt"
+    fieldnames, rows = _read_csv_rows(
+        source_master_dictionary_path,
+        label="LM2011 master dictionary file",
+        required_columns=("Word", "Negative", "Positive", "Uncertainty", "Litigious", "Modal", "Source"),
+    )
+    family_dir.mkdir(parents=True, exist_ok=True)
+
+    dictionary_list_paths: dict[str, Path] = {}
+    dictionary_list_counts: dict[str, int] = {}
+    for rule in REPLICATION_LIST_SELECTION_RULES:
+        words = _select_equal_match_words(
+            rows,
+            column=rule.source_column,
+            selected_value=rule.selected_value or "",
+        )
+        output_path = family_dir / rule.output_filename
+        _write_word_list(output_path, words)
+        dictionary_list_paths[rule.category] = output_path
+        dictionary_list_counts[rule.category] = len(words)
+
+    harvard_source_path = _require_existing_nonempty_path(
+        base_dir / HARVARD_NEGATIVE_WORD_LIST_FILE,
+        label="Harvard negative word list",
+    )
+    harvard_output_path = family_dir / HARVARD_NEGATIVE_WORD_LIST_FILE
+    dictionary_list_paths["harvard_negative"] = harvard_output_path
+    dictionary_list_counts["harvard_negative"] = _copy_word_list(harvard_source_path, harvard_output_path)
+
+    filtered_rows = [
+        row for row in rows if _normalize_cell(row.get("Source")) in PAPER_ERA_MASTER_SOURCES
+    ]
+    master_dictionary_output_path = family_dir / "LM2011_MasterDictionary.txt"
+    _write_csv_rows(master_dictionary_output_path, fieldnames=fieldnames, rows=filtered_rows)
+
+    selection_rules = {
+        "dictionary_lists": {
+            rule.category: {
+                "source_column": rule.source_column,
+                "selected_value": rule.selected_value,
+            }
+            for rule in REPLICATION_LIST_SELECTION_RULES
+        },
+        "recognized_word_master_dictionary": {
+            "source_column": "Source",
+            "allowed_source_values": list(PAPER_ERA_MASTER_SOURCES),
+        },
+        "copied_resources": {
+            "harvard_negative": HARVARD_NEGATIVE_WORD_LIST_FILE,
+        },
+    }
+    manifest_path = _write_family_manifest(
+        family_dir,
+        payload={
+            "family_name": REPLICATION_DICTIONARY_FAMILY_NAME,
+            "source_resources": {
+                "master_dictionary": str(source_master_dictionary_path.resolve()),
+                "harvard_negative": str(harvard_source_path.resolve()),
+            },
+            "selection_rules": selection_rules,
+            "dictionary_lists": {
+                category: {
+                    "path": str(path.resolve()),
+                    "word_count": dictionary_list_counts[category],
+                }
+                for category, path in dictionary_list_paths.items()
+            },
+            "master_dictionary": {
+                "path": str(master_dictionary_output_path.resolve()),
+                "word_count": len(filtered_rows),
+            },
+        },
+    )
+    return Lm2011GeneratedDictionaryFamily(
+        family_name=REPLICATION_DICTIONARY_FAMILY_NAME,
+        directory=family_dir,
+        manifest_path=manifest_path,
+        master_dictionary_path=master_dictionary_output_path,
+        master_dictionary_word_count=len(filtered_rows),
+        dictionary_list_paths=dictionary_list_paths,
+        dictionary_list_counts=dictionary_list_counts,
+        source_resources={
+            "master_dictionary": str(source_master_dictionary_path.resolve()),
+            "harvard_negative": str(harvard_source_path.resolve()),
+        },
+        selection_rules=selection_rules,
+    )
+
+
+def _materialize_extended_dictionary_family(
+    base_dir: Path,
+    family_dir: Path,
+) -> Lm2011GeneratedDictionaryFamily:
+    source_master_dictionary_path = base_dir / "Loughran-McDonald_MasterDictionary_1993-2024.csv"
+    fieldnames, rows = _read_csv_rows(
+        source_master_dictionary_path,
+        label="extended LM master dictionary file",
+        required_columns=("Word", "Negative", "Positive", "Uncertainty", "Litigious", "Strong_Modal", "Weak_Modal"),
+    )
+    family_dir.mkdir(parents=True, exist_ok=True)
+
+    dictionary_list_paths: dict[str, Path] = {}
+    dictionary_list_counts: dict[str, int] = {}
+    available_columns = set(fieldnames)
+    for rule in EXTENDED_LIST_SELECTION_RULES:
+        if rule.source_column not in available_columns:
+            if rule.required:
+                raise ValueError(
+                    f"Extended LM master dictionary file is missing required column {rule.source_column!r}: "
+                    f"{source_master_dictionary_path}"
+                )
+            continue
+        words = _select_active_words(rows, column=rule.source_column)
+        if not words and not rule.required:
+            continue
+        output_path = family_dir / rule.output_filename
+        _write_word_list(output_path, words)
+        dictionary_list_paths[rule.category] = output_path
+        dictionary_list_counts[rule.category] = len(words)
+
+    harvard_source_path = _require_existing_nonempty_path(
+        base_dir / HARVARD_NEGATIVE_WORD_LIST_FILE,
+        label="Harvard negative word list",
+    )
+    harvard_output_path = family_dir / HARVARD_NEGATIVE_WORD_LIST_FILE
+    dictionary_list_paths["harvard_negative"] = harvard_output_path
+    dictionary_list_counts["harvard_negative"] = _copy_word_list(harvard_source_path, harvard_output_path)
+
+    master_dictionary_output_path = family_dir / "Loughran-McDonald_MasterDictionary_1993-2024.csv"
+    shutil.copy2(source_master_dictionary_path, master_dictionary_output_path)
+
+    selection_rules = {
+        "dictionary_lists": {
+            rule.category: {
+                "source_column": rule.source_column,
+                "selected_membership_rule": "positive_year_flag_only",
+            }
+            for rule in EXTENDED_LIST_SELECTION_RULES
+            if rule.required or rule.source_column in available_columns
+        },
+        "recognized_word_master_dictionary": {
+            "selection_rule": "full_current_csv_word_universe",
+        },
+        "copied_resources": {
+            "harvard_negative": HARVARD_NEGATIVE_WORD_LIST_FILE,
+        },
+    }
+    manifest_path = _write_family_manifest(
+        family_dir,
+        payload={
+            "family_name": EXTENDED_DICTIONARY_FAMILY_NAME,
+            "source_resources": {
+                "master_dictionary": str(source_master_dictionary_path.resolve()),
+                "harvard_negative": str(harvard_source_path.resolve()),
+            },
+            "selection_rules": selection_rules,
+            "dictionary_lists": {
+                category: {
+                    "path": str(path.resolve()),
+                    "word_count": dictionary_list_counts[category],
+                }
+                for category, path in dictionary_list_paths.items()
+            },
+            "master_dictionary": {
+                "path": str(master_dictionary_output_path.resolve()),
+                "word_count": len(rows),
+            },
+        },
+    )
+    return Lm2011GeneratedDictionaryFamily(
+        family_name=EXTENDED_DICTIONARY_FAMILY_NAME,
+        directory=family_dir,
+        manifest_path=manifest_path,
+        master_dictionary_path=master_dictionary_output_path,
+        master_dictionary_word_count=len(rows),
+        dictionary_list_paths=dictionary_list_paths,
+        dictionary_list_counts=dictionary_list_counts,
+        source_resources={
+            "master_dictionary": str(source_master_dictionary_path.resolve()),
+            "harvard_negative": str(harvard_source_path.resolve()),
+        },
+        selection_rules=selection_rules,
+    )
+
+
+def materialize_lm2011_dictionary_families(additional_data_dir: Path | str) -> Lm2011GeneratedDictionaryFamilies:
+    base_dir = Path(additional_data_dir)
+    generated_root = base_dir / GENERATED_DICTIONARY_FAMILIES_DIRNAME
+    _reset_generated_dictionary_family_root(generated_root)
+    replication_family = _materialize_replication_dictionary_family(
+        base_dir,
+        generated_root / REPLICATION_DICTIONARY_FAMILY_NAME,
+    )
+    extended_family = _materialize_extended_dictionary_family(
+        base_dir,
+        generated_root / EXTENDED_DICTIONARY_FAMILY_NAME,
+    )
+    return Lm2011GeneratedDictionaryFamilies(
+        root_dir=generated_root,
+        replication=replication_family,
+        extended=extended_family,
+    )
 
 
 def load_lm2011_word_list(path: Path | str) -> tuple[str, ...]:

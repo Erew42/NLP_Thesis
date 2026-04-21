@@ -222,10 +222,40 @@ def _build_temp_layout(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
         ),
     )
 
-    for name in ("Fin-Neg.txt", "Fin-Pos.txt", "Fin-Unc.txt", "Fin-Lit.txt", "MW-Strong.txt", "MW-Weak.txt"):
-        _write_text(additional_data_dir / name, "token\n")
+    _write_text(additional_data_dir / "Fin-Neg.txt", "token\nstale_neg\n")
+    _write_text(additional_data_dir / "Fin-Pos.txt", "harvard\nstale_pos\n")
+    _write_text(additional_data_dir / "Fin-Unc.txt", "recognized\nstale_unc\n")
+    _write_text(additional_data_dir / "Fin-Lit.txt", "token\nstale_lit\n")
+    _write_text(additional_data_dir / "MW-Strong.txt", "token\n")
+    _write_text(additional_data_dir / "MW-Weak.txt", "recognized\n")
     _write_text(additional_data_dir / "Harvard_IV_NEG_Inf.txt", "harvard\n")
-    _write_text(additional_data_dir / "LM2011_MasterDictionary.txt", "Word\ntoken\nharvard\nrecognized\n")
+    _write_text(
+        additional_data_dir / "LM2011_MasterDictionary.txt",
+        "\n".join(
+            [
+                "Word,Negative,Positive,Uncertainty,Litigious,Modal,Source",
+                "TOKEN,2009,0,0,2009,1,12of12inf",
+                "HARVARD,0,2009,0,0,0,10K_2008",
+                "RECOGNIZED,0,0,2009,0,3,10K_2009",
+                "STALE_NEG,2011,0,0,0,0,10K_2010",
+                "STALE_LIT,0,0,0,2011,0,10K_2010",
+            ]
+        ),
+    )
+    _write_text(
+        additional_data_dir / "Loughran-McDonald_MasterDictionary_1993-2024.csv",
+        "\n".join(
+            [
+                "Word,Negative,Positive,Uncertainty,Litigious,Strong_Modal,Weak_Modal,Constraining,Complexity,Source",
+                "TOKEN,2009,0,0,0,2009,0,0,0,12of12inf",
+                "HARVARD,0,2012,0,0,0,0,0,0,10K_2008",
+                "RECOGNIZED,0,0,2011,0,0,2011,0,0,10K_2009",
+                "STALE_NEG,-2020,0,0,0,0,0,0,0,10K_2010",
+                "STALE_LIT,0,0,0,2014,0,0,2014,0,10K_2010",
+                "COMPLEXITY_ONLY,0,0,0,0,0,0,0,2024,10K_2010",
+            ]
+        ),
+    )
     _write_text(additional_data_dir / "FF_Siccodes_48_Industries.txt", "1 Agric Agriculture\n0100-0199 Range\n")
     _write_text(
         additional_data_dir / "F-F_Research_Data_Factors_daily.csv",
@@ -274,14 +304,25 @@ def _build_temp_layout(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
     return sample_root, upstream_run_root, additional_data_dir, output_dir
 
 
+def _effective_replication_dictionary_input_dir(additional_data_dir: Path) -> Path:
+    families = runner.materialize_lm2011_dictionary_families(additional_data_dir)
+    return families.replication.directory
+
+
 def _write_valid_text_feature_artifact(
     path: Path,
     *,
     additional_data_dir: Path,
     stage_name: str,
     doc_id: str = "d1",
+    dictionary_input_dir: Path | None = None,
 ) -> None:
-    dictionary_inputs = runner.load_lm2011_dictionary_inputs(additional_data_dir)
+    effective_dictionary_input_dir = (
+        _effective_replication_dictionary_input_dir(additional_data_dir)
+        if dictionary_input_dir is None
+        else dictionary_input_dir
+    )
+    dictionary_inputs = runner.load_lm2011_dictionary_inputs(effective_dictionary_input_dir)
     spec = runner.TEXT_FEATURE_REUSE_SPECS[stage_name]
     normalized_dict = lm2011_text.normalize_lm2011_dictionary_lists(dictionary_inputs.dictionary_lists)
     signal_specs = lm2011_text._build_lm2011_signal_specs(
@@ -327,8 +368,14 @@ def _write_text_feature_reuse_manifest(
     additional_data_dir: Path,
     full_10k_cleaning_contract: str = runner.DEFAULT_LM2011_FULL_10K_CLEANING_CONTRACT,
     raw_mda_cleaning_policy_id: str = runner.RAW_ITEM_TEXT_CLEANING_POLICY_ID,
+    dictionary_input_dir: Path | None = None,
 ) -> None:
-    dictionary_inputs = runner.load_lm2011_dictionary_inputs(additional_data_dir)
+    effective_dictionary_input_dir = (
+        _effective_replication_dictionary_input_dir(additional_data_dir)
+        if dictionary_input_dir is None
+        else dictionary_input_dir
+    )
+    dictionary_inputs = runner.load_lm2011_dictionary_inputs(effective_dictionary_input_dir)
     payload = {
         "runner_name": "lm2011_sample_post_refinitiv_runner",
         "config": {
@@ -1917,6 +1964,66 @@ def test_pipeline_ignores_incompatible_auto_text_feature_artifact_and_rebuilds(
     assert manifest["row_counts"]["text_features_full_10k"] == 1
 
 
+def test_pipeline_rejects_root_dictionary_manifest_reuse_after_generated_replication_switch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sample_root, upstream_run_root, additional_data_dir, output_dir = _build_temp_layout(tmp_path)
+    _write_valid_text_feature_artifact(
+        output_dir / runner.STAGE_ARTIFACT_FILENAMES["text_features_full_10k"],
+        additional_data_dir=additional_data_dir,
+        stage_name="text_features_full_10k",
+        dictionary_input_dir=additional_data_dir,
+    )
+    _write_text_feature_reuse_manifest(
+        output_dir,
+        additional_data_dir=additional_data_dir,
+        dictionary_input_dir=additional_data_dir,
+    )
+
+    run_cfg = runner.build_lm2011_post_refinitiv_run_config(
+        runner.parse_args(
+            [
+                "--sample-root",
+                str(sample_root),
+                "--upstream-run-root",
+                str(upstream_run_root),
+                "--additional-data-dir",
+                str(additional_data_dir),
+                "--output-dir",
+                str(output_dir),
+            ]
+        ),
+        enabled_stages=("text_features_full_10k",),
+    )
+
+    calls: dict[str, int] = {"count": 0}
+
+    def _full_10k_writer_stub(
+        sec_parsed_lf: pl.LazyFrame,
+        *,
+        output_path: Path,
+        **_: object,
+    ) -> int:
+        calls["count"] += 1
+        assert sec_parsed_lf.collect().get_column("doc_id").to_list() == ["d1"]
+        _write_valid_text_feature_artifact(
+            output_path,
+            additional_data_dir=additional_data_dir,
+            stage_name="text_features_full_10k",
+        )
+        return 1
+
+    monkeypatch.setattr(runner, "write_lm2011_text_features_full_10k_parquet", _full_10k_writer_stub)
+
+    assert runner.run_lm2011_post_refinitiv_pipeline(run_cfg) == 0
+
+    manifest = json.loads((output_dir / runner.MANIFEST_FILENAME).read_text(encoding="utf-8"))
+    assert calls["count"] == 1
+    assert manifest["stages"]["text_features_full_10k"]["status"] == "generated"
+    assert manifest["row_counts"]["text_features_full_10k"] == 1
+
+
 def test_pipeline_invalid_auto_text_feature_artifact_fails_early_when_downstream_requires_it(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2389,8 +2496,22 @@ def test_main_writes_expected_artifacts_and_manifest_for_stubbed_run(
     assert manifest["resolved_inputs"]["ff_monthly_csv_path"].endswith("F-F_Research_Data_Factors.csv")
     assert manifest["resolved_inputs"]["momentum_monthly_csv_path"].endswith("F-F_Momentum_Factor.csv")
     assert manifest["resolved_inputs"]["monthly_stock_path"].endswith("sfz_mth.parquet")
+    assert manifest["resolved_inputs"]["generated_dictionary_family_root"].endswith(
+        "generated_dictionary_families"
+    )
+    assert manifest["resolved_inputs"]["effective_dictionary_input_dir"].endswith(
+        "generated_dictionary_families\\replication"
+    )
     assert manifest["dictionary_inputs"]["resource_scope"] == "repo-local operative LM2011-style lexicon inputs"
     assert "not asserted to be the original LM2011" in manifest["dictionary_inputs"]["historical_provenance_warning"]
+    assert manifest["dictionary_inputs"]["source_additional_data_dir"] == str(additional_data_dir.resolve())
+    assert manifest["dictionary_inputs"]["generated_dictionary_family_root"] == str(
+        (additional_data_dir / "generated_dictionary_families").resolve()
+    )
+    assert manifest["dictionary_inputs"]["effective_dictionary_input_dir"] == str(
+        (additional_data_dir / "generated_dictionary_families" / "replication").resolve()
+    )
+    assert set(manifest["dictionary_inputs"]["generated_dictionary_families"]) == {"replication", "extended"}
     master_resources = [
         resource
         for resource in manifest["dictionary_inputs"]["resources"]
@@ -2398,6 +2519,12 @@ def test_main_writes_expected_artifacts_and_manifest_for_stubbed_run(
     ]
     assert master_resources[0]["name"] == "LM2011_MasterDictionary.txt"
     assert "not provenance-verified" in master_resources[0]["provenance_status"]
+    assert all(
+        "generated_dictionary_families\\replication" in resource["path"]
+        for resource in manifest["dictionary_inputs"]["resources"]
+    )
+    assert (additional_data_dir / "generated_dictionary_families" / "replication").exists()
+    assert (additional_data_dir / "generated_dictionary_families" / "extended").exists()
     assert manifest["stages"]["sample_backbone"]["status"] == "generated"
     assert manifest["stages"]["sample_backbone"]["source_path"] == str(prebuilt_backbone.resolve())
     assert manifest["stages"]["event_screen_surface"]["status"] == "generated"
@@ -2422,11 +2549,11 @@ def test_main_writes_expected_artifacts_and_manifest_for_stubbed_run(
     assert captured["text_features_full_10k_kwargs"]["batch_size"] == 4
     assert captured["text_features_full_10k_kwargs"]["temp_root"] == local_work_root.resolve() / "text_features_full_10k"
     assert callable(captured["text_features_full_10k_kwargs"]["progress_callback"])
-    assert captured["text_features_full_10k_kwargs"]["master_dictionary_words"] == ("token", "harvard", "recognized")
+    assert captured["text_features_full_10k_kwargs"]["master_dictionary_words"] == ("TOKEN", "HARVARD", "RECOGNIZED")
     assert captured["text_features_mda_kwargs"]["batch_size"] == 20
     assert captured["text_features_mda_kwargs"]["temp_root"] == local_work_root.resolve() / "text_features_mda"
     assert callable(captured["text_features_mda_kwargs"]["progress_callback"])
-    assert captured["text_features_mda_kwargs"]["master_dictionary_words"] == ("token", "harvard", "recognized")
+    assert captured["text_features_mda_kwargs"]["master_dictionary_words"] == ("TOKEN", "HARVARD", "RECOGNIZED")
     assert captured["table_i_windows"] == [
         (dt.date(1994, 1, 1), dt.date(2008, 12, 31)),
         (dt.date(1994, 1, 1), dt.date(2024, 12, 31)),
