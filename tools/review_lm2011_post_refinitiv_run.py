@@ -5,7 +5,7 @@ import datetime as dt
 import json
 import math
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -656,6 +656,8 @@ def _result_lookup(df: pl.DataFrame) -> tuple[dict[str, dict[str, dict[str, Any]
             "estimate": row["estimate"],
             "t_stat": row["t_stat"],
             "standard_error": row["standard_error"],
+            "signal_name": signal_name,
+            "coefficient_name": coefficient_name,
         }
         fit_info.setdefault(
             signal_name,
@@ -667,10 +669,29 @@ def _result_lookup(df: pl.DataFrame) -> tuple[dict[str, dict[str, dict[str, Any]
     return lookup, fit_info
 
 
-def _coef_cell(row: dict[str, Any] | None, *, digits: int = 3) -> str:
+def _scale_table_viii_estimate(row: dict[str, Any]) -> float:
+    scale = 100.0
+    if row.get("coefficient_name") == row.get("signal_name") and row.get("signal_name") in {
+        "h4n_inf_tfidf",
+        "lm_negative_tfidf",
+    }:
+        scale *= 100.0
+    return scale
+
+
+def _coef_cell(
+    row: dict[str, Any] | None,
+    *,
+    digits: int = 3,
+    estimate_scale: float | Callable[[dict[str, Any]], float] = 1.0,
+) -> str:
     if row is None:
         return ""
-    estimate = _format_float(row.get("estimate"), digits=digits)
+    scale = estimate_scale(row) if callable(estimate_scale) else estimate_scale
+    estimate_value = row.get("estimate")
+    if not _is_missing_number(estimate_value):
+        estimate_value = float(estimate_value) * float(scale)
+    estimate = _format_float(estimate_value, digits=digits)
     t_stat = _format_float(row.get("t_stat"), digits=2)
     return rf"\shortstack[c]{{{estimate} \\ ({t_stat})}}"
 
@@ -721,6 +742,8 @@ def _render_four_column_wordlist_table(
     h4n_label: str,
     finneg_label: str,
     extra_controls: Sequence[tuple[str, str]] = (),
+    estimate_scale: float | Callable[[dict[str, Any]], float] = 1.0,
+    note_suffix: str = "",
 ) -> str:
     lookup, fit_info = _result_lookup(df)
     signal_order = ["h4n_inf_prop", "lm_negative_prop", "h4n_inf_tfidf", "lm_negative_tfidf"]
@@ -757,9 +780,9 @@ def _render_four_column_wordlist_table(
         " & ".join(
             [
                 _latex_escape(h4n_label),
-                _coef_cell(row_lookup["h4n_inf_prop"]),
+                _coef_cell(row_lookup["h4n_inf_prop"], estimate_scale=estimate_scale),
                 "",
-                _coef_cell(row_lookup["h4n_inf_tfidf"]),
+                _coef_cell(row_lookup["h4n_inf_tfidf"], estimate_scale=estimate_scale),
                 "",
             ]
         )
@@ -768,9 +791,9 @@ def _render_four_column_wordlist_table(
             [
                 _latex_escape(finneg_label),
                 "",
-                _coef_cell(row_lookup["lm_negative_prop"]),
+                _coef_cell(row_lookup["lm_negative_prop"], estimate_scale=estimate_scale),
                 "",
-                _coef_cell(row_lookup["lm_negative_tfidf"]),
+                _coef_cell(row_lookup["lm_negative_tfidf"], estimate_scale=estimate_scale),
             ]
         )
         + r" \\",
@@ -779,18 +802,21 @@ def _render_four_column_wordlist_table(
     ]
     for display_label, coefficient_name in control_rows:
         cells = [
-            _coef_cell(lookup.get(signal_name, {}).get(coefficient_name))
+            _coef_cell(lookup.get(signal_name, {}).get(coefficient_name), estimate_scale=estimate_scale)
             for signal_name in signal_order
         ]
         if not any(cells):
             continue
         lines.append(" & ".join([_latex_escape(display_label), *cells]) + r" \\")
+    note = _fit_summary_note(fit_info, signal_order)
+    if note_suffix:
+        note += f" {note_suffix}"
     lines.extend(
         [
             r"\bottomrule",
             r"\end{tabular}",
             r"\end{table}",
-            rf"{{\footnotesize\emph{{Note:}} {_latex_escape(_fit_summary_note(fit_info, signal_order))}}}",
+            rf"{{\footnotesize\emph{{Note:}} {_latex_escape(note)}}}",
         ]
     )
     return "\n".join(lines)
@@ -801,6 +827,9 @@ def _render_dictionary_surface_table(
     heading: str,
     subtitle: str,
     df: pl.DataFrame,
+    *,
+    estimate_scale: float | Callable[[dict[str, Any]], float] = 1.0,
+    note_suffix: str = "",
 ) -> str:
     lookup, fit_info = _result_lookup(df)
     panel_a_order = [
@@ -821,7 +850,10 @@ def _render_dictionary_surface_table(
     ]
 
     def _panel_lines(panel_title: str, spec_order: Sequence[tuple[str, str]]) -> list[str]:
-        cells = [_coef_cell(lookup.get(signal_name, {}).get(signal_name)) for _, signal_name in spec_order]
+        cells = [
+            _coef_cell(lookup.get(signal_name, {}).get(signal_name), estimate_scale=estimate_scale)
+            for _, signal_name in spec_order
+        ]
         return [
             rf"\multicolumn{{7}}{{c}}{{{_latex_escape(panel_title)}}} \\",
             r"\cmidrule(lr){1-7}",
@@ -847,6 +879,8 @@ def _render_dictionary_surface_table(
         r"\end{table}",
     ]
     note = _fit_summary_note(fit_info, [signal_name for _, signal_name in (*panel_a_order, *panel_b_order)])
+    if note_suffix:
+        note += f" {note_suffix}"
     note += " The staged Table VI artifact retains the filing-period excess-return surface only; abnormal-volume and postevent-volatility surfaces are not stored in the selected run."
     lines.append(rf"{{\footnotesize\emph{{Note:}} {_latex_escape(note)}}}")
     return "\n".join(lines)
@@ -857,6 +891,9 @@ def _render_normalized_difference_table(
     heading: str,
     subtitle: str,
     df: pl.DataFrame,
+    *,
+    estimate_scale: float | Callable[[dict[str, Any]], float] = 1.0,
+    note_suffix: str = "",
 ) -> str:
     lookup, fit_info = _result_lookup(df)
     signal_order = ["normalized_difference_h4n_inf", "normalized_difference_negative"]
@@ -883,7 +920,10 @@ def _render_normalized_difference_table(
         " & ".join(
             [
                 r"H4N-Inf normalized difference",
-                _coef_cell(lookup.get("normalized_difference_h4n_inf", {}).get("normalized_difference_h4n_inf")),
+                _coef_cell(
+                    lookup.get("normalized_difference_h4n_inf", {}).get("normalized_difference_h4n_inf"),
+                    estimate_scale=estimate_scale,
+                ),
                 "",
             ]
         )
@@ -892,7 +932,10 @@ def _render_normalized_difference_table(
             [
                 r"Fin-Neg normalized difference",
                 "",
-                _coef_cell(lookup.get("normalized_difference_negative", {}).get("normalized_difference_negative")),
+                _coef_cell(
+                    lookup.get("normalized_difference_negative", {}).get("normalized_difference_negative"),
+                    estimate_scale=estimate_scale,
+                ),
             ]
         )
         + r" \\",
@@ -900,16 +943,22 @@ def _render_normalized_difference_table(
         r"\multicolumn{3}{l}{\textit{Control Variables}} \\",
     ]
     for display_label, coefficient_name in controls:
-        cells = [_coef_cell(lookup.get(signal_name, {}).get(coefficient_name)) for signal_name in signal_order]
+        cells = [
+            _coef_cell(lookup.get(signal_name, {}).get(coefficient_name), estimate_scale=estimate_scale)
+            for signal_name in signal_order
+        ]
         if not any(cells):
             continue
         lines.append(" & ".join([_latex_escape(display_label), *cells]) + r" \\")
+    note = _fit_summary_note(fit_info, signal_order)
+    if note_suffix:
+        note += f" {note_suffix}"
     lines.extend(
         [
             r"\bottomrule",
             r"\end{tabular}",
             r"\end{table}",
-            rf"{{\footnotesize\emph{{Note:}} {_latex_escape(_fit_summary_note(fit_info, signal_order))}}}",
+            rf"{{\footnotesize\emph{{Note:}} {_latex_escape(note)}}}",
         ]
     )
     return "\n".join(lines)
@@ -1178,44 +1227,19 @@ def _paper_table_sections(run_dir: Path) -> list[str]:
     if sample_block is not None:
         sections.append(sample_block)
 
+    return_note = (
+        "Displayed coefficients are multiplied by 100 to express return-regression estimates in percentage-point units, matching LM2011 table conventions."
+    )
+    sue_note = (
+        "Displayed coefficients are multiplied by 100 to express SUE-regression estimates in percentage-point units. Following LM2011 Table VIII, the tf.idf word-list coefficients in columns (3) and (4) are multiplied by an additional 100 for presentation."
+    )
     table_map = {filename: title for title, filename in CORE_QUARTERLY_RESULTS}
     for title, filename in CORE_QUARTERLY_RESULTS:
         path = run_dir / filename
         if not path.exists():
             continue
         df = pl.read_parquet(path)
-        if filename.startswith("lm2011_table_iv"):
-            sections.append(
-                _render_four_column_wordlist_table(
-                    title,
-                    "Comparison of Negative Word Lists Using Filing Period Excess Return Regressions",
-                    "Full 10-K document",
-                    df,
-                    h4n_label="H4N-Inf (Harvard-IV-4-Neg with inflections)",
-                    finneg_label="Fin-Neg (negative)",
-                )
-            )
-        elif filename.startswith("lm2011_table_v"):
-            sections.append(
-                _render_four_column_wordlist_table(
-                    title,
-                    "Comparison of Negative Word Lists Using Filing Period Excess Return Regressions",
-                    "MD&A section",
-                    df,
-                    h4n_label="H4N-Inf (only MD&A)",
-                    finneg_label="Fin-Neg (only MD&A)",
-                )
-            )
-        elif filename.startswith("lm2011_table_vi"):
-            sections.append(
-                _render_dictionary_surface_table(
-                    title,
-                    "Additional Word Lists and Filing Period Excess Return Regressions",
-                    "Finance-dictionary surface reconstructed from staged coefficients",
-                    df,
-                )
-            )
-        elif filename.startswith("lm2011_table_viii"):
+        if filename.startswith("lm2011_table_viii"):
             sections.append(
                 _render_four_column_wordlist_table(
                     title,
@@ -1228,6 +1252,45 @@ def _paper_table_sections(run_dir: Path) -> list[str]:
                         ("Analysts' earnings forecast dispersion", "analyst_dispersion"),
                         ("Analysts' earnings revisions", "analyst_revisions"),
                     ),
+                    estimate_scale=_scale_table_viii_estimate,
+                    note_suffix=sue_note,
+                )
+            )
+        elif filename.startswith("lm2011_table_vi"):
+            sections.append(
+                _render_dictionary_surface_table(
+                    title,
+                    "Additional Word Lists and Filing Period Excess Return Regressions",
+                    "Finance-dictionary surface reconstructed from staged coefficients",
+                    df,
+                    estimate_scale=100.0,
+                    note_suffix=return_note,
+                )
+            )
+        elif filename.startswith("lm2011_table_v"):
+            sections.append(
+                _render_four_column_wordlist_table(
+                    title,
+                    "Comparison of Negative Word Lists Using Filing Period Excess Return Regressions",
+                    "MD&A section",
+                    df,
+                    h4n_label="H4N-Inf (only MD&A)",
+                    finneg_label="Fin-Neg (only MD&A)",
+                    estimate_scale=100.0,
+                    note_suffix=return_note,
+                )
+            )
+        elif filename.startswith("lm2011_table_iv"):
+            sections.append(
+                _render_four_column_wordlist_table(
+                    title,
+                    "Comparison of Negative Word Lists Using Filing Period Excess Return Regressions",
+                    "Full 10-K document",
+                    df,
+                    h4n_label="H4N-Inf (Harvard-IV-4-Neg with inflections)",
+                    finneg_label="Fin-Neg (negative)",
+                    estimate_scale=100.0,
+                    note_suffix=return_note,
                 )
             )
         elif filename.startswith("lm2011_table_ia_i"):
@@ -1237,6 +1300,8 @@ def _paper_table_sections(run_dir: Path) -> list[str]:
                     "Normalized-Difference Excess Return Regressions",
                     "Full 10-K document",
                     df,
+                    estimate_scale=100.0,
+                    note_suffix=return_note,
                 )
             )
     trade_block = _render_trade_summary_table(run_dir)

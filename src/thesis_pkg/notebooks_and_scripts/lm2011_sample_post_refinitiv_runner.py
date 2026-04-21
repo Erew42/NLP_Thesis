@@ -546,6 +546,8 @@ class LM2011ExtensionRunConfig:
     text_scopes: tuple[str, ...] = EXTENSION_PRIMARY_TEXT_SCOPES
     run_id: str = "lm2011_extension"
     note: str = ""
+    print_ram_stats: bool = False
+    ram_log_interval_batches: int = DEFAULT_RAM_LOG_INTERVAL_BATCHES
 
     def __post_init__(self) -> None:
         if self.dictionary_source_mode not in EXTENSION_ALLOWED_DICTIONARY_SOURCE_MODES:
@@ -585,6 +587,8 @@ class LM2011ExtensionRunConfig:
             raise ValueError("LM2011 extension full_10k_text_feature_batch_size must be >= 1.")
         if self.event_window_doc_batch_size is not None and self.event_window_doc_batch_size < 1:
             raise ValueError("LM2011 extension event_window_doc_batch_size must be >= 1.")
+        if self.ram_log_interval_batches < 1:
+            raise ValueError("LM2011 extension ram_log_interval_batches must be >= 1.")
 
 
 @dataclass(frozen=True)
@@ -803,6 +807,42 @@ def _resolve_optional_existing_path(*paths: Path) -> Path | None:
 
 def _parquet_glob_exists(directory: Path, pattern: str) -> bool:
     return any(directory.glob(pattern))
+
+
+def _resolve_year_merged_scan_paths(
+    year_merged_dir: Path,
+    *,
+    sample_start: dt.date | None = None,
+    sample_end: dt.date | None = None,
+) -> tuple[Path, ...]:
+    if sample_start is not None and sample_end is not None:
+        year_paths = tuple(
+            candidate
+            for candidate in (
+                year_merged_dir / f"{year}.parquet"
+                for year in range(sample_start.year, sample_end.year + 1)
+            )
+            if candidate.exists()
+        )
+        if year_paths:
+            return year_paths
+    return tuple(sorted(year_merged_dir.glob(YEAR_MERGED_GLOB)))
+
+
+def _scan_year_merged_window(
+    year_merged_dir: Path,
+    *,
+    sample_start: dt.date | None = None,
+    sample_end: dt.date | None = None,
+) -> pl.LazyFrame:
+    scan_paths = _resolve_year_merged_scan_paths(
+        year_merged_dir,
+        sample_start=sample_start,
+        sample_end=sample_end,
+    )
+    if not scan_paths:
+        raise FileNotFoundError(f"year_merged parquet inputs not found under {year_merged_dir}")
+    return pl.scan_parquet([str(path) for path in scan_paths])
 
 
 def _absolute_path_str(path: Path | None) -> str | None:
@@ -1229,16 +1269,25 @@ def _build_or_reuse_extension_shared_prereqs(
 
     local_work_root = resolved_inputs["local_work_root"]
     local_work_root.mkdir(parents=True, exist_ok=True)
+    _print_ram_snapshot("extension_shared_prereqs_start", enabled=run_cfg.print_ram_stats)
 
     year_merged_lf: pl.LazyFrame | None = None
     if rebuild_sample_backbone or rebuild_full_10k_token_counts:
-        year_merged_glob = str(Path(resolved_inputs["year_merged_dir"]) / YEAR_MERGED_GLOB)
-        year_merged_backbone_lf = _prepare_lm2011_sec_backbone_input_lf(pl.scan_parquet(year_merged_glob))
-        year_merged_lf = _prepare_lm2011_sec_input_lf(pl.scan_parquet(year_merged_glob))
+        year_merged_scan = _scan_year_merged_window(
+            Path(resolved_inputs["year_merged_dir"]),
+            sample_start=EXTENSION_SAMPLE_START,
+            sample_end=EXTENSION_SAMPLE_END,
+        )
+        year_merged_backbone_lf = _prepare_lm2011_sec_backbone_input_lf(year_merged_scan)
+        year_merged_lf = _prepare_lm2011_sec_input_lf(year_merged_scan)
         matched_clean_lf = pl.scan_parquet(resolved_inputs["matched_clean_path"])
         filingdates_lf = pl.scan_parquet(resolved_inputs["filingdates_path"])
 
     if rebuild_sample_backbone:
+        _print_ram_snapshot(
+            "extension_shared_prereqs_sample_backbone_start",
+            enabled=run_cfg.print_ram_stats,
+        )
         sample_backbone_lf = build_lm2011_sample_backbone(
             year_merged_backbone_lf,
             matched_clean_lf,
@@ -1248,6 +1297,7 @@ def _build_or_reuse_extension_shared_prereqs(
         )
         artifact_paths["sample_backbone"].unlink(missing_ok=True)
         _write_frame_artifact(sample_backbone_lf, artifact_paths["sample_backbone"])
+        _gc_cleanup("extension_shared_prereqs_sample_backbone_post", enabled=run_cfg.print_ram_stats)
     sample_backbone_lf = pl.scan_parquet(artifact_paths["sample_backbone"])
 
     if rebuild_full_10k_token_counts:
@@ -1265,6 +1315,11 @@ def _build_or_reuse_extension_shared_prereqs(
             cleaning_contract=resolved_inputs["full_10k_cleaning_contract"],
             batch_size=resolved_inputs["full_10k_text_feature_batch_size"],
             temp_root=local_work_root / "lm2011_extension_full_10k_features_tmp",
+            progress_callback=_make_text_feature_progress_logger(
+                "extension_full_10k_token_counts",
+                print_ram_stats=run_cfg.print_ram_stats,
+                ram_log_interval_batches=run_cfg.ram_log_interval_batches,
+            ),
         )
         token_counts_lf = pl.scan_parquet(temp_full_10k_features_path).select(
             pl.col("doc_id").cast(pl.Utf8, strict=False),
@@ -1273,6 +1328,8 @@ def _build_or_reuse_extension_shared_prereqs(
         artifact_paths["full_10k_token_counts"].unlink(missing_ok=True)
         _write_frame_artifact(token_counts_lf, artifact_paths["full_10k_token_counts"])
         temp_full_10k_features_path.unlink(missing_ok=True)
+        del filtered_year_merged_lf
+        _gc_cleanup("extension_shared_prereqs_full_10k_token_counts_post", enabled=run_cfg.print_ram_stats)
 
     annual_accounting_panel_lf: pl.LazyFrame | None = None
     ff_factors_daily_lf: pl.LazyFrame | None = None
@@ -1303,8 +1360,14 @@ def _build_or_reuse_extension_shared_prereqs(
             pl.scan_parquet(artifact_paths["full_10k_token_counts"]),
             output_path=artifact_paths["event_screen_surface"],
             event_window_doc_batch_size=resolved_inputs["event_window_doc_batch_size"],
+            progress_callback=_make_event_screen_progress_logger(
+                "extension_event_screen_surface",
+                print_ram_stats=run_cfg.print_ram_stats,
+                ram_log_interval_batches=run_cfg.ram_log_interval_batches,
+            ),
             temp_root=local_work_root / "lm2011_extension_event_screen_surface",
         )
+        _gc_cleanup("extension_shared_prereqs_event_screen_surface_post", enabled=run_cfg.print_ram_stats)
 
     if rebuild_event_panel:
         event_panel_lf = build_lm2011_event_panel(
@@ -1319,6 +1382,9 @@ def _build_or_reuse_extension_shared_prereqs(
         )
         artifact_paths["event_panel"].unlink(missing_ok=True)
         _write_frame_artifact(event_panel_lf, artifact_paths["event_panel"])
+        _gc_cleanup("extension_shared_prereqs_event_panel_post", enabled=run_cfg.print_ram_stats)
+
+    _print_ram_snapshot("extension_shared_prereqs_end", enabled=run_cfg.print_ram_stats)
 
     return _ExtensionSharedPrereqArtifacts(
         sample_backbone_path=artifact_paths["sample_backbone"],
@@ -1384,6 +1450,8 @@ def _build_extension_manifest(
             "recompute_text_features_mda": run_cfg.recompute_text_features_mda,
             "recompute_event_screen_surface": run_cfg.recompute_event_screen_surface,
             "recompute_event_panel": run_cfg.recompute_event_panel,
+            "print_ram_stats": run_cfg.print_ram_stats,
+            "ram_log_interval_batches": run_cfg.ram_log_interval_batches,
         },
         "resolved_inputs": {
             "items_analysis_dir": _absolute_path_str(run_cfg.items_analysis_dir),
@@ -3223,14 +3291,21 @@ def run_lm2011_post_refinitiv_pipeline(run_cfg: LM2011PostRefinitivRunConfig) ->
         return_regression_panel_mda_lf: pl.LazyFrame | None = None
         sue_regression_panel_lf: pl.LazyFrame | None = None
         trading_strategy_monthly_returns_lf: pl.LazyFrame | None = None
-        year_merged_lf = (
-            _prepare_lm2011_sec_input_lf(pl.scan_parquet(str(paths.year_merged_dir / YEAR_MERGED_GLOB)))
+        year_merged_scan = (
+            _scan_year_merged_window(
+                paths.year_merged_dir,
+                sample_start=dt.date(1994, 1, 1),
+                sample_end=dt.date(2008, 12, 31),
+            )
             if _parquet_glob_exists(paths.year_merged_dir, YEAR_MERGED_GLOB)
             else None
         )
+        year_merged_lf = (
+            _prepare_lm2011_sec_input_lf(year_merged_scan) if year_merged_scan is not None else None
+        )
         year_merged_backbone_lf = (
-            _prepare_lm2011_sec_backbone_input_lf(pl.scan_parquet(str(paths.year_merged_dir / YEAR_MERGED_GLOB)))
-            if _parquet_glob_exists(paths.year_merged_dir, YEAR_MERGED_GLOB)
+            _prepare_lm2011_sec_backbone_input_lf(year_merged_scan)
+            if year_merged_scan is not None
             else None
         )
         items_analysis_lf = (
@@ -3261,6 +3336,7 @@ def run_lm2011_post_refinitiv_pipeline(run_cfg: LM2011PostRefinitivRunConfig) ->
                 text_features_mda_lf = resolved_lf
 
         current_stage_name = "sample_backbone"
+        _print_ram_snapshot("sample_backbone_start", enabled=paths.print_ram_stats)
         if _stage_disabled(run_cfg, manifest, manifest_path, "sample_backbone"):
             pass
         elif paths.sample_backbone_path is not None:

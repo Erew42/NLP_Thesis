@@ -713,6 +713,8 @@ def _build_lm2011_extension_run_config(
     recompute_event_panel: bool,
     finbert_analysis_run_dir: Path | None,
     finbert_preprocessing_run_dir: Path | None,
+    print_ram_stats: bool,
+    ram_log_interval_batches: int,
     finbert_analysis_artifacts: object | None = None,
     finbert_preprocessing_artifacts: object | None = None,
 ) -> LM2011ExtensionRunConfig:
@@ -760,6 +762,8 @@ def _build_lm2011_extension_run_config(
         recompute_text_features_mda=recompute_text_features_mda,
         recompute_event_screen_surface=recompute_event_screen_surface,
         recompute_event_panel=recompute_event_panel,
+        print_ram_stats=print_ram_stats,
+        ram_log_interval_batches=ram_log_interval_batches,
         finbert_item_features_long_path=(
             Path(same_run_item_features_long_path)
             if same_run_item_features_long_path is not None
@@ -950,6 +954,17 @@ def _json_value(path: Path, key: str) -> object | None:
 
 def _existing_year_parquet_paths(year_dir: Path, years: list[int]) -> list[Path]:
     return [year_dir / f"{year}.parquet" for year in years if (year_dir / f"{year}.parquet").exists()]
+
+
+_LM2011_CANONICAL_SAMPLE_START = dt.date(1994, 1, 1)
+_LM2011_CANONICAL_SAMPLE_END = dt.date(2008, 12, 31)
+
+
+def _lm2011_canonical_sample_year_paths(year_dir: Path) -> list[Path]:
+    return _existing_year_parquet_paths(
+        year_dir,
+        list(range(_LM2011_CANONICAL_SAMPLE_START.year, _LM2011_CANONICAL_SAMPLE_END.year + 1)),
+    )
 
 
 def _same_normalized_path(left: Path, right: Path) -> bool:
@@ -2585,7 +2600,8 @@ def main() -> None:
         if sec_ccm_paths is not None
         else SEC_CCM_OUTPUT_DIR / "sec_ccm_matched_clean.parquet"
     )
-    lm2011_year_paths = _existing_year_parquet_paths(SEC_YEAR_MERGED_DIR, YEARS)
+    lm2011_backbone_year_dir = LM2011_YEAR_MERGED_DIR or SEC_YEAR_MERGED_DIR
+    lm2011_year_paths = _lm2011_canonical_sample_year_paths(lm2011_backbone_year_dir)
     try:
         lm2011_filingdates_path = _resolve_ccm_parquet_artifact(CCM_BASE_DIR, "filingdates.parquet")
     except FileNotFoundError:
@@ -2612,6 +2628,7 @@ def main() -> None:
             raise RuntimeError(
                 "LM2011 backbone artifact is required for enabled LM2011 Refinitiv stages but could not be built.\n"
                 f"Expected year paths: {[str(path) for path in lm2011_year_paths]}\n"
+                f"LM2011 year_merged_dir: {lm2011_backbone_year_dir}\n"
                 f"Matched clean path: {lm2011_matched_clean_path}\n"
                 f"Filingdates path: {lm2011_filingdates_path}"
             )
@@ -2620,6 +2637,7 @@ def main() -> None:
                 {
                     "warning": "skipping canonical LM2011 backbone build; required inputs not found",
                     "year_paths": [str(path) for path in lm2011_year_paths],
+                    "lm2011_year_merged_dir": str(lm2011_backbone_year_dir),
                     "matched_clean_path": str(lm2011_matched_clean_path),
                     "filingdates_path": None if lm2011_filingdates_path is None else str(lm2011_filingdates_path),
                 }
@@ -3391,6 +3409,8 @@ def main() -> None:
             recompute_event_panel=LM2011_RECOMPUTE_EVENT_PANEL,
             finbert_analysis_run_dir=LM2011_EXTENSION_FINBERT_ANALYSIS_RUN_DIR,
             finbert_preprocessing_run_dir=LM2011_EXTENSION_FINBERT_PREPROCESS_RUN_DIR,
+            print_ram_stats=PRINT_RAM_STATS,
+            ram_log_interval_batches=RAM_LOG_INTERVAL_BATCHES,
             finbert_analysis_artifacts=finbert_analysis_artifacts,
             finbert_preprocessing_artifacts=finbert_preprocessing_artifacts,
         )

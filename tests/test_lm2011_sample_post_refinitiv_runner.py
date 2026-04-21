@@ -90,6 +90,32 @@ def _empty_quarterly_results_df() -> pl.DataFrame:
     )
 
 
+def test_resolve_year_merged_scan_paths_prefers_sample_window_year_files(tmp_path: Path) -> None:
+    for year in (1993, 1994, 1995, 2009):
+        _write_parquet(tmp_path / f"{year}.parquet", pl.DataFrame({"doc_id": [str(year)]}))
+
+    resolved = runner._resolve_year_merged_scan_paths(
+        tmp_path,
+        sample_start=dt.date(1994, 1, 1),
+        sample_end=dt.date(1995, 12, 31),
+    )
+
+    assert [path.name for path in resolved] == ["1994.parquet", "1995.parquet"]
+
+
+def test_resolve_year_merged_scan_paths_falls_back_to_glob(tmp_path: Path) -> None:
+    _write_parquet(tmp_path / "chunk_a.parquet", pl.DataFrame({"doc_id": ["a"]}))
+    _write_parquet(tmp_path / "chunk_b.parquet", pl.DataFrame({"doc_id": ["b"]}))
+
+    resolved = runner._resolve_year_merged_scan_paths(
+        tmp_path,
+        sample_start=dt.date(1994, 1, 1),
+        sample_end=dt.date(1995, 12, 31),
+    )
+
+    assert [path.name for path in resolved] == ["chunk_a.parquet", "chunk_b.parquet"]
+
+
 def _skipped_quarter_diagnostics_df() -> pl.DataFrame:
     return pl.DataFrame(
         {

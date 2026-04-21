@@ -343,6 +343,8 @@ def test_build_lm2011_extension_run_config_prefers_same_run_finbert_artifacts() 
         recompute_event_panel=False,
         finbert_analysis_run_dir=Path("explicit_analysis"),
         finbert_preprocessing_run_dir=Path("explicit_preprocess"),
+        print_ram_stats=True,
+        ram_log_interval_batches=7,
         finbert_analysis_artifacts=analysis_artifacts,
         finbert_preprocessing_artifacts=preprocessing_artifacts,
     )
@@ -359,6 +361,8 @@ def test_build_lm2011_extension_run_config_prefers_same_run_finbert_artifacts() 
     assert cfg.finbert_cleaned_item_scopes_dir == (
         Path("same_run_finbert_preprocess") / "cleaned_item_scopes" / "by_year"
     )
+    assert cfg.print_ram_stats is True
+    assert cfg.ram_log_interval_batches == 7
     assert cfg.year_merged_dir == Path("year_merged")
     assert cfg.matched_clean_path == Path("matched.parquet")
     assert cfg.filingdates_path == Path("filingdates.parquet")
@@ -865,6 +869,7 @@ def test_main_rebuilds_lm2011_backbone_when_sec_ccm_premerge_runs(
 ) -> None:
     paths = _configure_minimal_main_env(monkeypatch, tmp_path)
     monkeypatch.setenv("SEC_CCM_RUN_SEC_CCM_PREMERGE", "true")
+    monkeypatch.setenv("SEC_CCM_YEARS", "[1995, 2010]")
     monkeypatch.setattr(runner, "LSEG_API_READY", False)
 
     sec_ccm_output_dir = paths["run_root"] / "sec_ccm_premerge"
@@ -886,6 +891,13 @@ def test_main_rebuilds_lm2011_backbone_when_sec_ccm_premerge_runs(
     pl.DataFrame({"LPERMNO": [100], "FILEDATE": [runner.dt.date(1995, 1, 31)], "SRCTYPE": ["10K"]}).write_parquet(
         filingdates_path
     )
+    pl.DataFrame(
+        {
+            "doc_id": ["0000000001:2010000001"],
+            "cik_10": ["0000000001"],
+            "file_date_filename": [runner.dt.date(2010, 1, 31)],
+        }
+    ).write_parquet(paths["sec_year_merged_dir"] / "2010.parquet")
 
     monkeypatch.setattr(
         runner,
@@ -926,8 +938,85 @@ def test_main_rebuilds_lm2011_backbone_when_sec_ccm_premerge_runs(
 
     assert captured["matched_clean_path"] == matched_clean_path
     assert captured["filingdates_path"] == filingdates_path
+    assert captured["sec_year_paths"] == [paths["sec_year_merged_dir"] / "1995.parquet"]
     assert captured["output_path"] == sec_ccm_output_dir / "lm2011_sample_backbone.parquet"
     assert (sec_ccm_output_dir / "lm2011_sample_backbone.parquet").exists()
+
+
+def test_main_rebuilds_lm2011_backbone_from_lm2011_year_override(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    paths = _configure_minimal_main_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("SEC_CCM_RUN_SEC_CCM_PREMERGE", "true")
+    monkeypatch.setattr(runner, "LSEG_API_READY", False)
+
+    override_year_dir = paths["root"] / "lm2011_year_merged_override"
+    override_year_dir.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame(
+        {
+            "doc_id": ["0000000002:1996000001"],
+            "cik_10": ["0000000002"],
+            "file_date_filename": [runner.dt.date(1996, 1, 31)],
+        }
+    ).write_parquet(override_year_dir / "1996.parquet")
+    monkeypatch.setenv("SEC_CCM_LM2011_YEAR_MERGED_DIR", str(override_year_dir))
+
+    sec_ccm_output_dir = paths["run_root"] / "sec_ccm_premerge"
+    sec_ccm_output_dir.mkdir(parents=True, exist_ok=True)
+    matched_clean_path = sec_ccm_output_dir / "sec_ccm_matched_clean.parquet"
+    match_status_path = sec_ccm_output_dir / "sec_ccm_match_status.parquet"
+    filingdates_path = paths["ccm_base_dir"] / "filingdates.parquet"
+    pl.DataFrame({"doc_id": ["0000000002:1996000001"], "KYPERMNO": [101], "gvkey": [1001]}).write_parquet(
+        matched_clean_path
+    )
+    pl.DataFrame(
+        {
+            "doc_id": ["0000000002:1996000001"],
+            "match_reason_code": ["OK"],
+            "match_flag": [True],
+            "has_acceptance_datetime": [True],
+        }
+    ).write_parquet(match_status_path)
+    pl.DataFrame({"LPERMNO": [101], "FILEDATE": [runner.dt.date(1996, 1, 31)], "SRCTYPE": ["10K"]}).write_parquet(
+        filingdates_path
+    )
+
+    monkeypatch.setattr(
+        runner,
+        "run_sec_ccm_premerge_pipeline",
+        lambda **_: {
+            "sec_ccm_matched_clean": matched_clean_path,
+            "sec_ccm_match_status": match_status_path,
+        },
+    )
+    captured: dict[str, object] = {}
+
+    def _write_backbone_stub(
+        *,
+        sec_year_paths: list[Path],
+        matched_clean_path: Path,
+        filingdates_path: Path,
+        output_path: Path,
+    ) -> Path:
+        captured["sec_year_paths"] = sec_year_paths
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        pl.DataFrame(
+            {
+                "doc_id": ["0000000002:1996000001"],
+                "cik_10": ["0000000002"],
+                "filing_date": [runner.dt.date(1996, 1, 31)],
+                "normalized_form": ["10-K"],
+                "KYPERMNO": ["101"],
+            }
+        ).write_parquet(output_path)
+        return output_path
+
+    monkeypatch.setattr(runner, "_write_lm2011_backbone_artifact", _write_backbone_stub)
+
+    runner.main()
+
+    assert captured["sec_year_paths"] == [override_year_dir / "1996.parquet"]
 
 
 def test_main_doc_ownership_exact_uses_canonical_lm2011_backbone(

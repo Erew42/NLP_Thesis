@@ -308,8 +308,54 @@ def test_core_export_includes_existing_quarterly_tables_and_no_ownership_sibling
     assert "Summary Statistics for the 1994 to 2008 10-K Sample" in tex
     assert "Table IV (With Ownership Control)" in tex
     assert "Table IV (No Ownership Control)" in tex
+    assert r"\shortstack[c]{10.000 \\ (10.00)}" in tex
     assert "Figure 1." in tex
     assert (output_dir / "tables" / "lm2011_table_ii_summary_statistics.csv").exists()
+
+
+def test_coef_cell_scales_table_viii_tfidf_signal_to_lm2011_display_units() -> None:
+    row = {
+        "estimate": 1.955687e-07,
+        "t_stat": 0.030881,
+        "signal_name": "h4n_inf_tfidf",
+        "coefficient_name": "h4n_inf_tfidf",
+    }
+
+    assert (
+        review._coef_cell(row, estimate_scale=review._scale_table_viii_estimate)
+        == r"\shortstack[c]{0.002 \\ (0.03)}"
+    )
+
+
+def test_paper_table_sections_render_table_viii_with_sue_heading_and_scaling(tmp_path: Path) -> None:
+    run_dir = tmp_path / "lm2011_post_refinitiv"
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    df = pl.DataFrame(
+        {
+            "table_id": ["table_viii_sue", "table_viii_sue"],
+            "specification_id": ["h4n_inf_prop", "h4n_inf_tfidf"],
+            "text_scope": ["full_10k", "full_10k"],
+            "signal_name": ["h4n_inf_prop", "h4n_inf_tfidf"],
+            "dependent_variable": ["sue", "sue"],
+            "coefficient_name": ["h4n_inf_prop", "h4n_inf_tfidf"],
+            "estimate": [0.03795165, 1.955687e-07],
+            "standard_error": [0.01, 1e-08],
+            "t_stat": [2.19, 0.03],
+            "n_quarters": [58, 58],
+            "mean_quarter_n": [395.1, 395.1],
+            "weighting_rule": ["quarter_observation_count", "quarter_observation_count"],
+            "nw_lags": [1, 1],
+        }
+    )
+    _write_parquet(run_dir / "lm2011_table_viii_results_no_ownership.parquet", df)
+
+    sections = review._paper_table_sections(run_dir)
+    joined = "\n".join(sections)
+
+    assert "Standardized Unexpected Earnings Regressions" in joined
+    assert "additional 100 for presentation" in joined
+    assert r"\shortstack[c]{0.002 \\ (0.03)}" in joined
 
 
 def test_full_export_fails_when_extension_artifacts_cannot_be_resolved(tmp_path: Path) -> None:
