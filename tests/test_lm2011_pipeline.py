@@ -1029,7 +1029,7 @@ def test_write_lm2011_text_features_full_10k_parquet_emits_progress_callback(tmp
     ]
 
 
-def test_write_lm2011_text_features_full_10k_parquet_stages_source_once_before_microbatching(
+def test_write_lm2011_text_features_full_10k_parquet_consumes_source_plan_once_overall(
     tmp_path: Path,
 ) -> None:
     observed: dict[str, int] = {"rows": 0}
@@ -1094,30 +1094,32 @@ def test_write_lm2011_text_features_full_10k_parquet_staged_source_disables_full
     )
 
     workspaces = sorted(path for path in temp_root.iterdir() if path.is_dir())
-    source_path = workspaces[0] / "source.parquet"
-    parquet_file = pq.ParquetFile(source_path)
-    full_text_index = parquet_file.schema.names.index("full_text")
+    source_shards = sorted((workspaces[0] / "source_shards").glob("*.parquet"))
 
     assert row_count == 3
     assert len(workspaces) == 1
-    assert parquet_file.metadata.num_row_groups == 1
-    assert parquet_file.metadata.row_group(0).column(full_text_index).statistics is None
+    assert len(source_shards) == 3
+    for source_path in source_shards:
+        parquet_file = pq.ParquetFile(source_path)
+        full_text_index = parquet_file.schema.names.index("full_text")
+        assert parquet_file.metadata.num_row_groups == 1
+        assert parquet_file.metadata.row_group(0).column(full_text_index).statistics is None
 
 
-def test_write_lm2011_text_features_full_10k_parquet_staged_source_uses_row_group_floor(
+def test_write_lm2011_text_features_full_10k_parquet_source_sharding_caps_staged_units_independently_of_public_batch_size(
     tmp_path: Path,
 ) -> None:
-    temp_root = tmp_path / "staged_row_groups_root"
+    temp_root = tmp_path / "staged_source_shards_root"
     sec_parsed = pl.DataFrame(
         {
-            "doc_id": [f"d{idx}" for idx in range(129)],
-            "cik_10": [f"{idx:04d}" for idx in range(129)],
-            "filing_date": [dt.date(2023, 1, 1)] * 129,
-            "document_type_filename": ["10-K"] * 129,
-            "full_text": ["gain loss uncertain"] * 129,
+            "doc_id": [f"d{idx}" for idx in range(9)],
+            "cik_10": [f"{idx:04d}" for idx in range(9)],
+            "filing_date": [dt.date(2023, 1, 1)] * 9,
+            "document_type_filename": ["10-K"] * 9,
+            "full_text": ["gain loss uncertain"] * 9,
         }
     )
-    output_path = tmp_path / "full_10k_staged_row_groups.parquet"
+    output_path = tmp_path / "full_10k_staged_shards.parquet"
 
     row_count = write_lm2011_text_features_full_10k_parquet(
         sec_parsed.lazy(),
@@ -1125,19 +1127,84 @@ def test_write_lm2011_text_features_full_10k_parquet_staged_source_uses_row_grou
         dictionary_lists=_lm_dictionary_lists(),
         harvard_negative_word_list=_harvard_negative_word_list(),
         master_dictionary_words=_master_dictionary_words(),
-        batch_size=1,
+        batch_size=100,
         temp_root=temp_root,
         cleanup_on_success=False,
     )
 
     workspaces = sorted(path for path in temp_root.iterdir() if path.is_dir())
-    source_path = workspaces[0] / "source.parquet"
-    parquet_file = pq.ParquetFile(source_path)
+    source_shards = sorted((workspaces[0] / "source_shards").glob("*.parquet"))
 
-    assert row_count == 129
+    assert row_count == 9
     assert len(workspaces) == 1
-    assert parquet_file.metadata.num_rows == 129
-    assert parquet_file.metadata.num_row_groups == 2
+    assert len(source_shards) == 3
+    assert [pq.ParquetFile(path).metadata.num_rows for path in source_shards] == [4, 4, 1]
+
+
+def test_write_lm2011_text_features_full_10k_parquet_rejects_duplicate_doc_id_within_same_source_shard(
+    tmp_path: Path,
+) -> None:
+    sec_parsed = pl.DataFrame(
+        {
+            "doc_id": ["dup", "dup"],
+            "cik_10": ["0001", "0002"],
+            "filing_date": [dt.date(2023, 1, 1), dt.date(2023, 1, 2)],
+            "document_type_filename": ["10-K", "10-K"],
+            "full_text": ["gain loss", "uncertain may"],
+        }
+    )
+    output_path = tmp_path / "full_10k_duplicate_same_shard.parquet"
+    progress: list[dict[str, object]] = []
+
+    with pytest.raises(ValueError, match="doc_id to be unique") as excinfo:
+        write_lm2011_text_features_full_10k_parquet(
+            sec_parsed.lazy(),
+            output_path=output_path,
+            dictionary_lists=_lm_dictionary_lists(),
+            harvard_negative_word_list=_harvard_negative_word_list(),
+            master_dictionary_words=_master_dictionary_words(),
+            batch_size=10,
+            progress_callback=progress.append,
+        )
+
+    assert "dup" in str(excinfo.value)
+    assert progress == [{"event": "stage_source_start"}]
+
+
+def test_write_lm2011_text_features_full_10k_parquet_rejects_duplicate_doc_id_across_source_shards(
+    tmp_path: Path,
+) -> None:
+    sec_parsed = pl.DataFrame(
+        {
+            "doc_id": ["d1", "d2", "d3", "d4", "d1"],
+            "cik_10": ["0001", "0002", "0003", "0004", "0005"],
+            "filing_date": [
+                dt.date(2023, 1, 1),
+                dt.date(2023, 1, 2),
+                dt.date(2023, 1, 3),
+                dt.date(2023, 1, 4),
+                dt.date(2023, 1, 5),
+            ],
+            "document_type_filename": ["10-K"] * 5,
+            "full_text": ["gain loss"] * 5,
+        }
+    )
+    output_path = tmp_path / "full_10k_duplicate_cross_shard.parquet"
+    progress: list[dict[str, object]] = []
+
+    with pytest.raises(ValueError, match="doc_id to be unique") as excinfo:
+        write_lm2011_text_features_full_10k_parquet(
+            sec_parsed.lazy(),
+            output_path=output_path,
+            dictionary_lists=_lm_dictionary_lists(),
+            harvard_negative_word_list=_harvard_negative_word_list(),
+            master_dictionary_words=_master_dictionary_words(),
+            batch_size=100,
+            progress_callback=progress.append,
+        )
+
+    assert "d1" in str(excinfo.value)
+    assert progress == [{"event": "stage_source_start"}]
 
 
 def test_write_lm2011_text_features_mda_parquet_emits_progress_callback(tmp_path: Path) -> None:
@@ -1334,7 +1401,7 @@ def test_write_lm2011_text_features_full_10k_parquet_retains_workspace_on_staged
     real_validate = lm2011_text_module._validate_parquet_quick
 
     def _fail_source_only(path: Path) -> None:
-        if path.name == "source.parquet":
+        if path.parent.name == "source_shards":
             raise OSError("bad staged source")
         real_validate(path)
 
@@ -1352,10 +1419,11 @@ def test_write_lm2011_text_features_full_10k_parquet_retains_workspace_on_staged
         )
 
     workspaces = sorted(path for path in temp_root.iterdir() if path.is_dir())
-    source_path = workspaces[0] / "source.parquet"
+    source_shards = sorted((workspaces[0] / "source_shards").glob("*.parquet"))
     assert len(workspaces) == 1
-    assert source_path.exists()
-    assert str(source_path) in str(excinfo.value)
+    assert len(source_shards) == 1
+    assert source_shards[0].exists()
+    assert str(source_shards[0]) in str(excinfo.value)
 
 
 def test_write_lm2011_text_features_full_10k_parquet_retains_local_final_when_promotion_fails(

@@ -34,9 +34,6 @@ _LINEBREAK_HYPHEN_RE = re.compile(r"([A-Za-z])-\s*(?:\r?\n)\s*([A-Za-z])")
 _TOKEN_RE = re.compile(r"[A-Za-z]{2,}(?:[-'][A-Za-z]+)*")
 RAW_ITEM_TEXT_CLEANING_POLICY_ID = "raw_item_text"
 _STREAMING_PARQUET_COMPRESSION = "zstd"
-_STAGED_SOURCE_MIN_ROW_GROUP_SIZE = 128
-
-
 def _require_columns(lf: pl.LazyFrame, required: tuple[str, ...], label: str) -> None:
     schema = lf.collect_schema()
     missing = [name for name in required if name not in schema]
@@ -206,100 +203,134 @@ def _validated_microbatch_byte_limit(limit_bytes: int) -> int:
     return int(limit_bytes)
 
 
-def _stage_text_base_source(
+def _eager_text_microbatch_slices(
+    batch: pl.DataFrame,
+    *,
+    text_col: str,
+    max_docs_per_batch: int,
+    max_input_text_bytes_per_microbatch: int,
+) -> Iterator[pl.DataFrame]:
+    if batch.height <= 0:
+        return
+    max_docs = _validated_batch_size(max_docs_per_batch)
+    max_bytes = _validated_microbatch_byte_limit(max_input_text_bytes_per_microbatch)
+    sized_batch = batch.with_columns(
+        pl.col(text_col)
+        .cast(pl.Utf8, strict=False)
+        .str.len_bytes()
+        .fill_null(0)
+        .cast(pl.Int64, strict=False)
+        .alias("_input_text_bytes")
+    )
+    byte_sizes = sized_batch.get_column("_input_text_bytes").to_list()
+    current_start = 0
+    current_count = 0
+    current_bytes = 0
+    for row_index, row_bytes in enumerate(byte_sizes):
+        input_bytes = int(row_bytes or 0)
+        should_flush = current_count > 0 and (
+            current_count >= max_docs or current_bytes + input_bytes > max_bytes
+        )
+        if should_flush:
+            yield sized_batch.slice(current_start, current_count).drop("_input_text_bytes")
+            current_start = row_index
+            current_count = 0
+            current_bytes = 0
+        current_count += 1
+        current_bytes += input_bytes
+        if current_count >= max_docs:
+            yield sized_batch.slice(current_start, current_count).drop("_input_text_bytes")
+            current_start = row_index + 1
+            current_count = 0
+            current_bytes = 0
+    if current_count > 0:
+        yield sized_batch.slice(current_start, current_count).drop("_input_text_bytes")
+
+
+def _source_scan_chunk_docs(*, include_item_id: bool, max_docs_per_microbatch: int) -> int:
+    internal_cap = (
+        DEFAULT_PRODUCTION_MDA_MICROBATCH_SIZE if include_item_id else DEFAULT_PRODUCTION_FULL_10K_MICROBATCH_SIZE
+    )
+    return min(_validated_batch_size(max_docs_per_microbatch), internal_cap)
+
+
+def _validate_incremental_text_doc_ids(
+    batch: pl.DataFrame,
+    *,
+    seen_doc_ids: set[str | None],
+    duplicate_limit: int = 10,
+) -> None:
+    doc_ids = batch.get_column("doc_id").cast(pl.Utf8, strict=False).to_list()
+    batch_seen: set[str | None] = set()
+    duplicate_doc_ids: list[str | None] = []
+    for doc_id in doc_ids:
+        if doc_id in batch_seen or doc_id in seen_doc_ids:
+            if doc_id not in duplicate_doc_ids and len(duplicate_doc_ids) < duplicate_limit:
+                duplicate_doc_ids.append(doc_id)
+        batch_seen.add(doc_id)
+    if duplicate_doc_ids:
+        raise ValueError(f"LM2011 text scoring requires doc_id to be unique in the writer path: {duplicate_doc_ids}")
+    seen_doc_ids.update(batch_seen)
+
+
+def _stage_text_source_shards(
     base_lf: pl.LazyFrame,
     *,
     temp_dir: Path,
-    row_group_size: int,
-) -> tuple[pl.LazyFrame, Path]:
-    source_path = temp_dir / "source.parquet"
-    # This staged boundary is intentional: it avoids re-running the upstream SEC text plan
-    # while avoiding a global sort over full-text payloads before the first batch.
-    # Keep staged source metadata compact even when scoring uses tiny microbatches.
-    effective_row_group_size = max(_STAGED_SOURCE_MIN_ROW_GROUP_SIZE, int(row_group_size))
-    base_lf.sink_parquet(
-        source_path,
-        compression=_STREAMING_PARQUET_COMPRESSION,
-        statistics=False,
-        row_group_size=effective_row_group_size,
-    )
-    _validate_local_parquet(source_path, stage_label="staged source")
-    return pl.scan_parquet(str(source_path)), source_path
-
-
-def _validate_unique_text_doc_ids(base_lf: pl.LazyFrame, *, staged_source_path: Path | None = None) -> None:
-    try:
-        duplicate_doc_ids = (
-            base_lf.select(pl.col("doc_id").cast(pl.Utf8, strict=False).alias("doc_id"))
-            .group_by("doc_id")
-            .len()
-            .filter(pl.col("len") > 1)
-            .limit(10)
-            .collect()
-            .get_column("doc_id")
-            .to_list()
-        )
-    except Exception as exc:
-        location = f" at {staged_source_path}" if staged_source_path is not None else ""
-        raise OSError(
-            f"LM2011 text writer failed while reading staged source parquet{location} during doc_id uniqueness validation."
-        ) from exc
-    if duplicate_doc_ids:
-        raise ValueError(f"LM2011 text scoring requires doc_id to be unique in the writer path: {duplicate_doc_ids}")
-
-
-def _iter_staged_text_microbatches(
-    staged_source_lf: pl.LazyFrame,
-    *,
     text_col: str,
+    include_item_id: bool,
     max_docs_per_microbatch: int,
     max_input_text_bytes_per_microbatch: int,
-) -> Iterator[pl.DataFrame]:
-    if not hasattr(staged_source_lf, "collect_batches"):
+) -> list[Path]:
+    if not hasattr(base_lf, "collect_batches"):
         raise RuntimeError(
             "Polars LazyFrame.collect_batches is required for memory-safe LM2011 text scoring. "
             "Upgrade Polars to a version that provides collect_batches."
         )
-    max_docs = _validated_batch_size(max_docs_per_microbatch)
-    max_bytes = _validated_microbatch_byte_limit(max_input_text_bytes_per_microbatch)
-    for staged_batch in staged_source_lf.collect_batches(chunk_size=max_docs):
-        if staged_batch.height <= 0:
+    source_dir = temp_dir / "source_shards"
+    source_dir.mkdir(parents=True, exist_ok=True)
+    scan_chunk_docs = _source_scan_chunk_docs(
+        include_item_id=include_item_id,
+        max_docs_per_microbatch=max_docs_per_microbatch,
+    )
+    seen_doc_ids: set[str | None] = set()
+    shard_paths: list[Path] = []
+    shard_index = 0
+    for source_batch in base_lf.collect_batches(chunk_size=scan_chunk_docs):
+        if source_batch.height <= 0:
             continue
-        batch = staged_batch.with_columns(
-            pl.col(text_col)
-            .cast(pl.Utf8, strict=False)
-            .str.len_bytes()
-            .fill_null(0)
-            .cast(pl.Int64, strict=False)
-            .alias("_input_text_bytes")
-        )
-        byte_sizes = batch.get_column("_input_text_bytes").to_list()
-        current_start = 0
-        current_count = 0
-        current_bytes = 0
-        for row_index, row_bytes in enumerate(byte_sizes):
-            input_bytes = int(row_bytes or 0)
-            should_flush = current_count > 0 and (
-                current_count >= max_docs
-                or current_bytes + input_bytes > max_bytes
+        for shard_df in _eager_text_microbatch_slices(
+            source_batch,
+            text_col=text_col,
+            max_docs_per_batch=max_docs_per_microbatch,
+            max_input_text_bytes_per_microbatch=max_input_text_bytes_per_microbatch,
+        ):
+            _validate_incremental_text_doc_ids(shard_df, seen_doc_ids=seen_doc_ids)
+            shard_path = source_dir / f"{shard_index:06d}.parquet"
+            shard_df.write_parquet(
+                shard_path,
+                compression=_STREAMING_PARQUET_COMPRESSION,
+                statistics=False,
             )
-            if should_flush:
-                yield batch.slice(current_start, current_count).drop("_input_text_bytes")
-                current_start = row_index
-                current_count = 0
-                current_bytes = 0
-            current_count += 1
-            current_bytes += input_bytes
-            if current_count >= max_docs:
-                yield batch.slice(current_start, current_count).drop("_input_text_bytes")
-                current_start = row_index + 1
-                current_count = 0
-                current_bytes = 0
-        if current_count > 0:
-            yield batch.slice(current_start, current_count).drop("_input_text_bytes")
-        del batch
-        del byte_sizes
-        del staged_batch
+            _validate_local_parquet(shard_path, stage_label="staged source")
+            shard_paths.append(shard_path)
+            shard_index += 1
+            del shard_df
+        del source_batch
+        gc.collect()
+    return shard_paths
+
+
+def _iter_staged_text_source_shards(source_shard_paths: Iterable[Path]) -> Iterator[pl.DataFrame]:
+    for shard_path in source_shard_paths:
+        try:
+            shard_df = pl.read_parquet(shard_path)
+        except Exception as exc:
+            raise OSError(f"LM2011 text writer failed while reading staged source shard parquet at {shard_path}.") from exc
+        if shard_df.height > 0:
+            yield shard_df
+        else:
+            del shard_df
         gc.collect()
 
 
@@ -857,12 +888,14 @@ def _write_production_microbatched_text_features(
         required_item_id=required_item_id,
     )
     _emit_progress(progress_callback, {"event": "stage_source_start"})
-    staged_source_lf, staged_source_path = _stage_text_base_source(
+    staged_source_paths = _stage_text_source_shards(
         base_lf,
         temp_dir=temp_dir,
-        row_group_size=max_docs_per_microbatch,
+        text_col=text_col,
+        include_item_id=include_item_id,
+        max_docs_per_microbatch=max_docs_per_microbatch,
+        max_input_text_bytes_per_microbatch=max_input_text_bytes_per_microbatch,
     )
-    _validate_unique_text_doc_ids(staged_source_lf, staged_source_path=staged_source_path)
     _emit_progress(progress_callback, {"event": "stage_source_end"})
 
     pass1_paths: list[Path] = []
@@ -872,12 +905,7 @@ def _write_production_microbatched_text_features(
     try:
         _emit_progress(progress_callback, {"event": "pass1_start"})
         for batch_index, batch in enumerate(
-            _iter_staged_text_microbatches(
-                staged_source_lf,
-                text_col=text_col,
-                max_docs_per_microbatch=max_docs_per_microbatch,
-                max_input_text_bytes_per_microbatch=max_input_text_bytes_per_microbatch,
-            ),
+            _iter_staged_text_source_shards(staged_source_paths),
             start=1,
         ):
             rows, batch_document_frequency = _prepare_pass1_rows(
