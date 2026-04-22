@@ -85,6 +85,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     build_kwargs = {
         "run_id": args.run_id,
         "repo_root": repo_root,
+        "output_root": args.output_root.resolve() if args.output_root is not None else None,
         "lm2011_post_refinitiv_dir": resolved_paths["lm2011_post_refinitiv_dir"],
         "lm2011_extension_dir": resolved_paths["lm2011_extension_dir"],
         "finbert_run_dir": resolved_paths["finbert_run_dir"],
@@ -107,6 +108,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "run_id": args.run_id,
         "data_profile": args.data_profile,
         "repo_root": str(repo_root),
+        "output_root": str(result.output_root),
         "resolved_paths": {
             key: (str(value) if value is not None else None)
             for key, value in resolved_paths.items()
@@ -115,7 +117,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         "asset_statuses": asset_statuses,
     }
     print(json.dumps(payload, indent=2, sort_keys=True))
-    return 1 if any(status != "completed" for status in asset_statuses.values()) else 0
+    has_failures = any(status != "completed" for status in asset_statuses.values())
+    return 0 if (args.allow_failures or not has_failures) else 1
 
 
 def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
@@ -131,6 +134,12 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--repo-root", type=Path, default=None, help="Optional repo root override.")
     parser.add_argument(
+        "--output-root",
+        type=Path,
+        default=None,
+        help="Optional override for the final thesis asset output directory, typically .../thesis_assets/<run_id>.",
+    )
+    parser.add_argument(
         "--drive-data-root",
         type=Path,
         default=resolve_colab_drive_root() / "Data_LM",
@@ -139,6 +148,11 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--lm2011-post-refinitiv-dir", type=Path, default=None)
     parser.add_argument("--lm2011-extension-dir", type=Path, default=None)
     parser.add_argument("--finbert-run-dir", type=Path, default=None)
+    parser.add_argument(
+        "--allow-failures",
+        action="store_true",
+        help="Exit 0 even when one or more assets fail. The JSON payload still reports failed statuses.",
+    )
 
 
 def _resolve_run_paths(

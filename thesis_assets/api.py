@@ -28,6 +28,7 @@ def build_all_assets(
     *,
     run_id: str,
     repo_root: Path | None = None,
+    output_root: Path | None = None,
     lm2011_post_refinitiv_dir: Path | None = None,
     lm2011_extension_dir: Path | None = None,
     finbert_run_dir: Path | None = None,
@@ -36,6 +37,7 @@ def build_all_assets(
         load_registry(),
         run_id=run_id,
         repo_root=repo_root,
+        output_root=output_root,
         lm2011_post_refinitiv_dir=lm2011_post_refinitiv_dir,
         lm2011_extension_dir=lm2011_extension_dir,
         finbert_run_dir=finbert_run_dir,
@@ -47,6 +49,7 @@ def build_chapter_assets(
     chapter: str,
     run_id: str,
     repo_root: Path | None = None,
+    output_root: Path | None = None,
     lm2011_post_refinitiv_dir: Path | None = None,
     lm2011_extension_dir: Path | None = None,
     finbert_run_dir: Path | None = None,
@@ -55,6 +58,7 @@ def build_chapter_assets(
         load_assets_by_chapter(chapter),
         run_id=run_id,
         repo_root=repo_root,
+        output_root=output_root,
         lm2011_post_refinitiv_dir=lm2011_post_refinitiv_dir,
         lm2011_extension_dir=lm2011_extension_dir,
         finbert_run_dir=finbert_run_dir,
@@ -66,6 +70,7 @@ def build_single_asset(
     asset_id: str,
     run_id: str,
     repo_root: Path | None = None,
+    output_root: Path | None = None,
     lm2011_post_refinitiv_dir: Path | None = None,
     lm2011_extension_dir: Path | None = None,
     finbert_run_dir: Path | None = None,
@@ -74,6 +79,7 @@ def build_single_asset(
         (load_asset_by_id(asset_id),),
         run_id=run_id,
         repo_root=repo_root,
+        output_root=output_root,
         lm2011_post_refinitiv_dir=lm2011_post_refinitiv_dir,
         lm2011_extension_dir=lm2011_extension_dir,
         finbert_run_dir=finbert_run_dir,
@@ -85,6 +91,7 @@ def _build_assets(
     *,
     run_id: str,
     repo_root: Path | None,
+    output_root: Path | None,
     lm2011_post_refinitiv_dir: Path | None,
     lm2011_extension_dir: Path | None,
     finbert_run_dir: Path | None,
@@ -92,7 +99,7 @@ def _build_assets(
     repo_root = resolve_repo_root() if repo_root is None else repo_root.resolve()
     ensure_repo_src_on_path(repo_root)
 
-    output_root = build_output_root(repo_root, run_id)
+    output_root = build_output_root(repo_root, run_id) if output_root is None else output_root.resolve()
     _ensure_output_root_is_safe(repo_root, output_root)
     output_dirs = prepare_output_dirs(output_root)
     logger = _configure_logger(output_dirs["logs"] / BUILD_LOG_FILENAME)

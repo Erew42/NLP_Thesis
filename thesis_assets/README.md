@@ -76,5 +76,5 @@ The same build functions back both the notebook API and the CLI.
 
 For convenience, the repo also includes:
 
-- [tools/build_thesis_assets.py](/C:/Users/erik9/Documents/SEC_Data/code/NLP_Thesis/tools/build_thesis_assets.py): thin local/Colab wrapper around the `thesis_assets` API with `LOCAL_REPO`, `COLAB_DRIVE`, and `EXPLICIT` path profiles. The default local and Drive hints follow `sec_ccm_unified_runner.py` result conventions and then fall back to older standalone runner directories when needed.
-- [tools/thesis_assets_colab_entrypoint.ipynb](/C:/Users/erik9/Documents/SEC_Data/code/NLP_Thesis/tools/thesis_assets_colab_entrypoint.ipynb): Colab-friendly notebook with Drive mount, repo-path setup, parameter cells, and direct calls into the same API. Its default Drive root is `Data_LM`, and it resolves thesis-asset inputs from `results/sec_ccm_unified_runner/...` by default.
+- [tools/build_thesis_assets.py](../tools/build_thesis_assets.py): thin local/Colab wrapper around the `thesis_assets` API with `LOCAL_REPO`, `COLAB_DRIVE`, and `EXPLICIT` path profiles. The default local and Drive hints follow `sec_ccm_unified_runner.py` result conventions and then fall back to older standalone runner directories when needed.
+- [tools/thesis_assets_colab_entrypoint.ipynb](../tools/thesis_assets_colab_entrypoint.ipynb): Colab-friendly notebook with Drive mount, repo-path setup, parameter cells, and direct calls into the same API. Its default Drive root is `Data_LM`, and it resolves thesis-asset inputs from `results/sec_ccm_unified_runner/...` by default.

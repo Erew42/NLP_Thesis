@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import importlib.util
 import sys
 from datetime import date
 from pathlib import Path
@@ -23,6 +24,8 @@ from thesis_assets.config.constants import DEFAULT_COMMON_SUCCESS_POLICY
 from thesis_assets.errors import RegistryError
 from thesis_assets.errors import SampleContractError
 from thesis_assets.registry import loader
+from thesis_assets.specs import BuildResult
+from thesis_assets.specs import BuildSessionResult
 from thesis_assets.usage import resolve_usage_run_paths
 
 
@@ -257,6 +260,83 @@ def test_usage_run_paths_support_versioned_snapshot_and_drive_layouts(tmp_path: 
     assert colab_resolved["lm2011_post_refinitiv_dir"] == (unified_drive_root / "lm2011_post_refinitiv").resolve()
     assert colab_resolved["lm2011_extension_dir"] == (unified_drive_root / "lm2011_extension").resolve()
     assert colab_resolved["finbert_run_dir"] == drive_finbert_run.resolve()
+
+
+def test_tools_entrypoint_build_asset_emits_json_and_allows_failures(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module_path = REPO_ROOT / "tools" / "build_thesis_assets.py"
+    spec = importlib.util.spec_from_file_location("test_build_thesis_assets_tool", module_path)
+    assert spec is not None
+    assert spec.loader is not None
+    tool_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tool_module)
+
+    repo_root = tmp_path / "repo"
+    output_root = tmp_path / "drive" / "Data_LM" / "results" / "thesis_assets" / "tool_run"
+    manifest_path = output_root / "manifest.json"
+    resolved_paths = {
+        "lm2011_post_refinitiv_dir": tmp_path / "inputs" / "lm2011_post_refinitiv",
+        "lm2011_extension_dir": tmp_path / "inputs" / "lm2011_extension",
+        "finbert_run_dir": tmp_path / "inputs" / "finbert_item_analysis",
+    }
+
+    monkeypatch.setattr(tool_module, "_resolve_run_paths", lambda **_: resolved_paths)
+
+    captured_kwargs: dict[str, object] = {}
+
+    def _fake_build_single_asset(**kwargs: object) -> BuildSessionResult:
+        captured_kwargs.update(kwargs)
+        return BuildSessionResult(
+            run_id="tool_run",
+            output_root=output_root,
+            manifest_path=manifest_path,
+            asset_results={
+                "ch5_fit_horserace_item7_c0": BuildResult(
+                    asset_id="ch5_fit_horserace_item7_c0",
+                    chapter="chapter5",
+                    asset_kind="table",
+                    sample_contract_id="common_success_comparison",
+                    status="failed",
+                    resolved_inputs={"fit_summary": "C:/tmp/lm2011_extension_fit_summary.parquet"},
+                    output_paths={},
+                    row_counts={},
+                    failure_reason="required artifact missing",
+                )
+            },
+        )
+
+    monkeypatch.setattr(tool_module, "build_single_asset", _fake_build_single_asset)
+
+    exit_code = tool_module.main(
+        [
+            "build-asset",
+            "--asset-id",
+            "ch5_fit_horserace_item7_c0",
+            "--run-id",
+            "tool_run",
+            "--repo-root",
+            str(repo_root),
+            "--output-root",
+            str(output_root),
+            "--allow-failures",
+        ]
+    )
+
+    assert exit_code == 0
+    assert captured_kwargs["repo_root"] == repo_root.resolve()
+    assert captured_kwargs["output_root"] == output_root.resolve()
+    assert captured_kwargs["run_id"] == "tool_run"
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["command"] == "build-asset"
+    assert payload["run_id"] == "tool_run"
+    assert payload["output_root"] == str(output_root)
+    assert payload["manifest_path"] == str(manifest_path)
+    assert payload["asset_statuses"] == {"ch5_fit_horserace_item7_c0": "failed"}
+    assert payload["resolved_paths"] == {key: str(value) for key, value in resolved_paths.items()}
 
 
 def _write_sample_attrition_parquet(path: Path) -> None:
