@@ -1271,7 +1271,6 @@ def _build_or_reuse_extension_shared_prereqs(
     local_work_root.mkdir(parents=True, exist_ok=True)
     _print_ram_snapshot("extension_shared_prereqs_start", enabled=run_cfg.print_ram_stats)
 
-    year_merged_lf: pl.LazyFrame | None = None
     if rebuild_sample_backbone or rebuild_full_10k_token_counts:
         year_merged_scan = _scan_year_merged_window(
             Path(resolved_inputs["year_merged_dir"]),
@@ -1279,7 +1278,6 @@ def _build_or_reuse_extension_shared_prereqs(
             sample_end=EXTENSION_SAMPLE_END,
         )
         year_merged_backbone_lf = _prepare_lm2011_sec_backbone_input_lf(year_merged_scan)
-        year_merged_lf = _prepare_lm2011_sec_input_lf(year_merged_scan)
         matched_clean_lf = pl.scan_parquet(resolved_inputs["matched_clean_path"])
         filingdates_lf = pl.scan_parquet(resolved_inputs["filingdates_path"])
 
@@ -1301,34 +1299,17 @@ def _build_or_reuse_extension_shared_prereqs(
     sample_backbone_lf = pl.scan_parquet(artifact_paths["sample_backbone"])
 
     if rebuild_full_10k_token_counts:
-        if year_merged_lf is None:
-            raise RuntimeError("extension shared full-10-K token counts require year_merged input.")
-        filtered_year_merged_lf = _filter_to_sample_doc_ids_lf(year_merged_lf, sample_backbone_lf)
-        temp_full_10k_features_path = local_work_root / "lm2011_extension_full_10k_features_tmp.parquet"
-        temp_full_10k_features_path.unlink(missing_ok=True)
-        write_lm2011_text_features_full_10k_parquet(
-            filtered_year_merged_lf,
-            output_path=temp_full_10k_features_path,
-            dictionary_lists=dictionary_inputs.dictionary_lists,
-            harvard_negative_word_list=dictionary_inputs.harvard_negative_word_list,
-            master_dictionary_words=dictionary_inputs.master_dictionary_words,
+        _build_extension_full_10k_token_counts_artifact(
+            year_merged_dir=Path(resolved_inputs["year_merged_dir"]),
+            sample_backbone_lf=sample_backbone_lf,
+            output_path=artifact_paths["full_10k_token_counts"],
+            local_work_root=local_work_root,
+            dictionary_inputs=dictionary_inputs,
             cleaning_contract=resolved_inputs["full_10k_cleaning_contract"],
             batch_size=resolved_inputs["full_10k_text_feature_batch_size"],
-            temp_root=local_work_root / "lm2011_extension_full_10k_features_tmp",
-            progress_callback=_make_text_feature_progress_logger(
-                "extension_full_10k_token_counts",
-                print_ram_stats=run_cfg.print_ram_stats,
-                ram_log_interval_batches=run_cfg.ram_log_interval_batches,
-            ),
+            print_ram_stats=run_cfg.print_ram_stats,
+            ram_log_interval_batches=run_cfg.ram_log_interval_batches,
         )
-        token_counts_lf = pl.scan_parquet(temp_full_10k_features_path).select(
-            pl.col("doc_id").cast(pl.Utf8, strict=False),
-            pl.col("total_token_count_full_10k").cast(pl.Int32, strict=False).alias("total_token_count_full_10k"),
-        )
-        artifact_paths["full_10k_token_counts"].unlink(missing_ok=True)
-        _write_frame_artifact(token_counts_lf, artifact_paths["full_10k_token_counts"])
-        temp_full_10k_features_path.unlink(missing_ok=True)
-        del filtered_year_merged_lf
         _gc_cleanup("extension_shared_prereqs_full_10k_token_counts_post", enabled=run_cfg.print_ram_stats)
 
     annual_accounting_panel_lf: pl.LazyFrame | None = None
@@ -2061,6 +2042,202 @@ def _filter_to_sample_doc_ids_lf(lf: pl.LazyFrame, sample_backbone_lf: pl.LazyFr
         lf.with_columns(pl.col("doc_id").cast(pl.Utf8, strict=False).alias("doc_id"))
         .join(sample_doc_ids, on="doc_id", how="semi")
     )
+
+
+def _empty_extension_full_10k_token_counts_df() -> pl.DataFrame:
+    return pl.DataFrame(
+        schema={
+            "doc_id": pl.Utf8,
+            "total_token_count_full_10k": pl.Int32,
+        }
+    )
+
+
+def _collect_extension_sample_doc_ids_by_year(sample_backbone_lf: pl.LazyFrame) -> dict[int, pl.DataFrame]:
+    sample_docs = sample_backbone_lf.select(
+        pl.col("doc_id").cast(pl.Utf8, strict=False).alias("doc_id"),
+        pl.col("filing_date").cast(pl.Date, strict=False).dt.year().alias("filing_year"),
+    ).collect()
+    if sample_docs.height <= 0:
+        return {}
+    invalid_rows = sample_docs.filter(
+        pl.col("doc_id").is_null() | pl.col("filing_year").is_null()
+    )
+    if invalid_rows.height > 0:
+        raise ValueError(
+            "LM2011 extension full-10-K token counts require sample_backbone doc_id and filing_date for yearly sharding."
+        )
+    unique_sample_docs = sample_docs.unique(subset=["doc_id"], keep="first")
+    return {
+        int(year): frame.select(pl.col("doc_id"))
+        for (year,), frame in unique_sample_docs.partition_by(
+            "filing_year",
+            as_dict=True,
+            include_key=True,
+        ).items()
+    }
+
+
+def _resolve_extension_year_merged_file_map(
+    year_merged_dir: Path,
+    *,
+    sample_start: dt.date,
+    sample_end: dt.date,
+) -> dict[int, Path]:
+    year_file_map: dict[int, Path] = {}
+    for path in _resolve_year_merged_scan_paths(
+        year_merged_dir,
+        sample_start=sample_start,
+        sample_end=sample_end,
+    ):
+        try:
+            year = int(path.stem)
+        except ValueError:
+            continue
+        year_file_map[year] = path.resolve()
+    return year_file_map
+
+
+def _print_extension_year_progress(
+    stage_name: str,
+    *,
+    event: str,
+    year: int,
+    enabled: bool,
+) -> None:
+    payload: dict[str, object] = {
+        "stage": stage_name,
+        "event": event,
+        "year": year,
+    }
+    if enabled:
+        payload["ram"] = _ram_snapshot(f"{stage_name}_{event}_{year}")
+    print(payload)
+
+
+def _validate_extension_full_10k_token_count_shards_unique_doc_ids(
+    token_count_shard_paths: Sequence[Path],
+) -> None:
+    if not token_count_shard_paths:
+        return
+    duplicate_doc_ids = (
+        pl.concat(
+            [
+                pl.scan_parquet(path).select(pl.col("doc_id").cast(pl.Utf8, strict=False).alias("doc_id"))
+                for path in token_count_shard_paths
+            ]
+        )
+        .group_by("doc_id")
+        .len()
+        .filter(pl.col("len") > 1)
+        .select(pl.col("doc_id"))
+        .limit(10)
+        .collect()
+        .get_column("doc_id")
+        .to_list()
+    )
+    if duplicate_doc_ids:
+        raise ValueError(
+            "LM2011 extension full-10-K token counts require doc_id to be unique across yearly shards: "
+            f"{duplicate_doc_ids}"
+        )
+
+
+def _build_extension_full_10k_token_counts_artifact(
+    *,
+    year_merged_dir: Path,
+    sample_backbone_lf: pl.LazyFrame,
+    output_path: Path,
+    local_work_root: Path,
+    dictionary_inputs,
+    cleaning_contract: str,
+    batch_size: int,
+    print_ram_stats: bool,
+    ram_log_interval_batches: int,
+) -> tuple[Path, int]:
+    sample_doc_ids_by_year = _collect_extension_sample_doc_ids_by_year(sample_backbone_lf)
+    if not sample_doc_ids_by_year:
+        output_path.unlink(missing_ok=True)
+        return _write_frame_artifact(_empty_extension_full_10k_token_counts_df(), output_path)
+
+    year_file_map = _resolve_extension_year_merged_file_map(
+        year_merged_dir,
+        sample_start=EXTENSION_SAMPLE_START,
+        sample_end=EXTENSION_SAMPLE_END,
+    )
+    missing_years = sorted(year for year in sample_doc_ids_by_year if year not in year_file_map)
+    if missing_years:
+        raise FileNotFoundError(
+            "LM2011 extension full-10-K token counts are missing required year_merged parquet inputs for sample filing years: "
+            f"{missing_years}"
+        )
+
+    yearly_work_root = local_work_root / "lm2011_extension_full_10k_features_tmp"
+    full_feature_dir = yearly_work_root / "year_feature_outputs"
+    token_count_shard_dir = yearly_work_root / "year_token_count_shards"
+    full_feature_dir.mkdir(parents=True, exist_ok=True)
+    token_count_shard_dir.mkdir(parents=True, exist_ok=True)
+
+    token_count_shard_paths: list[Path] = []
+    for year in sorted(sample_doc_ids_by_year):
+        year_doc_ids_df = sample_doc_ids_by_year[year]
+        if year_doc_ids_df.height <= 0:
+            continue
+        _print_extension_year_progress(
+            "extension_full_10k_token_counts",
+            event="year_start",
+            year=year,
+            enabled=print_ram_stats,
+        )
+        year_merged_lf = _prepare_lm2011_sec_input_lf(pl.scan_parquet(str(year_file_map[year])))
+        filtered_year_merged_lf = _filter_to_sample_doc_ids_lf(year_merged_lf, year_doc_ids_df.lazy())
+        temp_full_10k_features_path = full_feature_dir / f"{year}.parquet"
+        temp_full_10k_features_path.unlink(missing_ok=True)
+        write_lm2011_text_features_full_10k_parquet(
+            filtered_year_merged_lf,
+            output_path=temp_full_10k_features_path,
+            dictionary_lists=dictionary_inputs.dictionary_lists,
+            harvard_negative_word_list=dictionary_inputs.harvard_negative_word_list,
+            master_dictionary_words=dictionary_inputs.master_dictionary_words,
+            cleaning_contract=cleaning_contract,
+            batch_size=batch_size,
+            temp_root=yearly_work_root / str(year),
+            progress_callback=_make_text_feature_progress_logger(
+                "extension_full_10k_token_counts",
+                print_ram_stats=print_ram_stats,
+                ram_log_interval_batches=ram_log_interval_batches,
+            ),
+        )
+        year_token_counts_path = token_count_shard_dir / f"{year}.parquet"
+        year_token_counts_path.unlink(missing_ok=True)
+        _write_frame_artifact(
+            pl.scan_parquet(temp_full_10k_features_path).select(
+                pl.col("doc_id").cast(pl.Utf8, strict=False),
+                pl.col("total_token_count_full_10k").cast(pl.Int32, strict=False).alias(
+                    "total_token_count_full_10k"
+                ),
+            ),
+            year_token_counts_path,
+        )
+        temp_full_10k_features_path.unlink(missing_ok=True)
+        token_count_shard_paths.append(year_token_counts_path)
+        del filtered_year_merged_lf
+        _print_extension_year_progress(
+            "extension_full_10k_token_counts",
+            event="year_end",
+            year=year,
+            enabled=print_ram_stats,
+        )
+        gc.collect()
+
+    _validate_extension_full_10k_token_count_shards_unique_doc_ids(token_count_shard_paths)
+    final_token_counts_lf = (
+        pl.concat([pl.scan_parquet(path) for path in token_count_shard_paths])
+        if token_count_shard_paths
+        else _empty_extension_full_10k_token_counts_df().lazy()
+    )
+    output_path.unlink(missing_ok=True)
+    return _write_frame_artifact(final_token_counts_lf, output_path)
 
 
 def _filter_valid_annual_period_descriptor_rows(lf: pl.LazyFrame) -> pl.LazyFrame:

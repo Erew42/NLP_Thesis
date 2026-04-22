@@ -116,6 +116,162 @@ def test_resolve_year_merged_scan_paths_falls_back_to_glob(tmp_path: Path) -> No
     assert [path.name for path in resolved] == ["chunk_a.parquet", "chunk_b.parquet"]
 
 
+def test_build_extension_full_10k_token_counts_artifact_processes_populated_years_independently(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    year_merged_dir = tmp_path / "year_merged"
+    _write_parquet(year_merged_dir / "2009.parquet", pl.DataFrame({"doc_id": ["doc1", "other_2009"]}))
+    _write_parquet(year_merged_dir / "2010.parquet", pl.DataFrame({"doc_id": ["doc2", "doc3", "other_2010"]}))
+    _write_parquet(year_merged_dir / "2011.parquet", pl.DataFrame({"doc_id": ["other_2011"]}))
+
+    sample_backbone_lf = pl.DataFrame(
+        {
+            "doc_id": ["doc1", "doc2", "doc3"],
+            "filing_date": [dt.date(2009, 3, 2), dt.date(2010, 2, 15), dt.date(2010, 9, 30)],
+        }
+    ).lazy()
+    writer_calls: list[tuple[str, list[str]]] = []
+
+    monkeypatch.setattr(runner, "_prepare_lm2011_sec_input_lf", lambda lf: lf)
+
+    def _writer_stub(
+        sec_parsed_lf: pl.LazyFrame,
+        *,
+        output_path: Path,
+        **_: object,
+    ) -> int:
+        docs = sec_parsed_lf.collect().get_column("doc_id").to_list()
+        writer_calls.append((output_path.stem, docs))
+        _write_parquet(
+            output_path,
+            pl.DataFrame(
+                {
+                    "doc_id": docs,
+                    "total_token_count_full_10k": [2000 + index for index, _doc in enumerate(docs, start=1)],
+                }
+            ),
+        )
+        return len(docs)
+
+    monkeypatch.setattr(runner, "write_lm2011_text_features_full_10k_parquet", _writer_stub)
+
+    output_path = tmp_path / "lm2011_extension_full_10k_token_counts.parquet"
+    written_path, row_count = runner._build_extension_full_10k_token_counts_artifact(
+        year_merged_dir=year_merged_dir,
+        sample_backbone_lf=sample_backbone_lf,
+        output_path=output_path,
+        local_work_root=tmp_path / "local_work",
+        dictionary_inputs=SimpleNamespace(
+            dictionary_lists={"negative": ["loss"]},
+            harvard_negative_word_list=["decline"],
+            master_dictionary_words={"loss", "decline"},
+        ),
+        cleaning_contract="lm2011_paper",
+        batch_size=4,
+        print_ram_stats=False,
+        ram_log_interval_batches=1,
+    )
+
+    assert written_path == output_path
+    assert row_count == 3
+    assert writer_calls == [("2009", ["doc1"]), ("2010", ["doc2", "doc3"])]
+    assert pl.read_parquet(output_path).sort("doc_id").to_dicts() == [
+        {"doc_id": "doc1", "total_token_count_full_10k": 2001},
+        {"doc_id": "doc2", "total_token_count_full_10k": 2001},
+        {"doc_id": "doc3", "total_token_count_full_10k": 2002},
+    ]
+
+
+def test_build_extension_full_10k_token_counts_artifact_fails_when_sample_year_file_is_missing(
+    tmp_path: Path,
+) -> None:
+    year_merged_dir = tmp_path / "year_merged"
+    _write_parquet(year_merged_dir / "2009.parquet", pl.DataFrame({"doc_id": ["doc1"]}))
+    sample_backbone_lf = pl.DataFrame(
+        {
+            "doc_id": ["doc1", "doc2"],
+            "filing_date": [dt.date(2009, 3, 2), dt.date(2010, 2, 15)],
+        }
+    ).lazy()
+
+    with pytest.raises(
+        FileNotFoundError,
+        match="missing required year_merged parquet inputs for sample filing years: \\[2010\\]",
+    ):
+        runner._build_extension_full_10k_token_counts_artifact(
+            year_merged_dir=year_merged_dir,
+            sample_backbone_lf=sample_backbone_lf,
+            output_path=tmp_path / "lm2011_extension_full_10k_token_counts.parquet",
+            local_work_root=tmp_path / "local_work",
+            dictionary_inputs=SimpleNamespace(
+                dictionary_lists={"negative": ["loss"]},
+                harvard_negative_word_list=["decline"],
+                master_dictionary_words={"loss", "decline"},
+            ),
+            cleaning_contract="lm2011_paper",
+            batch_size=4,
+            print_ram_stats=False,
+            ram_log_interval_batches=1,
+        )
+
+
+def test_build_extension_full_10k_token_counts_artifact_rejects_duplicate_doc_ids_across_years(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    year_merged_dir = tmp_path / "year_merged"
+    _write_parquet(year_merged_dir / "2009.parquet", pl.DataFrame({"doc_id": ["doc1"]}))
+    _write_parquet(year_merged_dir / "2010.parquet", pl.DataFrame({"doc_id": ["doc2"]}))
+    sample_backbone_lf = pl.DataFrame(
+        {
+            "doc_id": ["doc1", "doc2"],
+            "filing_date": [dt.date(2009, 3, 2), dt.date(2010, 2, 15)],
+        }
+    ).lazy()
+
+    monkeypatch.setattr(runner, "_prepare_lm2011_sec_input_lf", lambda lf: lf)
+
+    def _writer_stub(
+        _sec_parsed_lf: pl.LazyFrame,
+        *,
+        output_path: Path,
+        **_: object,
+    ) -> int:
+        _write_parquet(
+            output_path,
+            pl.DataFrame(
+                {
+                    "doc_id": ["duplicate_doc"],
+                    "total_token_count_full_10k": [3000],
+                }
+            ),
+        )
+        return 1
+
+    monkeypatch.setattr(runner, "write_lm2011_text_features_full_10k_parquet", _writer_stub)
+
+    with pytest.raises(
+        ValueError,
+        match="require doc_id to be unique across yearly shards",
+    ):
+        runner._build_extension_full_10k_token_counts_artifact(
+            year_merged_dir=year_merged_dir,
+            sample_backbone_lf=sample_backbone_lf,
+            output_path=tmp_path / "lm2011_extension_full_10k_token_counts.parquet",
+            local_work_root=tmp_path / "local_work",
+            dictionary_inputs=SimpleNamespace(
+                dictionary_lists={"negative": ["loss"]},
+                harvard_negative_word_list=["decline"],
+                master_dictionary_words={"loss", "decline"},
+            ),
+            cleaning_contract="lm2011_paper",
+            batch_size=4,
+            print_ram_stats=False,
+            ram_log_interval_batches=1,
+        )
+
+
 def _skipped_quarter_diagnostics_df() -> pl.DataFrame:
     return pl.DataFrame(
         {
