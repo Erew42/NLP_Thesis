@@ -77,6 +77,24 @@ def _require_columns(lf: pl.LazyFrame, required: tuple[str, ...], label: str) ->
         raise ValueError(f"{label} missing required columns: {missing}")
 
 
+def _select_groupwise_first_rows(
+    lf: pl.LazyFrame,
+    *,
+    group_keys: tuple[str, ...],
+    order_keys: tuple[str, ...],
+) -> pl.LazyFrame:
+    schema_names = lf.collect_schema().names()
+    value_columns = [name for name in schema_names if name not in group_keys]
+    if not value_columns:
+        return lf.select(*group_keys).unique(maintain_order=False)
+    return lf.group_by(*group_keys).agg(
+        [
+            pl.col(name).sort_by(list(order_keys)).first().alias(name)
+            for name in value_columns
+        ]
+    )
+
+
 def _resolve_first_existing(schema: pl.Schema, candidates: tuple[str, ...], label: str) -> str:
     for candidate in candidates:
         if candidate in schema:
@@ -292,8 +310,13 @@ def _build_lm2011_sample_backbone_stage_frames(
             & pl.col("accession_nodash").is_not_null()
             & pl.col(sec_form_col).is_not_null()
         )
-        .sort("doc_id", "filing_date", "accession_nodash")
-        .unique(subset=["doc_id"], keep="first")
+    )
+    sec_base = (
+        _select_groupwise_first_rows(
+            sec_base,
+            group_keys=("doc_id",),
+            order_keys=("filing_date", "accession_nodash"),
+        )
         .filter(pl.col("filing_date").is_between(pl.lit(sample_start), pl.lit(sample_end), closed="both"))
         .filter(pl.col("_sec_raw_form").is_in(sorted(_LM2011_SEC_INCLUDED_RAW_FORMS)))
         .filter(pl.col("_sec_raw_form").is_in(sorted(_LM2011_SEC_EXCLUDED_RAW_FORMS)).not_())
@@ -309,9 +332,11 @@ def _build_lm2011_sample_backbone_stage_frames(
     )
 
     first_filing = (
-        sec_base.with_columns(pl.col("filing_date").dt.year().alias("_filing_year"))
-        .sort("cik_10", "_filing_year", "filing_date", "accession_nodash")
-        .unique(subset=["cik_10", "_filing_year"], keep="first")
+        _select_groupwise_first_rows(
+            sec_base.with_columns(pl.col("filing_date").dt.year().alias("_filing_year")),
+            group_keys=("cik_10", "_filing_year"),
+            order_keys=("filing_date", "accession_nodash"),
+        )
         .drop("_filing_year")
         .sort("cik_10", "filing_date", "accession_nodash")
     )

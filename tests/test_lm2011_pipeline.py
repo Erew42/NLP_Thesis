@@ -636,6 +636,33 @@ def test_build_lm2011_sample_backbone_uses_accession_nodash_as_same_day_tie_brea
     assert backbone.get_column("accession_nodash").to_list() == ["0000000001"]
 
 
+def test_build_lm2011_sample_backbone_dedupes_duplicate_doc_id_by_earliest_row() -> None:
+    sec_parsed = pl.DataFrame(
+        {
+            "doc_id": ["dup_doc", "dup_doc"],
+            "cik_10": ["0001", "0001"],
+            "filing_date": [dt.date(1998, 4, 1), dt.date(1998, 3, 31)],
+            "accession_nodash": ["0000000002", "0000000001"],
+            "document_type_filename": ["10-K", "10-K"],
+        }
+    )
+    matched_clean = pl.DataFrame(
+        {
+            "doc_id": ["dup_doc"],
+            "KYPERMNO": [1],
+            "gvkey": [1001],
+            "SRCTYPE": ["10K"],
+        }
+    )
+
+    sec_base = _build_lm2011_sample_backbone_stage_frames(sec_parsed.lazy(), matched_clean.lazy())[0][1].collect()
+
+    assert sec_base.height == 1
+    assert sec_base.item(0, "doc_id") == "dup_doc"
+    assert sec_base.item(0, "filing_date") == dt.date(1998, 3, 31)
+    assert sec_base.item(0, "accession_nodash") == "0000000001"
+
+
 def test_build_lm2011_sample_backbone_stage_frames_report_expected_attrition() -> None:
     sec_parsed = pl.DataFrame(
         {
