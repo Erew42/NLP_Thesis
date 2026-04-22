@@ -1961,6 +1961,13 @@ def _prepare_monthly_factor_frame(ff_factors_monthly_with_mom_lf: pl.LazyFrame |
     return _ensure_factor_scale(factors_df, ("mkt_rf", "smb", "hml", "rf", "mom"))
 
 
+def _with_month_join_keys(df: pl.DataFrame, *, date_col: str = "portfolio_month") -> pl.DataFrame:
+    return df.with_columns(
+        pl.col(date_col).dt.year().cast(pl.Int32).alias("_join_year"),
+        pl.col(date_col).dt.month().cast(pl.Int8).alias("_join_month"),
+    )
+
+
 def _build_strategy_assignment_frame(strategy_docs_df: pl.DataFrame) -> pl.DataFrame:
     signal_columns = [
         signal_name
@@ -2310,12 +2317,28 @@ def build_lm2011_trading_strategy_ff4_summary(
     )
     if monthly_returns_df.height == 0:
         return _empty_trading_strategy_ff4_summary_df().lazy()
+    monthly_returns_df = _with_month_join_keys(monthly_returns_df)
 
-    factors_df = _prepare_monthly_factor_frame(ff_factors_monthly_with_mom_lf).filter(
+    factors_df = _with_month_join_keys(
+        _prepare_monthly_factor_frame(ff_factors_monthly_with_mom_lf).filter(
         pl.col("portfolio_month").is_between(pl.lit(_STRATEGY_START_DATE), pl.lit(_STRATEGY_END_DATE), closed="both")
+        )
     )
+    factor_month_duplicates = factors_df.group_by("_join_year", "_join_month").len().filter(pl.col("len") > 1)
+    if factor_month_duplicates.height > 0:
+        duplicate_examples = (
+            factor_month_duplicates.select("_join_year", "_join_month").head(10).to_dicts()
+        )
+        raise ValueError(
+            "ff_factors_monthly_with_mom contains duplicate calendar months in the LM2011 trading strategy window; "
+            f"examples={duplicate_examples}"
+        )
     strategy_df = (
-        monthly_returns_df.join(factors_df, on="portfolio_month", how="inner")
+        monthly_returns_df.join(
+            factors_df.select("_join_year", "_join_month", "mkt_rf", "smb", "hml", "mom"),
+            on=["_join_year", "_join_month"],
+            how="inner",
+        )
         .filter(
             pl.col("mkt_rf").is_not_null()
             & pl.col("smb").is_not_null()
@@ -2324,6 +2347,21 @@ def build_lm2011_trading_strategy_ff4_summary(
         )
         .sort("portfolio_month", "sort_signal_name")
     )
+    missing_factor_months = (
+        monthly_returns_df.select("_join_year", "_join_month", "portfolio_month")
+        .unique()
+        .join(
+            factors_df.select("_join_year", "_join_month").unique(),
+            on=["_join_year", "_join_month"],
+            how="anti",
+        )
+    )
+    if missing_factor_months.height > 0:
+        missing_examples = missing_factor_months.select("portfolio_month").head(10).to_series().to_list()
+        raise ValueError(
+            "ff_factors_monthly_with_mom is missing calendar months required by the LM2011 trading strategy summary; "
+            f"missing_strategy_months={missing_examples}"
+        )
     if strategy_df.height == 0:
         return _empty_trading_strategy_ff4_summary_df().lazy()
     return _fit_strategy_factor_loadings(strategy_df).lazy()

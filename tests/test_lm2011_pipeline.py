@@ -293,6 +293,23 @@ def _strategy_months() -> list[dt.date]:
     ]
 
 
+def _strategy_trading_months() -> list[dt.date]:
+    return [
+        dt.date(1997, 7, 31),
+        dt.date(1997, 8, 29),
+        dt.date(1997, 9, 30),
+        dt.date(1997, 10, 31),
+        dt.date(1997, 11, 28),
+        dt.date(1997, 12, 31),
+        dt.date(1998, 1, 30),
+        dt.date(1998, 2, 27),
+        dt.date(1998, 3, 31),
+        dt.date(1998, 4, 30),
+        dt.date(1998, 5, 29),
+        dt.date(1998, 6, 30),
+    ]
+
+
 def _build_strategy_inputs() -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame, pl.DataFrame]:
     event_panel = pl.DataFrame(
         {
@@ -2871,6 +2888,67 @@ def test_build_lm2011_trading_strategy_ff4_summary_is_separate_artifact_with_r2(
     ]
     assert summary.height == 4
     assert summary.select(pl.col("r2").is_not_null().all()).item() is True
+
+
+def test_build_lm2011_trading_strategy_ff4_summary_matches_calendar_month_factors_for_trading_month_ends() -> None:
+    event_panel, sec_parsed, monthly_stock, monthly_factors = _build_strategy_inputs()
+    monthly_returns = build_lm2011_trading_strategy_monthly_returns(
+        event_panel.lazy(),
+        sec_parsed.lazy(),
+        monthly_stock.lazy(),
+        lm_dictionary_lists=_lm_dictionary_lists(),
+        harvard_negative_word_list=_harvard_negative_word_list(),
+        master_dictionary_words=_master_dictionary_words(),
+    ).collect()
+    month_mapping = pl.DataFrame(
+        {
+            "portfolio_month": _strategy_months(),
+            "_trading_month_end": _strategy_trading_months(),
+        }
+    )
+    trading_month_returns = (
+        monthly_returns.join(month_mapping, on="portfolio_month", how="left")
+        .with_columns(pl.col("_trading_month_end").alias("portfolio_month"))
+        .drop("_trading_month_end")
+    )
+
+    summary = build_lm2011_trading_strategy_ff4_summary(
+        trading_month_returns.lazy(),
+        monthly_factors.lazy(),
+    ).collect().sort("sort_signal_name")
+
+    assert summary.height == 4
+    assert summary.select(pl.col("r2").is_not_null().all()).item() is True
+
+
+def test_build_lm2011_trading_strategy_ff4_summary_fails_closed_when_factor_month_missing() -> None:
+    event_panel, sec_parsed, monthly_stock, monthly_factors = _build_strategy_inputs()
+    monthly_returns = build_lm2011_trading_strategy_monthly_returns(
+        event_panel.lazy(),
+        sec_parsed.lazy(),
+        monthly_stock.lazy(),
+        lm_dictionary_lists=_lm_dictionary_lists(),
+        harvard_negative_word_list=_harvard_negative_word_list(),
+        master_dictionary_words=_master_dictionary_words(),
+    ).collect()
+    month_mapping = pl.DataFrame(
+        {
+            "portfolio_month": _strategy_months(),
+            "_trading_month_end": _strategy_trading_months(),
+        }
+    )
+    trading_month_returns = (
+        monthly_returns.join(month_mapping, on="portfolio_month", how="left")
+        .with_columns(pl.col("_trading_month_end").alias("portfolio_month"))
+        .drop("_trading_month_end")
+    )
+    incomplete_factors = monthly_factors.filter(pl.col("month_end") != dt.date(1997, 8, 31))
+
+    with pytest.raises(ValueError, match="missing calendar months required"):
+        build_lm2011_trading_strategy_ff4_summary(
+            trading_month_returns.lazy(),
+            incomplete_factors.lazy(),
+        ).collect()
 
 
 def test_build_lm2011_trading_strategy_builders_fail_closed_without_required_external_inputs() -> None:
