@@ -25,6 +25,7 @@ from thesis_pkg.core.ccm.lm2011 import (
     derive_filing_trade_anchors,
 )
 from thesis_pkg.core.sec.lm2011_text import (
+    DEFAULT_TEXT_FEATURE_BATCH_SIZE,
     build_lm2011_text_features_full_10k,
     build_lm2011_text_features_mda,
     build_lm2011_trading_strategy_signal_frame,
@@ -1995,10 +1996,20 @@ def _build_strategy_assignment_frame(strategy_docs_df: pl.DataFrame) -> pl.DataF
             *[pl.col(column).cast(pl.Float64, strict=False).alias(column) for column in signal_columns],
         )
         .drop_nulls(subset=["doc_id", "KYPERMNO", "filing_date"])
-        .with_columns((pl.col("filing_date").dt.year() + 1).cast(pl.Int32).alias("sort_year"))
+        # Portfolios formed on June 30 of year t use filings available in the
+        # trailing July-to-June window ending on that formation date.
+        .with_columns(
+            pl.when(pl.col("filing_date").dt.month() >= 7)
+            .then(pl.col("filing_date").dt.year() + 1)
+            .otherwise(pl.col("filing_date").dt.year())
+            .cast(pl.Int32)
+            .alias("sort_year")
+        )
         .filter(
             pl.col("sort_year").is_between(_STRATEGY_MIN_SORT_YEAR, _STRATEGY_MAX_SORT_YEAR, closed="both")
         )
+        .sort("KYPERMNO", "sort_year", "filing_date", "doc_id")
+        .unique(subset=["KYPERMNO", "sort_year"], keep="last")
         .unpivot(
             index=["doc_id", "KYPERMNO", "sort_year"],
             on=signal_columns,
@@ -2082,16 +2093,20 @@ def _compute_long_short_returns(holdings_df: pl.DataFrame, *, portfolio_weightin
             pl.when(pl.col("quintile") == 1).then(pl.col("_quintile_return")).otherwise(None).drop_nulls().first().alias("_q1_return"),
             pl.when(pl.col("quintile") == 5).then(pl.col("_quintile_return")).otherwise(None).drop_nulls().first().alias("_q5_return"),
         )
-        .with_columns((pl.col("_q1_return") - pl.col("_q5_return")).alias("long_short_return"))
+        .with_columns((pl.col("_q5_return") - pl.col("_q1_return")).alias("long_short_return"))
         .filter(pl.col("long_short_return").is_not_null())
         .select("portfolio_month", "sort_signal_name", "long_short_return")
     )
 
 
-def _prepare_trading_strategy_doc_universe_df(event_panel_lf: pl.LazyFrame) -> pl.DataFrame:
-    _require_columns(event_panel_lf, ("doc_id", "KYPERMNO", "filing_date"), "event_panel")
+def _prepare_trading_strategy_doc_universe_df(
+    strategy_universe_lf: pl.LazyFrame,
+    *,
+    label: str = "strategy_universe",
+) -> pl.DataFrame:
+    _require_columns(strategy_universe_lf, ("doc_id", "KYPERMNO", "filing_date"), label)
     return (
-        event_panel_lf.select(
+        strategy_universe_lf.select(
             pl.col("doc_id").cast(pl.Utf8, strict=False),
             pl.col("KYPERMNO").cast(pl.Int32, strict=False),
             pl.col("filing_date").cast(pl.Date, strict=False),
@@ -2199,7 +2214,7 @@ def _fit_strategy_factor_loadings(strategy_df: pl.DataFrame) -> pl.DataFrame:
 
 
 def _build_trading_strategy_monthly_returns_df(
-    event_panel_lf: pl.LazyFrame,
+    strategy_universe_lf: pl.LazyFrame,
     sec_parsed_lf: pl.LazyFrame,
     monthly_stock_lf: pl.LazyFrame,
     *,
@@ -2209,10 +2224,11 @@ def _build_trading_strategy_monthly_returns_df(
     portfolio_weighting: str = "equal",
     monthly_return_col: str = "MRET",
     cleaning_contract: Full10KCleaningContract = "current",
+    batch_size: int = DEFAULT_TEXT_FEATURE_BATCH_SIZE,
 ) -> pl.DataFrame:
     if portfolio_weighting not in {"equal", "lagged_value"}:
         raise ValueError("portfolio_weighting must be one of {'equal', 'lagged_value'}")
-    docs_df = _prepare_trading_strategy_doc_universe_df(event_panel_lf)
+    docs_df = _prepare_trading_strategy_doc_universe_df(strategy_universe_lf)
     if docs_df.height == 0:
         return _empty_trading_strategy_monthly_returns_df()
 
@@ -2222,6 +2238,7 @@ def _build_trading_strategy_monthly_returns_df(
         harvard_negative_word_list=harvard_negative_word_list,
         master_dictionary_words=master_dictionary_words,
         cleaning_contract=cleaning_contract,
+        batch_size=batch_size,
     ).collect()
     strategy_docs_df = docs_df.join(signal_df, on="doc_id", how="inner")
     return _build_trading_strategy_monthly_returns_from_strategy_docs_df(
@@ -2243,6 +2260,7 @@ def build_lm2011_trading_strategy_monthly_returns(
     portfolio_weighting: str = "equal",
     monthly_return_col: str = "MRET",
     cleaning_contract: Full10KCleaningContract = "current",
+    batch_size: int = DEFAULT_TEXT_FEATURE_BATCH_SIZE,
 ) -> pl.LazyFrame:
     return _build_trading_strategy_monthly_returns_df(
         event_panel_lf,
@@ -2254,6 +2272,7 @@ def build_lm2011_trading_strategy_monthly_returns(
         portfolio_weighting=portfolio_weighting,
         monthly_return_col=monthly_return_col,
         cleaning_contract=cleaning_contract,
+        batch_size=batch_size,
     ).lazy()
 
 

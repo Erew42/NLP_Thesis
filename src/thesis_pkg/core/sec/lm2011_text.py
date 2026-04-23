@@ -535,13 +535,16 @@ def _build_scored_text_frame(
         total_token_count_col=total_token_count_col,
         signal_specs=signal_specs,
     )
-    df = (
-        pl.DataFrame(rows, schema_overrides=schema)
-        .with_columns(
-            pl.col(total_token_count_col).cast(pl.Int32, strict=False),
-            pl.col(token_count_col).cast(pl.Int32, strict=False),
+    if rows:
+        df = (
+            pl.DataFrame(rows, schema_overrides=schema)
+            .with_columns(
+                pl.col(total_token_count_col).cast(pl.Int32, strict=False),
+                pl.col(token_count_col).cast(pl.Int32, strict=False),
+            )
         )
-    )
+    else:
+        df = pl.DataFrame(schema=schema)
     if cleaning_policy_id is not None:
         df = df.with_columns(pl.lit(cleaning_policy_id, dtype=pl.Utf8).alias("cleaning_policy_id"))
     return df.lazy()

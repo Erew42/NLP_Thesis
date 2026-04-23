@@ -315,17 +315,17 @@ def _build_strategy_inputs() -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame, 
         {
             "doc_id": [f"doc_{idx}" for idx in range(10)],
             "KYPERMNO": [100 + idx for idx in range(10)],
-            "filing_date": [dt.date(1996, 3, 1) + dt.timedelta(days=idx) for idx in range(10)],
+            "filing_date": [dt.date(1997, 3, 1) + dt.timedelta(days=idx) for idx in range(10)],
         }
     )
     sec_parsed = pl.DataFrame(
         {
             "doc_id": [f"doc_{idx}" for idx in range(10)],
             "cik_10": [f"{idx:010d}" for idx in range(10)],
-            "filing_date": [dt.date(1996, 3, 1) + dt.timedelta(days=idx) for idx in range(10)],
+            "filing_date": [dt.date(1997, 3, 1) + dt.timedelta(days=idx) for idx in range(10)],
             "document_type_filename": ["10-K"] * 10,
             "full_text": [
-                " ".join((["loss"] * (idx + 1)) + (["bad"] * max(0, 9 - idx)) + (["neutral"] * 20))
+                " ".join((["loss"] * (idx + 1)) + (["bad"] * (idx + 1)) + (["neutral"] * 20))
                 for idx in range(10)
             ],
         }
@@ -2732,10 +2732,7 @@ def test_build_lm2011_trading_strategy_monthly_returns_pin_direction_and_support
     assert equal_panel.get_column("portfolio_month").unique().sort().to_list() == _strategy_months()
     assert lagged_value_panel.height == equal_panel.height
 
-    fin_neg_returns = equal_panel.filter(pl.col("sort_signal_name").is_in(["fin_neg_prop", "fin_neg_tfidf"]))
-    h4n_returns = equal_panel.filter(pl.col("sort_signal_name").is_in(["h4n_inf_prop", "h4n_inf_tfidf"]))
-    assert fin_neg_returns.select(pl.col("long_short_return").max()).item() < 0
-    assert h4n_returns.select(pl.col("long_short_return").min()).item() > 0
+    assert equal_panel.select(pl.col("long_short_return").min()).item() > 0
 
     merged = equal_panel.join(
         lagged_value_panel.rename({"long_short_return": "lagged_long_short_return"}),
@@ -2806,17 +2803,83 @@ def test_build_lm2011_trading_strategy_monthly_returns_from_text_features_matche
     assert from_text_features_equal.get_column("portfolio_month").unique().sort().to_list() == _strategy_months()
 
 
-def test_build_lm2011_trading_strategy_monthly_returns_use_prior_year_signal_year() -> None:
-    event_panel, sec_parsed, monthly_stock, monthly_factors = _build_strategy_inputs()
-    prior_year_required = build_lm2011_trading_strategy_monthly_returns(
+def test_build_lm2011_trading_strategy_monthly_returns_use_june_cutoff_signal_year() -> None:
+    event_panel, sec_parsed, monthly_stock, _ = _build_strategy_inputs()
+    june_eligible = build_lm2011_trading_strategy_monthly_returns(
         event_panel.with_columns(pl.lit(dt.date(1997, 3, 1)).alias("filing_date")).lazy(),
-        sec_parsed.lazy(),
+        sec_parsed.with_columns(pl.lit(dt.date(1997, 3, 1)).alias("filing_date")).lazy(),
         monthly_stock.lazy(),
         lm_dictionary_lists=_lm_dictionary_lists(),
         harvard_negative_word_list=_harvard_negative_word_list(),
         master_dictionary_words=_master_dictionary_words(),
     ).collect()
-    assert prior_year_required.height == 0
+    not_yet_available = build_lm2011_trading_strategy_monthly_returns(
+        event_panel.with_columns(pl.lit(dt.date(1997, 11, 15)).alias("filing_date")).lazy(),
+        sec_parsed.with_columns(pl.lit(dt.date(1997, 11, 15)).alias("filing_date")).lazy(),
+        monthly_stock.lazy(),
+        lm_dictionary_lists=_lm_dictionary_lists(),
+        harvard_negative_word_list=_harvard_negative_word_list(),
+        master_dictionary_words=_master_dictionary_words(),
+    ).collect()
+    assert june_eligible.height == 48
+    assert june_eligible.get_column("portfolio_month").unique().sort().to_list() == _strategy_months()
+    assert not_yet_available.height == 0
+
+
+def test_strategy_assignment_and_long_short_follow_june_cutoff_high_minus_low_convention() -> None:
+    strategy_docs_df = pl.DataFrame(
+        {
+            "doc_id": [
+                "doc_prev_old",
+                "doc_prev_new",
+                *[f"doc_{idx}" for idx in range(2, 10)],
+                "doc_late",
+            ],
+            "KYPERMNO": [
+                100,
+                100,
+                *[100 + idx for idx in range(1, 9)],
+                109,
+            ],
+            "filing_date": [
+                dt.date(1996, 8, 15),
+                dt.date(1997, 3, 1),
+                *[dt.date(1997, 3, 1) for _ in range(8)],
+                dt.date(1997, 11, 15),
+            ],
+            "fin_neg_prop": [0.0, 1.0, *[float(idx) for idx in range(2, 10)], 99.0],
+            "fin_neg_tfidf": [0.0, 1.0, *[float(idx) for idx in range(2, 10)], 99.0],
+            "h4n_inf_prop": [0.0, 1.0, *[float(idx) for idx in range(2, 10)], 99.0],
+            "h4n_inf_tfidf": [0.0, 1.0, *[float(idx) for idx in range(2, 10)], 99.0],
+        }
+    )
+    assignments = lm2011_pipeline._build_strategy_assignment_frame(strategy_docs_df)
+
+    assert assignments.get_column("sort_year").unique().sort().to_list() == [1997, 1998]
+    assert assignments.filter(pl.col("doc_id") == "doc_prev_old").height == 0
+    assert assignments.filter(pl.col("doc_id") == "doc_prev_new").select(pl.col("sort_year").unique().first()).item() == 1997
+    assert assignments.filter(pl.col("doc_id") == "doc_late").select(pl.col("sort_year").unique().first()).item() == 1998
+    assert assignments.filter((pl.col("doc_id") == "doc_prev_new") & (pl.col("sort_signal_name") == "fin_neg_prop")).select(pl.col("quintile").first()).item() == 1
+    assert assignments.filter((pl.col("doc_id") == "doc_9") & (pl.col("sort_signal_name") == "fin_neg_prop")).select(pl.col("quintile").first()).item() == 5
+
+    monthly_stock = pl.DataFrame(
+        {
+            "KYPERMNO": [100 + idx for idx in range(10)],
+            "MCALDT": [dt.date(1997, 7, 31)] * 10,
+            "MRET": [0.01 + 0.01 * idx for idx in range(10)],
+            "MTCAP": [100.0 + float(idx) for idx in range(10)],
+        }
+    )
+    long_short_df = lm2011_pipeline._build_trading_strategy_monthly_returns_from_strategy_docs_df(
+        strategy_docs_df,
+        monthly_stock.lazy(),
+        portfolio_weighting="equal",
+        monthly_return_col="MRET",
+    ).sort("sort_signal_name")
+
+    assert long_short_df.height == 4
+    assert long_short_df.get_column("portfolio_month").unique().to_list() == [dt.date(1997, 7, 31)]
+    assert long_short_df.select(pl.col("long_short_return").min()).item() > 0
 
 
 def test_build_lm2011_trading_strategy_monthly_returns_propagates_cleaning_contract(
