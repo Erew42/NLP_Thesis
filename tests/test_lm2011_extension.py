@@ -330,6 +330,30 @@ def test_extension_estimation_scaffold_runs_primary_comparison_grid() -> None:
     )
     assert horse_race.height > 0
     assert all(value is None or math.isfinite(value) for value in results.get_column("p_value").to_list())
+    assert results.get_column("weighting_rule").drop_nulls().unique().to_list() == [
+        "quarter_observation_count"
+    ]
+
+
+def test_extension_estimation_scaffold_propagates_equal_quarter_weighting() -> None:
+    results = run_lm2011_extension_estimation_scaffold(
+        _estimation_panel().lazy(),
+        run_id="unit_test_extension",
+        text_scopes=("item_7_mda",),
+        control_set_ids=("C0",),
+        quarter_weighting="equal_quarter",
+    )
+
+    assert results.height > 0
+    assert results.get_column("weighting_rule").drop_nulls().unique().to_list() == [
+        "equal_quarter"
+    ]
+    joint_signal_rows = results.filter(
+        (pl.col("specification_name") == "dictionary_finbert_joint")
+        & (pl.col("coefficient_name") == "finbert_neg_prob_lenw_mean")
+        & (pl.col("estimator_status") == "estimated")
+    )
+    assert joint_signal_rows.height > 0
 
 
 def test_extension_fit_comparison_scaffold_uses_common_sample_only_for_fit_artifacts() -> None:

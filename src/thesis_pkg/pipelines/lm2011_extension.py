@@ -16,6 +16,7 @@ from thesis_pkg.pipelines.lm2011_regressions import _attach_ff48_industries
 from thesis_pkg.pipelines.lm2011_regressions import _newey_west_standard_error
 from thesis_pkg.pipelines.lm2011_regressions import _nullify_infinite_float_columns
 from thesis_pkg.pipelines.lm2011_regressions import _weighted_mean
+from thesis_pkg.pipelines.lm2011_regressions import QuarterWeighting
 from thesis_pkg.pipelines.lm2011_regressions import run_lm2011_quarterly_fama_macbeth
 from thesis_pkg.pipelines.lm2011_regressions import run_lm2011_quarterly_fama_macbeth_with_diagnostics
 
@@ -1191,6 +1192,7 @@ def run_lm2011_extension_estimation_scaffold(
     control_set_ids: Sequence[str] = ("C0", "C1", "C2"),
     specification_names: Sequence[str] = ("dictionary_only", "finbert_only", "dictionary_finbert_joint"),
     nw_lags: int = 1,
+    quarter_weighting: QuarterWeighting = "quarter_observation_count",
 ) -> pl.DataFrame:
     output_rows: list[dict[str, object]] = []
     for text_scope in text_scopes:
@@ -1216,6 +1218,7 @@ def run_lm2011_extension_estimation_scaffold(
                                 f"{comparison_spec.specification_name}:{control_set.control_set_id}:{outcome_name}"
                             ),
                             nw_lags=nw_lags,
+                            quarter_weighting=quarter_weighting,
                         )
                     except ValueError as exc:
                         output_rows.append(

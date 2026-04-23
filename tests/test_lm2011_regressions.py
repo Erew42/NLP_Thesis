@@ -382,6 +382,39 @@ def test_run_lm2011_quarterly_fama_macbeth_weights_quarters_and_hides_industry_d
     assert all(not row["coefficient_name"].startswith("_industry_dummy_") for row in results.to_dicts())
 
 
+def test_run_lm2011_quarterly_fama_macbeth_supports_equal_quarter_aggregation() -> None:
+    rows: list[dict[str, object]] = []
+    for filing_date, slope, x_values in (
+        (dt.date(2021, 2, 15), 1.0, [0.0, 1.0]),
+        (dt.date(2021, 5, 15), 3.0, [0.0, 1.0, 2.0]),
+    ):
+        for industry_id in (1, 12):
+            for x_value in x_values:
+                rows.append(
+                    {
+                        "filing_date": filing_date,
+                        "ff48_industry_id": industry_id,
+                        "signal": x_value,
+                        "dependent": 1.0 + slope * x_value + (5.0 if industry_id == 12 else 0.0),
+                    }
+                )
+
+    results = run_lm2011_quarterly_fama_macbeth(
+        pl.DataFrame(rows).lazy(),
+        table_id="unit_test_table",
+        text_scope="full_10k",
+        dependent_variable="dependent",
+        signal_column="signal",
+        control_columns=(),
+        quarter_weighting="equal_quarter",
+    ).sort("coefficient_name")
+
+    by_name = {row["coefficient_name"]: row for row in results.to_dicts()}
+    assert math.isclose(by_name["signal"]["estimate"], 2.0, rel_tol=0.0, abs_tol=1e-12)
+    assert by_name["signal"]["weighting_rule"] == "equal_quarter"
+    assert by_name["signal"]["n_quarters"] == 2
+
+
 def test_run_lm2011_quarterly_fama_macbeth_collects_narrowed_panel_once() -> None:
     rows: list[dict[str, object]] = []
     for filing_date, slope, x_values in (
@@ -598,6 +631,38 @@ def test_run_lm2011_quarterly_fama_macbeth_with_diagnostics_emits_quarter_fit_ro
     assert bundle.quarter_fit_df.get_column("signal_inputs").to_list() == [["signal"], ["signal"]]
     assert all(value is not None and math.isfinite(value) for value in bundle.quarter_fit_df.get_column("raw_r2").to_list())
     assert all(value is not None and math.isfinite(value) for value in bundle.quarter_fit_df.get_column("adj_r2").to_list())
+
+
+def test_run_lm2011_quarterly_fama_macbeth_with_diagnostics_marks_equal_quarter_weights() -> None:
+    rows: list[dict[str, object]] = []
+    for filing_date, slope, x_values in (
+        (dt.date(2021, 2, 15), 1.0, [0.0, 1.0, 2.0]),
+        (dt.date(2021, 5, 15), 3.0, [0.0, 1.0, 2.0, 3.0]),
+    ):
+        for industry_id in (1, 12):
+            for x_value in x_values:
+                rows.append(
+                    {
+                        "filing_date": filing_date,
+                        "ff48_industry_id": industry_id,
+                        "signal": x_value,
+                        "dependent": 1.0 + slope * x_value + (5.0 if industry_id == 12 else 0.0),
+                    }
+                )
+
+    bundle = run_lm2011_quarterly_fama_macbeth_with_diagnostics(
+        pl.DataFrame(rows).lazy(),
+        table_id="unit_test_table",
+        text_scope="full_10k",
+        dependent_variable="dependent",
+        signal_column="signal",
+        control_columns=(),
+        quarter_weighting="equal_quarter",
+    )
+
+    assert bundle.quarter_fit_df.height == 2
+    assert bundle.quarter_fit_df.get_column("weighting_rule").unique().to_list() == ["equal_quarter"]
+    assert bundle.quarter_fit_df.get_column("weight").to_list() == [1.0, 1.0]
 
 
 def test_run_lm2011_quarterly_fama_macbeth_with_diagnostics_marks_nonfinite_fit_statistics() -> None:

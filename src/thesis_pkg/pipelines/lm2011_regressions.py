@@ -96,11 +96,13 @@ _QUARTER_FIT_SCHEMA: dict[str, pl.DataType] = {
     "weight": pl.Float64,
     "weighting_rule": pl.Utf8,
 }
-_QUARTER_WEIGHTING_RULE = "quarter_observation_count"
+_QUARTER_WEIGHTING_RULE_OBSERVATION_COUNT = "quarter_observation_count"
+_QUARTER_WEIGHTING_RULE_EQUAL = "equal_quarter"
 _INTERCEPT_NAME = "intercept"
 _RANK_DEFICIENT_SKIP_REASON = "rank_deficient_design"
 _INSUFFICIENT_DOF_SKIP_REASON = "insufficient_degrees_of_freedom"
 _NONFINITE_FIT_SKIP_REASON = "non_finite_fit_statistics"
+QuarterWeighting = Literal["quarter_observation_count", "equal_quarter"]
 
 
 def _empty_lm2011_table_results_df() -> pl.DataFrame:
@@ -382,6 +384,22 @@ def _weighted_mean(values: Sequence[float], weights: Sequence[float]) -> float |
     return sum(weight * value for value, weight in zip(values, weights, strict=True)) / total_weight
 
 
+def _resolve_quarter_weights(
+    quarter_sizes: Sequence[float],
+    *,
+    quarter_weighting: QuarterWeighting,
+) -> tuple[list[float], QuarterWeighting]:
+    if quarter_weighting == _QUARTER_WEIGHTING_RULE_OBSERVATION_COUNT:
+        return [float(size) for size in quarter_sizes], quarter_weighting
+    if quarter_weighting == _QUARTER_WEIGHTING_RULE_EQUAL:
+        return [1.0 for _ in quarter_sizes], quarter_weighting
+    raise ValueError(
+        "quarter_weighting must be one of "
+        f"{_QUARTER_WEIGHTING_RULE_OBSERVATION_COUNT!r} or {_QUARTER_WEIGHTING_RULE_EQUAL!r}; "
+        f"got {quarter_weighting!r}."
+    )
+
+
 def _newey_west_standard_error(
     values: Sequence[float],
     weights: Sequence[float],
@@ -635,7 +653,7 @@ def _fit_cross_sectional_ols(
                 else None
             ),
             "weight": float(n_obs),
-            "weighting_rule": _QUARTER_WEIGHTING_RULE,
+            "weighting_rule": _QUARTER_WEIGHTING_RULE_OBSERVATION_COUNT,
         }
     elif on_rank_deficient == "skip":
         skipped_quarter_row = {
@@ -675,6 +693,7 @@ def _run_lm2011_quarterly_fama_macbeth_bundle(
     filing_date_col: str = "filing_date",
     industry_col: str = "ff48_industry_id",
     nw_lags: int = 1,
+    quarter_weighting: QuarterWeighting = _QUARTER_WEIGHTING_RULE_OBSERVATION_COUNT,
     signal_inputs: Sequence[str] | None = None,
     on_rank_deficient: Literal["raise", "skip"] = "raise",
 ) -> _QuarterlyFamaMacbethBundle:
@@ -776,11 +795,20 @@ def _run_lm2011_quarterly_fama_macbeth_bundle(
             ),
         )
 
+    quarter_weights, weighting_rule = _resolve_quarter_weights(
+        quarter_sizes,
+        quarter_weighting=quarter_weighting,
+    )
+    if quarter_fit_rows:
+        for fit_row, quarter_weight in zip(quarter_fit_rows, quarter_weights, strict=True):
+            fit_row["weight"] = quarter_weight
+            fit_row["weighting_rule"] = weighting_rule
+
     mean_quarter_n = sum(quarter_sizes) / float(retained_quarters)
     rows: list[dict[str, object]] = []
     for coefficient_name, values in coefficient_time_series.items():
-        estimate = _weighted_mean(values, quarter_sizes)
-        standard_error = _newey_west_standard_error(values, quarter_sizes, nw_lags=nw_lags)
+        estimate = _weighted_mean(values, quarter_weights)
+        standard_error = _newey_west_standard_error(values, quarter_weights, nw_lags=nw_lags)
         t_stat = None
         if estimate is not None and standard_error is not None and standard_error > 0:
             t_stat = estimate / standard_error
@@ -797,7 +825,7 @@ def _run_lm2011_quarterly_fama_macbeth_bundle(
                 "t_stat": t_stat,
                 "n_quarters": retained_quarters,
                 "mean_quarter_n": mean_quarter_n,
-                "weighting_rule": _QUARTER_WEIGHTING_RULE,
+                "weighting_rule": weighting_rule,
                 "nw_lags": nw_lags,
             }
         )
@@ -828,6 +856,7 @@ def run_lm2011_quarterly_fama_macbeth(
     filing_date_col: str = "filing_date",
     industry_col: str = "ff48_industry_id",
     nw_lags: int = 1,
+    quarter_weighting: QuarterWeighting = _QUARTER_WEIGHTING_RULE_OBSERVATION_COUNT,
     on_rank_deficient: Literal["raise", "skip"] = "raise",
 ) -> pl.DataFrame:
     return _run_lm2011_quarterly_fama_macbeth_bundle(
@@ -841,6 +870,7 @@ def run_lm2011_quarterly_fama_macbeth(
         filing_date_col=filing_date_col,
         industry_col=industry_col,
         nw_lags=nw_lags,
+        quarter_weighting=quarter_weighting,
         on_rank_deficient=on_rank_deficient,
     ).results_df
 
@@ -857,6 +887,7 @@ def run_lm2011_quarterly_fama_macbeth_with_diagnostics(
     filing_date_col: str = "filing_date",
     industry_col: str = "ff48_industry_id",
     nw_lags: int = 1,
+    quarter_weighting: QuarterWeighting = _QUARTER_WEIGHTING_RULE_OBSERVATION_COUNT,
     signal_inputs: Sequence[str] | None = None,
     on_rank_deficient: Literal["raise", "skip"] = "skip",
 ) -> _QuarterlyFamaMacbethBundle:
@@ -871,6 +902,7 @@ def run_lm2011_quarterly_fama_macbeth_with_diagnostics(
         filing_date_col=filing_date_col,
         industry_col=industry_col,
         nw_lags=nw_lags,
+        quarter_weighting=quarter_weighting,
         signal_inputs=signal_inputs,
         on_rank_deficient=on_rank_deficient,
     )
@@ -885,6 +917,7 @@ def _run_signal_family_with_diagnostics(
     signal_columns: Sequence[str],
     control_columns: Sequence[str],
     nw_lags: int = 1,
+    quarter_weighting: QuarterWeighting = _QUARTER_WEIGHTING_RULE_OBSERVATION_COUNT,
 ) -> _QuarterlyFamaMacbethBundle:
     outputs = [
         _run_lm2011_quarterly_fama_macbeth_bundle(
@@ -896,6 +929,7 @@ def _run_signal_family_with_diagnostics(
             control_columns=control_columns,
             specification_id=signal_column,
             nw_lags=nw_lags,
+            quarter_weighting=quarter_weighting,
             signal_inputs=(signal_column,),
             on_rank_deficient="skip",
         )
