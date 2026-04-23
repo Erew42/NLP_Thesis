@@ -33,6 +33,15 @@ from thesis_pkg.benchmarking.contracts import SentenceDatasetConfig
 from thesis_pkg.benchmarking.contracts import StageRunsConfig
 from thesis_pkg.benchmarking.finbert_analysis import run_finbert_item_analysis
 from thesis_pkg.benchmarking.finbert_analysis import finbert_item_feature_contract_payload
+from thesis_pkg.benchmarking.finbert_sentence_examples import (
+    HighConfidenceSentenceExampleArtifacts,
+)
+from thesis_pkg.benchmarking.finbert_sentence_examples import (
+    HighConfidenceSentenceExamplePack,
+)
+from thesis_pkg.benchmarking.finbert_sentence_examples import (
+    build_high_confidence_sentence_example_pack,
+)
 from thesis_pkg.benchmarking.item_text_cleaning import benchmark_item_code_to_text_scope
 from thesis_pkg.benchmarking.item_text_cleaning import build_segment_policy_id
 from thesis_pkg.benchmarking.item_text_cleaning import clean_item_scopes_with_audit
@@ -78,6 +87,8 @@ __all__ = [
     "FinbertBenchmarkRunConfig",
     "FinbertBenchmarkSuiteConfig",
     "FinbertBenchmarkSweepConfig",
+    "HighConfidenceSentenceExampleArtifacts",
+    "HighConfidenceSentenceExamplePack",
     "FinbertRuntimeConfig",
     "FinbertSentenceParquetInferenceRunArtifacts",
     "FinbertSentenceParquetInferenceRunConfig",
@@ -95,6 +106,7 @@ __all__ = [
     "benchmark_model_only",
     "benchmark_sentence_splitting",
     "benchmark_tokenizer_only",
+    "build_high_confidence_sentence_example_pack",
     "build_finbert_benchmark_suite",
     "build_segment_policy_id",
     "compute_year_allocations",
