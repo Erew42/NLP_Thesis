@@ -143,6 +143,77 @@ def _build_sentence_scores_by_year(panel_df: pl.DataFrame) -> dict[int, pl.DataF
     }
 
 
+def test_add_within_cell_quantile_variants_lf_respects_grouping_ties_and_missingness() -> None:
+    rows: list[dict[str, object]] = []
+    quarter_scope_specs = (
+        (dt.date(2009, 1, 1), "item_7_mda", [float(i) for i in range(10)]),
+        (dt.date(2009, 4, 1), "item_7_mda", [5.0, *[100.0 + i for i in range(9)]]),
+        (dt.date(2009, 1, 1), "item_1a_risk_factors", [*[-100.0 + i for i in range(9)], 5.0]),
+        (dt.date(2009, 4, 1), "item_1a_risk_factors", [float(i) for i in range(10)]),
+    )
+    for quarter_start, text_scope, values in quarter_scope_specs:
+        for obs_idx, value in enumerate(values):
+            rows.append(
+                {
+                    "doc_id": f"{quarter_start:%Y%m%d}_{text_scope}_{obs_idx}",
+                    "_regression_quarter": quarter_start,
+                    "text_scope": text_scope,
+                    "signal": value,
+                    "tied_signal": 1.0,
+                    "missing_signal": None if obs_idx == 0 else value,
+                }
+            )
+    base = pl.DataFrame(rows)
+
+    augmented = runner.add_within_cell_quantile_variants_lf(
+        base.lazy(),
+        signal_col="signal",
+        group_cols=["_regression_quarter", "text_scope"],
+        variant_prefix="signal",
+    ).collect()
+
+    assert augmented.height == base.height
+    assert augmented.get_column("signal__q5_score").min() == 0.0
+    assert augmented.get_column("signal__q5_score").max() == 1.0
+    assert set(augmented.get_column("signal__q5_top_bottom").unique().to_list()) == {
+        -0.5,
+        0.0,
+        0.5,
+    }
+
+    for group_df in augmented.partition_by("_regression_quarter", "text_scope"):
+        ordered_scores = group_df.sort("signal").get_column("signal__q5_score").to_list()
+        assert ordered_scores == sorted(ordered_scores)
+        assert group_df.sort("signal").item(0, "signal__q5_score") == 0.0
+        assert group_df.sort("signal").item(group_df.height - 1, "signal__q5_score") == 1.0
+
+    same_raw_value = augmented.filter(pl.col("signal") == 5.0).select(
+        "_regression_quarter",
+        "text_scope",
+        "signal__q5_score",
+    )
+    assert same_raw_value.get_column("signal__q5_score").n_unique() > 1
+
+    tied_augmented = runner.add_within_cell_quantile_variants_lf(
+        base.lazy(),
+        signal_col="tied_signal",
+        group_cols=["_regression_quarter", "text_scope"],
+        variant_prefix="tied_signal",
+    ).collect()
+    assert tied_augmented.get_column("tied_signal__q5_score").is_between(0.0, 1.0).all()
+
+    missing_augmented = runner.add_within_cell_quantile_variants_lf(
+        base.lazy(),
+        signal_col="missing_signal",
+        group_cols=["_regression_quarter", "text_scope"],
+        variant_prefix="missing_signal",
+    ).collect()
+    missing_rows = missing_augmented.filter(pl.col("missing_signal").is_null())
+    assert missing_rows.get_column("missing_signal__q5_label").null_count() == missing_rows.height
+    assert missing_rows.get_column("missing_signal__q5_score").null_count() == missing_rows.height
+    assert missing_rows.get_column("missing_signal__q5_top_bottom").null_count() == missing_rows.height
+
+
 def test_parse_args_rejects_removed_finbert_item_features_override() -> None:
     with pytest.raises(SystemExit):
         runner.parse_args(
@@ -207,6 +278,7 @@ def test_lm2011_finbert_robustness_runner_emits_variant_tagged_outputs(tmp_path:
 
     existing_scale_coefficients = pl.read_parquet(artifacts.existing_scale_coefficients_path)
     tail_coefficients = pl.read_parquet(artifacts.tail_coefficients_path)
+    quantile_coefficients = pl.read_parquet(artifacts.quantile_coefficients_path)
     tail_doc_surface = pl.read_parquet(artifacts.tail_doc_surface_path)
     candidate_summary = pl.read_parquet(artifacts.candidate_summary_path)
 
@@ -215,6 +287,9 @@ def test_lm2011_finbert_robustness_runner_emits_variant_tagged_outputs(tmp_path:
     assert artifacts.existing_scale_fit_comparisons_path.exists()
     assert artifacts.tail_fit_summary_path.exists()
     assert artifacts.tail_fit_comparisons_path.exists()
+    assert artifacts.quantile_fit_summary_path.exists()
+    assert artifacts.quantile_fit_comparisons_path.exists()
+    assert artifacts.quantile_fit_skipped_quarters_path.exists()
     assert artifacts.tail_doc_surface_by_year_dir.exists()
     assert (artifacts.tail_doc_surface_by_year_dir / "2009.parquet").exists()
     assert (artifacts.tail_doc_surface_by_year_dir / "2010.parquet").exists()
@@ -231,6 +306,18 @@ def test_lm2011_finbert_robustness_runner_emits_variant_tagged_outputs(tmp_path:
         "quarter_observation_count",
         "equal_quarter",
     }
+    assert set(quantile_coefficients.get_column("variant_id").unique().to_list()) == {
+        variant.variant_id for variant in runner.QUANTILE_VARIANTS
+    }
+    assert set(quantile_coefficients.get_column("weighting_rule").drop_nulls().unique().to_list()) == {
+        "quarter_observation_count",
+        "equal_quarter",
+    }
+    assert {
+        variant.variant_id
+        for variant in runner.QUANTILE_VARIANTS
+        if variant.variant_id in set(quantile_coefficients.get_column("coefficient_name").drop_nulls().to_list())
+    } == {variant.variant_id for variant in runner.QUANTILE_VARIANTS}
     assert tail_doc_surface.height == extension_panel.height
     assert set(tail_doc_surface.get_column("text_scope").unique().to_list()) == set(runner.PRIMARY_TEXT_SCOPES)
     assert candidate_summary.height > 0
@@ -258,7 +345,15 @@ def test_lm2011_finbert_robustness_runner_emits_variant_tagged_outputs(tmp_path:
     assert manifest["resolved_inputs"]["finbert_sentence_scores_dir"] == str(sentence_scores_dir.resolve())
     assert len(manifest["variant_registry"]["existing_scale"]) == 5
     assert len(manifest["variant_registry"]["tail_signal"]) == len(TAIL_FEATURE_COLUMNS)
+    assert len(manifest["variant_registry"]["quantile_signal"]) == len(runner.QUANTILE_VARIANTS)
+    assert {entry["base_variant_id"] for entry in manifest["variant_registry"]["quantile_signal"]} == {
+        "baseline_neg_mean",
+        "net_negative_mean",
+        "top_20pct_neg_mean",
+    }
     assert manifest["row_counts"]["tail_doc_surface"] == extension_panel.height
+    assert manifest["row_counts"]["quantile_coefficients"] == quantile_coefficients.height
+    assert not Path(manifest["artifacts"]["quantile_coefficients_path"]).is_absolute()
     assert not Path(manifest["artifacts"]["candidate_summary_path"]).is_absolute()
 
 

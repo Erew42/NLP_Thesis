@@ -51,10 +51,35 @@ from thesis_pkg.benchmarking.manifest_contracts import write_manifest_path_value
 from thesis_pkg.benchmarking.run_logging import utc_timestamp
 from thesis_pkg.benchmarking.run_logging import write_frame
 from thesis_pkg.benchmarking.run_logging import write_json
+from thesis_pkg.pipelines.lm2011_extension import _comparison_signal_name
+from thesis_pkg.pipelines.lm2011_extension import _control_set_by_id
+from thesis_pkg.pipelines.lm2011_extension import _convert_lm2011_table_results_to_extension_rows
+from thesis_pkg.pipelines.lm2011_extension import _empty_extension_fit_comparisons_df
+from thesis_pkg.pipelines.lm2011_extension import _empty_extension_fit_quarterly_df
+from thesis_pkg.pipelines.lm2011_extension import _empty_extension_fit_skipped_quarters_df
+from thesis_pkg.pipelines.lm2011_extension import _empty_extension_fit_summary_df
+from thesis_pkg.pipelines.lm2011_extension import _empty_extension_results_df
+from thesis_pkg.pipelines.lm2011_extension import _EXTENSION_COMMON_ROW_SAMPLE_POLICY
+from thesis_pkg.pipelines.lm2011_extension import _EXTENSION_COMMON_SUCCESS_POLICY
+from thesis_pkg.pipelines.lm2011_extension import _extension_fit_comparison_pairs
+from thesis_pkg.pipelines.lm2011_extension import _extension_fit_comparison_status_row
+from thesis_pkg.pipelines.lm2011_extension import _extension_fit_summary_status_row
+from thesis_pkg.pipelines.lm2011_extension import _extension_result_status_row
+from thesis_pkg.pipelines.lm2011_extension import _normal_approx_two_sided_p_value
+from thesis_pkg.pipelines.lm2011_extension import apply_lm2011_extension_control_set
+from thesis_pkg.pipelines.lm2011_extension import EXTENSION_DICTIONARY_FAMILY_LM2011
+from thesis_pkg.pipelines.lm2011_extension import EXTENSION_FINBERT_MODEL_FAMILY
+from thesis_pkg.pipelines.lm2011_extension import EXTENSION_JOINT_FEATURE_FAMILY
 from thesis_pkg.pipelines.lm2011_extension import EXTENSION_PRIMARY_OUTCOME
 from thesis_pkg.pipelines.lm2011_extension import EXTENSION_PRIMARY_TEXT_SCOPES
+from thesis_pkg.pipelines.lm2011_extension import EXTENSION_SAMPLE_WINDOW
+from thesis_pkg.pipelines.lm2011_extension import Lm2011ExtensionComparisonSpec
 from thesis_pkg.pipelines.lm2011_extension import run_lm2011_extension_estimation_scaffold
 from thesis_pkg.pipelines.lm2011_extension import run_lm2011_extension_fit_comparison_scaffold
+from thesis_pkg.pipelines.lm2011_regressions import _newey_west_standard_error
+from thesis_pkg.pipelines.lm2011_regressions import _weighted_mean
+from thesis_pkg.pipelines.lm2011_regressions import run_lm2011_quarterly_fama_macbeth
+from thesis_pkg.pipelines.lm2011_regressions import run_lm2011_quarterly_fama_macbeth_with_diagnostics
 
 
 RUNNER_NAME = "lm2011_finbert_robustness_runner"
@@ -79,6 +104,16 @@ QUARTER_WEIGHTINGS: tuple[str, ...] = (
 REPLICATION_DICTIONARY_FAMILY_SOURCE = "replication"
 EXISTING_SCALE_FAMILY = "existing_scale"
 TAIL_SIGNAL_FAMILY = "tail_signal"
+QUANTILE_SIGNAL_FAMILY = "quantile_signal"
+QUANTILE_TRANSFORM = "within_quarter_text_scope_quintile"
+QUANTILE_K = 5
+REGRESSION_QUARTER_COL = "_regression_quarter"
+QUANTILE_LABEL_SUFFIX = "__q5_label"
+QUANTILE_SCORE_SUFFIX = "__q5_score"
+QUANTILE_TOP_BOTTOM_SUFFIX = "__q5_top_bottom"
+DICTIONARY_SIGNAL_COLUMN = "lm_negative_tfidf"
+FILING_DATE_COL = "filing_date"
+INDUSTRY_COL = "ff48_industry_id"
 ARTIFACT_FILENAMES: dict[str, str] = {
     "existing_scale_coefficients": "finbert_robustness_existing_scale_coefficients.parquet",
     "existing_scale_fit_summary": "finbert_robustness_existing_scale_fit_summary.parquet",
@@ -89,6 +124,10 @@ ARTIFACT_FILENAMES: dict[str, str] = {
     "tail_fit_summary": "finbert_robustness_tail_fit_summary.parquet",
     "tail_fit_comparisons": "finbert_robustness_tail_fit_comparisons.parquet",
     "tail_fit_skipped_quarters": "finbert_robustness_tail_fit_skipped_quarters.parquet",
+    "quantile_coefficients": "finbert_robustness_quantile_coefficients.parquet",
+    "quantile_fit_summary": "finbert_robustness_quantile_fit_summary.parquet",
+    "quantile_fit_comparisons": "finbert_robustness_quantile_fit_comparisons.parquet",
+    "quantile_fit_skipped_quarters": "finbert_robustness_quantile_fit_skipped_quarters.parquet",
     "candidate_summary": "finbert_robustness_candidate_summary.parquet",
 }
 TAIL_DOC_SURFACE_BY_YEAR_DIRNAME = "finbert_robustness_tail_doc_surface_by_year"
@@ -105,6 +144,18 @@ class FinbertRobustnessVariant:
     variant_id: str
     description: str
     source_columns: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class FinbertQuantileVariant:
+    variant_family: str
+    variant_id: str
+    description: str
+    source_columns: tuple[str, ...]
+    base_variant_id: str
+    base_signal_col: str
+    transform: str = QUANTILE_TRANSFORM
+    quantile_k: int = QUANTILE_K
 
 
 @dataclass(frozen=True)
@@ -132,6 +183,10 @@ class FinbertRobustnessRunArtifacts:
     tail_fit_summary_path: Path
     tail_fit_comparisons_path: Path
     tail_fit_skipped_quarters_path: Path
+    quantile_coefficients_path: Path
+    quantile_fit_summary_path: Path
+    quantile_fit_comparisons_path: Path
+    quantile_fit_skipped_quarters_path: Path
     candidate_summary_path: Path
 
 
@@ -182,6 +237,38 @@ TAIL_VARIANTS: tuple[FinbertRobustnessVariant, ...] = tuple(
         source_columns=(column,),
     )
     for column in TAIL_FEATURE_COLUMNS
+)
+_QUANTILE_BASE_SIGNALS: tuple[tuple[str, str, str], ...] = (
+    (
+        "baseline_neg_mean",
+        "finbert_neg_prob_lenw_mean",
+        "Length-weighted mean negative probability",
+    ),
+    (
+        "net_negative_mean",
+        "finbert_net_negative_lenw_mean",
+        "Length-weighted net negativity",
+    ),
+    (
+        "top_20pct_neg_mean",
+        "top_20pct_neg_mean",
+        "Top-20 percent sentence negative-probability mean",
+    ),
+)
+QUANTILE_VARIANTS: tuple[FinbertQuantileVariant, ...] = tuple(
+    FinbertQuantileVariant(
+        variant_family=QUANTILE_SIGNAL_FAMILY,
+        variant_id=f"{base_variant_id}{suffix}",
+        description=f"{description} transformed to {label}.",
+        source_columns=(base_signal_col,),
+        base_variant_id=base_variant_id,
+        base_signal_col=base_signal_col,
+    )
+    for base_variant_id, base_signal_col, description in _QUANTILE_BASE_SIGNALS
+    for suffix, label in (
+        (QUANTILE_SCORE_SUFFIX, "within-quarter text-scope quintile score"),
+        (QUANTILE_TOP_BOTTOM_SUFFIX, "top-minus-bottom quintile contrast"),
+    )
 )
 
 
@@ -382,7 +469,735 @@ def _existing_scale_variant_expr(variant: FinbertRobustnessVariant) -> pl.Expr:
     raise ValueError(f"Unsupported existing-scale variant: {variant.variant_id}")
 
 
-def _annotate_variant_df(df: pl.DataFrame, variant: FinbertRobustnessVariant) -> pl.DataFrame:
+def _regression_quarter_expr(filing_date_col: str = FILING_DATE_COL) -> pl.Expr:
+    filing_date = pl.col(filing_date_col).cast(pl.Date, strict=False)
+    quarter_month = (((filing_date.dt.month() - 1) // 3) * 3 + 1).cast(pl.Int8)
+    return pl.date(filing_date.dt.year(), quarter_month, 1).alias(REGRESSION_QUARTER_COL)
+
+
+def add_within_cell_quantile_variants_lf(
+    lf: pl.LazyFrame,
+    *,
+    signal_col: str,
+    group_cols: Sequence[str],
+    variant_prefix: str,
+    k: int = QUANTILE_K,
+) -> pl.LazyFrame:
+    label_col = f"{variant_prefix}__q{k}_label"
+    score_col = f"{variant_prefix}__q{k}_score"
+    top_bottom_col = f"{variant_prefix}__q{k}_top_bottom"
+    rank_pct_col = f"__{variant_prefix}__q{k}_rank_pct"
+    signal = pl.col(signal_col).cast(pl.Float64, strict=False)
+    nonmissing_count = signal.count().over(group_cols).cast(pl.Float64)
+    rank_pct = (
+        pl.when(signal.is_not_null() & (nonmissing_count > 0.0))
+        .then(signal.rank(method="average").over(group_cols) / nonmissing_count)
+        .otherwise(pl.lit(None, dtype=pl.Float64))
+    )
+    label = (
+        pl.when(pl.col(rank_pct_col).is_not_null())
+        .then((pl.col(rank_pct_col) * pl.lit(float(k))).ceil().clip(1, k))
+        .otherwise(pl.lit(None, dtype=pl.Float64))
+        .cast(pl.Int8, strict=False)
+    )
+    return (
+        lf.with_columns(rank_pct.alias(rank_pct_col))
+        .with_columns(label.alias(label_col))
+        .with_columns(
+            (
+                (pl.col(label_col).cast(pl.Float64) - 1.0) / float(k - 1)
+            ).alias(score_col),
+            (
+                pl.when(pl.col(label_col) == k)
+                .then(pl.lit(0.5, dtype=pl.Float64))
+                .when(pl.col(label_col) == 1)
+                .then(pl.lit(-0.5, dtype=pl.Float64))
+                .when(pl.col(label_col).is_not_null())
+                .then(pl.lit(0.0, dtype=pl.Float64))
+                .otherwise(pl.lit(None, dtype=pl.Float64))
+            ).alias(top_bottom_col),
+        )
+        .drop(rank_pct_col)
+    )
+
+
+def _unique_preserving_order(values: Sequence[str]) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(values))
+
+
+def _quantile_comparison_specs(
+    variant: FinbertQuantileVariant,
+) -> tuple[Lm2011ExtensionComparisonSpec, ...]:
+    return (
+        Lm2011ExtensionComparisonSpec(
+            specification_name="dictionary_only",
+            feature_family=EXTENSION_DICTIONARY_FAMILY_LM2011,
+            signal_inputs=(DICTIONARY_SIGNAL_COLUMN,),
+        ),
+        Lm2011ExtensionComparisonSpec(
+            specification_name="finbert_only",
+            feature_family=EXTENSION_FINBERT_MODEL_FAMILY,
+            signal_inputs=(variant.variant_id,),
+        ),
+        Lm2011ExtensionComparisonSpec(
+            specification_name="dictionary_finbert_joint",
+            feature_family=EXTENSION_JOINT_FEATURE_FAMILY,
+            signal_inputs=(DICTIONARY_SIGNAL_COLUMN, variant.variant_id),
+        ),
+    )
+
+
+def _quantile_source_signal_columns(
+    variant: FinbertQuantileVariant,
+    comparison_spec: Lm2011ExtensionComparisonSpec,
+) -> tuple[str, ...]:
+    return _unique_preserving_order(
+        tuple(
+            variant.base_signal_col if column == variant.variant_id else column
+            for column in comparison_spec.signal_inputs
+        )
+    )
+
+
+def _quantile_signal_and_controls(
+    comparison_spec: Lm2011ExtensionComparisonSpec,
+    control_columns: Sequence[str],
+) -> tuple[str, tuple[str, ...]]:
+    signal_column = comparison_spec.signal_inputs[0]
+    return signal_column, (*comparison_spec.signal_inputs[1:], *control_columns)
+
+
+def _with_cast_nonmissing_quantile_base(
+    panel_lf: pl.LazyFrame,
+    *,
+    text_scope: str,
+    control_set_id: str,
+    outcome_name: str,
+    source_signal_columns: Sequence[str],
+    control_columns: Sequence[str],
+) -> pl.LazyFrame:
+    float_columns = _unique_preserving_order(
+        (*source_signal_columns, *control_columns, outcome_name)
+    )
+    return (
+        apply_lm2011_extension_control_set(panel_lf, control_set_id)
+        .filter(pl.col("text_scope") == pl.lit(text_scope))
+        .with_columns(
+            pl.col(FILING_DATE_COL).cast(pl.Date, strict=False).alias(FILING_DATE_COL),
+            pl.col(INDUSTRY_COL).cast(pl.Int32, strict=False).alias(INDUSTRY_COL),
+            *[
+                pl.col(column).cast(pl.Float64, strict=False).alias(column)
+                for column in float_columns
+            ],
+        )
+        .drop_nulls(subset=[FILING_DATE_COL, INDUSTRY_COL, *float_columns])
+    )
+
+
+def _build_quantile_spec_panel_lf(
+    panel_lf: pl.LazyFrame,
+    *,
+    variant: FinbertQuantileVariant,
+    comparison_spec: Lm2011ExtensionComparisonSpec,
+    control_set_id: str,
+    control_columns: Sequence[str],
+    text_scope: str,
+    outcome_name: str,
+) -> pl.LazyFrame:
+    source_signal_columns = _quantile_source_signal_columns(variant, comparison_spec)
+    spec_panel_lf = _with_cast_nonmissing_quantile_base(
+        panel_lf,
+        text_scope=text_scope,
+        control_set_id=control_set_id,
+        outcome_name=outcome_name,
+        source_signal_columns=source_signal_columns,
+        control_columns=control_columns,
+    )
+    if variant.variant_id not in comparison_spec.signal_inputs:
+        return spec_panel_lf
+    return add_within_cell_quantile_variants_lf(
+        spec_panel_lf.with_columns(_regression_quarter_expr()),
+        signal_col=variant.base_signal_col,
+        group_cols=[REGRESSION_QUARTER_COL, "text_scope"],
+        variant_prefix=variant.base_variant_id,
+        k=variant.quantile_k,
+    )
+
+
+def _build_quantile_common_comparison_panel_lf(
+    panel_lf: pl.LazyFrame,
+    *,
+    variant: FinbertQuantileVariant,
+    comparison_specs: Sequence[Lm2011ExtensionComparisonSpec],
+    control_set_id: str,
+    control_columns: Sequence[str],
+    text_scope: str,
+    outcome_name: str,
+) -> pl.LazyFrame:
+    source_signal_columns = _unique_preserving_order(
+        tuple(
+            source_column
+            for comparison_spec in comparison_specs
+            for source_column in _quantile_source_signal_columns(variant, comparison_spec)
+        )
+    )
+    return add_within_cell_quantile_variants_lf(
+        _with_cast_nonmissing_quantile_base(
+            panel_lf,
+            text_scope=text_scope,
+            control_set_id=control_set_id,
+            outcome_name=outcome_name,
+            source_signal_columns=source_signal_columns,
+            control_columns=control_columns,
+        ).with_columns(_regression_quarter_expr()),
+        signal_col=variant.base_signal_col,
+        group_cols=[REGRESSION_QUARTER_COL, "text_scope"],
+        variant_prefix=variant.base_variant_id,
+        k=variant.quantile_k,
+    )
+
+
+def _run_quantile_coefficients_for_variant(
+    panel_lf: pl.LazyFrame,
+    *,
+    variant: FinbertQuantileVariant,
+    suite_name: str,
+    nw_lags: int = 1,
+) -> pl.DataFrame:
+    output_rows: list[dict[str, object]] = []
+    comparison_specs = _quantile_comparison_specs(variant)
+    for quarter_weighting in QUARTER_WEIGHTINGS:
+        run_id = f"{suite_name}:{variant.variant_id}:coefficients:{quarter_weighting}"
+        for text_scope in PRIMARY_TEXT_SCOPES:
+            for outcome_name in PRIMARY_OUTCOME_NAMES:
+                for comparison_spec in comparison_specs:
+                    for control_set_id in PRIMARY_CONTROL_SET_IDS:
+                        control_set = _control_set_by_id(control_set_id)
+                        spec_panel_lf = _build_quantile_spec_panel_lf(
+                            panel_lf,
+                            variant=variant,
+                            comparison_spec=comparison_spec,
+                            control_set_id=control_set.control_set_id,
+                            control_columns=control_set.controls,
+                            text_scope=text_scope,
+                            outcome_name=outcome_name,
+                        )
+                        signal_column, control_columns = _quantile_signal_and_controls(
+                            comparison_spec,
+                            control_set.controls,
+                        )
+                        try:
+                            result_df = run_lm2011_quarterly_fama_macbeth(
+                                spec_panel_lf,
+                                table_id="lm2011_extension_results",
+                                text_scope=text_scope,
+                                dependent_variable=outcome_name,
+                                signal_column=signal_column,
+                                control_columns=control_columns,
+                                specification_id=(
+                                    f"{comparison_spec.specification_name}:"
+                                    f"{control_set.control_set_id}:{outcome_name}"
+                                ),
+                                nw_lags=nw_lags,
+                                quarter_weighting=quarter_weighting,
+                            )
+                        except ValueError as exc:
+                            output_rows.append(
+                                _extension_result_status_row(
+                                    run_id=run_id,
+                                    sample_window=EXTENSION_SAMPLE_WINDOW,
+                                    text_scope=text_scope,
+                                    outcome_name=outcome_name,
+                                    comparison_spec=comparison_spec,
+                                    control_set=control_set,
+                                    estimator_status="failed",
+                                    failure_reason=str(exc),
+                                    nw_lags=nw_lags,
+                                )
+                            )
+                            continue
+                        if result_df.height == 0:
+                            output_rows.append(
+                                _extension_result_status_row(
+                                    run_id=run_id,
+                                    sample_window=EXTENSION_SAMPLE_WINDOW,
+                                    text_scope=text_scope,
+                                    outcome_name=outcome_name,
+                                    comparison_spec=comparison_spec,
+                                    control_set=control_set,
+                                    estimator_status="insufficient_sample",
+                                    failure_reason="no estimable quarterly Fama-MacBeth cross-sections",
+                                    nw_lags=nw_lags,
+                                )
+                            )
+                            continue
+                        output_rows.extend(
+                            _convert_lm2011_table_results_to_extension_rows(
+                                result_df,
+                                run_id=run_id,
+                                sample_window=EXTENSION_SAMPLE_WINDOW,
+                                outcome_name=outcome_name,
+                                comparison_spec=comparison_spec,
+                                control_set=control_set,
+                            )
+                        )
+    if not output_rows:
+        return _empty_extension_results_df()
+    return pl.DataFrame(output_rows, schema_overrides=_empty_extension_results_df().schema).select(
+        _empty_extension_results_df().columns
+    )
+
+
+def _run_quantile_fit_comparisons_for_variant(
+    panel_lf: pl.LazyFrame,
+    *,
+    variant: FinbertQuantileVariant,
+    suite_name: str,
+    nw_lags: int = 1,
+) -> dict[str, pl.DataFrame]:
+    comparison_specs = _quantile_comparison_specs(variant)
+    comparison_spec_by_name = {
+        comparison_spec.specification_name: comparison_spec
+        for comparison_spec in comparison_specs
+    }
+    comparison_pairs = _extension_fit_comparison_pairs(PRIMARY_SPECIFICATION_NAMES)
+    summary_rows: list[dict[str, object]] = []
+    comparison_rows: list[dict[str, object]] = []
+    skipped_quarter_rows: list[dict[str, object]] = []
+
+    for text_scope in PRIMARY_TEXT_SCOPES:
+        for outcome_name in PRIMARY_OUTCOME_NAMES:
+            for control_set_id in PRIMARY_CONTROL_SET_IDS:
+                control_set = _control_set_by_id(control_set_id)
+                run_id = f"{suite_name}:{variant.variant_id}:fit_weighted"
+                try:
+                    common_panel_lf = _build_quantile_common_comparison_panel_lf(
+                        panel_lf,
+                        variant=variant,
+                        comparison_specs=comparison_specs,
+                        control_set_id=control_set.control_set_id,
+                        control_columns=control_set.controls,
+                        text_scope=text_scope,
+                        outcome_name=outcome_name,
+                    )
+                except ValueError as exc:
+                    failure_reason = str(exc)
+                    for comparison_spec in comparison_specs:
+                        summary_rows.append(
+                            _extension_fit_summary_status_row(
+                                run_id=run_id,
+                                sample_window=EXTENSION_SAMPLE_WINDOW,
+                                text_scope=text_scope,
+                                outcome_name=outcome_name,
+                                comparison_spec=comparison_spec,
+                                control_set=control_set,
+                                estimator_status="failed",
+                                failure_reason=failure_reason,
+                            )
+                        )
+                    for comparison_name, left_name, right_name in comparison_pairs:
+                        comparison_rows.append(
+                            _extension_fit_comparison_status_row(
+                                run_id=run_id,
+                                sample_window=EXTENSION_SAMPLE_WINDOW,
+                                text_scope=text_scope,
+                                outcome_name=outcome_name,
+                                control_set=control_set,
+                                comparison_name=comparison_name,
+                                left_spec=comparison_spec_by_name[left_name],
+                                right_spec=comparison_spec_by_name[right_name],
+                                estimator_status="failed",
+                                failure_reason=failure_reason,
+                            )
+                        )
+                    continue
+
+                spec_quarter_fit_map: dict[str, pl.DataFrame] = {}
+                spec_failure_reasons: dict[str, str] = {}
+                for comparison_spec in comparison_specs:
+                    signal_column, control_columns = _quantile_signal_and_controls(
+                        comparison_spec,
+                        control_set.controls,
+                    )
+                    try:
+                        bundle = run_lm2011_quarterly_fama_macbeth_with_diagnostics(
+                            common_panel_lf,
+                            table_id="lm2011_extension_fit",
+                            text_scope=text_scope,
+                            dependent_variable=outcome_name,
+                            signal_column=signal_column,
+                            control_columns=control_columns,
+                            specification_id=(
+                                f"{comparison_spec.specification_name}:"
+                                f"{control_set.control_set_id}:{outcome_name}"
+                            ),
+                            nw_lags=nw_lags,
+                            signal_inputs=comparison_spec.signal_inputs,
+                            on_rank_deficient="skip",
+                        )
+                    except ValueError as exc:
+                        spec_quarter_fit_map[
+                            comparison_spec.specification_name
+                        ] = _empty_extension_fit_quarterly_df()
+                        spec_failure_reasons[comparison_spec.specification_name] = str(exc)
+                        continue
+
+                    fit_rows = [
+                        {
+                            "run_id": run_id,
+                            "sample_window": EXTENSION_SAMPLE_WINDOW,
+                            "text_scope": text_scope,
+                            "outcome_name": outcome_name,
+                            "feature_family": comparison_spec.feature_family,
+                            "control_set_id": control_set.control_set_id,
+                            "control_set_alias": control_set.spec_alias,
+                            "specification_name": comparison_spec.specification_name,
+                            "signal_name": _comparison_signal_name(comparison_spec.signal_inputs),
+                            "signal_inputs": list(comparison_spec.signal_inputs),
+                            "quarter_start": row["quarter_start"],
+                            "n_obs": row["n_obs"],
+                            "industry_count": row["industry_count"],
+                            "industry_dummy_count": row["industry_dummy_count"],
+                            "visible_regressor_count": row["visible_regressor_count"],
+                            "full_regressor_count": row["full_regressor_count"],
+                            "rank": row["rank"],
+                            "df_model": row["df_model"],
+                            "df_resid": row["df_resid"],
+                            "condition_number": row["condition_number"],
+                            "raw_r2": row["raw_r2"],
+                            "adj_r2": row["adj_r2"],
+                            "ssr": row["ssr"],
+                            "centered_tss": row["centered_tss"],
+                            "weight": row["weight"],
+                            "weighting_rule": row["weighting_rule"],
+                            "common_row_sample_policy": _EXTENSION_COMMON_ROW_SAMPLE_POLICY,
+                        }
+                        for row in bundle.quarter_fit_df.to_dicts()
+                    ]
+                    spec_quarter_fit_df = (
+                        pl.DataFrame(
+                            fit_rows,
+                            schema_overrides=_empty_extension_fit_quarterly_df().schema,
+                        )
+                        if fit_rows
+                        else _empty_extension_fit_quarterly_df()
+                    )
+                    spec_quarter_fit_map[comparison_spec.specification_name] = spec_quarter_fit_df
+
+                    skipped_quarter_rows.extend(
+                        {
+                            "run_id": run_id,
+                            "sample_window": EXTENSION_SAMPLE_WINDOW,
+                            "text_scope": text_scope,
+                            "outcome_name": outcome_name,
+                            "feature_family": comparison_spec.feature_family,
+                            "control_set_id": control_set.control_set_id,
+                            "control_set_alias": control_set.spec_alias,
+                            "specification_name": comparison_spec.specification_name,
+                            "signal_name": _comparison_signal_name(comparison_spec.signal_inputs),
+                            "signal_inputs": list(comparison_spec.signal_inputs),
+                            "quarter_start": row["quarter_start"],
+                            "skip_reason": row["skip_reason"],
+                            "n_obs": row["n_obs"],
+                            "industry_count": row["industry_count"],
+                            "rank": row["rank"],
+                            "column_count": row["column_count"],
+                            "condition_number": row["condition_number"],
+                            "regressors": row["regressors"],
+                            "duplicate_regressor_pairs": row["duplicate_regressor_pairs"],
+                            "restoring_drop_candidates": row["restoring_drop_candidates"],
+                        }
+                        for row in bundle.skipped_quarters_df.to_dicts()
+                    )
+
+                common_quarters: list[object] = []
+                if comparison_specs and all(
+                    spec_quarter_fit_map[comparison_spec.specification_name].height > 0
+                    for comparison_spec in comparison_specs
+                ):
+                    common_quarters = sorted(
+                        set.intersection(
+                            *[
+                                set(
+                                    spec_quarter_fit_map[
+                                        comparison_spec.specification_name
+                                    ].get_column("quarter_start").to_list()
+                                )
+                                for comparison_spec in comparison_specs
+                            ]
+                        )
+                    )
+
+                common_quarter_reason = "no common successful quarters across selected specifications"
+                n_obs_mismatch_reason = None
+                quarter_row_maps: dict[str, dict[object, dict[str, object]]] = {}
+                if common_quarters:
+                    quarter_row_maps = {
+                        comparison_spec.specification_name: {
+                            row["quarter_start"]: row
+                            for row in spec_quarter_fit_map[
+                                comparison_spec.specification_name
+                            ].to_dicts()
+                        }
+                        for comparison_spec in comparison_specs
+                    }
+                    for quarter_start in common_quarters:
+                        n_obs_values = {
+                            int(
+                                quarter_row_maps[comparison_spec.specification_name][
+                                    quarter_start
+                                ]["n_obs"]
+                            )
+                            for comparison_spec in comparison_specs
+                        }
+                        if len(n_obs_values) != 1:
+                            n_obs_mismatch_reason = (
+                                "common successful quarter n_obs mismatch across specifications"
+                            )
+                            break
+
+                if n_obs_mismatch_reason is not None:
+                    for comparison_spec in comparison_specs:
+                        summary_rows.append(
+                            _extension_fit_summary_status_row(
+                                run_id=run_id,
+                                sample_window=EXTENSION_SAMPLE_WINDOW,
+                                text_scope=text_scope,
+                                outcome_name=outcome_name,
+                                comparison_spec=comparison_spec,
+                                control_set=control_set,
+                                estimator_status="failed",
+                                failure_reason=n_obs_mismatch_reason,
+                            )
+                        )
+                    for comparison_name, left_name, right_name in comparison_pairs:
+                        comparison_rows.append(
+                            _extension_fit_comparison_status_row(
+                                run_id=run_id,
+                                sample_window=EXTENSION_SAMPLE_WINDOW,
+                                text_scope=text_scope,
+                                outcome_name=outcome_name,
+                                control_set=control_set,
+                                comparison_name=comparison_name,
+                                left_spec=comparison_spec_by_name[left_name],
+                                right_spec=comparison_spec_by_name[right_name],
+                                estimator_status="failed",
+                                failure_reason=n_obs_mismatch_reason,
+                            )
+                        )
+                    continue
+
+                if not common_quarters:
+                    for comparison_spec in comparison_specs:
+                        failure_reason = spec_failure_reasons.get(
+                            comparison_spec.specification_name,
+                            common_quarter_reason,
+                        )
+                        estimator_status = (
+                            "failed"
+                            if comparison_spec.specification_name in spec_failure_reasons
+                            else "insufficient_sample"
+                        )
+                        summary_rows.append(
+                            _extension_fit_summary_status_row(
+                                run_id=run_id,
+                                sample_window=EXTENSION_SAMPLE_WINDOW,
+                                text_scope=text_scope,
+                                outcome_name=outcome_name,
+                                comparison_spec=comparison_spec,
+                                control_set=control_set,
+                                estimator_status=estimator_status,
+                                failure_reason=failure_reason,
+                            )
+                        )
+                    pair_failure_reason = (
+                        "; ".join(sorted(set(spec_failure_reasons.values())))
+                        if spec_failure_reasons
+                        else common_quarter_reason
+                    )
+                    pair_status = "failed" if spec_failure_reasons else "insufficient_sample"
+                    for comparison_name, left_name, right_name in comparison_pairs:
+                        comparison_rows.append(
+                            _extension_fit_comparison_status_row(
+                                run_id=run_id,
+                                sample_window=EXTENSION_SAMPLE_WINDOW,
+                                text_scope=text_scope,
+                                outcome_name=outcome_name,
+                                control_set=control_set,
+                                comparison_name=comparison_name,
+                                left_spec=comparison_spec_by_name[left_name],
+                                right_spec=comparison_spec_by_name[right_name],
+                                estimator_status=pair_status,
+                                failure_reason=pair_failure_reason,
+                            )
+                        )
+                    continue
+
+                common_weights = [
+                    float(
+                        quarter_row_maps[comparison_specs[0].specification_name][
+                            quarter_start
+                        ]["n_obs"]
+                    )
+                    for quarter_start in common_quarters
+                ]
+                total_n_obs = int(sum(common_weights))
+                mean_quarter_n = sum(common_weights) / float(len(common_weights))
+
+                for comparison_spec in comparison_specs:
+                    common_rows = [
+                        quarter_row_maps[comparison_spec.specification_name][quarter_start]
+                        for quarter_start in common_quarters
+                    ]
+                    raw_values = [float(row["raw_r2"]) for row in common_rows]
+                    adj_values = [float(row["adj_r2"]) for row in common_rows]
+                    summary_rows.append(
+                        {
+                            "run_id": run_id,
+                            "sample_window": EXTENSION_SAMPLE_WINDOW,
+                            "text_scope": text_scope,
+                            "outcome_name": outcome_name,
+                            "feature_family": comparison_spec.feature_family,
+                            "control_set_id": control_set.control_set_id,
+                            "control_set_alias": control_set.spec_alias,
+                            "specification_name": comparison_spec.specification_name,
+                            "signal_name": _comparison_signal_name(comparison_spec.signal_inputs),
+                            "signal_inputs": list(comparison_spec.signal_inputs),
+                            "n_quarters": len(common_quarters),
+                            "total_n_obs": total_n_obs,
+                            "mean_quarter_n": mean_quarter_n,
+                            "weighted_avg_raw_r2": _weighted_mean(raw_values, common_weights),
+                            "weighted_avg_adj_r2": _weighted_mean(adj_values, common_weights),
+                            "equal_quarter_avg_raw_r2": sum(raw_values) / float(len(raw_values)),
+                            "equal_quarter_avg_adj_r2": sum(adj_values) / float(len(adj_values)),
+                            "weighting_rule": "quarter_observation_count",
+                            "common_success_policy": _EXTENSION_COMMON_SUCCESS_POLICY,
+                            "estimator_status": "estimated",
+                            "failure_reason": None,
+                        }
+                    )
+
+                for comparison_name, left_name, right_name in comparison_pairs:
+                    left_spec = comparison_spec_by_name[left_name]
+                    right_spec = comparison_spec_by_name[right_name]
+                    delta_raw_values: list[float] = []
+                    delta_adj_values: list[float] = []
+                    for quarter_start in common_quarters:
+                        left_row = quarter_row_maps[left_name][quarter_start]
+                        right_row = quarter_row_maps[right_name][quarter_start]
+                        delta_raw_values.append(float(left_row["raw_r2"]) - float(right_row["raw_r2"]))
+                        delta_adj_values.append(float(left_row["adj_r2"]) - float(right_row["adj_r2"]))
+                    nw_se = None
+                    nw_t_stat = None
+                    nw_p_value = None
+                    if len(delta_adj_values) >= 3:
+                        nw_se = _newey_west_standard_error(delta_adj_values, common_weights, nw_lags=nw_lags)
+                        weighted_delta_adj = _weighted_mean(delta_adj_values, common_weights)
+                        if weighted_delta_adj is not None and nw_se is not None and nw_se > 0:
+                            nw_t_stat = weighted_delta_adj / nw_se
+                            nw_p_value = _normal_approx_two_sided_p_value(nw_t_stat)
+                    comparison_rows.append(
+                        {
+                            "run_id": run_id,
+                            "sample_window": EXTENSION_SAMPLE_WINDOW,
+                            "text_scope": text_scope,
+                            "outcome_name": outcome_name,
+                            "control_set_id": control_set.control_set_id,
+                            "control_set_alias": control_set.spec_alias,
+                            "comparison_name": comparison_name,
+                            "left_specification_name": left_name,
+                            "left_signal_name": _comparison_signal_name(left_spec.signal_inputs),
+                            "left_signal_inputs": list(left_spec.signal_inputs),
+                            "right_specification_name": right_name,
+                            "right_signal_name": _comparison_signal_name(right_spec.signal_inputs),
+                            "right_signal_inputs": list(right_spec.signal_inputs),
+                            "n_quarters": len(common_quarters),
+                            "total_n_obs": total_n_obs,
+                            "mean_quarter_n": mean_quarter_n,
+                            "weighted_avg_delta_raw_r2": _weighted_mean(delta_raw_values, common_weights),
+                            "weighted_avg_delta_adj_r2": _weighted_mean(delta_adj_values, common_weights),
+                            "equal_quarter_avg_delta_raw_r2": sum(delta_raw_values)
+                            / float(len(delta_raw_values)),
+                            "equal_quarter_avg_delta_adj_r2": sum(delta_adj_values)
+                            / float(len(delta_adj_values)),
+                            "nw_lags": nw_lags,
+                            "nw_se_delta_adj_r2": nw_se,
+                            "nw_t_stat_delta_adj_r2": nw_t_stat,
+                            "nw_p_value_delta_adj_r2": nw_p_value,
+                            "weighting_rule": "quarter_observation_count",
+                            "common_success_policy": _EXTENSION_COMMON_SUCCESS_POLICY,
+                            "estimator_status": "estimated",
+                            "failure_reason": None,
+                        }
+                    )
+
+    return {
+        "fit_summary": (
+            pl.DataFrame(summary_rows, schema_overrides=_empty_extension_fit_summary_df().schema).select(
+                _empty_extension_fit_summary_df().columns
+            )
+            if summary_rows
+            else _empty_extension_fit_summary_df()
+        ),
+        "fit_comparisons": (
+            pl.DataFrame(
+                comparison_rows,
+                schema_overrides=_empty_extension_fit_comparisons_df().schema,
+            ).select(_empty_extension_fit_comparisons_df().columns)
+            if comparison_rows
+            else _empty_extension_fit_comparisons_df()
+        ),
+        "fit_skipped_quarters": (
+            pl.DataFrame(
+                skipped_quarter_rows,
+                schema_overrides=_empty_extension_fit_skipped_quarters_df().schema,
+            ).select(_empty_extension_fit_skipped_quarters_df().columns)
+            if skipped_quarter_rows
+            else _empty_extension_fit_skipped_quarters_df()
+        ),
+    }
+
+
+def _run_quantile_variant_suite(
+    *,
+    base_panel_df: pl.DataFrame,
+    suite_name: str,
+) -> dict[str, pl.DataFrame]:
+    coefficient_frames: list[pl.DataFrame] = []
+    fit_summary_frames: list[pl.DataFrame] = []
+    fit_comparison_frames: list[pl.DataFrame] = []
+    fit_skipped_frames: list[pl.DataFrame] = []
+    panel_lf = base_panel_df.lazy()
+
+    for variant in QUANTILE_VARIANTS:
+        coefficient_frames.append(
+            _annotate_variant_df(
+                _run_quantile_coefficients_for_variant(
+                    panel_lf,
+                    variant=variant,
+                    suite_name=suite_name,
+                ),
+                variant,
+            )
+        )
+        fit_artifacts = _run_quantile_fit_comparisons_for_variant(
+            panel_lf,
+            variant=variant,
+            suite_name=suite_name,
+        )
+        fit_summary_frames.append(_annotate_variant_df(fit_artifacts["fit_summary"], variant))
+        fit_comparison_frames.append(_annotate_variant_df(fit_artifacts["fit_comparisons"], variant))
+        fit_skipped_frames.append(_annotate_variant_df(fit_artifacts["fit_skipped_quarters"], variant))
+
+    return {
+        "coefficients": _collect_variant_frames(coefficient_frames),
+        "fit_summary": _collect_variant_frames(fit_summary_frames),
+        "fit_comparisons": _collect_variant_frames(fit_comparison_frames),
+        "fit_skipped_quarters": _collect_variant_frames(fit_skipped_frames),
+    }
+
+
+def _annotate_variant_df(df: pl.DataFrame, variant: Any) -> pl.DataFrame:
     return df.with_columns(
         pl.lit(variant.variant_family, dtype=pl.Utf8).alias("variant_family"),
         pl.lit(variant.variant_id, dtype=pl.Utf8).alias("variant_id"),
@@ -620,6 +1435,10 @@ def run_lm2011_finbert_robustness(
         alias_expr_builder=_tail_variant_expr,
         suite_name=f"{run_name}:tail",
     )
+    quantile_outputs = _run_quantile_variant_suite(
+        base_panel_df=tail_panel_df,
+        suite_name=f"{run_name}:quantile",
+    )
 
     coefficient_df = _collect_variant_frames(
         [
@@ -651,6 +1470,10 @@ def run_lm2011_finbert_robustness(
         tail_fit_summary_path=run_dir / ARTIFACT_FILENAMES["tail_fit_summary"],
         tail_fit_comparisons_path=run_dir / ARTIFACT_FILENAMES["tail_fit_comparisons"],
         tail_fit_skipped_quarters_path=run_dir / ARTIFACT_FILENAMES["tail_fit_skipped_quarters"],
+        quantile_coefficients_path=run_dir / ARTIFACT_FILENAMES["quantile_coefficients"],
+        quantile_fit_summary_path=run_dir / ARTIFACT_FILENAMES["quantile_fit_summary"],
+        quantile_fit_comparisons_path=run_dir / ARTIFACT_FILENAMES["quantile_fit_comparisons"],
+        quantile_fit_skipped_quarters_path=run_dir / ARTIFACT_FILENAMES["quantile_fit_skipped_quarters"],
         candidate_summary_path=run_dir / ARTIFACT_FILENAMES["candidate_summary"],
     )
 
@@ -662,6 +1485,10 @@ def run_lm2011_finbert_robustness(
     write_frame(tail_outputs["fit_summary"], artifacts.tail_fit_summary_path)
     write_frame(tail_outputs["fit_comparisons"], artifacts.tail_fit_comparisons_path)
     write_frame(tail_outputs["fit_skipped_quarters"], artifacts.tail_fit_skipped_quarters_path)
+    write_frame(quantile_outputs["coefficients"], artifacts.quantile_coefficients_path)
+    write_frame(quantile_outputs["fit_summary"], artifacts.quantile_fit_summary_path)
+    write_frame(quantile_outputs["fit_comparisons"], artifacts.quantile_fit_comparisons_path)
+    write_frame(quantile_outputs["fit_skipped_quarters"], artifacts.quantile_fit_skipped_quarters_path)
     write_frame(candidate_summary_df, artifacts.candidate_summary_path)
 
     completed_at_utc = utc_timestamp()
@@ -694,6 +1521,18 @@ def run_lm2011_finbert_robustness(
                     "source_columns": list(variant.source_columns),
                 }
                 for variant in TAIL_VARIANTS
+            ],
+            "quantile_signal": [
+                {
+                    "variant_id": variant.variant_id,
+                    "description": variant.description,
+                    "source_columns": list(variant.source_columns),
+                    "base_variant_id": variant.base_variant_id,
+                    "base_signal_col": variant.base_signal_col,
+                    "transform": variant.transform,
+                    "quantile_k": variant.quantile_k,
+                }
+                for variant in QUANTILE_VARIANTS
             ],
         },
         "resolved_inputs": {
@@ -753,6 +1592,22 @@ def run_lm2011_finbert_robustness(
                 artifacts.tail_fit_skipped_quarters_path,
                 manifest_path=manifest_path,
             ),
+            "quantile_coefficients_path": _manifest_path_value(
+                artifacts.quantile_coefficients_path,
+                manifest_path=manifest_path,
+            ),
+            "quantile_fit_summary_path": _manifest_path_value(
+                artifacts.quantile_fit_summary_path,
+                manifest_path=manifest_path,
+            ),
+            "quantile_fit_comparisons_path": _manifest_path_value(
+                artifacts.quantile_fit_comparisons_path,
+                manifest_path=manifest_path,
+            ),
+            "quantile_fit_skipped_quarters_path": _manifest_path_value(
+                artifacts.quantile_fit_skipped_quarters_path,
+                manifest_path=manifest_path,
+            ),
             "candidate_summary_path": _manifest_path_value(
                 artifacts.candidate_summary_path,
                 manifest_path=manifest_path,
@@ -769,6 +1624,10 @@ def run_lm2011_finbert_robustness(
             "tail_fit_summary": tail_outputs["fit_summary"].height,
             "tail_fit_comparisons": tail_outputs["fit_comparisons"].height,
             "tail_fit_skipped_quarters": tail_outputs["fit_skipped_quarters"].height,
+            "quantile_coefficients": quantile_outputs["coefficients"].height,
+            "quantile_fit_summary": quantile_outputs["fit_summary"].height,
+            "quantile_fit_comparisons": quantile_outputs["fit_comparisons"].height,
+            "quantile_fit_skipped_quarters": quantile_outputs["fit_skipped_quarters"].height,
             "candidate_summary": candidate_summary_df.height,
         },
     }

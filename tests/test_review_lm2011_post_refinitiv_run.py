@@ -122,6 +122,7 @@ def _return_regression_panel_full_10k_df() -> pl.DataFrame:
         rows.append(
             {
                 "doc_id": f"doc-{idx:02d}",
+                "filing_date": dt.date(1994 + idx, 3, 15),
                 "filing_period_excess_return": -0.05 + (idx * 0.01),
                 "size_event": 1000.0 + (idx * 50.0),
                 "bm_event": 0.4 + (idx * 0.02),
@@ -147,6 +148,7 @@ def _return_regression_panel_mda_df() -> pl.DataFrame:
         rows.append(
             {
                 "doc_id": f"doc-{idx:02d}",
+                "filing_date": dt.date(1994 + idx, 3, 15),
                 "filing_period_excess_return": -0.045 + (idx * 0.009),
                 "size_event": 900.0 + (idx * 45.0),
                 "bm_event": 0.35 + (idx * 0.018),
@@ -211,26 +213,48 @@ def _extension_results_df() -> pl.DataFrame:
 
 
 def _extension_sample_loss_df() -> pl.DataFrame:
+    rows: list[dict[str, object]] = []
+    for year in (2009, 2010):
+        for text_scope, base_count in (
+            ("item_1a_risk_factors", 140),
+            ("item_7_mda", 180),
+        ):
+            for control_set_id, alias, sample_size in (
+                ("C0", "C0_base_no_ownership", base_count),
+                ("C1", "C0_common_support_no_ownership", 24),
+                ("C2", "C1_proxy_ownership_common_support", 24),
+            ):
+                rows.append(
+                    {
+                        "sample_window": "2009_2024",
+                        "calendar_year": year,
+                        "text_scope": text_scope,
+                        "outcome_name": "filing_period_excess_return",
+                        "feature_family": "dictionary_plus_finbert",
+                        "control_set_id": control_set_id,
+                        "control_set_alias": alias,
+                        "specification_name": "dictionary_only",
+                        "n_control_set_rows": sample_size,
+                        "n_outcome_available": sample_size,
+                        "n_signal_available": sample_size,
+                        "n_controls_available": sample_size,
+                        "n_industry_available": sample_size,
+                        "n_estimation_rows": sample_size,
+                        "n_missing_outcome": 0,
+                        "n_missing_signal": 0,
+                        "n_missing_controls": 0,
+                        "n_missing_industry": 0,
+                    }
+                )
+    return pl.DataFrame(rows)
+
+
+def _extension_event_panel_df() -> pl.DataFrame:
     return pl.DataFrame(
         {
-            "sample_window": ["2009_2024"],
-            "calendar_year": [2009],
-            "text_scope": ["item_7_mda"],
-            "outcome_name": ["filing_period_excess_return"],
-            "feature_family": ["dictionary"],
-            "control_set_id": ["C1"],
-            "control_set_alias": ["C0_common_support_no_ownership"],
-            "specification_name": ["dictionary_only"],
-            "n_control_set_rows": [120],
-            "n_outcome_available": [120],
-            "n_signal_available": [118],
-            "n_controls_available": [117],
-            "n_industry_available": [120],
-            "n_estimation_rows": [117],
-            "n_missing_outcome": [0],
-            "n_missing_signal": [2],
-            "n_missing_controls": [3],
-            "n_missing_industry": [0],
+            "doc_id": ["ext-2009-a", "ext-2009-b", "ext-2010-a", "ext-2010-b"],
+            "filing_date": [dt.date(2009, 3, 15), dt.date(2009, 8, 1), dt.date(2010, 3, 15), dt.date(2010, 8, 1)],
+            "institutional_ownership": [0.3, None, 0.4, 0.5],
         }
     )
 
@@ -379,6 +403,7 @@ def test_full_export_succeeds_when_extension_artifacts_are_present(tmp_path: Pat
     extension_run_dir = tmp_path / "lm2011_extension"
     output_dir = tmp_path / "report"
 
+    _write_parquet(extension_run_dir / "lm2011_extension_event_panel.parquet", _extension_event_panel_df())
     _write_parquet(extension_run_dir / review.EXTENSION_RESULTS_FILE, _extension_results_df())
     _write_parquet(extension_run_dir / review.EXTENSION_SAMPLE_LOSS_FILE, _extension_sample_loss_df())
 
@@ -398,3 +423,9 @@ def test_full_export_succeeds_when_extension_artifacts_are_present(tmp_path: Pat
     tex = (output_dir / "lm2011_post_refinitiv_review.tex").read_text(encoding="utf-8")
     assert "LM2011 Extension Sample Loss" in tex
     assert "LM2011 Extension Results" in tex
+    assert "Appendix Figures" in tex
+    assert "Appendix sample-coverage figure for C0" in tex
+    assert "Appendix sample-coverage figure for C1/C2" in tex
+    assert (output_dir / "figures" / "yearly_sample_sizes_c0.png").exists()
+    assert (output_dir / "figures" / "yearly_sample_sizes_c1_c2.png").exists()
+    assert (output_dir / "tables" / "lm2011_yearly_sample_sizes_appendix.csv").exists()

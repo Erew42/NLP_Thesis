@@ -582,6 +582,287 @@ def _plot_trading_returns(run_dir: Path, figure_dir: Path) -> Path | None:
     return out_path
 
 
+def _combined_yearly_sample_sizes_frame(core_run_dir: Path, extension_run_dir: Path) -> pl.DataFrame | None:
+    core_full_panel_path = core_run_dir / FULL_RETURN_PANEL_FILE
+    core_mda_panel_path = core_run_dir / MDA_RETURN_PANEL_FILE
+    extension_event_panel_path = extension_run_dir / "lm2011_extension_event_panel.parquet"
+    extension_sample_loss_path = extension_run_dir / EXTENSION_SAMPLE_LOSS_FILE
+    if not (
+        core_full_panel_path.exists()
+        and core_mda_panel_path.exists()
+        and extension_event_panel_path.exists()
+        and extension_sample_loss_path.exists()
+    ):
+        return None
+
+    core_full_panel = (
+        pl.scan_parquet(core_full_panel_path)
+        .select(
+            pl.col("filing_date").cast(pl.Date, strict=False),
+            pl.col("institutional_ownership"),
+        )
+        .with_columns(pl.col("filing_date").dt.year().cast(pl.Int32).alias("year"))
+    )
+    core_mda_panel = (
+        pl.scan_parquet(core_mda_panel_path)
+        .select(
+            pl.col("filing_date").cast(pl.Date, strict=False),
+            pl.col("institutional_ownership"),
+            pl.col("total_token_count_mda").cast(pl.Float64, strict=False),
+        )
+        .filter(pl.col("total_token_count_mda") >= float(MDA_MIN_TOKEN_COUNT))
+        .with_columns(pl.col("filing_date").dt.year().cast(pl.Int32).alias("year"))
+    )
+    core_counts = pl.concat(
+        [
+            core_full_panel.group_by("year")
+            .agg(pl.len().cast(pl.Int64).alias("sample_size"))
+            .with_columns(
+                pl.lit("Full 10-K", dtype=pl.Utf8).alias("series_label"),
+                pl.lit("C0", dtype=pl.Utf8).alias("control_group"),
+                pl.lit("1994-2008", dtype=pl.Utf8).alias("sample_window"),
+                pl.lit("core_full_return_panel", dtype=pl.Utf8).alias("data_source"),
+            ),
+            core_full_panel.filter(pl.col("institutional_ownership").is_not_null())
+            .group_by("year")
+            .agg(pl.len().cast(pl.Int64).alias("sample_size"))
+            .with_columns(
+                pl.lit("Full 10-K", dtype=pl.Utf8).alias("series_label"),
+                pl.lit("C1/C2", dtype=pl.Utf8).alias("control_group"),
+                pl.lit("1994-2008", dtype=pl.Utf8).alias("sample_window"),
+                pl.lit("core_full_return_panel_nonmissing_ownership", dtype=pl.Utf8).alias("data_source"),
+            ),
+            core_mda_panel.group_by("year")
+            .agg(pl.len().cast(pl.Int64).alias("sample_size"))
+            .with_columns(
+                pl.lit("Item 7 MD&A", dtype=pl.Utf8).alias("series_label"),
+                pl.lit("C0", dtype=pl.Utf8).alias("control_group"),
+                pl.lit("1994-2008", dtype=pl.Utf8).alias("sample_window"),
+                pl.lit("core_mda_return_panel_token_ge_250", dtype=pl.Utf8).alias("data_source"),
+            ),
+            core_mda_panel.filter(pl.col("institutional_ownership").is_not_null())
+            .group_by("year")
+            .agg(pl.len().cast(pl.Int64).alias("sample_size"))
+            .with_columns(
+                pl.lit("Item 7 MD&A", dtype=pl.Utf8).alias("series_label"),
+                pl.lit("C1/C2", dtype=pl.Utf8).alias("control_group"),
+                pl.lit("1994-2008", dtype=pl.Utf8).alias("sample_window"),
+                pl.lit("core_mda_return_panel_token_ge_250_nonmissing_ownership", dtype=pl.Utf8).alias("data_source"),
+            ),
+        ],
+        how="vertical_relaxed",
+    ).collect()
+
+    extension_event_panel = (
+        pl.scan_parquet(extension_event_panel_path)
+        .select(
+            pl.col("filing_date").cast(pl.Date, strict=False),
+            pl.col("institutional_ownership"),
+        )
+        .with_columns(pl.col("filing_date").dt.year().cast(pl.Int32).alias("year"))
+    )
+    extension_full_counts = pl.concat(
+        [
+            extension_event_panel.group_by("year")
+            .agg(pl.len().cast(pl.Int64).alias("sample_size"))
+            .with_columns(
+                pl.lit("Full 10-K", dtype=pl.Utf8).alias("series_label"),
+                pl.lit("C0", dtype=pl.Utf8).alias("control_group"),
+                pl.lit("2009-2024", dtype=pl.Utf8).alias("sample_window"),
+                pl.lit("extension_event_panel", dtype=pl.Utf8).alias("data_source"),
+            ),
+            extension_event_panel.filter(pl.col("institutional_ownership").is_not_null())
+            .group_by("year")
+            .agg(pl.len().cast(pl.Int64).alias("sample_size"))
+            .with_columns(
+                pl.lit("Full 10-K", dtype=pl.Utf8).alias("series_label"),
+                pl.lit("C1/C2", dtype=pl.Utf8).alias("control_group"),
+                pl.lit("2009-2024", dtype=pl.Utf8).alias("sample_window"),
+                pl.lit("extension_event_panel_nonmissing_ownership", dtype=pl.Utf8).alias("data_source"),
+            ),
+        ],
+        how="vertical_relaxed",
+    ).collect()
+
+    extension_counts_raw = (
+        pl.scan_parquet(extension_sample_loss_path)
+        .filter(
+            pl.col("text_scope").is_in(("item_1a_risk_factors", "item_7_mda"))
+            & pl.col("control_set_id").is_in(("C0", "C1", "C2"))
+            & (pl.col("specification_name") == pl.lit("dictionary_only"))
+        )
+        .select(
+            pl.col("calendar_year").cast(pl.Int32).alias("year"),
+            pl.when(pl.col("text_scope") == "item_1a_risk_factors")
+            .then(pl.lit("Item 1A risk factors"))
+            .when(pl.col("text_scope") == "item_7_mda")
+            .then(pl.lit("Item 7 MD&A"))
+            .otherwise(pl.col("text_scope"))
+            .alias("series_label"),
+            pl.when(pl.col("control_set_id") == "C0")
+            .then(pl.lit("C0"))
+            .otherwise(pl.lit("C1/C2"))
+            .alias("control_group"),
+            pl.col("sample_window").cast(pl.Utf8),
+            pl.col("n_control_set_rows").cast(pl.Int64),
+            pl.lit("extension_sample_loss", dtype=pl.Utf8).alias("data_source"),
+        )
+    )
+    extension_counts = (
+        extension_counts_raw.group_by("year", "series_label", "control_group", "sample_window", "data_source")
+        .agg(
+            pl.col("n_control_set_rows").n_unique().alias("_n_unique_row_counts"),
+            pl.col("n_control_set_rows").first().cast(pl.Int64).alias("sample_size"),
+        )
+        .sort("series_label", "control_group", "year")
+    ).collect()
+    if extension_counts.filter(pl.col("_n_unique_row_counts") > 1).height > 0:
+        raise ValueError(
+            "Extension sample-loss rows disagree within a (year, series, control-group) block; "
+            "cannot collapse C1/C2 into a single yearly sample-size series."
+        )
+    extension_counts = extension_counts.drop("_n_unique_row_counts")
+
+    output_columns = ["year", "sample_size", "series_label", "control_group", "sample_window", "data_source"]
+    combined = pl.concat(
+        [
+            core_counts.select(output_columns),
+            extension_full_counts.select(output_columns),
+            extension_counts.select(output_columns),
+        ],
+        how="vertical_relaxed",
+    )
+    expected_rows: list[dict[str, Any]] = []
+    for control_group in ("C0", "C1/C2"):
+        full_source = (
+            "core_full_return_panel"
+            if control_group == "C0"
+            else "core_full_return_panel_nonmissing_ownership"
+        )
+        item7_source = (
+            "core_mda_return_panel_token_ge_250"
+            if control_group == "C0"
+            else "core_mda_return_panel_token_ge_250_nonmissing_ownership"
+        )
+        extension_full_source = (
+            "extension_event_panel"
+            if control_group == "C0"
+            else "extension_event_panel_nonmissing_ownership"
+        )
+        for year in range(1994, 2009):
+            expected_rows.extend(
+                [
+                    {
+                        "year": year,
+                        "series_label": "Full 10-K",
+                        "control_group": control_group,
+                        "sample_window": "1994-2008",
+                        "data_source": full_source,
+                    },
+                    {
+                        "year": year,
+                        "series_label": "Item 7 MD&A",
+                        "control_group": control_group,
+                        "sample_window": "1994-2008",
+                        "data_source": item7_source,
+                    },
+                ]
+            )
+        for year in range(2009, 2025):
+            expected_rows.extend(
+                [
+                    {
+                        "year": year,
+                        "series_label": "Full 10-K",
+                        "control_group": control_group,
+                        "sample_window": "2009-2024",
+                        "data_source": extension_full_source,
+                    },
+                    {
+                        "year": year,
+                        "series_label": "Item 7 MD&A",
+                        "control_group": control_group,
+                        "sample_window": "2009-2024",
+                        "data_source": "extension_sample_loss",
+                    },
+                    {
+                        "year": year,
+                        "series_label": "Item 1A risk factors",
+                        "control_group": control_group,
+                        "sample_window": "2009-2024",
+                        "data_source": "extension_sample_loss",
+                    },
+                ]
+            )
+    expected_frame = pl.DataFrame(expected_rows)
+    actual_counts = combined.select("year", "series_label", "control_group", "sample_size")
+    return (
+        expected_frame.join(
+            actual_counts,
+            on=["year", "series_label", "control_group"],
+            how="left",
+        )
+        .with_columns(pl.col("sample_size").fill_null(0).cast(pl.Int64))
+        .sort("series_label", "control_group", "year")
+    )
+
+
+def _plot_yearly_sample_sizes_by_control_group(
+    plot_frame: pl.DataFrame,
+    *,
+    control_group: str,
+    figure_dir: Path,
+) -> Path | None:
+    group_frame = plot_frame.filter(pl.col("control_group") == control_group).sort("series_label", "year")
+    if group_frame.height == 0:
+        return None
+
+    fig, ax = plt.subplots(figsize=(9.4, 4.8))
+    series_order = ["Full 10-K", "Item 7 MD&A", "Item 1A risk factors"]
+    styles = {
+        "Full 10-K": {"color": "#1f5aa6", "linestyle": "-", "marker": "o"},
+        "Item 7 MD&A": {"color": "#0b6e4f", "linestyle": "-", "marker": "s"},
+        "Item 1A risk factors": {"color": "#8c3b2f", "linestyle": "--", "marker": "^"},
+    }
+    for series_label in series_order:
+        series_df = group_frame.filter(pl.col("series_label") == series_label).sort("year")
+        if series_df.height == 0:
+            continue
+        style = styles[series_label]
+        ax.plot(
+            series_df["year"].to_list(),
+            series_df["sample_size"].to_list(),
+            label=series_label,
+            color=style["color"],
+            linestyle=style["linestyle"],
+            marker=style["marker"],
+            linewidth=2.2,
+            markersize=5.0,
+        )
+    tick_years = list(range(1994, 2025, 4))
+    if 2024 not in tick_years:
+        tick_years.append(2024)
+    ax.set_xlim(1994, 2024)
+    ax.set_xticks(sorted(set(tick_years)))
+    ax.set_ylabel("Sample size")
+    ax.set_xlabel("Filing year")
+    ax.set_title(f"Yearly Sample Sizes: {control_group}", fontsize=13, fontweight="bold")
+    ax.grid(alpha=0.25)
+    ax.legend(
+        loc="upper center",
+        bbox_to_anchor=(0.5, 1.23),
+        ncol=3,
+        frameon=True,
+        facecolor="white",
+        edgecolor="#b0b0b0",
+    )
+    fig.subplots_adjust(top=0.76, bottom=0.16)
+    filename = "yearly_sample_sizes_c0.png" if control_group == "C0" else "yearly_sample_sizes_c1_c2.png"
+    out_path = figure_dir / filename
+    _figure_save(fig, out_path)
+    return out_path
+
+
 def _render_manual_figure(path: Path, *, number: str, caption: str, width: str = "0.82\\textwidth") -> str:
     return "\n".join(
         [
@@ -1215,6 +1496,9 @@ def _build_review_notes(
         notes.append(
             f"Full export mode includes extension tables from {extension_run_dir} using lm2011_extension_results.parquet and lm2011_extension_sample_loss.parquet as the authoritative extension artifacts."
         )
+        notes.append(
+            "The appendix yearly sample-size figures combine the 1994-2008 core run with the 2009-2024 extension run. The extension sample-loss artifact does not persist a full-document text scope, so the 2009-2024 full-document series is sourced from the extension event panel while item-scope series come from extension sample-loss rows."
+        )
     notes.append(
         "Paper Table III cannot be reconstructed from the staged run alone because token-level word-frequency counts are not stored in the exported artifacts."
     )
@@ -1342,6 +1626,25 @@ def _write_report(
     summary_stats_block = _render_summary_statistics_table(context.run_dir, table_output_dir)
     quintile_figure = _plot_median_excess_return_quintiles(context.run_dir, figure_dir, table_output_dir)
     trading_figure = _plot_trading_returns(context.run_dir, figure_dir)
+    yearly_sample_sizes_frame = (
+        _combined_yearly_sample_sizes_frame(context.run_dir, extension_run_dir)
+        if extension_run_dir is not None
+        else None
+    )
+    yearly_sample_sizes_c0_figure: Path | None = None
+    yearly_sample_sizes_c1_c2_figure: Path | None = None
+    if yearly_sample_sizes_frame is not None and yearly_sample_sizes_frame.height > 0:
+        yearly_sample_sizes_frame.write_csv(table_output_dir / "lm2011_yearly_sample_sizes_appendix.csv")
+        yearly_sample_sizes_c0_figure = _plot_yearly_sample_sizes_by_control_group(
+            yearly_sample_sizes_frame,
+            control_group="C0",
+            figure_dir=figure_dir,
+        )
+        yearly_sample_sizes_c1_c2_figure = _plot_yearly_sample_sizes_by_control_group(
+            yearly_sample_sizes_frame,
+            control_group="C1/C2",
+            figure_dir=figure_dir,
+        )
     paper_tables = _paper_table_sections(context.run_dir)
 
     sections: list[str] = [
@@ -1365,18 +1668,20 @@ def _write_report(
         sections.extend(paper_tables[:1])
     if summary_stats_block is not None:
         sections.extend([r"\clearpage", summary_stats_block])
+    next_figure_number = 1
     if quintile_figure is not None:
         sections.extend(
             [
                 r"\clearpage",
                 _render_manual_figure(
                     quintile_figure.relative_to(output_dir),
-                    number="1",
+                    number=str(next_figure_number),
                     caption="Median filing period excess return by negative-tone quintile for H4N-Inf and Fin-Neg using the available 1994--2008 full-10-K sample from the selected run. Returns are expressed in percent.",
                     width="0.78\\textwidth",
                 ),
             ]
         )
+        next_figure_number += 1
     if len(paper_tables) > 1:
         sections.extend([r"\clearpage", *sum(([block, r"\clearpage"] for block in paper_tables[1:]), [])[:-1]])
     if trading_figure is not None:
@@ -1385,10 +1690,40 @@ def _write_report(
                 r"\clearpage",
                 _render_manual_figure(
                     trading_figure.relative_to(output_dir),
-                    number="2",
+                    number=str(next_figure_number),
                     caption="Cumulative long-short returns by LM2011 sort signal from the IA.II monthly trading-strategy artifact.",
                     width="0.94\\textwidth",
                 ),
+            ]
+        )
+        next_figure_number += 1
+    appendix_figures: list[str] = []
+    if yearly_sample_sizes_c0_figure is not None:
+        appendix_figures.extend(
+            [
+                _render_manual_figure(
+                    yearly_sample_sizes_c0_figure.relative_to(output_dir),
+                    number=f"A{1 if not appendix_figures else 2}",
+                    caption=(
+                        "Appendix sample-coverage figure for C0. Full 10-K and Item 7 counts span 1994--2024, while Item 1A begins in 2009. "
+                        "The 1994--2008 Item 7 series uses the core MD&A return panel with the 250-token floor, the 2009--2024 full-document series uses the extension event panel, and the 2009--2024 item-scope series use extension sample-loss counts."
+                    ),
+                    width="0.92\\textwidth",
+                )
+            ]
+        )
+    if yearly_sample_sizes_c1_c2_figure is not None:
+        appendix_figures.extend(
+            [
+                _render_manual_figure(
+                    yearly_sample_sizes_c1_c2_figure.relative_to(output_dir),
+                    number=f"A{1 if not appendix_figures else 2}",
+                    caption=(
+                        "Appendix sample-coverage figure for C1/C2. Full 10-K and Item 7 counts span 1994--2024, while Item 1A begins in 2009. "
+                        "This figure is included to show the low ownership-conditioned coverage in the common-support specifications."
+                    ),
+                    width="0.92\\textwidth",
+                )
             ]
         )
 
@@ -1399,6 +1734,15 @@ def _write_report(
 
     if extension_run_dir is not None:
         sections.extend(_extension_sections(extension_run_dir))
+
+    if appendix_figures:
+        sections.extend(
+            [
+                r"\clearpage",
+                r"\section*{Appendix Figures}",
+                *appendix_figures,
+            ]
+        )
 
     sections.append(r"\end{document}")
     tex_path = output_dir / f"{REPORT_BASENAME}.tex"
