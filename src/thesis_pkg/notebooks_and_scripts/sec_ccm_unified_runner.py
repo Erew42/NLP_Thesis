@@ -1512,12 +1512,19 @@ def main() -> None:
     LM2011_TEXT_FEATURES_MDA_PATH = _env_optional_path(
         "SEC_CCM_LM2011_TEXT_FEATURES_MDA_PATH"
     )
+    LM2011_STRATEGY_TEXT_FEATURES_FULL_10K_PATH = _env_optional_path(
+        "SEC_CCM_LM2011_STRATEGY_TEXT_FEATURES_FULL_10K_PATH"
+    )
     LM2011_RECOMPUTE_TEXT_FEATURES_FULL_10K = _env_bool(
         "SEC_CCM_LM2011_RECOMPUTE_TEXT_FEATURES_FULL_10K",
         False,
     )
     LM2011_RECOMPUTE_TEXT_FEATURES_MDA = _env_bool(
         "SEC_CCM_LM2011_RECOMPUTE_TEXT_FEATURES_MDA",
+        False,
+    )
+    LM2011_RECOMPUTE_STRATEGY_TEXT_FEATURES_FULL_10K = _env_bool(
+        "SEC_CCM_LM2011_RECOMPUTE_STRATEGY_TEXT_FEATURES_FULL_10K",
         False,
     )
     LM2011_RECOMPUTE_EVENT_SCREEN_SURFACE = _env_bool(
@@ -3057,6 +3064,14 @@ def main() -> None:
                 "SEC_CCM_LM2011_RECOMPUTE_TEXT_FEATURES_MDA cannot be combined with "
                 "SEC_CCM_LM2011_TEXT_FEATURES_MDA_PATH"
             )
+        if (
+            LM2011_RECOMPUTE_STRATEGY_TEXT_FEATURES_FULL_10K
+            and LM2011_STRATEGY_TEXT_FEATURES_FULL_10K_PATH is not None
+        ):
+            raise ValueError(
+                "SEC_CCM_LM2011_RECOMPUTE_STRATEGY_TEXT_FEATURES_FULL_10K cannot be combined with "
+                "SEC_CCM_LM2011_STRATEGY_TEXT_FEATURES_FULL_10K_PATH"
+            )
         lm2011_text_features_full_10k_path_is_explicit = (
             LM2011_TEXT_FEATURES_FULL_10K_PATH is not None
         ) and not LM2011_RECOMPUTE_TEXT_FEATURES_FULL_10K
@@ -3082,6 +3097,20 @@ def main() -> None:
                 or _resolve_optional_existing_path(
                     LM2011_POST_REFINITIV_DIR
                     / LM2011_STAGE_ARTIFACT_FILENAMES["text_features_mda"]
+                )
+            )
+        )
+        lm2011_strategy_text_features_full_10k_path_is_explicit = (
+            LM2011_STRATEGY_TEXT_FEATURES_FULL_10K_PATH is not None
+        ) and not LM2011_RECOMPUTE_STRATEGY_TEXT_FEATURES_FULL_10K
+        lm2011_strategy_text_features_full_10k_path = (
+            None
+            if LM2011_RECOMPUTE_STRATEGY_TEXT_FEATURES_FULL_10K
+            else (
+                LM2011_STRATEGY_TEXT_FEATURES_FULL_10K_PATH
+                or _resolve_optional_existing_path(
+                    LM2011_POST_REFINITIV_DIR
+                    / LM2011_STAGE_ARTIFACT_FILENAMES["strategy_text_features_full_10k"]
                 )
             )
         )
@@ -3137,6 +3166,14 @@ def main() -> None:
                     else None
                 ),
                 "lm2011_recompute_text_features_mda": LM2011_RECOMPUTE_TEXT_FEATURES_MDA,
+                "lm2011_strategy_text_features_full_10k_path": (
+                    str(lm2011_strategy_text_features_full_10k_path)
+                    if lm2011_strategy_text_features_full_10k_path is not None
+                    else None
+                ),
+                "lm2011_recompute_strategy_text_features_full_10k": (
+                    LM2011_RECOMPUTE_STRATEGY_TEXT_FEATURES_FULL_10K
+                ),
                 "lm2011_recompute_event_screen_surface": LM2011_RECOMPUTE_EVENT_SCREEN_SURFACE,
                 "lm2011_recompute_event_panel": LM2011_RECOMPUTE_EVENT_PANEL,
                 "lm2011_recompute_regression_tables": LM2011_RECOMPUTE_REGRESSION_TABLES,
@@ -3194,6 +3231,10 @@ def main() -> None:
             daily_panel_path=lm2011_daily_panel_path,
             text_features_full_10k_path=lm2011_text_features_full_10k_path,
             text_features_full_10k_path_is_explicit=lm2011_text_features_full_10k_path_is_explicit,
+            strategy_text_features_full_10k_path=lm2011_strategy_text_features_full_10k_path,
+            strategy_text_features_full_10k_path_is_explicit=(
+                lm2011_strategy_text_features_full_10k_path_is_explicit
+            ),
             text_features_mda_path=lm2011_text_features_mda_path,
             text_features_mda_path_is_explicit=lm2011_text_features_mda_path_is_explicit,
             ccm_base_dir=lm2011_ccm_base_dir,
@@ -3250,6 +3291,7 @@ def main() -> None:
             full_10k_cleaning_contract=LM2011_FULL_10K_CLEANING_CONTRACT,
             full_10k_text_feature_batch_size=LM2011_FULL_10K_TEXT_FEATURE_BATCH_SIZE,
             mda_text_feature_batch_size=LM2011_MDA_TEXT_FEATURE_BATCH_SIZE,
+            recompute_strategy_text_features_full_10k=LM2011_RECOMPUTE_STRATEGY_TEXT_FEATURES_FULL_10K,
             recompute_event_screen_surface=LM2011_RECOMPUTE_EVENT_SCREEN_SURFACE,
             recompute_event_panel=LM2011_RECOMPUTE_EVENT_PANEL,
             recompute_regression_tables=LM2011_RECOMPUTE_REGRESSION_TABLES,

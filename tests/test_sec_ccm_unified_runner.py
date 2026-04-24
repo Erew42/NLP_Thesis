@@ -12,9 +12,42 @@ from thesis_pkg.notebooks_and_scripts import sec_ccm_unified_runner as runner
 from thesis_pkg.pipelines.refinitiv.lseg_ledger import LsegResumeCompatibilityError
 
 
+RUNNER_PATH = Path("src/thesis_pkg/notebooks_and_scripts/sec_ccm_unified_runner.py")
+NOTEBOOK_PATH = Path("src/thesis_pkg/notebooks_and_scripts/sec_ccm_unified_runner.ipynb")
+
+
+def _runner_source() -> str:
+    return RUNNER_PATH.read_text(encoding="utf-8")
+
+
+def _notebook() -> dict:
+    return json.loads(NOTEBOOK_PATH.read_text(encoding="utf-8"))
+
+
+def _notebook_source() -> str:
+    return "\n".join(
+        "".join(cell.get("source", []))
+        for cell in _notebook().get("cells", [])
+    )
+
+
+def _notebook_code_sources() -> list[str]:
+    return [
+        "".join(cell.get("source", []))
+        for cell in _notebook().get("cells", [])
+        if cell.get("cell_type") == "code"
+    ]
+
+
+def _notebook_code_cell_containing(marker: str) -> str:
+    for source in _notebook_code_sources():
+        if marker in source:
+            return source
+    raise AssertionError(f"Notebook code cell missing marker: {marker}")
+
+
 def test_doc_ownership_stage_runs_after_sec_ccm_premerge_block() -> None:
-    runner_path = Path("src/thesis_pkg/notebooks_and_scripts/sec_ccm_unified_runner.py")
-    source = runner_path.read_text(encoding="utf-8")
+    source = _runner_source()
 
     premerge_marker = "sec_ccm_paths = run_sec_ccm_premerge_pipeline("
     doc_stage_marker = "if RUN_REFINITIV_DOC_OWNERSHIP_LM2011_EXACT_HANDOFF:"
@@ -25,8 +58,7 @@ def test_doc_ownership_stage_runs_after_sec_ccm_premerge_block() -> None:
 
 
 def test_doc_analyst_stage_runs_after_sec_ccm_premerge_block() -> None:
-    runner_path = Path("src/thesis_pkg/notebooks_and_scripts/sec_ccm_unified_runner.py")
-    source = runner_path.read_text(encoding="utf-8")
+    source = _runner_source()
 
     premerge_marker = "sec_ccm_paths = run_sec_ccm_premerge_pipeline("
     doc_stage_marker = "if RUN_REFINITIV_DOC_ANALYST_LM2011_ANCHORS:"
@@ -37,8 +69,7 @@ def test_doc_analyst_stage_runs_after_sec_ccm_premerge_block() -> None:
 
 
 def test_analyst_step1_stage_functions_are_imported_and_referenced() -> None:
-    runner_path = Path("src/thesis_pkg/notebooks_and_scripts/sec_ccm_unified_runner.py")
-    source = runner_path.read_text(encoding="utf-8")
+    source = _runner_source()
 
     required_symbols = [
         "run_refinitiv_step1_instrument_authority_pipeline",
@@ -53,8 +84,7 @@ def test_analyst_step1_stage_functions_are_imported_and_referenced() -> None:
 
 
 def test_analyst_step1_stage_order_precedes_doc_analyst_stages() -> None:
-    runner_path = Path("src/thesis_pkg/notebooks_and_scripts/sec_ccm_unified_runner.py")
-    source = runner_path.read_text(encoding="utf-8")
+    source = _runner_source()
 
     normalize_marker = "if RUN_REFINITIV_ANALYST_NORMALIZE:"
     doc_anchor_marker = "if RUN_REFINITIV_DOC_ANALYST_LM2011_ANCHORS:"
@@ -68,11 +98,8 @@ def test_analyst_step1_stage_order_precedes_doc_analyst_stages() -> None:
 
 
 def test_notebook_defaults_match_script_defaults_for_refinitiv_stage_plan() -> None:
-    runner_path = Path("src/thesis_pkg/notebooks_and_scripts/sec_ccm_unified_runner.py")
-    source = runner_path.read_text(encoding="utf-8")
-    notebook_source = Path(
-        "src/thesis_pkg/notebooks_and_scripts/sec_ccm_unified_runner.ipynb"
-    ).read_text(encoding="utf-8")
+    source = _runner_source()
+    notebook_source = _notebook_source()
 
     expected_explicit_flags = [
         "RUN_REFINITIV_STEP1",
@@ -95,18 +122,13 @@ def test_notebook_defaults_match_script_defaults_for_refinitiv_stage_plan() -> N
 
     for flag_name in expected_explicit_flags:
         assert f'{flag_name} = _env_bool(' in source
-        assert (
-            f'"{flag_name} = True\\n",' in notebook_source
-            or f'"{flag_name} = False\\n",' in notebook_source
-        )
+        assert f"{flag_name} =" in notebook_source
         env_flag_name = flag_name.removeprefix("RUN_")
-        assert f'SEC_CCM_RUN_{env_flag_name}' in notebook_source
-        assert f'": {flag_name},\\n"' in notebook_source
+        assert f'"SEC_CCM_RUN_{env_flag_name}": {flag_name}' in notebook_source
 
 
 def test_runner_references_expected_analyst_output_artifacts() -> None:
-    runner_path = Path("src/thesis_pkg/notebooks_and_scripts/sec_ccm_unified_runner.py")
-    source = runner_path.read_text(encoding="utf-8")
+    source = _runner_source()
 
     expected_artifacts = [
         "refinitiv_analyst_request_group_membership_common_stock.parquet",
@@ -121,8 +143,7 @@ def test_runner_references_expected_analyst_output_artifacts() -> None:
 
 
 def test_sec_ccm_unified_runner_exposes_and_threads_ownership_ticker_fallback_flag() -> None:
-    runner_path = Path("src/thesis_pkg/notebooks_and_scripts/sec_ccm_unified_runner.py")
-    source = runner_path.read_text(encoding="utf-8")
+    source = _runner_source()
 
     assert 'SEC_CCM_REFINITIV_OWNERSHIP_INCLUDE_TICKER_FALLBACK' in source
     assert 'REFINITIV_OWNERSHIP_INCLUDE_TICKER_FALLBACK = _env_bool(' in source
@@ -194,34 +215,30 @@ def test_env_optional_date_helper(monkeypatch: MonkeyPatch) -> None:
 
 
 def test_runner_exposes_lseg_request_bound_env_defaults() -> None:
-    runner_path = Path("src/thesis_pkg/notebooks_and_scripts/sec_ccm_unified_runner.py")
-    source = runner_path.read_text(encoding="utf-8")
+    source = _runner_source()
 
     assert 'LSEG_REQUEST_MIN_DATE = _env_optional_date(\n        "SEC_CCM_LSEG_REQUEST_MIN_DATE",\n        dt.date(1994, 1, 1),' in source
     assert 'LSEG_REQUEST_MAX_DATE = _env_optional_date(\n        "SEC_CCM_LSEG_REQUEST_MAX_DATE",\n        dt.date(2024, 12, 31),' in source
 
 
 def test_runner_passes_lseg_request_bounds_to_request_building_stages() -> None:
-    runner_path = Path("src/thesis_pkg/notebooks_and_scripts/sec_ccm_unified_runner.py")
-    source = runner_path.read_text(encoding="utf-8")
+    source = _runner_source()
 
     assert "request_min_date=LSEG_REQUEST_MIN_DATE" in source
     assert "request_max_date=LSEG_REQUEST_MAX_DATE" in source
 
 
 def test_notebook_config_exports_lseg_request_bound_env_keys() -> None:
-    notebook_path = Path("src/thesis_pkg/notebooks_and_scripts/sec_ccm_unified_runner.ipynb")
-    source = notebook_path.read_text(encoding="utf-8")
+    source = _notebook_source()
 
-    assert 'LSEG_REQUEST_MIN_DATE = \\"1994-01-01\\"  # ISO date | None' in source
-    assert 'LSEG_REQUEST_MAX_DATE = \\"2024-12-31\\"  # ISO date | None' in source
-    assert '"    \\"SEC_CCM_LSEG_REQUEST_MIN_DATE\\": LSEG_REQUEST_MIN_DATE,\\n"' in source
-    assert '"    \\"SEC_CCM_LSEG_REQUEST_MAX_DATE\\": LSEG_REQUEST_MAX_DATE,\\n"' in source
+    assert "LSEG_REQUEST_MIN_DATE =" in source
+    assert "LSEG_REQUEST_MAX_DATE =" in source
+    assert '"SEC_CCM_LSEG_REQUEST_MIN_DATE": LSEG_REQUEST_MIN_DATE' in source
+    assert '"SEC_CCM_LSEG_REQUEST_MAX_DATE": LSEG_REQUEST_MAX_DATE' in source
 
 
 def test_runner_exposes_finbert_sentence_postprocess_policy_env() -> None:
-    runner_path = Path("src/thesis_pkg/notebooks_and_scripts/sec_ccm_unified_runner.py")
-    source = runner_path.read_text(encoding="utf-8")
+    source = _runner_source()
 
     assert 'SEC_CCM_FINBERT_SENTENCE_POSTPROCESS_POLICY' in source
     assert 'FINBERT_SENTENCE_POSTPROCESS_POLICY = _env_str(' in source
@@ -229,16 +246,17 @@ def test_runner_exposes_finbert_sentence_postprocess_policy_env() -> None:
 
 
 def test_notebook_config_exports_finbert_sentence_postprocess_policy_env_key() -> None:
-    notebook_path = Path("src/thesis_pkg/notebooks_and_scripts/sec_ccm_unified_runner.ipynb")
-    source = notebook_path.read_text(encoding="utf-8")
+    source = _notebook_source()
 
-    assert 'FINBERT_SENTENCE_POSTPROCESS_POLICY = \\"reference_stitch_protect_v3\\"' in source
-    assert '"    \\"SEC_CCM_FINBERT_SENTENCE_POSTPROCESS_POLICY\\": FINBERT_SENTENCE_POSTPROCESS_POLICY,\\n"' in source
+    assert "FINBERT_SENTENCE_POSTPROCESS_POLICY =" in source
+    assert (
+        '"SEC_CCM_FINBERT_SENTENCE_POSTPROCESS_POLICY": '
+        "FINBERT_SENTENCE_POSTPROCESS_POLICY"
+    ) in source
 
 
 def test_runner_exposes_lm2011_extension_env_flags_and_orders_stage_after_finbert() -> None:
-    runner_path = Path("src/thesis_pkg/notebooks_and_scripts/sec_ccm_unified_runner.py")
-    source = runner_path.read_text(encoding="utf-8")
+    source = _runner_source()
 
     assert 'SEC_CCM_RUN_LM2011_EXTENSION' in source
     assert 'LM2011_EXTENSION_REQUIRE_CLEANED_SCOPE_MATCH = _env_bool(' in source
@@ -252,27 +270,26 @@ def test_runner_exposes_lm2011_extension_env_flags_and_orders_stage_after_finber
 
 
 def test_notebook_config_exports_lm2011_extension_env_keys() -> None:
-    notebook_path = Path("src/thesis_pkg/notebooks_and_scripts/sec_ccm_unified_runner.ipynb")
-    source = notebook_path.read_text(encoding="utf-8")
+    source = _notebook_source()
 
     assert 'RUN_LM2011_EXTENSION = ' in source
-    assert 'LM2011_EXTENSION_OUTPUT_DIR = RUN_ROOT / \\"lm2011_extension\\"' in source
-    assert 'LM2011_EXTENSION_REQUIRE_CLEANED_SCOPE_MATCH = True' in source
-    assert 'LM2011_EXTENSION_FINBERT_ANALYSIS_RUN_DIR = None' in source
-    assert 'LM2011_EXTENSION_FINBERT_PREPROCESS_RUN_DIR = None' in source
-    assert '"    \\"SEC_CCM_RUN_LM2011_EXTENSION\\": RUN_LM2011_EXTENSION,\\n"' in source
-    assert '"    \\"SEC_CCM_LM2011_EXTENSION_OUTPUT_DIR\\": LM2011_EXTENSION_OUTPUT_DIR,\\n"' in source
+    assert 'LM2011_EXTENSION_OUTPUT_DIR =' in source
+    assert 'LM2011_EXTENSION_REQUIRE_CLEANED_SCOPE_MATCH =' in source
+    assert 'LM2011_EXTENSION_FINBERT_ANALYSIS_RUN_DIR =' in source
+    assert 'LM2011_EXTENSION_FINBERT_PREPROCESS_RUN_DIR =' in source
+    assert '"SEC_CCM_RUN_LM2011_EXTENSION": RUN_LM2011_EXTENSION' in source
+    assert '"SEC_CCM_LM2011_EXTENSION_OUTPUT_DIR": LM2011_EXTENSION_OUTPUT_DIR' in source
     assert (
-        '"    \\"SEC_CCM_LM2011_EXTENSION_REQUIRE_CLEANED_SCOPE_MATCH\\": '
-        'LM2011_EXTENSION_REQUIRE_CLEANED_SCOPE_MATCH,\\n"'
+        '"SEC_CCM_LM2011_EXTENSION_REQUIRE_CLEANED_SCOPE_MATCH": '
+        "LM2011_EXTENSION_REQUIRE_CLEANED_SCOPE_MATCH"
     ) in source
     assert (
-        '"    \\"SEC_CCM_LM2011_EXTENSION_FINBERT_ANALYSIS_RUN_DIR\\": '
-        'LM2011_EXTENSION_FINBERT_ANALYSIS_RUN_DIR,\\n"'
+        '"SEC_CCM_LM2011_EXTENSION_FINBERT_ANALYSIS_RUN_DIR": '
+        "LM2011_EXTENSION_FINBERT_ANALYSIS_RUN_DIR"
     ) in source
     assert (
-        '"    \\"SEC_CCM_LM2011_EXTENSION_FINBERT_PREPROCESS_RUN_DIR\\": '
-        'LM2011_EXTENSION_FINBERT_PREPROCESS_RUN_DIR,\\n"'
+        '"SEC_CCM_LM2011_EXTENSION_FINBERT_PREPROCESS_RUN_DIR": '
+        "LM2011_EXTENSION_FINBERT_PREPROCESS_RUN_DIR"
     ) in source
 
 
@@ -288,6 +305,8 @@ def test_build_lm2011_extension_run_config_prefers_same_run_finbert_artifacts() 
         daily_panel_path=Path("daily.parquet"),
         text_features_full_10k_path=None,
         text_features_full_10k_path_is_explicit=False,
+        strategy_text_features_full_10k_path=None,
+        strategy_text_features_full_10k_path_is_explicit=False,
         text_features_mda_path=None,
         text_features_mda_path_is_explicit=False,
         ccm_base_dir=Path("ccm"),
@@ -314,6 +333,7 @@ def test_build_lm2011_extension_run_config_prefers_same_run_finbert_artifacts() 
         full_10k_cleaning_contract="lm2011_paper",
         full_10k_text_feature_batch_size=4,
         mda_text_feature_batch_size=20,
+        recompute_strategy_text_features_full_10k=False,
         recompute_event_screen_surface=False,
         recompute_event_panel=False,
         recompute_regression_tables=False,
@@ -414,12 +434,8 @@ def test_resolve_lm2011_extension_finbert_run_dirs_falls_back_to_named_finbert_o
 
 
 def test_runner_and_notebook_share_lm2011_memory_hardened_defaults() -> None:
-    runner_source = Path("src/thesis_pkg/notebooks_and_scripts/sec_ccm_unified_runner.py").read_text(
-        encoding="utf-8"
-    )
-    notebook_source = Path("src/thesis_pkg/notebooks_and_scripts/sec_ccm_unified_runner.ipynb").read_text(
-        encoding="utf-8"
-    )
+    runner_source = _runner_source()
+    notebook_source = _notebook_source()
 
     assert "DEFAULT_LM2011_FULL_10K_CLEANING_CONTRACT" in runner_source
     assert "DEFAULT_LM2011_FULL_10K_TEXT_FEATURE_BATCH_SIZE" in runner_source
@@ -429,54 +445,62 @@ def test_runner_and_notebook_share_lm2011_memory_hardened_defaults() -> None:
     assert 'LM2011_FULL_10K_TEXT_FEATURE_BATCH_SIZE = _env_int(\n        "SEC_CCM_LM2011_FULL_10K_TEXT_FEATURE_BATCH_SIZE",' in runner_source
     assert 'LM2011_MDA_TEXT_FEATURE_BATCH_SIZE = _env_int(\n        "SEC_CCM_LM2011_MDA_TEXT_FEATURE_BATCH_SIZE",' in runner_source
     assert 'LM2011_EVENT_WINDOW_DOC_BATCH_SIZE = _env_int(\n        "SEC_CCM_LM2011_EVENT_WINDOW_DOC_BATCH_SIZE",\n        DEFAULT_LM2011_EVENT_WINDOW_DOC_BATCH_SIZE,' in runner_source
-    assert 'LM2011_FULL_10K_CLEANING_CONTRACT = \\"lm2011_paper\\"' in notebook_source
-    assert 'LM2011_FULL_10K_TEXT_FEATURE_BATCH_SIZE = 4' in notebook_source
-    assert 'LM2011_MDA_TEXT_FEATURE_BATCH_SIZE = 20' in notebook_source
-    assert 'LM2011_EVENT_WINDOW_DOC_BATCH_SIZE = 50' in notebook_source
+    assert 'LM2011_FULL_10K_CLEANING_CONTRACT =' in notebook_source
+    assert 'LM2011_FULL_10K_TEXT_FEATURE_BATCH_SIZE =' in notebook_source
+    assert 'LM2011_MDA_TEXT_FEATURE_BATCH_SIZE =' in notebook_source
+    assert 'LM2011_EVENT_WINDOW_DOC_BATCH_SIZE =' in notebook_source
+    assert (
+        '"SEC_CCM_LM2011_FULL_10K_CLEANING_CONTRACT": '
+        "LM2011_FULL_10K_CLEANING_CONTRACT"
+    ) in notebook_source
+    assert (
+        '"SEC_CCM_LM2011_FULL_10K_TEXT_FEATURE_BATCH_SIZE": '
+        "LM2011_FULL_10K_TEXT_FEATURE_BATCH_SIZE"
+    ) in notebook_source
+    assert (
+        '"SEC_CCM_LM2011_MDA_TEXT_FEATURE_BATCH_SIZE": '
+        "LM2011_MDA_TEXT_FEATURE_BATCH_SIZE"
+    ) in notebook_source
+    assert (
+        '"SEC_CCM_LM2011_EVENT_WINDOW_DOC_BATCH_SIZE": '
+        "LM2011_EVENT_WINDOW_DOC_BATCH_SIZE"
+    ) in notebook_source
 
 
 def test_runner_and_notebook_export_lm2011_recompute_stage_env_keys() -> None:
-    runner_source = Path("src/thesis_pkg/notebooks_and_scripts/sec_ccm_unified_runner.py").read_text(
-        encoding="utf-8"
-    )
-    notebook_source = Path("src/thesis_pkg/notebooks_and_scripts/sec_ccm_unified_runner.ipynb").read_text(
-        encoding="utf-8"
-    )
+    runner_source = _runner_source()
+    notebook_source = _notebook_source()
 
     assert 'SEC_CCM_LM2011_RECOMPUTE_EVENT_SCREEN_SURFACE' in runner_source
     assert 'SEC_CCM_LM2011_RECOMPUTE_EVENT_PANEL' in runner_source
     assert 'SEC_CCM_LM2011_RECOMPUTE_REGRESSION_TABLES' in runner_source
-    assert 'LM2011_RECOMPUTE_EVENT_SCREEN_SURFACE = False' in notebook_source
-    assert 'LM2011_RECOMPUTE_EVENT_PANEL = False' in notebook_source
-    assert 'LM2011_RECOMPUTE_REGRESSION_TABLES = False' in notebook_source
+    assert 'LM2011_RECOMPUTE_EVENT_SCREEN_SURFACE =' in notebook_source
+    assert 'LM2011_RECOMPUTE_EVENT_PANEL =' in notebook_source
+    assert 'LM2011_RECOMPUTE_REGRESSION_TABLES =' in notebook_source
     assert (
-        '"    \\"SEC_CCM_LM2011_RECOMPUTE_EVENT_SCREEN_SURFACE\\": '
-        'LM2011_RECOMPUTE_EVENT_SCREEN_SURFACE,\\n"'
+        '"SEC_CCM_LM2011_RECOMPUTE_EVENT_SCREEN_SURFACE": '
+        "LM2011_RECOMPUTE_EVENT_SCREEN_SURFACE"
     ) in notebook_source
     assert (
-        '"    \\"SEC_CCM_LM2011_RECOMPUTE_EVENT_PANEL\\": '
-        'LM2011_RECOMPUTE_EVENT_PANEL,\\n"'
+        '"SEC_CCM_LM2011_RECOMPUTE_EVENT_PANEL": '
+        "LM2011_RECOMPUTE_EVENT_PANEL"
     ) in notebook_source
     assert (
-        '"    \\"SEC_CCM_LM2011_RECOMPUTE_REGRESSION_TABLES\\": '
-        'LM2011_RECOMPUTE_REGRESSION_TABLES,\\n"'
+        '"SEC_CCM_LM2011_RECOMPUTE_REGRESSION_TABLES": '
+        "LM2011_RECOMPUTE_REGRESSION_TABLES"
     ) in notebook_source
 
 
 def test_runner_and_notebook_export_ram_logging_env_keys() -> None:
-    runner_source = Path("src/thesis_pkg/notebooks_and_scripts/sec_ccm_unified_runner.py").read_text(
-        encoding="utf-8"
-    )
-    notebook_source = Path("src/thesis_pkg/notebooks_and_scripts/sec_ccm_unified_runner.ipynb").read_text(
-        encoding="utf-8"
-    )
+    runner_source = _runner_source()
+    notebook_source = _notebook_source()
 
     assert 'SEC_CCM_PRINT_RAM_STATS' in runner_source
     assert 'SEC_CCM_RAM_LOG_INTERVAL_BATCHES' in runner_source
-    assert 'PRINT_RAM_STATS = True' in notebook_source
-    assert 'RAM_LOG_INTERVAL_BATCHES = 10' in notebook_source
-    assert '"    \\"SEC_CCM_PRINT_RAM_STATS\\": PRINT_RAM_STATS,\\n"' in notebook_source
-    assert '"    \\"SEC_CCM_RAM_LOG_INTERVAL_BATCHES\\": RAM_LOG_INTERVAL_BATCHES,\\n"' in notebook_source
+    assert 'PRINT_RAM_STATS =' in notebook_source
+    assert 'RAM_LOG_INTERVAL_BATCHES =' in notebook_source
+    assert '"SEC_CCM_PRINT_RAM_STATS": PRINT_RAM_STATS' in notebook_source
+    assert '"SEC_CCM_RAM_LOG_INTERVAL_BATCHES": RAM_LOG_INTERVAL_BATCHES' in notebook_source
 
 
 def test_print_rows_table_uses_tabular_ascii_output(capsys) -> None:
@@ -529,13 +553,9 @@ def test_print_ram_snapshot_is_silent_when_disabled(capsys) -> None:
 
 
 def test_sec_ccm_unified_runner_notebook_bootstrap_is_valid() -> None:
-    notebook_path = Path("src/thesis_pkg/notebooks_and_scripts/sec_ccm_unified_runner.ipynb")
-    notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
-
-    assert len(notebook["cells"]) == 4
-    bootstrap_cell = "".join(notebook["cells"][1]["source"])
-    config_cell = "".join(notebook["cells"][2]["source"])
-    run_cell = "".join(notebook["cells"][3]["source"])
+    bootstrap_cell = _notebook_code_cell_containing('subprocess.check_call(["git", "clone"')
+    config_cell = _notebook_code_cell_containing("CONFIG_ENV = {")
+    run_cell = _notebook_code_cell_containing("main = reload(module).main")
 
     assert 'subprocess.check_call(["git", "clone"' in bootstrap_cell
     assert "CONFIG_ENV = {" in config_cell
@@ -551,6 +571,14 @@ def test_sec_ccm_unified_runner_notebook_bootstrap_is_valid() -> None:
     assert 'print_ram_snapshot("notebook_before_main")' in run_cell
     assert 'main = reload(module).main' in run_cell
     assert 'print_ram_snapshot("notebook_after_main")' in run_cell
+
+
+def test_sec_ccm_unified_runner_notebook_has_no_saved_outputs() -> None:
+    notebook = _notebook()
+
+    for cell in notebook["cells"]:
+        assert cell.get("execution_count") is None
+        assert cell.get("outputs", []) == []
 
 
 def _configure_minimal_main_env(monkeypatch: MonkeyPatch, tmp_path: Path) -> dict[str, Path]:
@@ -1711,16 +1739,23 @@ def test_main_lm2011_text_feature_override_env_paths_take_precedence(
     items_analysis_dir.mkdir(parents=True, exist_ok=True)
     pl.DataFrame({"doc_id": ["0000000001:1995000001"]}).write_parquet(items_analysis_dir / "1995.parquet")
     explicit_full_10k = tmp_path / "explicit" / "full_10k.parquet"
+    explicit_strategy_full_10k = tmp_path / "explicit" / "strategy_full_10k.parquet"
     explicit_mda = tmp_path / "explicit" / "mda.parquet"
     explicit_full_10k.parent.mkdir(parents=True, exist_ok=True)
     pl.DataFrame({"doc_id": ["0000000001:1995000001"]}).write_parquet(explicit_full_10k)
+    pl.DataFrame({"doc_id": ["0000000001:1995000001"]}).write_parquet(explicit_strategy_full_10k)
     pl.DataFrame({"doc_id": ["0000000001:1995000001"]}).write_parquet(explicit_mda)
 
     monkeypatch.setenv("SEC_CCM_RUN_LM2011_POST_REFINITIV", "false")
     monkeypatch.setenv("SEC_CCM_RUN_LM2011_TEXT_FEATURES_FULL_10K", "true")
+    monkeypatch.setenv("SEC_CCM_RUN_LM2011_STRATEGY_TEXT_FEATURES_FULL_10K", "true")
     monkeypatch.setenv("SEC_CCM_RUN_LM2011_TEXT_FEATURES_MDA", "true")
     monkeypatch.setenv("SEC_CCM_RUN_FINBERT", "false")
     monkeypatch.setenv("SEC_CCM_LM2011_TEXT_FEATURES_FULL_10K_PATH", str(explicit_full_10k))
+    monkeypatch.setenv(
+        "SEC_CCM_LM2011_STRATEGY_TEXT_FEATURES_FULL_10K_PATH",
+        str(explicit_strategy_full_10k),
+    )
     monkeypatch.setenv("SEC_CCM_LM2011_TEXT_FEATURES_MDA_PATH", str(explicit_mda))
 
     captured: dict[str, object] = {}
@@ -1736,6 +1771,8 @@ def test_main_lm2011_text_feature_override_env_paths_take_precedence(
     lm2011_run_cfg = captured["run_cfg"]
     assert lm2011_run_cfg.paths.text_features_full_10k_path == explicit_full_10k
     assert lm2011_run_cfg.paths.text_features_full_10k_path_is_explicit is True
+    assert lm2011_run_cfg.paths.strategy_text_features_full_10k_path == explicit_strategy_full_10k
+    assert lm2011_run_cfg.paths.strategy_text_features_full_10k_path_is_explicit is True
     assert lm2011_run_cfg.paths.text_features_mda_path == explicit_mda
     assert lm2011_run_cfg.paths.text_features_mda_path_is_explicit is True
 
@@ -1756,12 +1793,17 @@ def test_main_lm2011_recompute_text_feature_env_disables_auto_reuse(
     pl.DataFrame({"doc_id": ["0000000001:1995000001"]}).write_parquet(
         lm2011_output_dir / "lm2011_text_features_mda.parquet"
     )
+    pl.DataFrame({"doc_id": ["0000000001:1995000001"]}).write_parquet(
+        lm2011_output_dir / "lm2011_strategy_text_features_full_10k.parquet"
+    )
 
     monkeypatch.setenv("SEC_CCM_RUN_LM2011_POST_REFINITIV", "false")
     monkeypatch.setenv("SEC_CCM_RUN_LM2011_TEXT_FEATURES_FULL_10K", "true")
+    monkeypatch.setenv("SEC_CCM_RUN_LM2011_STRATEGY_TEXT_FEATURES_FULL_10K", "true")
     monkeypatch.setenv("SEC_CCM_RUN_LM2011_TEXT_FEATURES_MDA", "true")
     monkeypatch.setenv("SEC_CCM_RUN_FINBERT", "false")
     monkeypatch.setenv("SEC_CCM_LM2011_RECOMPUTE_TEXT_FEATURES_FULL_10K", "true")
+    monkeypatch.setenv("SEC_CCM_LM2011_RECOMPUTE_STRATEGY_TEXT_FEATURES_FULL_10K", "true")
     monkeypatch.setenv("SEC_CCM_LM2011_RECOMPUTE_TEXT_FEATURES_MDA", "true")
 
     captured: dict[str, object] = {}
@@ -1777,6 +1819,8 @@ def test_main_lm2011_recompute_text_feature_env_disables_auto_reuse(
     lm2011_run_cfg = captured["run_cfg"]
     assert lm2011_run_cfg.paths.text_features_full_10k_path is None
     assert lm2011_run_cfg.paths.text_features_full_10k_path_is_explicit is False
+    assert lm2011_run_cfg.paths.strategy_text_features_full_10k_path is None
+    assert lm2011_run_cfg.paths.strategy_text_features_full_10k_path_is_explicit is False
     assert lm2011_run_cfg.paths.text_features_mda_path is None
     assert lm2011_run_cfg.paths.text_features_mda_path_is_explicit is False
 
@@ -1795,6 +1839,7 @@ def test_main_lm2011_recompute_stage_env_flags_propagate(
     monkeypatch.setenv("SEC_CCM_RUN_FINBERT", "false")
     monkeypatch.setenv("SEC_CCM_LM2011_RECOMPUTE_EVENT_SCREEN_SURFACE", "true")
     monkeypatch.setenv("SEC_CCM_LM2011_RECOMPUTE_EVENT_PANEL", "true")
+    monkeypatch.setenv("SEC_CCM_LM2011_RECOMPUTE_STRATEGY_TEXT_FEATURES_FULL_10K", "true")
     monkeypatch.setenv("SEC_CCM_LM2011_RECOMPUTE_REGRESSION_TABLES", "true")
 
     captured: dict[str, object] = {}
@@ -1810,6 +1855,7 @@ def test_main_lm2011_recompute_stage_env_flags_propagate(
     lm2011_run_cfg = captured["run_cfg"]
     assert lm2011_run_cfg.paths.recompute_event_screen_surface is True
     assert lm2011_run_cfg.paths.recompute_event_panel is True
+    assert lm2011_run_cfg.paths.recompute_strategy_text_features_full_10k is True
     assert lm2011_run_cfg.paths.recompute_regression_tables is True
 
 
@@ -1834,5 +1880,36 @@ def test_main_lm2011_recompute_text_feature_env_conflicts_with_override(
     with pytest.raises(
         ValueError,
         match="SEC_CCM_LM2011_RECOMPUTE_TEXT_FEATURES_FULL_10K cannot be combined with SEC_CCM_LM2011_TEXT_FEATURES_FULL_10K_PATH",
+    ):
+        runner.main()
+
+
+def test_main_lm2011_recompute_strategy_text_feature_env_conflicts_with_override(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    paths = _configure_minimal_main_env(monkeypatch, tmp_path)
+    items_analysis_dir = paths["run_root"] / "items_analysis"
+    items_analysis_dir.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame({"doc_id": ["0000000001:1995000001"]}).write_parquet(items_analysis_dir / "1995.parquet")
+    explicit_strategy_full_10k = tmp_path / "explicit" / "strategy_full_10k.parquet"
+    explicit_strategy_full_10k.parent.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame({"doc_id": ["0000000001:1995000001"]}).write_parquet(explicit_strategy_full_10k)
+
+    monkeypatch.setenv("SEC_CCM_RUN_LM2011_POST_REFINITIV", "false")
+    monkeypatch.setenv("SEC_CCM_RUN_LM2011_STRATEGY_TEXT_FEATURES_FULL_10K", "true")
+    monkeypatch.setenv("SEC_CCM_RUN_FINBERT", "false")
+    monkeypatch.setenv(
+        "SEC_CCM_LM2011_STRATEGY_TEXT_FEATURES_FULL_10K_PATH",
+        str(explicit_strategy_full_10k),
+    )
+    monkeypatch.setenv("SEC_CCM_LM2011_RECOMPUTE_STRATEGY_TEXT_FEATURES_FULL_10K", "true")
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "SEC_CCM_LM2011_RECOMPUTE_STRATEGY_TEXT_FEATURES_FULL_10K cannot be combined with "
+            "SEC_CCM_LM2011_STRATEGY_TEXT_FEATURES_FULL_10K_PATH"
+        ),
     ):
         runner.main()

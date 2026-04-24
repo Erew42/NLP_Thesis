@@ -57,6 +57,7 @@ if str(SRC) not in sys.path:
 
 import polars as pl
 
+from thesis_pkg.benchmarking.manifest_contracts import stable_string_fingerprint
 from thesis_pkg.core.ccm.lm2011 import (
     build_annual_accounting_panel,
     build_lm2011_sample_backbone,
@@ -275,6 +276,7 @@ DEFAULT_LM2011_MDA_TEXT_FEATURE_BATCH_SIZE = DEFAULT_PRODUCTION_MDA_MICROBATCH_S
 DEFAULT_LM2011_TEXT_FEATURE_BATCH_SIZE = DEFAULT_LM2011_FULL_10K_TEXT_FEATURE_BATCH_SIZE
 DEFAULT_LM2011_EVENT_WINDOW_DOC_BATCH_SIZE = 50
 DEFAULT_RAM_LOG_INTERVAL_BATCHES = 10
+STRATEGY_TEXT_FEATURE_STAGE_NAME = "strategy_text_features_full_10k"
 
 STAGE_ARTIFACT_FILENAMES: dict[str, str] = {
     "sample_backbone": "lm2011_sample_backbone.parquet",
@@ -288,6 +290,7 @@ STAGE_ARTIFACT_FILENAMES: dict[str, str] = {
     "table_i_sample_creation": "lm2011_table_i_sample_creation.parquet",
     "table_i_sample_creation_1994_2024": "lm2011_table_i_sample_creation_1994_2024.parquet",
     "event_panel": "lm2011_event_panel.parquet",
+    STRATEGY_TEXT_FEATURE_STAGE_NAME: "lm2011_strategy_text_features_full_10k.parquet",
     "sue_panel": "lm2011_sue_panel.parquet",
     "return_regression_panel_full_10k": "lm2011_return_regression_panel_full_10k.parquet",
     "return_regression_panel_mda": "lm2011_return_regression_panel_mda.parquet",
@@ -328,6 +331,7 @@ LM2011_ALL_STAGE_NAMES: tuple[str, ...] = tuple(STAGE_ARTIFACT_FILENAMES)
 LM2011_OPTIONAL_STAGE_DEFAULTS_FALSE = frozenset(
     {
         "ff_factors_monthly_with_mom_normalized",
+        STRATEGY_TEXT_FEATURE_STAGE_NAME,
         "trading_strategy_monthly_returns",
         "table_ia_ii_results",
     }
@@ -379,6 +383,8 @@ class RunnerPaths:
     daily_panel_path: Path
     text_features_full_10k_path: Path | None
     text_features_full_10k_path_is_explicit: bool
+    strategy_text_features_full_10k_path: Path | None
+    strategy_text_features_full_10k_path_is_explicit: bool
     text_features_mda_path: Path | None
     text_features_mda_path_is_explicit: bool
     ccm_base_dir: Path
@@ -405,6 +411,7 @@ class RunnerPaths:
     full_10k_cleaning_contract: str
     full_10k_text_feature_batch_size: int
     mda_text_feature_batch_size: int
+    recompute_strategy_text_features_full_10k: bool
     recompute_event_screen_surface: bool
     recompute_event_panel: bool
     recompute_regression_tables: bool
@@ -447,6 +454,14 @@ TEXT_FEATURE_REUSE_SPECS: dict[str, _TextFeatureReuseSpec] = {
                 "table_ia_i_results_no_ownership",
             }
         ),
+    ),
+    STRATEGY_TEXT_FEATURE_STAGE_NAME: _TextFeatureReuseSpec(
+        stage_name=STRATEGY_TEXT_FEATURE_STAGE_NAME,
+        token_count_col="token_count_full_10k",
+        total_token_count_col="total_token_count_full_10k",
+        include_item_id=False,
+        include_cleaning_policy_id=False,
+        blocking_stage_names=frozenset({"trading_strategy_monthly_returns"}),
     ),
     "text_features_mda": _TextFeatureReuseSpec(
         stage_name="text_features_mda",
@@ -656,6 +671,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--strategy-text-features-full-10k-path",
+        type=Path,
+        default=None,
+        help=(
+            "Optional reusable LM2011 full-10-K text-features parquet for Table IA.II strategy sorts. "
+            "Its doc_id universe must exactly match the screened event panel."
+        ),
+    )
+    parser.add_argument(
         "--recompute-text-features-full-10k",
         action="store_true",
         help=(
@@ -669,6 +693,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help=(
             "Force recomputation of MD&A text features by ignoring any reusable "
             "lm2011_text_features_mda.parquet artifact."
+        ),
+    )
+    parser.add_argument(
+        "--recompute-strategy-text-features-full-10k",
+        action="store_true",
+        help=(
+            "Force recomputation of the screened event-panel full-10-K text features used by "
+            "the LM2011 Table IA.II trading strategy."
         ),
     )
     parser.add_argument(
@@ -1774,6 +1806,14 @@ def _resolve_paths(args: argparse.Namespace) -> RunnerPaths:
             "--recompute-text-features-mda cannot be combined with "
             "--text-features-mda-path"
         )
+    if (
+        args.recompute_strategy_text_features_full_10k
+        and args.strategy_text_features_full_10k_path is not None
+    ):
+        raise ValueError(
+            "--recompute-strategy-text-features-full-10k cannot be combined with "
+            "--strategy-text-features-full-10k-path"
+        )
     year_merged_dir = (
         Path(args.year_merged_dir).resolve()
         if args.year_merged_dir is not None
@@ -1830,6 +1870,24 @@ def _resolve_paths(args: argparse.Namespace) -> RunnerPaths:
             else (
                 auto_text_features_full_10k_path.resolve()
                 if auto_text_features_full_10k_path.exists()
+                else None
+            )
+        )
+    )
+    auto_strategy_text_features_full_10k_path = output_dir / STAGE_ARTIFACT_FILENAMES[STRATEGY_TEXT_FEATURE_STAGE_NAME]
+    strategy_text_features_full_10k_path_is_explicit = (
+        (args.strategy_text_features_full_10k_path is not None)
+        and not args.recompute_strategy_text_features_full_10k
+    )
+    strategy_text_features_full_10k_path = (
+        None
+        if args.recompute_strategy_text_features_full_10k
+        else (
+            Path(args.strategy_text_features_full_10k_path).resolve()
+            if args.strategy_text_features_full_10k_path is not None
+            else (
+                auto_strategy_text_features_full_10k_path.resolve()
+                if auto_strategy_text_features_full_10k_path.exists()
                 else None
             )
         )
@@ -1900,6 +1958,8 @@ def _resolve_paths(args: argparse.Namespace) -> RunnerPaths:
         daily_panel_path=daily_panel_path,
         text_features_full_10k_path=text_features_full_10k_path,
         text_features_full_10k_path_is_explicit=text_features_full_10k_path_is_explicit,
+        strategy_text_features_full_10k_path=strategy_text_features_full_10k_path,
+        strategy_text_features_full_10k_path_is_explicit=strategy_text_features_full_10k_path_is_explicit,
         text_features_mda_path=text_features_mda_path,
         text_features_mda_path_is_explicit=text_features_mda_path_is_explicit,
         ccm_base_dir=ccm_base_dir,
@@ -1953,6 +2013,7 @@ def _resolve_paths(args: argparse.Namespace) -> RunnerPaths:
         full_10k_cleaning_contract=str(args.full_10k_cleaning_contract),
         full_10k_text_feature_batch_size=full_10k_text_feature_batch_size,
         mda_text_feature_batch_size=mda_text_feature_batch_size,
+        recompute_strategy_text_features_full_10k=bool(args.recompute_strategy_text_features_full_10k),
         recompute_event_screen_surface=bool(args.recompute_event_screen_surface),
         recompute_event_panel=bool(args.recompute_event_panel),
         recompute_regression_tables=bool(args.recompute_regression_tables),
@@ -2042,6 +2103,60 @@ def _filter_to_sample_doc_ids_lf(lf: pl.LazyFrame, sample_backbone_lf: pl.LazyFr
         lf.with_columns(pl.col("doc_id").cast(pl.Utf8, strict=False).alias("doc_id"))
         .join(sample_doc_ids, on="doc_id", how="semi")
     )
+
+
+def _doc_id_universe_contract(lf: pl.LazyFrame, *, universe_label: str) -> dict[str, Any]:
+    doc_ids = (
+        lf.select(pl.col("doc_id").cast(pl.Utf8, strict=False).alias("doc_id"))
+        .drop_nulls(subset=["doc_id"])
+        .unique()
+        .sort("doc_id")
+        .collect()
+        .get_column("doc_id")
+        .to_list()
+    )
+    row_count = int(lf.select(pl.len()).collect().item())
+    return {
+        "universe_label": universe_label,
+        "row_count": row_count,
+        "unique_doc_count": len(doc_ids),
+        "doc_id_fingerprint": stable_string_fingerprint(doc_ids),
+    }
+
+
+def _strategy_text_feature_metadata(
+    *,
+    artifact_path: Path,
+    event_panel_lf: pl.LazyFrame,
+    cleaning_contract: str,
+    source_year_start: int,
+    source_year_end: int,
+) -> dict[str, Any]:
+    event_panel_contract = _doc_id_universe_contract(
+        event_panel_lf,
+        universe_label="screened_event_panel",
+    )
+    strategy_feature_contract = _doc_id_universe_contract(
+        pl.scan_parquet(artifact_path),
+        universe_label=STRATEGY_TEXT_FEATURE_STAGE_NAME,
+    )
+    if (
+        strategy_feature_contract["unique_doc_count"] != event_panel_contract["unique_doc_count"]
+        or strategy_feature_contract["doc_id_fingerprint"] != event_panel_contract["doc_id_fingerprint"]
+    ):
+        raise ValueError(
+            "LM2011 strategy text features must exactly match the screened event-panel doc_id universe: "
+            f"event_panel={event_panel_contract}, strategy_text_features={strategy_feature_contract}"
+        )
+    return {
+        "idf_scope": "screened_event_panel_doc_ids",
+        "portfolio_direction": "Q5_minus_Q1",
+        "full_10k_cleaning_contract": cleaning_contract,
+        "source_year_start": source_year_start,
+        "source_year_end": source_year_end,
+        "event_panel_doc_universe": event_panel_contract,
+        "strategy_text_feature_doc_universe": strategy_feature_contract,
+    }
 
 
 def _empty_extension_full_10k_token_counts_df() -> pl.DataFrame:
@@ -2722,6 +2837,7 @@ def _build_manifest(paths: RunnerPaths) -> dict[str, Any]:
             "text_feature_batch_size": paths.full_10k_text_feature_batch_size,
             "full_10k_text_feature_batch_size": paths.full_10k_text_feature_batch_size,
             "mda_text_feature_batch_size": paths.mda_text_feature_batch_size,
+            "recompute_strategy_text_features_full_10k": paths.recompute_strategy_text_features_full_10k,
             "recompute_event_screen_surface": paths.recompute_event_screen_surface,
             "recompute_event_panel": paths.recompute_event_panel,
             "recompute_regression_tables": paths.recompute_regression_tables,
@@ -2734,6 +2850,7 @@ def _build_manifest(paths: RunnerPaths) -> dict[str, Any]:
             "sample_backbone_path": _absolute_path_str(paths.sample_backbone_path),
             "daily_panel_path": _absolute_path_str(paths.daily_panel_path),
             "text_features_full_10k_path": _absolute_path_str(paths.text_features_full_10k_path),
+            "strategy_text_features_full_10k_path": _absolute_path_str(paths.strategy_text_features_full_10k_path),
             "text_features_mda_path": _absolute_path_str(paths.text_features_mda_path),
             "ccm_base_dir": _absolute_path_str(paths.ccm_base_dir),
             "matched_clean_path": _absolute_path_str(paths.matched_clean_path),
@@ -2877,7 +2994,7 @@ def _validate_text_feature_artifact_semantics(
         )
     current_value: object | None
     source_value: object | None
-    if spec.stage_name == "text_features_full_10k":
+    if spec.stage_name in {"text_features_full_10k", STRATEGY_TEXT_FEATURE_STAGE_NAME}:
         current_value = current_config.get("full_10k_cleaning_contract")
         source_value = source_config.get("full_10k_cleaning_contract")
         if source_value != current_value:
@@ -2918,6 +3035,7 @@ def _record_reused_stage_artifact(
     source_path: Path,
     extra_artifacts: dict[str, Path] | None = None,
     warnings: Sequence[str] | None = None,
+    metadata: Mapping[str, Any] | None = None,
 ) -> pl.LazyFrame:
     row_count = int(pl.scan_parquet(artifact_path).select(pl.len()).collect().item())
     completed_at_utc = _utc_timestamp()
@@ -2934,6 +3052,7 @@ def _record_reused_stage_artifact(
         },
         "source_path": _absolute_path_str(source_path),
         "warnings": list(warnings or []),
+        "metadata": dict(metadata or {}),
         "completed_at_utc": completed_at_utc,
     }
     print(
@@ -2960,6 +3079,7 @@ def _record_stage_success(
     source_path: Path | None = None,
     extra_artifacts: dict[str, Path] | None = None,
     warnings: Sequence[str] | None = None,
+    metadata: Mapping[str, Any] | None = None,
 ) -> None:
     status = "generated_empty" if row_count == 0 else "generated"
     completed_at_utc = _utc_timestamp()
@@ -2976,6 +3096,7 @@ def _record_stage_success(
         },
         "source_path": _absolute_path_str(source_path),
         "warnings": list(warnings or []),
+        "metadata": dict(metadata or {}),
         "completed_at_utc": completed_at_utc,
     }
     print({"stage": stage_name, "status": status, "row_count": row_count, "artifact_path": str(artifact_path)})
@@ -3034,6 +3155,7 @@ def _write_stage(
     source_path: Path | None = None,
     extra_artifacts: dict[str, Path] | None = None,
     warnings: Sequence[str] | None = None,
+    metadata: Mapping[str, Any] | None = None,
 ) -> pl.LazyFrame:
     artifact_path = _artifact_output_path(output_dir, stage_name)
     written_path, row_count = _write_frame_artifact(frame, artifact_path)
@@ -3046,6 +3168,7 @@ def _write_stage(
         source_path=source_path,
         extra_artifacts=extra_artifacts,
         warnings=warnings,
+        metadata=metadata,
     )
     if manifest_path is not None:
         _checkpoint_manifest(manifest, manifest_path)
@@ -3062,6 +3185,7 @@ def _record_existing_stage_artifact(
     source_path: Path | None = None,
     extra_artifacts: dict[str, Path] | None = None,
     warnings: Sequence[str] | None = None,
+    metadata: Mapping[str, Any] | None = None,
 ) -> pl.LazyFrame:
     row_count = int(pl.scan_parquet(artifact_path).select(pl.len()).collect().item())
     _record_stage_success(
@@ -3073,6 +3197,7 @@ def _record_existing_stage_artifact(
         source_path=source_path,
         extra_artifacts=extra_artifacts,
         warnings=warnings,
+        metadata=metadata,
     )
     if manifest_path is not None:
         _checkpoint_manifest(manifest, manifest_path)
@@ -3086,6 +3211,11 @@ def _text_feature_reuse_candidate(
 ) -> tuple[Path | None, bool]:
     if stage_name == "text_features_full_10k":
         return paths.text_features_full_10k_path, paths.text_features_full_10k_path_is_explicit
+    if stage_name == STRATEGY_TEXT_FEATURE_STAGE_NAME:
+        return (
+            paths.strategy_text_features_full_10k_path,
+            paths.strategy_text_features_full_10k_path_is_explicit,
+        )
     if stage_name == "text_features_mda":
         return paths.text_features_mda_path, paths.text_features_mda_path_is_explicit
     raise ValueError(f"Unsupported text-feature stage for reuse: {stage_name}")
@@ -3094,12 +3224,19 @@ def _text_feature_reuse_candidate(
 def _text_feature_reuse_override_hint(stage_name: str) -> str:
     if stage_name == "text_features_full_10k":
         return "--text-features-full-10k-path / SEC_CCM_LM2011_TEXT_FEATURES_FULL_10K_PATH"
+    if stage_name == STRATEGY_TEXT_FEATURE_STAGE_NAME:
+        return (
+            "--strategy-text-features-full-10k-path / "
+            "SEC_CCM_LM2011_STRATEGY_TEXT_FEATURES_FULL_10K_PATH"
+        )
     if stage_name == "text_features_mda":
         return "--text-features-mda-path / SEC_CCM_LM2011_TEXT_FEATURES_MDA_PATH"
     raise ValueError(f"Unsupported text-feature stage for reuse: {stage_name}")
 
 
 def _stage_recompute_enabled(paths: RunnerPaths, stage_name: str) -> bool:
+    if stage_name == STRATEGY_TEXT_FEATURE_STAGE_NAME:
+        return paths.recompute_strategy_text_features_full_10k
     if stage_name == "event_screen_surface":
         return paths.recompute_event_screen_surface
     if stage_name == "event_panel":
@@ -3107,6 +3244,19 @@ def _stage_recompute_enabled(paths: RunnerPaths, stage_name: str) -> bool:
     if stage_name in FINAL_REGRESSION_TABLE_STAGE_NAMES:
         return paths.recompute_regression_tables
     return False
+
+
+def _text_feature_stage_can_rebuild(
+    run_cfg: LM2011PostRefinitivRunConfig,
+    *,
+    spec: _TextFeatureReuseSpec,
+) -> bool:
+    if _stage_enabled(run_cfg, spec.stage_name):
+        return True
+    return (
+        spec.stage_name == STRATEGY_TEXT_FEATURE_STAGE_NAME
+        and _stage_enabled(run_cfg, "trading_strategy_monthly_returns")
+    )
 
 
 def _existing_reused_stage_extra_artifacts(
@@ -3171,7 +3321,7 @@ def _text_feature_stage_needs_preload(
     *,
     spec: _TextFeatureReuseSpec,
 ) -> bool:
-    return _stage_enabled(run_cfg, spec.stage_name) or bool(
+    return _text_feature_stage_can_rebuild(run_cfg, spec=spec) or bool(
         _enabled_text_feature_blocking_stages(run_cfg, spec=spec)
     )
 
@@ -3190,7 +3340,7 @@ def _resolve_reusable_text_feature_stage(
         paths,
         stage_name=spec.stage_name,
     )
-    can_rebuild = _stage_enabled(run_cfg, spec.stage_name)
+    can_rebuild = _text_feature_stage_can_rebuild(run_cfg, spec=spec)
     blocking_stages = _enabled_text_feature_blocking_stages(run_cfg, spec=spec)
     if candidate_path is None:
         if not can_rebuild and blocking_stages:
@@ -3263,6 +3413,109 @@ def _resolve_reusable_text_feature_stage(
     )
 
 
+def _resolve_reusable_strategy_text_feature_stage(
+    run_cfg: LM2011PostRefinitivRunConfig,
+    *,
+    manifest: dict[str, Any],
+    manifest_path: Path,
+    paths: RunnerPaths,
+    dictionary_inputs,
+    event_panel_lf: pl.LazyFrame,
+    preexisting_output_manifest: Mapping[str, Any] | None = None,
+) -> pl.LazyFrame | None:
+    spec = TEXT_FEATURE_REUSE_SPECS[STRATEGY_TEXT_FEATURE_STAGE_NAME]
+    candidate_path, is_explicit_override = _text_feature_reuse_candidate(
+        paths,
+        stage_name=spec.stage_name,
+    )
+    can_rebuild = _text_feature_stage_can_rebuild(run_cfg, spec=spec)
+    blocking_stages = _enabled_text_feature_blocking_stages(run_cfg, spec=spec)
+    if candidate_path is None:
+        if not can_rebuild and blocking_stages:
+            blocked = ", ".join(blocking_stages)
+            hint = _text_feature_reuse_override_hint(spec.stage_name)
+            raise RuntimeError(
+                f"LM2011 stages require {spec.stage_name}, but no compatible reusable artifact was available. "
+                f"Blocked stages: {blocked}. Enable {spec.stage_name} to rebuild it or provide {hint}."
+            )
+        return None
+
+    expected_schema = _expected_text_feature_schema(spec, dictionary_inputs=dictionary_inputs)
+    source_manifest_override = (
+        preexisting_output_manifest
+        if candidate_path.parent.resolve() == paths.output_dir.resolve()
+        else None
+    )
+    try:
+        _validate_text_feature_artifact_schema(
+            candidate_path,
+            stage_name=spec.stage_name,
+            expected_schema=expected_schema,
+        )
+        warnings = _validate_text_feature_artifact_semantics(
+            candidate_path,
+            spec=spec,
+            current_config=manifest["config"],
+            current_dictionary_inputs_manifest=manifest.get("dictionary_inputs"),
+            is_explicit_override=is_explicit_override,
+            source_manifest_override=source_manifest_override,
+        )
+        metadata = _strategy_text_feature_metadata(
+            artifact_path=candidate_path,
+            event_panel_lf=event_panel_lf,
+            cleaning_contract=paths.full_10k_cleaning_contract,
+            source_year_start=1994,
+            source_year_end=2008,
+        )
+    except Exception as exc:
+        if is_explicit_override:
+            raise ValueError(
+                f"Explicit reusable artifact for {spec.stage_name} is incompatible: {candidate_path}. {exc}"
+            ) from exc
+        if can_rebuild:
+            print(
+                {
+                    "stage": spec.stage_name,
+                    "status": "ignoring_incompatible_existing_artifact",
+                    "artifact_path": str(candidate_path),
+                    "reason": str(exc),
+                }
+            )
+            return None
+        if blocking_stages:
+            blocked = ", ".join(blocking_stages)
+            hint = _text_feature_reuse_override_hint(spec.stage_name)
+            raise RuntimeError(
+                f"LM2011 stages require {spec.stage_name}, but the canonical reusable artifact at "
+                f"{candidate_path} is incompatible. Blocked stages: {blocked}. Enable {spec.stage_name} "
+                f"to rebuild it or provide {hint}. Root cause: {exc}"
+            ) from exc
+        return None
+
+    canonical_artifact_path = _artifact_output_path(paths.output_dir, spec.stage_name)
+    load_path = canonical_artifact_path
+    if candidate_path.resolve() != canonical_artifact_path.resolve():
+        _copy_with_verify(candidate_path, canonical_artifact_path, validate="quick")
+        metadata = _strategy_text_feature_metadata(
+            artifact_path=canonical_artifact_path,
+            event_panel_lf=event_panel_lf,
+            cleaning_contract=paths.full_10k_cleaning_contract,
+            source_year_start=1994,
+            source_year_end=2008,
+        )
+    else:
+        load_path = candidate_path
+    return _record_reused_stage_artifact(
+        manifest,
+        manifest_path=manifest_path,
+        stage_name=spec.stage_name,
+        artifact_path=load_path,
+        source_path=candidate_path,
+        warnings=warnings,
+        metadata=metadata,
+    )
+
+
 def _write_streaming_text_feature_stage(
     manifest: dict[str, Any],
     *,
@@ -3271,6 +3524,7 @@ def _write_streaming_text_feature_stage(
     stage_name: str,
     writer: Callable[[], int],
     warnings: Sequence[str] | None = None,
+    metadata_factory: Callable[[Path], Mapping[str, Any]] | None = None,
     print_ram_stats: bool = False,
 ) -> pl.LazyFrame:
     artifact_path = _artifact_output_path(output_dir, stage_name)
@@ -3281,12 +3535,14 @@ def _write_streaming_text_feature_stage(
         _print_ram_snapshot(f"{stage_name}_failed", enabled=print_ram_stats)
         raise
     _print_ram_snapshot(f"{stage_name}_end", enabled=print_ram_stats)
+    metadata = dict(metadata_factory(artifact_path)) if metadata_factory is not None else {}
     return _record_existing_stage_artifact(
         manifest,
         manifest_path=manifest_path,
         stage_name=stage_name,
         artifact_path=artifact_path,
         warnings=warnings,
+        metadata=metadata,
     )
 
 
@@ -3459,6 +3715,7 @@ def run_lm2011_post_refinitiv_pipeline(run_cfg: LM2011PostRefinitivRunConfig) ->
         ff_factors_daily_lf: pl.LazyFrame | None = None
         ff_factors_monthly_with_mom_lf: pl.LazyFrame | None = None
         text_features_full_10k_lf: pl.LazyFrame | None = None
+        strategy_text_features_full_10k_lf: pl.LazyFrame | None = None
         text_features_mda_lf: pl.LazyFrame | None = None
         event_screen_surface_lf: pl.LazyFrame | None = None
         table_i_sample_creation_lf: pl.LazyFrame | None = None
@@ -4034,6 +4291,76 @@ def run_lm2011_post_refinitiv_pipeline(run_cfg: LM2011PostRefinitivRunConfig) ->
             event_screen_surface_lf = None
         _gc_cleanup("event_panel_post", enabled=paths.print_ram_stats)
 
+        strategy_feature_needed = _stage_enabled(run_cfg, STRATEGY_TEXT_FEATURE_STAGE_NAME) or (
+            _stage_enabled(run_cfg, "trading_strategy_monthly_returns")
+            and not _artifact_output_path(paths.output_dir, "trading_strategy_monthly_returns").exists()
+        )
+        current_stage_name = STRATEGY_TEXT_FEATURE_STAGE_NAME
+        if not strategy_feature_needed:
+            pass
+        elif event_panel_lf is None:
+            _skip_or_raise_stage(
+                run_cfg,
+                manifest,
+                manifest_path,
+                stage_name=STRATEGY_TEXT_FEATURE_STAGE_NAME,
+                reason=SKIPPED_MISSING_OPTIONAL_INPUT,
+                detail="event_panel",
+            )
+        elif (
+            strategy_text_features_full_10k_lf := _resolve_reusable_strategy_text_feature_stage(
+                run_cfg,
+                manifest=manifest,
+                manifest_path=manifest_path,
+                paths=paths,
+                dictionary_inputs=dictionary_inputs,
+                event_panel_lf=event_panel_lf,
+                preexisting_output_manifest=preexisting_output_manifest,
+            )
+        ) is not None:
+            pass
+        elif year_merged_lf is not None:
+            strategy_year_merged_lf = _filter_to_sample_doc_ids_lf(year_merged_lf, event_panel_lf)
+            strategy_text_features_full_10k_lf = _write_streaming_text_feature_stage(
+                manifest,
+                manifest_path=manifest_path,
+                output_dir=paths.output_dir,
+                stage_name=STRATEGY_TEXT_FEATURE_STAGE_NAME,
+                writer=lambda: write_lm2011_text_features_full_10k_parquet(
+                    strategy_year_merged_lf,
+                    output_path=_artifact_output_path(paths.output_dir, STRATEGY_TEXT_FEATURE_STAGE_NAME),
+                    dictionary_lists=dictionary_lists,
+                    harvard_negative_word_list=harvard_negative_word_list,
+                    master_dictionary_words=master_dictionary_words,
+                    cleaning_contract=paths.full_10k_cleaning_contract,
+                    batch_size=paths.full_10k_text_feature_batch_size,
+                    temp_root=paths.local_work_root / STRATEGY_TEXT_FEATURE_STAGE_NAME,
+                    progress_callback=_make_text_feature_progress_logger(
+                        STRATEGY_TEXT_FEATURE_STAGE_NAME,
+                        print_ram_stats=paths.print_ram_stats,
+                        ram_log_interval_batches=paths.ram_log_interval_batches,
+                    ),
+                ),
+                metadata_factory=lambda artifact_path: _strategy_text_feature_metadata(
+                    artifact_path=artifact_path,
+                    event_panel_lf=event_panel_lf,
+                    cleaning_contract=paths.full_10k_cleaning_contract,
+                    source_year_start=1994,
+                    source_year_end=2008,
+                ),
+                print_ram_stats=paths.print_ram_stats,
+            )
+            _gc_cleanup(f"{STRATEGY_TEXT_FEATURE_STAGE_NAME}_post", enabled=paths.print_ram_stats)
+        else:
+            _skip_or_raise_stage(
+                run_cfg,
+                manifest,
+                manifest_path,
+                stage_name=STRATEGY_TEXT_FEATURE_STAGE_NAME,
+                reason=SKIPPED_MISSING_OPTIONAL_INPUT,
+                detail="year_merged",
+            )
+
         current_stage_name = "sue_panel"
         if _stage_disabled(run_cfg, manifest, manifest_path, "sue_panel"):
             pass
@@ -4355,7 +4682,7 @@ def run_lm2011_post_refinitiv_pipeline(run_cfg: LM2011PostRefinitivRunConfig) ->
             paths.monthly_stock_path is not None
             and paths.monthly_stock_path.exists()
             and event_panel_lf is not None
-            and text_features_full_10k_lf is not None
+            and strategy_text_features_full_10k_lf is not None
         ):
             trading_strategy_monthly_returns_lf = _write_stage(
                 manifest,
@@ -4364,9 +4691,10 @@ def run_lm2011_post_refinitiv_pipeline(run_cfg: LM2011PostRefinitivRunConfig) ->
                 stage_name="trading_strategy_monthly_returns",
                 frame=build_lm2011_trading_strategy_monthly_returns_from_text_features(
                     event_panel_lf,
-                    text_features_full_10k_lf,
+                    strategy_text_features_full_10k_lf,
                     pl.scan_parquet(paths.monthly_stock_path),
                 ),
+                metadata={"portfolio_direction": "Q5_minus_Q1"},
             )
         else:
             _skip_or_raise_stage(
@@ -4379,8 +4707,10 @@ def run_lm2011_post_refinitiv_pipeline(run_cfg: LM2011PostRefinitivRunConfig) ->
                     {
                         "monthly_stock_path": paths.monthly_stock_path,
                         "event_panel": Path(manifest["artifacts"]["event_panel"]) if "event_panel" in manifest["artifacts"] else None,
-                        "text_features_full_10k": Path(manifest["artifacts"]["text_features_full_10k"])
-                        if "text_features_full_10k" in manifest["artifacts"]
+                        STRATEGY_TEXT_FEATURE_STAGE_NAME: Path(
+                            manifest["artifacts"][STRATEGY_TEXT_FEATURE_STAGE_NAME]
+                        )
+                        if STRATEGY_TEXT_FEATURE_STAGE_NAME in manifest["artifacts"]
                         else None,
                     }
                 ),
@@ -4401,18 +4731,6 @@ def run_lm2011_post_refinitiv_pipeline(run_cfg: LM2011PostRefinitivRunConfig) ->
             pass
         else:
             monthly_returns_for_ia_ii_lf = trading_strategy_monthly_returns_lf
-            if (
-                monthly_returns_for_ia_ii_lf is None
-                and paths.monthly_stock_path is not None
-                and paths.monthly_stock_path.exists()
-                and event_panel_lf is not None
-                and text_features_full_10k_lf is not None
-            ):
-                monthly_returns_for_ia_ii_lf = build_lm2011_trading_strategy_monthly_returns_from_text_features(
-                    event_panel_lf,
-                    text_features_full_10k_lf,
-                    pl.scan_parquet(paths.monthly_stock_path),
-                )
             if monthly_returns_for_ia_ii_lf is not None and ff_factors_monthly_with_mom_lf is not None:
                 _write_stage(
                     manifest,
@@ -4424,6 +4742,7 @@ def run_lm2011_post_refinitiv_pipeline(run_cfg: LM2011PostRefinitivRunConfig) ->
                         ff_factors_monthly_with_mom_lf,
                     ),
                     empty_reason=EMPTY_TABLE_REASON,
+                    metadata={"portfolio_direction": "Q5_minus_Q1"},
                 )
             else:
                 _skip_or_raise_stage(
@@ -4442,9 +4761,6 @@ def run_lm2011_post_refinitiv_pipeline(run_cfg: LM2011PostRefinitivRunConfig) ->
                             else None,
                             "event_panel": Path(manifest["artifacts"]["event_panel"])
                             if "event_panel" in manifest["artifacts"]
-                            else None,
-                            "text_features_full_10k": Path(manifest["artifacts"]["text_features_full_10k"])
-                            if "text_features_full_10k" in manifest["artifacts"]
                             else None,
                             "trading_strategy_monthly_returns": Path(
                                 manifest["artifacts"]["trading_strategy_monthly_returns"]

@@ -2336,6 +2336,21 @@ def build_lm2011_trading_strategy_ff4_summary(
     )
     if monthly_returns_df.height == 0:
         return _empty_trading_strategy_ff4_summary_df().lazy()
+    monthly_return_duplicates = (
+        monthly_returns_df.group_by("portfolio_month", "sort_signal_name")
+        .len()
+        .filter(pl.col("len") > 1)
+    )
+    if monthly_return_duplicates.height > 0:
+        duplicate_examples = (
+            monthly_return_duplicates.select("portfolio_month", "sort_signal_name")
+            .head(10)
+            .to_dicts()
+        )
+        raise ValueError(
+            "trading_strategy_monthly_returns contains duplicate portfolio_month/sort_signal_name keys; "
+            f"examples={duplicate_examples}"
+        )
     monthly_returns_df = _with_month_join_keys(monthly_returns_df)
 
     factors_df = _with_month_join_keys(

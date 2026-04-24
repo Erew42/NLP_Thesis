@@ -1527,8 +1527,10 @@ def test_parse_args_uses_memory_hardened_defaults() -> None:
     assert args.mda_text_feature_batch_size is None
     assert args.text_feature_batch_size is None
     assert args.text_features_full_10k_path is None
+    assert args.strategy_text_features_full_10k_path is None
     assert args.text_features_mda_path is None
     assert args.recompute_text_features_full_10k is False
+    assert args.recompute_strategy_text_features_full_10k is False
     assert args.recompute_text_features_mda is False
     assert args.recompute_event_screen_surface is False
     assert args.recompute_event_panel is False
@@ -1579,6 +1581,7 @@ def test_resolve_paths_threads_recompute_flags(tmp_path: Path) -> None:
                 str(output_dir),
                 "--recompute-event-screen-surface",
                 "--recompute-event-panel",
+                "--recompute-strategy-text-features-full-10k",
                 "--recompute-regression-tables",
             ]
         )
@@ -1586,6 +1589,7 @@ def test_resolve_paths_threads_recompute_flags(tmp_path: Path) -> None:
 
     assert paths.recompute_event_screen_surface is True
     assert paths.recompute_event_panel is True
+    assert paths.recompute_strategy_text_features_full_10k is True
     assert paths.recompute_regression_tables is True
 
 
@@ -1711,11 +1715,17 @@ def test_resolve_paths_auto_detects_canonical_text_feature_artifacts(tmp_path: P
 def test_resolve_paths_explicit_text_feature_artifact_paths_take_precedence(tmp_path: Path) -> None:
     sample_root, upstream_run_root, additional_data_dir, output_dir = _build_temp_layout(tmp_path)
     explicit_full_10k = tmp_path / "explicit" / "full_10k.parquet"
+    explicit_strategy_full_10k = tmp_path / "explicit" / "strategy_full_10k.parquet"
     explicit_mda = tmp_path / "explicit" / "mda.parquet"
     _write_valid_text_feature_artifact(
         explicit_full_10k,
         additional_data_dir=additional_data_dir,
         stage_name="text_features_full_10k",
+    )
+    _write_valid_text_feature_artifact(
+        explicit_strategy_full_10k,
+        additional_data_dir=additional_data_dir,
+        stage_name=runner.STRATEGY_TEXT_FEATURE_STAGE_NAME,
     )
     _write_valid_text_feature_artifact(
         explicit_mda,
@@ -1741,6 +1751,8 @@ def test_resolve_paths_explicit_text_feature_artifact_paths_take_precedence(tmp_
                 str(output_dir),
                 "--text-features-full-10k-path",
                 str(explicit_full_10k),
+                "--strategy-text-features-full-10k-path",
+                str(explicit_strategy_full_10k),
                 "--text-features-mda-path",
                 str(explicit_mda),
             ]
@@ -1749,6 +1761,8 @@ def test_resolve_paths_explicit_text_feature_artifact_paths_take_precedence(tmp_
 
     assert paths.text_features_full_10k_path == explicit_full_10k.resolve()
     assert paths.text_features_full_10k_path_is_explicit is True
+    assert paths.strategy_text_features_full_10k_path == explicit_strategy_full_10k.resolve()
+    assert paths.strategy_text_features_full_10k_path_is_explicit is True
     assert paths.text_features_mda_path == explicit_mda.resolve()
     assert paths.text_features_mda_path_is_explicit is True
 
@@ -1765,6 +1779,11 @@ def test_resolve_paths_recompute_text_feature_flags_disable_auto_reuse(tmp_path:
         additional_data_dir=additional_data_dir,
         stage_name="text_features_mda",
     )
+    _write_valid_text_feature_artifact(
+        output_dir / runner.STAGE_ARTIFACT_FILENAMES[runner.STRATEGY_TEXT_FEATURE_STAGE_NAME],
+        additional_data_dir=additional_data_dir,
+        stage_name=runner.STRATEGY_TEXT_FEATURE_STAGE_NAME,
+    )
 
     paths = runner._resolve_paths(
         runner.parse_args(
@@ -1778,6 +1797,7 @@ def test_resolve_paths_recompute_text_feature_flags_disable_auto_reuse(tmp_path:
                 "--output-dir",
                 str(output_dir),
                 "--recompute-text-features-full-10k",
+                "--recompute-strategy-text-features-full-10k",
                 "--recompute-text-features-mda",
             ]
         )
@@ -1785,6 +1805,8 @@ def test_resolve_paths_recompute_text_feature_flags_disable_auto_reuse(tmp_path:
 
     assert paths.text_features_full_10k_path is None
     assert paths.text_features_full_10k_path_is_explicit is False
+    assert paths.strategy_text_features_full_10k_path is None
+    assert paths.strategy_text_features_full_10k_path_is_explicit is False
     assert paths.text_features_mda_path is None
     assert paths.text_features_mda_path_is_explicit is False
 
@@ -1792,11 +1814,17 @@ def test_resolve_paths_recompute_text_feature_flags_disable_auto_reuse(tmp_path:
 def test_resolve_paths_recompute_text_feature_flags_conflict_with_explicit_paths(tmp_path: Path) -> None:
     sample_root, upstream_run_root, additional_data_dir, output_dir = _build_temp_layout(tmp_path)
     explicit_full_10k = tmp_path / "explicit" / "full_10k.parquet"
+    explicit_strategy_full_10k = tmp_path / "explicit" / "strategy_full_10k.parquet"
     explicit_mda = tmp_path / "explicit" / "mda.parquet"
     _write_valid_text_feature_artifact(
         explicit_full_10k,
         additional_data_dir=additional_data_dir,
         stage_name="text_features_full_10k",
+    )
+    _write_valid_text_feature_artifact(
+        explicit_strategy_full_10k,
+        additional_data_dir=additional_data_dir,
+        stage_name=runner.STRATEGY_TEXT_FEATURE_STAGE_NAME,
     )
     _write_valid_text_feature_artifact(
         explicit_mda,
@@ -1822,6 +1850,31 @@ def test_resolve_paths_recompute_text_feature_flags_conflict_with_explicit_paths
                     "--text-features-full-10k-path",
                     str(explicit_full_10k),
                     "--recompute-text-features-full-10k",
+                ]
+            )
+        )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "--recompute-strategy-text-features-full-10k cannot be combined with "
+            "--strategy-text-features-full-10k-path"
+        ),
+    ):
+        runner._resolve_paths(
+            runner.parse_args(
+                [
+                    "--sample-root",
+                    str(sample_root),
+                    "--upstream-run-root",
+                    str(upstream_run_root),
+                    "--additional-data-dir",
+                    str(additional_data_dir),
+                    "--output-dir",
+                    str(output_dir),
+                    "--strategy-text-features-full-10k-path",
+                    str(explicit_strategy_full_10k),
+                    "--recompute-strategy-text-features-full-10k",
                 ]
             )
         )
@@ -2314,6 +2367,100 @@ def test_pipeline_reuses_trading_strategy_artifact_and_builds_table_ia_ii_from_m
     assert manifest["stages"]["trading_strategy_monthly_returns"]["status"] == runner.STAGE_STATUS_REUSED_EXISTING_ARTIFACT
     assert manifest["stages"]["table_ia_ii_results"]["status"] == "generated_empty"
     assert manifest["stages"]["table_ia_ii_results"]["reason"] == runner.EMPTY_TABLE_REASON
+
+
+def test_pipeline_builds_strategy_features_from_event_panel_universe_for_monthly_returns(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sample_root, upstream_run_root, additional_data_dir, output_dir = _build_temp_layout(tmp_path)
+    _write_parquet(
+        sample_root / "year_merged" / "1995.parquet",
+        pl.DataFrame(
+            {
+                "doc_id": ["d1", "backbone_only"],
+                "cik_10": ["0000000001", "0000000002"],
+                "accession_nodash": ["000000000100000001", "000000000200000001"],
+                "file_date_filename": [dt.date(1995, 1, 1), dt.date(1995, 1, 2)],
+                "document_type_filename": ["10-K", "10-K"],
+                "full_text": ["token harvard", "stale_neg stale_neg"],
+            }
+        ),
+    )
+    _write_parquet(
+        output_dir / runner.STAGE_ARTIFACT_FILENAMES["event_panel"],
+        pl.DataFrame(
+            {
+                "doc_id": ["d1"],
+                "filing_date": [dt.date(1995, 1, 1)],
+                "KYPERMNO": [1],
+            }
+        ),
+    )
+
+    captured: dict[str, object] = {}
+
+    def _capture_monthly_returns(
+        event_panel_lf: pl.LazyFrame,
+        full_10k_text_features_lf: pl.LazyFrame,
+        *_: object,
+        **__: object,
+    ) -> pl.LazyFrame:
+        captured["event_panel_doc_ids"] = event_panel_lf.select("doc_id").collect().get_column("doc_id").to_list()
+        captured["feature_doc_ids"] = (
+            full_10k_text_features_lf.select("doc_id").collect().get_column("doc_id").to_list()
+        )
+        return pl.DataFrame(
+            {
+                "portfolio_month": [dt.date(1997, 7, 31)],
+                "sort_signal_name": ["fin_neg_prop"],
+                "long_short_return": [0.01],
+            }
+        ).lazy()
+
+    monkeypatch.setattr(
+        runner,
+        "build_lm2011_trading_strategy_monthly_returns_from_text_features",
+        _capture_monthly_returns,
+    )
+    monkeypatch.setattr(
+        runner,
+        "build_lm2011_table_ia_ii_results_from_monthly_returns",
+        lambda *_, **__: _empty_quarterly_results_df(),
+    )
+
+    run_cfg = runner.build_lm2011_post_refinitiv_run_config(
+        runner.parse_args(
+            [
+                "--sample-root",
+                str(sample_root),
+                "--upstream-run-root",
+                str(upstream_run_root),
+                "--additional-data-dir",
+                str(additional_data_dir),
+                "--output-dir",
+                str(output_dir),
+                "--full-10k-text-feature-batch-size",
+                "1",
+            ]
+        ),
+        enabled_stages=(
+            "event_panel",
+            "ff_factors_monthly_with_mom_normalized",
+            "trading_strategy_monthly_returns",
+            "table_ia_ii_results",
+        ),
+    )
+
+    assert runner.run_lm2011_post_refinitiv_pipeline(run_cfg) == 0
+    assert captured["event_panel_doc_ids"] == ["d1"]
+    assert captured["feature_doc_ids"] == ["d1"]
+
+    manifest = json.loads((output_dir / runner.MANIFEST_FILENAME).read_text(encoding="utf-8"))
+    metadata = manifest["stages"][runner.STRATEGY_TEXT_FEATURE_STAGE_NAME]["metadata"]
+    assert metadata["idf_scope"] == "screened_event_panel_doc_ids"
+    assert metadata["event_panel_doc_universe"]["unique_doc_count"] == 1
+    assert metadata["strategy_text_feature_doc_universe"]["unique_doc_count"] == 1
 
 
 def test_pipeline_reuses_existing_no_ownership_regression_artifacts_in_output_dir(
@@ -3046,14 +3193,20 @@ def test_main_writes_expected_artifacts_and_manifest_for_stubbed_run(
     captured: dict[str, object] = {}
 
     def _capture_text_features_full_10k(*_: object, **kwargs: object) -> int:
-        captured["text_features_full_10k_kwargs"] = kwargs
+        output_path = Path(kwargs["output_path"])
+        capture_key = (
+            "strategy_text_features_full_10k_kwargs"
+            if output_path.name == runner.STAGE_ARTIFACT_FILENAMES[runner.STRATEGY_TEXT_FEATURE_STAGE_NAME]
+            else "text_features_full_10k_kwargs"
+        )
+        captured[capture_key] = kwargs
         pl.DataFrame(
             {
                 "doc_id": ["d1"],
                 "token_count_full_10k": [2500],
                 "total_token_count_full_10k": [2500],
             }
-        ).write_parquet(Path(kwargs["output_path"]))
+        ).write_parquet(output_path)
         return 1
 
     def _capture_text_features_mda(*_: object, **kwargs: object) -> int:
@@ -3218,6 +3371,7 @@ def test_main_writes_expected_artifacts_and_manifest_for_stubbed_run(
     assert (output_dir / "lm2011_table_i_sample_creation_1994_2024.csv").exists()
     assert (output_dir / "lm2011_table_i_sample_creation_1994_2024.md").exists()
     assert (output_dir / "lm2011_event_panel.parquet").exists()
+    assert (output_dir / runner.STAGE_ARTIFACT_FILENAMES[runner.STRATEGY_TEXT_FEATURE_STAGE_NAME]).exists()
     assert (output_dir / "lm2011_table_iv_results.parquet").exists()
     assert (output_dir / "lm2011_ff_factors_monthly_with_mom_normalized.parquet").exists()
     assert "1994-2024" in (output_dir / "lm2011_table_i_sample_creation_1994_2024.md").read_text(encoding="utf-8")
@@ -3272,6 +3426,15 @@ def test_main_writes_expected_artifacts_and_manifest_for_stubbed_run(
     assert manifest["stages"]["sample_backbone"]["status"] == "generated"
     assert manifest["stages"]["sample_backbone"]["source_path"] == str(prebuilt_backbone.resolve())
     assert manifest["stages"]["event_screen_surface"]["status"] == "generated"
+    assert manifest["stages"][runner.STRATEGY_TEXT_FEATURE_STAGE_NAME]["status"] == "generated"
+    assert (
+        manifest["stages"][runner.STRATEGY_TEXT_FEATURE_STAGE_NAME]["metadata"]["idf_scope"]
+        == "screened_event_panel_doc_ids"
+    )
+    assert (
+        manifest["stages"][runner.STRATEGY_TEXT_FEATURE_STAGE_NAME]["metadata"]["portfolio_direction"]
+        == "Q5_minus_Q1"
+    )
     assert manifest["stages"]["table_i_sample_creation"]["status"] == "generated"
     assert set(manifest["stages"]["table_i_sample_creation"]["extra_artifacts"]) == {"csv", "markdown"}
     assert manifest["stages"]["table_i_sample_creation"]["warnings"] == [
@@ -3294,6 +3457,12 @@ def test_main_writes_expected_artifacts_and_manifest_for_stubbed_run(
     assert captured["text_features_full_10k_kwargs"]["temp_root"] == local_work_root.resolve() / "text_features_full_10k"
     assert callable(captured["text_features_full_10k_kwargs"]["progress_callback"])
     assert captured["text_features_full_10k_kwargs"]["master_dictionary_words"] == ("TOKEN", "HARVARD", "RECOGNIZED")
+    assert captured["strategy_text_features_full_10k_kwargs"]["cleaning_contract"] == "lm2011_paper"
+    assert captured["strategy_text_features_full_10k_kwargs"]["batch_size"] == 4
+    assert captured["strategy_text_features_full_10k_kwargs"]["temp_root"] == (
+        local_work_root.resolve() / runner.STRATEGY_TEXT_FEATURE_STAGE_NAME
+    )
+    assert callable(captured["strategy_text_features_full_10k_kwargs"]["progress_callback"])
     assert captured["text_features_mda_kwargs"]["batch_size"] == 20
     assert captured["text_features_mda_kwargs"]["temp_root"] == local_work_root.resolve() / "text_features_mda"
     assert callable(captured["text_features_mda_kwargs"]["progress_callback"])
@@ -3750,9 +3919,11 @@ def test_notebook_wrapper_honors_unified_env_contract_and_stage_semantics(
     custom_daily_panel = tmp_path / "overrides" / "daily_panel.parquet"
     custom_monthly_stock = tmp_path / "overrides" / "monthly_stock.parquet"
     custom_ff_monthly_with_mom = tmp_path / "overrides" / "ff_monthly_with_mom.parquet"
+    custom_strategy_text_features = tmp_path / "overrides" / "strategy_text_features.parquet"
     _write_parquet(custom_daily_panel)
     _write_parquet(custom_monthly_stock)
     _write_parquet(custom_ff_monthly_with_mom)
+    _write_parquet(custom_strategy_text_features)
 
     notebook_output_dir = tmp_path / "notebook_output"
     local_work_root = tmp_path / "local_work"
@@ -3776,6 +3947,10 @@ def test_notebook_wrapper_honors_unified_env_contract_and_stage_semantics(
     monkeypatch.setenv("SEC_CCM_LOCAL_WORK", str(local_work_root))
     monkeypatch.setenv("SEC_CCM_LM2011_DAILY_PANEL_PATH", str(custom_daily_panel))
     monkeypatch.setenv("SEC_CCM_LM2011_MONTHLY_STOCK_PATH", str(custom_monthly_stock))
+    monkeypatch.setenv(
+        "SEC_CCM_LM2011_STRATEGY_TEXT_FEATURES_FULL_10K_PATH",
+        str(custom_strategy_text_features),
+    )
     monkeypatch.setenv(
         "SEC_CCM_LM2011_FF_MONTHLY_WITH_MOM_PATH",
         str(custom_ff_monthly_with_mom),
@@ -3817,6 +3992,7 @@ def test_notebook_wrapper_honors_unified_env_contract_and_stage_semantics(
     assert namespace["CCM_BASE_DIR"] == (sample_root / "ccm_parquet_data").resolve()
     assert namespace["DAILY_PANEL_PATH"] == custom_daily_panel.resolve()
     assert namespace["MONTHLY_STOCK_PATH"] == custom_monthly_stock.resolve()
+    assert namespace["LM2011_STRATEGY_TEXT_FEATURES_FULL_10K_PATH"] == custom_strategy_text_features.resolve()
     assert namespace["FF_MONTHLY_WITH_MOM_PATH"] == custom_ff_monthly_with_mom.resolve()
     assert namespace["OUTPUT_DIR"] == notebook_output_dir.resolve()
     assert namespace["LOCAL_WORK_ROOT"] == (local_work_root / "lm2011_post_refinitiv").resolve()
@@ -3847,6 +4023,7 @@ def test_notebook_wrapper_honors_unified_env_contract_and_stage_semantics(
     assert "--doc-analyst-selected-path" in run_args
     assert "--full-10k-text-feature-batch-size" in run_args
     assert "--mda-text-feature-batch-size" in run_args
+    assert "--strategy-text-features-full-10k-path" in run_args
     assert "--event-window-doc-batch-size" in run_args
     assert "--recompute-event-screen-surface" in run_args
     assert "--recompute-event-panel" in run_args
@@ -3871,6 +4048,8 @@ def test_notebook_wrapper_honors_unified_env_contract_and_stage_semantics(
     assert run_cfg.paths.full_10k_cleaning_contract == "current"
     assert run_cfg.paths.full_10k_text_feature_batch_size == 11
     assert run_cfg.paths.mda_text_feature_batch_size == 13
+    assert run_cfg.paths.strategy_text_features_full_10k_path == custom_strategy_text_features.resolve()
+    assert run_cfg.paths.strategy_text_features_full_10k_path_is_explicit is True
     assert run_cfg.paths.recompute_event_screen_surface is True
     assert run_cfg.paths.recompute_event_panel is True
     assert run_cfg.paths.recompute_regression_tables is True

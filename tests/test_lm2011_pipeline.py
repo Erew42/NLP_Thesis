@@ -975,6 +975,37 @@ def test_write_lm2011_text_features_full_10k_parquet_matches_eager_builder(tmp_p
         _assert_frames_equal_with_float_tolerance(eager, streamed, sort_by=["doc_id"])
 
 
+def test_write_lm2011_text_features_full_10k_parquet_uses_global_idf_across_years(
+    tmp_path: Path,
+) -> None:
+    sec_parsed = pl.DataFrame(
+        {
+            "doc_id": ["d1994", "d1995"],
+            "cik_10": ["0001", "0002"],
+            "filing_date": [dt.date(1994, 3, 1), dt.date(1995, 3, 1)],
+            "document_type_filename": ["10-K", "10-K"],
+            "full_text": ["loss", "gain"],
+        }
+    )
+    output_path = tmp_path / "strategy_global_idf.parquet"
+
+    row_count = write_lm2011_text_features_full_10k_parquet(
+        sec_parsed.lazy(),
+        output_path=output_path,
+        dictionary_lists=_lm_dictionary_lists(),
+        harvard_negative_word_list=_harvard_negative_word_list(),
+        master_dictionary_words=_master_dictionary_words(),
+        batch_size=1,
+    )
+    features = pl.read_parquet(output_path).sort("doc_id")
+
+    assert row_count == 2
+    d1994 = features.filter(pl.col("doc_id") == "d1994").row(0, named=True)
+    d1995 = features.filter(pl.col("doc_id") == "d1995").row(0, named=True)
+    assert d1994["lm_negative_tfidf"] == pytest.approx(math.log(2.0 / 1.0))
+    assert d1995["lm_negative_tfidf"] == pytest.approx(0.0)
+
+
 def test_write_lm2011_text_features_mda_parquet_matches_eager_builder(tmp_path: Path) -> None:
     sec_items = pl.DataFrame(
         {
@@ -3011,6 +3042,23 @@ def test_build_lm2011_trading_strategy_ff4_summary_fails_closed_when_factor_mont
         build_lm2011_trading_strategy_ff4_summary(
             trading_month_returns.lazy(),
             incomplete_factors.lazy(),
+        ).collect()
+
+
+def test_build_lm2011_trading_strategy_ff4_summary_fails_closed_on_duplicate_monthly_returns() -> None:
+    _event_panel, _sec_parsed, _monthly_stock, monthly_factors = _build_strategy_inputs()
+    duplicate_monthly_returns = pl.DataFrame(
+        {
+            "portfolio_month": [dt.date(1997, 7, 31), dt.date(1997, 7, 31)],
+            "sort_signal_name": ["fin_neg_prop", "fin_neg_prop"],
+            "long_short_return": [0.01, 0.02],
+        }
+    )
+
+    with pytest.raises(ValueError, match="duplicate portfolio_month/sort_signal_name"):
+        build_lm2011_trading_strategy_ff4_summary(
+            duplicate_monthly_returns.lazy(),
+            monthly_factors.lazy(),
         ).collect()
 
 
