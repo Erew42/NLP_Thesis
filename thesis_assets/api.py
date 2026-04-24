@@ -8,6 +8,7 @@ from thesis_assets.bootstrap import resolve_repo_root
 from thesis_assets.builders import build_asset
 from thesis_assets.config import BUILD_LOG_FILENAME
 from thesis_assets.config import MANIFEST_FILENAME
+from thesis_assets.config import RUN_FAMILY_FINBERT_ROBUSTNESS
 from thesis_assets.config import RUN_FAMILY_FINBERT_RUN
 from thesis_assets.config import RUN_FAMILY_LM2011_EXTENSION
 from thesis_assets.config import RUN_FAMILY_LM2011_POST_REFINITIV
@@ -32,6 +33,7 @@ def build_all_assets(
     lm2011_post_refinitiv_dir: Path | None = None,
     lm2011_extension_dir: Path | None = None,
     finbert_run_dir: Path | None = None,
+    finbert_robustness_dir: Path | None = None,
 ) -> BuildSessionResult:
     return _build_assets(
         load_registry(),
@@ -41,6 +43,7 @@ def build_all_assets(
         lm2011_post_refinitiv_dir=lm2011_post_refinitiv_dir,
         lm2011_extension_dir=lm2011_extension_dir,
         finbert_run_dir=finbert_run_dir,
+        finbert_robustness_dir=finbert_robustness_dir,
     )
 
 
@@ -53,6 +56,7 @@ def build_chapter_assets(
     lm2011_post_refinitiv_dir: Path | None = None,
     lm2011_extension_dir: Path | None = None,
     finbert_run_dir: Path | None = None,
+    finbert_robustness_dir: Path | None = None,
 ) -> BuildSessionResult:
     return _build_assets(
         load_assets_by_chapter(chapter),
@@ -62,6 +66,7 @@ def build_chapter_assets(
         lm2011_post_refinitiv_dir=lm2011_post_refinitiv_dir,
         lm2011_extension_dir=lm2011_extension_dir,
         finbert_run_dir=finbert_run_dir,
+        finbert_robustness_dir=finbert_robustness_dir,
     )
 
 
@@ -74,6 +79,7 @@ def build_single_asset(
     lm2011_post_refinitiv_dir: Path | None = None,
     lm2011_extension_dir: Path | None = None,
     finbert_run_dir: Path | None = None,
+    finbert_robustness_dir: Path | None = None,
 ) -> BuildSessionResult:
     return _build_assets(
         (load_asset_by_id(asset_id),),
@@ -83,6 +89,7 @@ def build_single_asset(
         lm2011_post_refinitiv_dir=lm2011_post_refinitiv_dir,
         lm2011_extension_dir=lm2011_extension_dir,
         finbert_run_dir=finbert_run_dir,
+        finbert_robustness_dir=finbert_robustness_dir,
     )
 
 
@@ -95,6 +102,7 @@ def _build_assets(
     lm2011_post_refinitiv_dir: Path | None,
     lm2011_extension_dir: Path | None,
     finbert_run_dir: Path | None,
+    finbert_robustness_dir: Path | None,
 ) -> BuildSessionResult:
     repo_root = resolve_repo_root() if repo_root is None else repo_root.resolve()
     ensure_repo_src_on_path(repo_root)
@@ -109,6 +117,7 @@ def _build_assets(
             RUN_FAMILY_LM2011_POST_REFINITIV: lm2011_post_refinitiv_dir,
             RUN_FAMILY_LM2011_EXTENSION: lm2011_extension_dir,
             RUN_FAMILY_FINBERT_RUN: finbert_run_dir,
+            RUN_FAMILY_FINBERT_ROBUSTNESS: finbert_robustness_dir,
         }.items()
         if path is not None
     }

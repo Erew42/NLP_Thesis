@@ -15,6 +15,7 @@ class ArtifactRequirement:
     required: bool = True
     required_columns: tuple[str, ...] = ()
     relative_subdir: str | None = None
+    artifact_kind: str = "parquet"
 
 
 @dataclass(frozen=True)
@@ -56,6 +57,7 @@ class BuildContext:
     explicit_run_roots: dict[str, Path]
     resolved_runs: dict[str, ResolvedRun] = field(default_factory=dict)
     resolved_artifacts: dict[str, ResolvedArtifact] = field(default_factory=dict)
+    asset_cache: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

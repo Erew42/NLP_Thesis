@@ -2974,14 +2974,26 @@ def test_build_lm2011_trading_strategy_ff4_summary_is_separate_artifact_with_r2(
     assert summary.columns == [
         "sort_signal_name",
         "alpha_ff3_mom",
+        "alpha_ff3_mom_standard_error",
+        "alpha_ff3_mom_t_stat",
         "beta_market",
+        "beta_market_standard_error",
+        "beta_market_t_stat",
         "beta_smb",
+        "beta_smb_standard_error",
+        "beta_smb_t_stat",
         "beta_hml",
+        "beta_hml_standard_error",
+        "beta_hml_t_stat",
         "beta_mom",
+        "beta_mom_standard_error",
+        "beta_mom_t_stat",
         "r2",
     ]
     assert summary.height == 4
     assert summary.select(pl.col("r2").is_not_null().all()).item() is True
+    assert summary.select(pl.col("alpha_ff3_mom_standard_error").is_not_null().all()).item() is True
+    assert summary.select(pl.col("alpha_ff3_mom_t_stat").is_not_null().all()).item() is True
 
 
 def test_build_lm2011_trading_strategy_ff4_summary_matches_calendar_month_factors_for_trading_month_ends() -> None:

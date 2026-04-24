@@ -80,6 +80,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         lm2011_post_refinitiv_dir=args.lm2011_post_refinitiv_dir,
         lm2011_extension_dir=args.lm2011_extension_dir,
         finbert_run_dir=args.finbert_run_dir,
+        finbert_robustness_dir=args.finbert_robustness_dir,
     )
 
     build_kwargs = {
@@ -89,6 +90,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "lm2011_post_refinitiv_dir": resolved_paths["lm2011_post_refinitiv_dir"],
         "lm2011_extension_dir": resolved_paths["lm2011_extension_dir"],
         "finbert_run_dir": resolved_paths["finbert_run_dir"],
+        "finbert_robustness_dir": resolved_paths["finbert_robustness_dir"],
     }
     if args.command == "build-all":
         result = build_all_assets(**build_kwargs)
@@ -148,6 +150,7 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--lm2011-post-refinitiv-dir", type=Path, default=None)
     parser.add_argument("--lm2011-extension-dir", type=Path, default=None)
     parser.add_argument("--finbert-run-dir", type=Path, default=None)
+    parser.add_argument("--finbert-robustness-dir", type=Path, default=None)
     parser.add_argument(
         "--allow-failures",
         action="store_true",
@@ -163,6 +166,7 @@ def _resolve_run_paths(
     lm2011_post_refinitiv_dir: Path | None,
     lm2011_extension_dir: Path | None,
     finbert_run_dir: Path | None,
+    finbert_robustness_dir: Path | None,
 ) -> dict[str, Path | None]:
     return resolve_usage_run_paths(
         repo_root=repo_root,
@@ -171,6 +175,7 @@ def _resolve_run_paths(
         lm2011_post_refinitiv_dir=lm2011_post_refinitiv_dir,
         lm2011_extension_dir=lm2011_extension_dir,
         finbert_run_dir=finbert_run_dir,
+        finbert_robustness_dir=finbert_robustness_dir,
     )
 
 

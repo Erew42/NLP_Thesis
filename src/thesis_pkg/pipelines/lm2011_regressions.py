@@ -1581,20 +1581,32 @@ def build_lm2011_table_ia_ii_results_from_monthly_returns(
     mean_returns_df = monthly_returns_df.group_by("sort_signal_name").agg(
         pl.col("long_short_return").mean().alias("mean_long_short_return")
     )
-    combined = mean_returns_df.join(summary_df, on="sort_signal_name", how="left").sort("sort_signal_name")
+    combined = mean_returns_df.join(summary_df, on="sort_signal_name", how="left").sort(
+        "sort_signal_name"
+    )
     rows: list[dict[str, object]] = []
     coefficient_pairs = (
-        ("mean_long_short_return", "mean_long_short_return"),
-        ("alpha_ff3_mom", "alpha_ff3_mom"),
-        ("beta_market", "beta_market"),
-        ("beta_smb", "beta_smb"),
-        ("beta_hml", "beta_hml"),
-        ("beta_mom", "beta_mom"),
-        ("r2", "r2"),
+        ("mean_long_short_return", "mean_long_short_return", None, None),
+        (
+            "alpha_ff3_mom",
+            "alpha_ff3_mom",
+            "alpha_ff3_mom_standard_error",
+            "alpha_ff3_mom_t_stat",
+        ),
+        ("beta_market", "beta_market", "beta_market_standard_error", "beta_market_t_stat"),
+        ("beta_smb", "beta_smb", "beta_smb_standard_error", "beta_smb_t_stat"),
+        ("beta_hml", "beta_hml", "beta_hml_standard_error", "beta_hml_t_stat"),
+        ("beta_mom", "beta_mom", "beta_mom_standard_error", "beta_mom_t_stat"),
+        ("r2", "r2", None, None),
     )
     for row in combined.iter_rows(named=True):
         signal_name = str(row["sort_signal_name"])
-        for coefficient_name, source_column in coefficient_pairs:
+        for (
+            coefficient_name,
+            source_column,
+            standard_error_column,
+            t_stat_column,
+        ) in coefficient_pairs:
             rows.append(
                 {
                     "table_id": "internet_appendix_table_ia_ii",
@@ -1608,8 +1620,16 @@ def build_lm2011_table_ia_ii_results_from_monthly_returns(
                         if row[source_column] is not None
                         else None
                     ),
-                    "standard_error": None,
-                    "t_stat": None,
+                    "standard_error": (
+                        float(row[standard_error_column])
+                        if standard_error_column is not None and row[standard_error_column] is not None
+                        else None
+                    ),
+                    "t_stat": (
+                        float(row[t_stat_column])
+                        if t_stat_column is not None and row[t_stat_column] is not None
+                        else None
+                    ),
                     "n_quarters": None,
                     "mean_quarter_n": None,
                     "weighting_rule": None,

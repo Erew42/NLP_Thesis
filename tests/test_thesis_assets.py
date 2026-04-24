@@ -14,6 +14,8 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from thesis_assets.api import build_single_asset
+from thesis_assets.builders.sentence_summaries import SENTENCE_BATCH_SIZE_ENV_VAR
+from thesis_assets.builders.sentence_summaries import _lm_negative_sentence_share
 from thesis_assets.builders.sample_contracts import common_row_comparison
 from thesis_assets.builders.sample_contracts import common_success_comparison
 from thesis_assets.builders.sample_contracts import ownership_common_support
@@ -33,8 +35,19 @@ def test_registry_loader_imports_expected_assets() -> None:
     assets = loader.load_registry()
     assert [asset.asset_id for asset in assets] == [
         "ch4_sample_attrition_lm2011_1994_2008",
+        "ch4_sample_funnel_raw_to_final_lm2011",
+        "ch4_sample_attrition_losses_lm2011",
+        "ch4_sample_stage_bridge_lm2011",
         "ch5_fit_horserace_item7_c0",
         "ch5_concordance_item7_common_sample",
+        "ch5_between_filing_ecdf_lm_negative_doc_scores",
+        "ch5_between_filing_ecdf_finbert_doc_scores",
+        "ch5_within_filing_sentence_ecdf_finbert_negative",
+        "ch5_within_filing_sentence_ecdf_lm_negative_share",
+        "ch5_within_filing_high_negative_sentence_share",
+        "ch5_concordance_negative_scores_by_scope",
+        "ch5_finbert_robustness_coefficients",
+        "ch5_finbert_robustness_fit_comparisons",
     ]
 
 
@@ -140,6 +153,75 @@ def test_manifest_writing_for_single_asset(tmp_path: Path) -> None:
     manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
     assert manifest["asset_statuses"]["ch4_sample_attrition_lm2011_1994_2008"] == "completed"
     assert manifest["assets"]["ch4_sample_attrition_lm2011_1994_2008"]["sample_contract_id"] == "raw_available"
+
+
+def test_chapter4_sample_funnel_figure_outputs(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    run_root = repo_root / "inputs" / "lm2011_post_refinitiv"
+    run_root.mkdir(parents=True)
+    _write_sample_attrition_parquet(run_root / "lm2011_table_i_sample_creation.parquet")
+
+    result = build_single_asset(
+        asset_id="ch4_sample_funnel_raw_to_final_lm2011",
+        run_id="unit_ch4_figure",
+        repo_root=repo_root,
+        lm2011_post_refinitiv_dir=run_root,
+    )
+
+    asset_result = result.asset_results["ch4_sample_funnel_raw_to_final_lm2011"]
+    assert asset_result.status == "completed"
+    assert Path(asset_result.output_paths["csv"]).exists()
+    assert Path(asset_result.output_paths["png"]).exists()
+    assert Path(asset_result.output_paths["pdf"]).exists()
+
+
+def test_lm_sentence_negative_share_scoring() -> None:
+    negative_words = frozenset({"bad", "loss"})
+    assert _lm_negative_sentence_share("Bad loss was offset by growth.", negative_words) == pytest.approx(2 / 6)
+    assert _lm_negative_sentence_share("Growth improved.", negative_words) == pytest.approx(0.0)
+    assert _lm_negative_sentence_share("1234", negative_words) is None
+
+
+def test_sentence_level_lm_ecdf_uses_shards_and_tiny_batches(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_root = tmp_path / "repo"
+    extension_root = repo_root / "inputs" / "lm2011_extension"
+    finbert_root = repo_root / "inputs" / "finbert_run"
+    (extension_root / "replication").mkdir(parents=True)
+    (finbert_root / "sentence_scores" / "by_year").mkdir(parents=True)
+    _write_extension_analysis_panel(extension_root / "replication" / "lm2011_extension_analysis_panel.parquet")
+    _write_sentence_score_shard(finbert_root / "sentence_scores" / "by_year" / "2020.parquet")
+    _write_replication_negative_word_list(
+        repo_root / "full_data_run" / "LM2011_additional_data" / "generated_dictionary_families" / "replication" / "Fin-Neg.txt"
+    )
+    monkeypatch.setenv(SENTENCE_BATCH_SIZE_ENV_VAR, "1")
+
+    result = build_single_asset(
+        asset_id="ch5_within_filing_sentence_ecdf_lm_negative_share",
+        run_id="unit_sentence_lm",
+        repo_root=repo_root,
+        lm2011_extension_dir=extension_root,
+        finbert_run_dir=finbert_root,
+    )
+
+    asset_result = result.asset_results["ch5_within_filing_sentence_ecdf_lm_negative_share"]
+    assert asset_result.status == "completed"
+    assert Path(asset_result.output_paths["csv"]).exists()
+    assert Path(asset_result.output_paths["png"]).exists()
+    assert Path(asset_result.output_paths["pdf"]).exists()
+
+    ecdf_df = pl.read_csv(asset_result.output_paths["csv"])
+    totals = (
+        ecdf_df.group_by("text_scope")
+        .agg(pl.col("total_count").max().alias("total_count"))
+        .sort("text_scope")
+    )
+    assert totals.to_dicts() == [
+        {"text_scope": "item_1a_risk_factors", "total_count": 1},
+        {"text_scope": "item_7_mda", "total_count": 2},
+    ]
 
 
 def test_missing_artifact_failure_is_recorded_in_manifest(tmp_path: Path) -> None:
@@ -281,6 +363,7 @@ def test_tools_entrypoint_build_asset_emits_json_and_allows_failures(
         "lm2011_post_refinitiv_dir": tmp_path / "inputs" / "lm2011_post_refinitiv",
         "lm2011_extension_dir": tmp_path / "inputs" / "lm2011_extension",
         "finbert_run_dir": tmp_path / "inputs" / "finbert_item_analysis",
+        "finbert_robustness_dir": tmp_path / "inputs" / "finbert_robustness",
     }
 
     monkeypatch.setattr(tool_module, "_resolve_run_paths", lambda **_: resolved_paths)
@@ -359,3 +442,36 @@ def _write_sample_attrition_parquet(path: Path) -> None:
         }
     )
     df.write_parquet(path)
+
+
+def _write_extension_analysis_panel(path: Path) -> None:
+    df = pl.DataFrame(
+        {
+            "doc_id": ["doc_a", "doc_b"],
+            "text_scope": ["item_7_mda", "item_1a_risk_factors"],
+            "dictionary_family": ["replication", "replication"],
+        }
+    )
+    df.write_parquet(path)
+
+
+def _write_sentence_score_shard(path: Path) -> None:
+    df = pl.DataFrame(
+        {
+            "doc_id": ["doc_a", "doc_a", "doc_b", "doc_c"],
+            "text_scope": ["item_7_mda", "item_7_mda", "item_1a_risk_factors", "item_7_mda"],
+            "sentence_text": [
+                "Bad loss was offset by growth.",
+                "Growth improved.",
+                "Bad risk remained.",
+                "Bad loss outside the analysis universe.",
+            ],
+            "negative_prob": [0.98, 0.02, 0.70, 0.99],
+        }
+    )
+    df.write_parquet(path)
+
+
+def _write_replication_negative_word_list(path: Path) -> None:
+    path.parent.mkdir(parents=True)
+    path.write_text("bad\nloss\n", encoding="utf-8")

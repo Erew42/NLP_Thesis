@@ -9,6 +9,7 @@ from thesis_assets.config.constants import EXTENSION_OWNERSHIP_SUPPORT_COLUMN
 from thesis_assets.config.constants import MANIFEST_FILENAME
 from thesis_assets.config.constants import OUTPUT_SUBDIRS
 from thesis_assets.config.constants import REGISTRY_MODULES
+from thesis_assets.config.constants import RUN_FAMILY_FINBERT_ROBUSTNESS
 from thesis_assets.config.constants import RUN_FAMILY_FINBERT_RUN
 from thesis_assets.config.constants import RUN_FAMILY_LM2011_EXTENSION
 from thesis_assets.config.constants import RUN_FAMILY_LM2011_POST_REFINITIV
@@ -26,6 +27,7 @@ __all__ = [
     "MANIFEST_FILENAME",
     "OUTPUT_SUBDIRS",
     "REGISTRY_MODULES",
+    "RUN_FAMILY_FINBERT_ROBUSTNESS",
     "RUN_FAMILY_FINBERT_RUN",
     "RUN_FAMILY_LM2011_EXTENSION",
     "RUN_FAMILY_LM2011_POST_REFINITIV",

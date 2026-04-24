@@ -272,6 +272,7 @@ def test_lm2011_finbert_robustness_runner_emits_variant_tagged_outputs(tmp_path:
             extension_run_dir=extension_run_dir,
             finbert_analysis_run_dir=finbert_run_dir,
             output_dir=output_dir,
+            tail_doc_batch_size=7,
             run_name="unit_test_finbert_robustness",
         )
     )
@@ -293,6 +294,8 @@ def test_lm2011_finbert_robustness_runner_emits_variant_tagged_outputs(tmp_path:
     assert artifacts.tail_doc_surface_by_year_dir.exists()
     assert (artifacts.tail_doc_surface_by_year_dir / "2009.parquet").exists()
     assert (artifacts.tail_doc_surface_by_year_dir / "2010.parquet").exists()
+    assert len(list((artifacts.tail_doc_surface_by_year_dir / "_batches" / "2009").glob("*.parquet"))) > 1
+    assert len(list((artifacts.tail_doc_surface_by_year_dir / "_batches" / "2010").glob("*.parquet"))) > 1
 
     assert set(existing_scale_coefficients.get_column("variant_id").unique().to_list()) == {
         variant.variant_id for variant in runner.EXISTING_SCALE_VARIANTS
@@ -343,6 +346,7 @@ def test_lm2011_finbert_robustness_runner_emits_variant_tagged_outputs(tmp_path:
     assert manifest["resolved_inputs"]["extension_analysis_panel_path"] == str(extension_panel_path.resolve())
     assert "finbert_item_features_long_path" not in manifest["resolved_inputs"]
     assert manifest["resolved_inputs"]["finbert_sentence_scores_dir"] == str(sentence_scores_dir.resolve())
+    assert manifest["resolved_inputs"]["tail_doc_batch_size"] == 7
     assert len(manifest["variant_registry"]["existing_scale"]) == 5
     assert len(manifest["variant_registry"]["tail_signal"]) == len(TAIL_FEATURE_COLUMNS)
     assert len(manifest["variant_registry"]["quantile_signal"]) == len(runner.QUANTILE_VARIANTS)
@@ -385,4 +389,5 @@ def test_build_tail_doc_surfaces_rejects_cross_year_duplicate_doc_scope(tmp_path
         runner._build_tail_doc_surfaces(
             sentence_scores_dir=sentence_scores_dir,
             output_dir=output_dir,
+            tail_doc_batch_size=2,
         )

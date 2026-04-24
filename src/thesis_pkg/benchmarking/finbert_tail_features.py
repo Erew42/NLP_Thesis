@@ -14,7 +14,6 @@ TAIL_FEATURE_COLUMNS: tuple[str, ...] = (
     "tail_share_tau_0_70",
     "top_10pct_neg_mean",
     "top_20pct_neg_mean",
-    "top_5_sentences_neg_mean",
     "neg_prob_dispersion",
 )
 TAIL_DOC_SURFACE_SCHEMA: dict[str, pl.DataType] = {
@@ -31,7 +30,6 @@ TAIL_DOC_SURFACE_SCHEMA: dict[str, pl.DataType] = {
     "tail_share_tau_0_70": pl.Float64,
     "top_10pct_neg_mean": pl.Float64,
     "top_20pct_neg_mean": pl.Float64,
-    "top_5_sentences_neg_mean": pl.Float64,
     "neg_prob_dispersion": pl.Float64,
 }
 _TAIL_METADATA_COLUMNS: tuple[str, ...] = (
@@ -262,23 +260,6 @@ def build_finbert_tail_doc_surface_lf(
                 ),
                 group_keys=group_keys,
                 alias="top_20pct_neg_mean",
-            ),
-            _weighted_group_mean(
-                pl.when(pl.col("_negative_rank") <= 5)
-                .then(pl.col("negative_prob"))
-                .otherwise(pl.lit(0.0)),
-                weight_expr=pl.when(pl.col("_negative_rank") <= 5)
-                .then(pl.col("_token_weight"))
-                .otherwise(pl.lit(0.0)),
-                denominator_expr=(
-                    pl.when(pl.col("_negative_rank") <= 5)
-                    .then(pl.col("_token_weight"))
-                    .otherwise(pl.lit(0.0))
-                    .sum()
-                    .over(group_keys)
-                ),
-                group_keys=group_keys,
-                alias="top_5_sentences_neg_mean",
             ),
             (
                 pl.when(denominator_expr > 0.0)

@@ -94,14 +94,14 @@ def _build_strategy_inputs() -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame, 
         {
             "doc_id": [f"doc_{idx}" for idx in range(10)],
             "KYPERMNO": [100 + idx for idx in range(10)],
-            "filing_date": [dt.date(1996, 3, 1) + dt.timedelta(days=idx) for idx in range(10)],
+            "filing_date": [dt.date(1997, 3, 1) + dt.timedelta(days=idx) for idx in range(10)],
         }
     )
     sec_parsed = pl.DataFrame(
         {
             "doc_id": [f"doc_{idx}" for idx in range(10)],
             "cik_10": [f"{idx:010d}" for idx in range(10)],
-            "filing_date": [dt.date(1996, 3, 1) + dt.timedelta(days=idx) for idx in range(10)],
+            "filing_date": [dt.date(1997, 3, 1) + dt.timedelta(days=idx) for idx in range(10)],
             "document_type_filename": ["10-K"] * 10,
             "full_text": [
                 " ".join((["loss"] * (idx + 1)) + (["bad"] * max(0, 9 - idx)) + (["neutral"] * 20))
@@ -1232,6 +1232,24 @@ def test_build_lm2011_table_ia_ii_results_matches_strategy_artifacts() -> None:
                 rel_tol=0.0,
                 abs_tol=1e-12,
             )
+        for coefficient_name in ("alpha_ff3_mom", "beta_market", "beta_smb", "beta_hml", "beta_mom"):
+            coefficient_row = signal_rows.filter(pl.col("coefficient_name") == coefficient_name)
+            assert math.isclose(
+                coefficient_row.select("standard_error").item(),
+                row[f"{coefficient_name}_standard_error"],
+                rel_tol=0.0,
+                abs_tol=1e-12,
+            )
+            assert math.isclose(
+                coefficient_row.select("t_stat").item(),
+                row[f"{coefficient_name}_t_stat"],
+                rel_tol=0.0,
+                abs_tol=1e-12,
+            )
+        assert signal_rows.filter(pl.col("coefficient_name") == "mean_long_short_return").select(
+            "standard_error"
+        ).item() is None
+        assert signal_rows.filter(pl.col("coefficient_name") == "r2").select("t_stat").item() is None
 
 
 def test_build_lm2011_table_ia_ii_results_from_monthly_returns_matches_legacy_wrapper() -> None:

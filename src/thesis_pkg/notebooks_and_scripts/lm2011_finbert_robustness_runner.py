@@ -89,6 +89,7 @@ FINBERT_ANALYSIS_MANIFEST_FILENAME = "run_manifest.json"
 EXTENSION_ANALYSIS_PANEL_FILENAME = "lm2011_extension_analysis_panel.parquet"
 FINBERT_SENTENCE_SCORES_DIRNAME = "sentence_scores/by_year"
 PARQUET_COMPRESSION = "zstd"
+DEFAULT_TAIL_DOC_BATCH_SIZE = 5_000
 PRIMARY_CONTROL_SET_IDS: tuple[str, ...] = ("C0",)
 PRIMARY_OUTCOME_NAMES: tuple[str, ...] = (EXTENSION_PRIMARY_OUTCOME,)
 PRIMARY_TEXT_SCOPES: tuple[str, ...] = EXTENSION_PRIMARY_TEXT_SCOPES
@@ -165,6 +166,7 @@ class FinbertRobustnessRunConfig:
     output_dir: Path
     extension_analysis_panel_path: Path | None = None
     finbert_sentence_scores_dir: Path | None = None
+    tail_doc_batch_size: int = DEFAULT_TAIL_DOC_BATCH_SIZE
     run_name: str | None = None
     note: str = ""
 
@@ -281,9 +283,21 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--extension-analysis-panel-path", type=Path, default=None)
     parser.add_argument("--finbert-sentence-scores-dir", type=Path, default=None)
+    parser.add_argument(
+        "--tail-doc-batch-size",
+        type=int,
+        default=DEFAULT_TAIL_DOC_BATCH_SIZE,
+        help=(
+            "Number of unique doc_id values per bounded tail-surface aggregation batch. "
+            f"Default: {DEFAULT_TAIL_DOC_BATCH_SIZE}."
+        ),
+    )
     parser.add_argument("--run-name", type=str, default=None)
     parser.add_argument("--note", type=str, default="")
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.tail_doc_batch_size < 1:
+        parser.error("--tail-doc-batch-size must be >= 1")
+    return args
 
 
 def _read_json_payload(path: Path) -> dict[str, Any]:
@@ -589,6 +603,12 @@ def _with_cast_nonmissing_quantile_base(
                 pl.col(column).cast(pl.Float64, strict=False).alias(column)
                 for column in float_columns
             ],
+        )
+        .select(
+            "text_scope",
+            FILING_DATE_COL,
+            INDUSTRY_COL,
+            *float_columns,
         )
         .drop_nulls(subset=[FILING_DATE_COL, INDUSTRY_COL, *float_columns])
     )
@@ -1290,26 +1310,76 @@ def _scan_tail_doc_surface_paths(paths: Sequence[Path]) -> pl.LazyFrame:
     )
 
 
+def _collect_tail_doc_batch_ids(year_path: Path) -> pl.DataFrame:
+    return (
+        pl.scan_parquet(str(year_path))
+        .select(pl.col("doc_id").cast(pl.Utf8, strict=False).alias("doc_id"))
+        .drop_nulls(subset=["doc_id"])
+        .unique(subset=["doc_id"], keep="first", maintain_order=False)
+        .collect()
+    )
+
+
+def _tail_doc_surface_batch_paths(
+    *,
+    year_path: Path,
+    year_doc_ids_df: pl.DataFrame,
+    by_year_dir: Path,
+    tail_doc_batch_size: int,
+) -> list[Path]:
+    batch_dir = by_year_dir / "_batches" / year_path.stem
+    batch_dir.mkdir(parents=True, exist_ok=True)
+    for stale_batch_path in batch_dir.glob("*.parquet"):
+        stale_batch_path.unlink()
+
+    batch_paths: list[Path] = []
+    for batch_index, offset in enumerate(range(0, year_doc_ids_df.height, tail_doc_batch_size)):
+        doc_batch_df = year_doc_ids_df.slice(offset, tail_doc_batch_size)
+        if doc_batch_df.height <= 0:
+            continue
+        batch_df = build_finbert_tail_doc_surface_lf(
+            pl.scan_parquet(str(year_path)).join(doc_batch_df.lazy(), on="doc_id", how="semi"),
+            text_scopes=PRIMARY_TEXT_SCOPES,
+        ).collect()
+        _validate_unique_doc_scope(
+            batch_df,
+            label=f"tail_doc_surface[{year_path.stem}:batch_{batch_index:05d}]",
+        )
+        batch_path = batch_dir / f"batch_{batch_index:05d}.parquet"
+        write_frame(
+            batch_df if batch_df.height > 0 else pl.DataFrame(schema=TAIL_DOC_SURFACE_SCHEMA),
+            batch_path,
+        )
+        batch_paths.append(batch_path)
+    return batch_paths
+
+
 def _build_tail_doc_surfaces(
     *,
     sentence_scores_dir: Path,
     output_dir: Path,
+    tail_doc_batch_size: int,
 ) -> TailDocSurfaceArtifacts:
+    if tail_doc_batch_size < 1:
+        raise ValueError("tail_doc_batch_size must be >= 1.")
     by_year_dir = output_dir / TAIL_DOC_SURFACE_BY_YEAR_DIRNAME
     by_year_dir.mkdir(parents=True, exist_ok=True)
     stacked_path = output_dir / ARTIFACT_FILENAMES["tail_doc_surface"]
     written_year_paths: list[Path] = []
     for year_path in _resolve_sentence_score_year_paths(sentence_scores_dir):
-        year_df = build_finbert_tail_doc_surface_lf(
-            pl.scan_parquet(str(year_path)),
-            text_scopes=PRIMARY_TEXT_SCOPES,
-        ).collect()
-        _validate_unique_doc_scope(year_df, label=f"tail_doc_surface[{year_path.stem}]")
-        output_path = by_year_dir / year_path.name
-        write_frame(
-            year_df if year_df.height > 0 else pl.DataFrame(schema=TAIL_DOC_SURFACE_SCHEMA),
-            output_path,
+        year_doc_ids_df = _collect_tail_doc_batch_ids(year_path)
+        batch_paths = _tail_doc_surface_batch_paths(
+            year_path=year_path,
+            year_doc_ids_df=year_doc_ids_df,
+            by_year_dir=by_year_dir,
+            tail_doc_batch_size=tail_doc_batch_size,
         )
+        year_lf = _scan_tail_doc_surface_paths(batch_paths)
+        _validate_unique_doc_scope(year_lf, label=f"tail_doc_surface[{year_path.stem}]")
+        output_path = by_year_dir / year_path.name
+        if output_path.exists():
+            output_path.unlink()
+        year_lf.sink_parquet(output_path, compression=PARQUET_COMPRESSION)
         written_year_paths.append(output_path)
     stacked_lf = _scan_tail_doc_surface_paths(written_year_paths)
     _validate_unique_doc_scope(stacked_lf, label="tail_doc_surface")
@@ -1415,6 +1485,7 @@ def run_lm2011_finbert_robustness(
     tail_surface_artifacts = _build_tail_doc_surfaces(
         sentence_scores_dir=finbert_inputs["sentence_scores_dir"],
         output_dir=run_dir,
+        tail_doc_batch_size=cfg.tail_doc_batch_size,
     )
     tail_panel_df = (
         base_panel_df.lazy()
@@ -1550,6 +1621,7 @@ def run_lm2011_finbert_robustness(
                 else None
             ),
             "finbert_sentence_scores_dir": str(finbert_inputs["sentence_scores_dir"]),
+            "tail_doc_batch_size": cfg.tail_doc_batch_size,
         },
         "artifacts": {
             "existing_scale_coefficients_path": _manifest_path_value(
@@ -1650,6 +1722,7 @@ def _resolved_run_config(args: argparse.Namespace) -> FinbertRobustnessRunConfig
             if args.finbert_sentence_scores_dir is not None
             else None
         ),
+        tail_doc_batch_size=int(args.tail_doc_batch_size),
         run_name=args.run_name,
         note=args.note,
     )

@@ -450,10 +450,20 @@ def test_lm2011_spec_pins_trading_strategy_direction_and_split_outputs() -> None
     assert derived_outputs["lm2011_trading_strategy_ff4_summary"]["required_columns"] == [
         "sort_signal_name",
         "alpha_ff3_mom",
+        "alpha_ff3_mom_standard_error",
+        "alpha_ff3_mom_t_stat",
         "beta_market",
+        "beta_market_standard_error",
+        "beta_market_t_stat",
         "beta_smb",
+        "beta_smb_standard_error",
+        "beta_smb_t_stat",
         "beta_hml",
+        "beta_hml_standard_error",
+        "beta_hml_t_stat",
         "beta_mom",
+        "beta_mom_standard_error",
+        "beta_mom_t_stat",
         "r2",
     ]
     assert strategy_contract["formation_month"] == "June"

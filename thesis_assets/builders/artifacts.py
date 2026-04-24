@@ -66,7 +66,17 @@ def resolve_artifact(
 
 
 def scan_parquet_artifact(artifact: ResolvedArtifact) -> pl.LazyFrame:
-    return pl.scan_parquet(artifact.path)
+    return pl.scan_parquet([str(path) for path in parquet_artifact_paths(artifact)])
+
+
+def parquet_artifact_paths(artifact: ResolvedArtifact) -> tuple[Path, ...]:
+    path = artifact.path
+    if path.is_dir():
+        paths = tuple(sorted(candidate.resolve() for candidate in path.glob("*.parquet") if candidate.is_file()))
+        if not paths:
+            raise MissingArtifactError(f"Parquet artifact directory contains no parquet shards: {path}")
+        return paths
+    return (path,)
 
 
 def _resolve_explicit_run(run_family: str, root: Path) -> ResolvedRun:
@@ -200,7 +210,17 @@ def _append_candidate(candidates: list[Path], seen: set[Path], candidate: Path) 
 def _validate_required_columns(path: Path, requirement: ArtifactRequirement) -> None:
     if not requirement.required_columns:
         return
-    schema = pl.scan_parquet(path).collect_schema()
+    schema_path: str | list[str]
+    if path.is_dir():
+        paths = sorted(candidate for candidate in path.glob("*.parquet") if candidate.is_file())
+        if not paths:
+            raise MissingArtifactError(
+                f"Artifact directory {path} contains no parquet shards for {requirement.logical_name!r}."
+            )
+        schema_path = [str(candidate) for candidate in paths]
+    else:
+        schema_path = str(path)
+    schema = pl.scan_parquet(schema_path).collect_schema()
     missing = [column for column in requirement.required_columns if column not in schema]
     if missing:
         raise MissingArtifactError(

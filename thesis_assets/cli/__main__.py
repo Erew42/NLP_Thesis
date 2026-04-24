@@ -35,6 +35,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "lm2011_post_refinitiv_dir": args.lm2011_post_refinitiv_dir,
         "lm2011_extension_dir": args.lm2011_extension_dir,
         "finbert_run_dir": args.finbert_run_dir,
+        "finbert_robustness_dir": args.finbert_robustness_dir,
     }
 
     if args.command == "build-all":
@@ -61,6 +62,7 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--lm2011-post-refinitiv-dir", type=Path, default=None)
     parser.add_argument("--lm2011-extension-dir", type=Path, default=None)
     parser.add_argument("--finbert-run-dir", type=Path, default=None)
+    parser.add_argument("--finbert-robustness-dir", type=Path, default=None)
 
 
 if __name__ == "__main__":

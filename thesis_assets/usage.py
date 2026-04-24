@@ -35,12 +35,14 @@ def resolve_usage_run_paths(
     lm2011_post_refinitiv_dir: Path | None = None,
     lm2011_extension_dir: Path | None = None,
     finbert_run_dir: Path | None = None,
+    finbert_robustness_dir: Path | None = None,
 ) -> dict[str, Path | None]:
     if data_profile == EXPLICIT_PROFILE:
         return {
             "lm2011_post_refinitiv_dir": _resolve_optional_path(lm2011_post_refinitiv_dir),
             "lm2011_extension_dir": _resolve_optional_path(lm2011_extension_dir),
             "finbert_run_dir": _resolve_optional_path(finbert_run_dir),
+            "finbert_robustness_dir": _resolve_optional_path(finbert_robustness_dir),
         }
 
     if data_profile == LOCAL_REPO_PROFILE:
@@ -62,6 +64,8 @@ def resolve_usage_run_paths(
         or defaults["lm2011_extension_dir"],
         "finbert_run_dir": _resolve_optional_path(finbert_run_dir)
         or defaults["finbert_run_dir"],
+        "finbert_robustness_dir": _resolve_optional_path(finbert_robustness_dir)
+        or defaults["finbert_robustness_dir"],
     }
 
 
@@ -86,10 +90,12 @@ def resolve_local_profile_paths(repo_root: Path) -> dict[str, Path | None]:
         ),
         "finbert_run_dir": _first_existing_path(
             (
+                _resolve_latest_finbert_run_with_sentence_scores(full_data_root),
                 _resolve_latest_finbert_run(unified_root / "finbert_item_analysis"),
                 _resolve_latest_finbert_run(sample_results_root / "finbert_item_analysis_runner"),
             )
         ),
+        "finbert_robustness_dir": _resolve_latest_finbert_robustness_run(full_data_root),
     }
 
 
@@ -106,10 +112,12 @@ def resolve_colab_profile_paths(drive_data_root: Path) -> dict[str, Path | None]
         "lm2011_extension_dir": _first_existing_path((unified_root / "lm2011_extension",)),
         "finbert_run_dir": _first_existing_path(
             (
+                _resolve_latest_finbert_run_with_sentence_scores(results_root),
                 _resolve_latest_finbert_run(unified_root / "finbert_item_analysis"),
                 _resolve_latest_finbert_run(results_root / "finbert_item_analysis_runner"),
             )
         ),
+        "finbert_robustness_dir": _first_existing_path((results_root / "finbert_robustness",)),
     }
 
 
@@ -139,6 +147,47 @@ def _resolve_latest_finbert_run(parent: Path) -> Path | None:
         if (child / "run_manifest.json").exists() and (child / "item_features_long.parquet").exists():
             candidates.append(child.resolve())
 
+    if not candidates:
+        return None
+    return max(candidates, key=lambda path: path.stat().st_mtime)
+
+
+def _resolve_latest_finbert_run_with_sentence_scores(parent: Path) -> Path | None:
+    if not parent.exists() or not parent.is_dir():
+        return None
+
+    candidates: list[Path] = []
+    for root in parent.glob("finbert_item_analysis*"):
+        if not root.is_dir():
+            continue
+        candidate_roots = [root, *[child for child in root.iterdir() if child.is_dir() and not child.name.startswith("_")]]
+        for candidate in candidate_roots:
+            if _is_finbert_run_with_sentence_scores(candidate):
+                candidates.append(candidate.resolve())
+
+    if not candidates:
+        return None
+    return max(candidates, key=lambda path: path.stat().st_mtime)
+
+
+def _is_finbert_run_with_sentence_scores(path: Path) -> bool:
+    sentence_scores_dir = path / "sentence_scores" / "by_year"
+    return (
+        (path / "run_manifest.json").exists()
+        and (path / "item_features_long.parquet").exists()
+        and sentence_scores_dir.exists()
+        and any(sentence_scores_dir.glob("*.parquet"))
+    )
+
+
+def _resolve_latest_finbert_robustness_run(parent: Path) -> Path | None:
+    if not parent.exists() or not parent.is_dir():
+        return None
+    candidates = [
+        child.resolve()
+        for child in parent.glob("finbert_robustness*")
+        if child.is_dir() and (child / "finbert_robustness_run_manifest.json").exists()
+    ]
     if not candidates:
         return None
     return max(candidates, key=lambda path: path.stat().st_mtime)

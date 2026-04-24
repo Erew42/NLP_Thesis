@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from thesis_assets.config.constants import OUTPUT_SUBDIRS
+from thesis_assets.config.constants import RUN_FAMILY_FINBERT_ROBUSTNESS
 from thesis_assets.config.constants import RUN_FAMILY_FINBERT_RUN
 from thesis_assets.config.constants import RUN_FAMILY_LM2011_EXTENSION
 from thesis_assets.config.constants import RUN_FAMILY_LM2011_POST_REFINITIV
@@ -61,6 +62,19 @@ def candidate_run_roots(repo_root: Path, run_family: str) -> tuple[Path, ...]:
             *sorted(finbert_colab_alt.glob("*")),
             *sorted(unified_colab_alt.glob("*")),
         ]
+    elif run_family == RUN_FAMILY_FINBERT_ROBUSTNESS:
+        robustness_candidates = [
+            candidate
+            for candidate in full_data_run.glob("finbert_robustness*")
+            if candidate.is_dir()
+        ]
+        if robustness_candidates:
+            candidates = [max(robustness_candidates, key=lambda path: path.stat().st_mtime)]
+        else:
+            candidates = [
+                Path("/content/drive/MyDrive/Data_LM/results/finbert_robustness"),
+                Path("/content/drive/My Drive/Data_LM/results/finbert_robustness"),
+            ]
     else:
         raise ValueError(f"Unsupported run family: {run_family!r}")
 

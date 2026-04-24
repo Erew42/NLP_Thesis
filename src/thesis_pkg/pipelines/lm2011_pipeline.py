@@ -271,10 +271,20 @@ def _empty_trading_strategy_ff4_summary_df() -> pl.DataFrame:
         schema={
             "sort_signal_name": pl.Utf8,
             "alpha_ff3_mom": pl.Float64,
+            "alpha_ff3_mom_standard_error": pl.Float64,
+            "alpha_ff3_mom_t_stat": pl.Float64,
             "beta_market": pl.Float64,
+            "beta_market_standard_error": pl.Float64,
+            "beta_market_t_stat": pl.Float64,
             "beta_smb": pl.Float64,
+            "beta_smb_standard_error": pl.Float64,
+            "beta_smb_t_stat": pl.Float64,
             "beta_hml": pl.Float64,
+            "beta_hml_standard_error": pl.Float64,
+            "beta_hml_t_stat": pl.Float64,
             "beta_mom": pl.Float64,
+            "beta_mom_standard_error": pl.Float64,
+            "beta_mom_t_stat": pl.Float64,
             "r2": pl.Float64,
         }
     )
@@ -305,6 +315,14 @@ def _ensure_factor_scale(df: pl.DataFrame, columns: tuple[str, ...]) -> pl.DataF
             for column in factor_cols
         ]
     )
+
+
+def _finite_float_or_none(value: object) -> float | None:
+    try:
+        resolved = float(value)
+    except (TypeError, ValueError):
+        return None
+    return resolved if math.isfinite(resolved) else None
 
 
 def _frame_height(frame: pl.LazyFrame | pl.DataFrame) -> int:
@@ -2163,6 +2181,30 @@ def _ols_coefficients_and_r2(
     y_col: str,
     x_cols: tuple[str, ...],
 ) -> tuple[tuple[float | None, ...], float | None]:
+    (
+        coefficients,
+        _standard_errors,
+        _t_stats,
+        r2,
+    ) = _ols_coefficients_standard_errors_tstats_and_r2(
+        df,
+        y_col=y_col,
+        x_cols=x_cols,
+    )
+    return coefficients, r2
+
+
+def _ols_coefficients_standard_errors_tstats_and_r2(
+    df: pl.DataFrame,
+    *,
+    y_col: str,
+    x_cols: tuple[str, ...],
+) -> tuple[
+    tuple[float | None, ...],
+    tuple[float | None, ...],
+    tuple[float | None, ...],
+    float | None,
+]:
     nonnull_predictors = [pl.col(column).is_not_null() for column in x_cols]
     subset = df.filter(
         pl.col(y_col).is_not_null()
@@ -2175,16 +2217,19 @@ def _ols_coefficients_and_r2(
     n_obs = subset.height
     size = len(x_cols) + 1
     if n_obs <= len(x_cols):
-        return tuple(None for _ in range(size)), None
+        null_values = tuple(None for _ in range(size))
+        return null_values, null_values, null_values, None
     results = _fit_checked_ols(
         subset.get_column(y_col).cast(pl.Float64, strict=False).to_numpy(),
         subset.select(*[pl.col(column).cast(pl.Float64, strict=False) for column in x_cols]).to_numpy(),
         exog_names=x_cols,
         label=f"FF4 regression for dependent={y_col}",
     )
-    r2_value = float(results.rsquared)
-    r2 = r2_value if math.isfinite(r2_value) else None
-    return tuple(float(value) for value in results.params), r2
+    r2 = _finite_float_or_none(results.rsquared)
+    coefficients = tuple(_finite_float_or_none(value) for value in results.params)
+    standard_errors = tuple(_finite_float_or_none(value) for value in results.bse)
+    t_stats = tuple(_finite_float_or_none(value) for value in results.tvalues)
+    return coefficients, standard_errors, t_stats, r2
 
 
 def _fit_strategy_factor_loadings(strategy_df: pl.DataFrame) -> pl.DataFrame:
@@ -2193,20 +2238,37 @@ def _fit_strategy_factor_loadings(strategy_df: pl.DataFrame) -> pl.DataFrame:
     rows: list[dict[str, object]] = []
     for group in strategy_df.partition_by("sort_signal_name", maintain_order=True):
         signal_name = group.item(0, "sort_signal_name")
-        coefficients, r2 = _ols_coefficients_and_r2(
+        (
+            coefficients,
+            standard_errors,
+            t_stats,
+            r2,
+        ) = _ols_coefficients_standard_errors_tstats_and_r2(
             group,
             y_col="long_short_return",
             x_cols=("mkt_rf", "smb", "hml", "mom"),
         )
         alpha, beta_market, beta_smb, beta_hml, beta_mom = coefficients
+        alpha_se, beta_market_se, beta_smb_se, beta_hml_se, beta_mom_se = standard_errors
+        alpha_t, beta_market_t, beta_smb_t, beta_hml_t, beta_mom_t = t_stats
         rows.append(
             {
                 "sort_signal_name": signal_name,
                 "alpha_ff3_mom": alpha,
+                "alpha_ff3_mom_standard_error": alpha_se,
+                "alpha_ff3_mom_t_stat": alpha_t,
                 "beta_market": beta_market,
+                "beta_market_standard_error": beta_market_se,
+                "beta_market_t_stat": beta_market_t,
                 "beta_smb": beta_smb,
+                "beta_smb_standard_error": beta_smb_se,
+                "beta_smb_t_stat": beta_smb_t,
                 "beta_hml": beta_hml,
+                "beta_hml_standard_error": beta_hml_se,
+                "beta_hml_t_stat": beta_hml_t,
                 "beta_mom": beta_mom,
+                "beta_mom_standard_error": beta_mom_se,
+                "beta_mom_t_stat": beta_mom_t,
                 "r2": r2,
             }
         )
