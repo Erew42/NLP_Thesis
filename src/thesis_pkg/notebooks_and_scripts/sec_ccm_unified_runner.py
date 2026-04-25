@@ -395,6 +395,29 @@ def _resolve_stage_toggle(
     return umbrella_enabled and default_when_umbrella
 
 
+def _lm2011_stage_env_name(stage_name: str) -> str:
+    return f"SEC_CCM_RUN_LM2011_{stage_name.upper()}"
+
+
+def _resolve_lm2011_stage_flags(*, umbrella_enabled: bool) -> dict[str, bool]:
+    stage_flags = {
+        stage_name: _resolve_stage_toggle(
+            _lm2011_stage_env_name(stage_name),
+            umbrella_enabled=umbrella_enabled,
+            default_when_umbrella=stage_name not in LM2011_OPTIONAL_STAGE_DEFAULTS_FALSE,
+        )
+        for stage_name in LM2011_ALL_STAGE_NAMES
+    }
+    for stage_name, companion_stage_names in LM2011_STAGE_FLAG_COMPANIONS.items():
+        if not stage_flags.get(stage_name, False):
+            continue
+        for companion_stage_name in companion_stage_names:
+            companion_env_name = _lm2011_stage_env_name(companion_stage_name)
+            if _env_optional_bool(companion_env_name, None) is None:
+                stage_flags[companion_stage_name] = True
+    return stage_flags
+
+
 def _resolve_finbert_batch_config(
     *,
     profile_name: str,
@@ -533,6 +556,7 @@ from thesis_pkg.notebooks_and_scripts.lm2011_sample_post_refinitiv_runner import
     DEFAULT_LM2011_MDA_TEXT_FEATURE_BATCH_SIZE,
     DEFAULT_LM2011_TEXT_FEATURE_BATCH_SIZE,
     EXTENSION_MANIFEST_FILENAME as LM2011_EXTENSION_MANIFEST_FILENAME,
+    EXTENSION_PRIMARY_TEXT_SCOPES as LM2011_EXTENSION_PRIMARY_TEXT_SCOPES,
     LM2011ExtensionRunConfig,
     LM2011_ALL_STAGE_NAMES,
     LM2011_OPTIONAL_STAGE_DEFAULTS_FALSE,
@@ -597,6 +621,9 @@ LM2011_STAGES_REQUIRING_DAILY_PANEL: frozenset[str] = frozenset(
         "table_ia_ii_results",
     }
 )
+LM2011_STAGE_FLAG_COMPANIONS: dict[str, tuple[str, ...]] = {
+    "table_vi_results": ("table_vi_results_no_ownership",),
+}
 
 
 @dataclass(frozen=True)
@@ -715,6 +742,9 @@ def _build_lm2011_extension_run_config(
     finbert_preprocessing_run_dir: Path | None,
     print_ram_stats: bool,
     ram_log_interval_batches: int,
+    text_scopes: tuple[str, ...] = LM2011_EXTENSION_PRIMARY_TEXT_SCOPES,
+    extension_text_features_full_10k_path: Path | None = None,
+    recompute_extension_text_features_full_10k: bool = False,
     finbert_analysis_artifacts: object | None = None,
     finbert_preprocessing_artifacts: object | None = None,
 ) -> LM2011ExtensionRunConfig:
@@ -795,6 +825,9 @@ def _build_lm2011_extension_run_config(
             else None
         ),
         require_cleaned_scope_match=require_cleaned_scope_match,
+        text_scopes=text_scopes,
+        extension_text_features_full_10k_path=extension_text_features_full_10k_path,
+        recompute_extension_text_features_full_10k=recompute_extension_text_features_full_10k,
     )
 
 
@@ -1421,14 +1454,7 @@ def main() -> None:
     RUN_BOUNDARY_DIAGNOSTICS = _env_bool("SEC_CCM_RUN_BOUNDARY_DIAGNOSTICS", False)
     RUN_VALIDATION_CHECKS = _env_bool("SEC_CCM_RUN_VALIDATION_CHECKS", False)
     RUN_LM2011_POST_REFINITIV = _env_bool("SEC_CCM_RUN_LM2011_POST_REFINITIV", False)
-    LM2011_STAGE_FLAGS = {
-        stage_name: _resolve_stage_toggle(
-            f"SEC_CCM_RUN_LM2011_{stage_name.upper()}",
-            umbrella_enabled=RUN_LM2011_POST_REFINITIV,
-            default_when_umbrella=stage_name not in LM2011_OPTIONAL_STAGE_DEFAULTS_FALSE,
-        )
-        for stage_name in LM2011_ALL_STAGE_NAMES
-    }
+    LM2011_STAGE_FLAGS = _resolve_lm2011_stage_flags(umbrella_enabled=RUN_LM2011_POST_REFINITIV)
     RUN_FINBERT = _env_bool("SEC_CCM_RUN_FINBERT", False)
     RUN_FINBERT_PREPROCESS = _resolve_stage_toggle(
         "SEC_CCM_RUN_FINBERT_PREPROCESS",
@@ -1585,6 +1611,27 @@ def main() -> None:
         "SEC_CCM_LM2011_EXTENSION_REQUIRE_CLEANED_SCOPE_MATCH",
         True,
     )
+    LM2011_EXTENSION_TEXT_SCOPES = tuple(
+        _env_str_list(
+            "SEC_CCM_LM2011_EXTENSION_TEXT_SCOPES",
+            list(LM2011_EXTENSION_PRIMARY_TEXT_SCOPES),
+        )
+    )
+    LM2011_EXTENSION_TEXT_FEATURES_FULL_10K_PATH = _env_optional_path(
+        "SEC_CCM_LM2011_EXTENSION_TEXT_FEATURES_FULL_10K_PATH"
+    )
+    LM2011_EXTENSION_RECOMPUTE_TEXT_FEATURES_FULL_10K = _env_bool(
+        "SEC_CCM_LM2011_EXTENSION_RECOMPUTE_TEXT_FEATURES_FULL_10K",
+        False,
+    )
+    if (
+        LM2011_EXTENSION_TEXT_FEATURES_FULL_10K_PATH is not None
+        and LM2011_EXTENSION_RECOMPUTE_TEXT_FEATURES_FULL_10K
+    ):
+        raise ValueError(
+            "SEC_CCM_LM2011_EXTENSION_RECOMPUTE_TEXT_FEATURES_FULL_10K cannot be combined with "
+            "SEC_CCM_LM2011_EXTENSION_TEXT_FEATURES_FULL_10K_PATH"
+        )
     LM2011_EXTENSION_FINBERT_ANALYSIS_RUN_DIR = _env_optional_path(
         "SEC_CCM_LM2011_EXTENSION_FINBERT_ANALYSIS_RUN_DIR"
     )
@@ -1775,6 +1822,15 @@ def main() -> None:
             "RUN_LM2011_EXTENSION": RUN_LM2011_EXTENSION,
             "LM2011_EXTENSION_OUTPUT_DIR": str(LM2011_EXTENSION_OUTPUT_DIR),
             "LM2011_EXTENSION_REQUIRE_CLEANED_SCOPE_MATCH": LM2011_EXTENSION_REQUIRE_CLEANED_SCOPE_MATCH,
+            "LM2011_EXTENSION_TEXT_SCOPES": list(LM2011_EXTENSION_TEXT_SCOPES),
+            "LM2011_EXTENSION_TEXT_FEATURES_FULL_10K_PATH": (
+                str(LM2011_EXTENSION_TEXT_FEATURES_FULL_10K_PATH)
+                if LM2011_EXTENSION_TEXT_FEATURES_FULL_10K_PATH is not None
+                else None
+            ),
+            "LM2011_EXTENSION_RECOMPUTE_TEXT_FEATURES_FULL_10K": (
+                LM2011_EXTENSION_RECOMPUTE_TEXT_FEATURES_FULL_10K
+            ),
             "LM2011_EXTENSION_FINBERT_ANALYSIS_RUN_DIR": (
                 str(LM2011_EXTENSION_FINBERT_ANALYSIS_RUN_DIR)
                 if LM2011_EXTENSION_FINBERT_ANALYSIS_RUN_DIR is not None
@@ -3476,6 +3532,9 @@ def main() -> None:
             lm2011_output_dir=LM2011_POST_REFINITIV_DIR,
             output_dir=LM2011_EXTENSION_OUTPUT_DIR,
             require_cleaned_scope_match=LM2011_EXTENSION_REQUIRE_CLEANED_SCOPE_MATCH,
+            text_scopes=LM2011_EXTENSION_TEXT_SCOPES,
+            extension_text_features_full_10k_path=LM2011_EXTENSION_TEXT_FEATURES_FULL_10K_PATH,
+            recompute_extension_text_features_full_10k=LM2011_EXTENSION_RECOMPUTE_TEXT_FEATURES_FULL_10K,
             recompute_text_features_full_10k=LM2011_RECOMPUTE_TEXT_FEATURES_FULL_10K,
             recompute_text_features_mda=LM2011_RECOMPUTE_TEXT_FEATURES_MDA,
             recompute_event_screen_surface=LM2011_RECOMPUTE_EVENT_SCREEN_SURFACE,
@@ -3491,6 +3550,15 @@ def main() -> None:
             {
                 "lm2011_extension_output_dir": str(LM2011_EXTENSION_OUTPUT_DIR),
                 "lm2011_extension_require_cleaned_scope_match": LM2011_EXTENSION_REQUIRE_CLEANED_SCOPE_MATCH,
+                "lm2011_extension_text_scopes": list(LM2011_EXTENSION_TEXT_SCOPES),
+                "lm2011_extension_text_features_full_10k_path": (
+                    str(LM2011_EXTENSION_TEXT_FEATURES_FULL_10K_PATH)
+                    if LM2011_EXTENSION_TEXT_FEATURES_FULL_10K_PATH is not None
+                    else None
+                ),
+                "lm2011_extension_recompute_extension_text_features_full_10k": (
+                    LM2011_EXTENSION_RECOMPUTE_TEXT_FEATURES_FULL_10K
+                ),
                 "lm2011_extension_recompute_text_features_full_10k": (
                     LM2011_RECOMPUTE_TEXT_FEATURES_FULL_10K
                 ),

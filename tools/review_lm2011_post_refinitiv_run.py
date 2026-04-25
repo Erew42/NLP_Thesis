@@ -939,6 +939,7 @@ def _result_lookup(df: pl.DataFrame) -> tuple[dict[str, dict[str, dict[str, Any]
             "standard_error": row["standard_error"],
             "signal_name": signal_name,
             "coefficient_name": coefficient_name,
+            "dependent_variable": row.get("dependent_variable"),
         }
         fit_info.setdefault(
             signal_name,
@@ -958,6 +959,12 @@ def _scale_table_viii_estimate(row: dict[str, Any]) -> float:
     }:
         scale *= 100.0
     return scale
+
+
+def _scale_table_vi_estimate(row: dict[str, Any]) -> float:
+    if row.get("dependent_variable") == "abnormal_volume":
+        return 1.0
+    return 100.0
 
 
 def _coef_cell(
@@ -1112,8 +1119,8 @@ def _render_dictionary_surface_table(
     estimate_scale: float | Callable[[dict[str, Any]], float] = 1.0,
     note_suffix: str = "",
 ) -> str:
-    lookup, fit_info = _result_lookup(df)
     panel_a_order = [
+        ("H4N-Inf", "h4n_inf_prop"),
         ("Negative", "lm_negative_prop"),
         ("Positive", "lm_positive_prop"),
         ("Uncertainty", "lm_uncertainty_prop"),
@@ -1122,6 +1129,7 @@ def _render_dictionary_surface_table(
         ("Modal Weak", "lm_modal_weak_prop"),
     ]
     panel_b_order = [
+        ("H4N-Inf", "h4n_inf_tfidf"),
         ("Negative", "lm_negative_tfidf"),
         ("Positive", "lm_positive_tfidf"),
         ("Uncertainty", "lm_uncertainty_tfidf"),
@@ -1129,19 +1137,28 @@ def _render_dictionary_surface_table(
         ("Modal Strong", "lm_modal_strong_tfidf"),
         ("Modal Weak", "lm_modal_weak_tfidf"),
     ]
+    outcome_order = [
+        ("Event period excess return", "filing_period_excess_return"),
+        ("Event period abnormal volume", "abnormal_volume"),
+        ("Postevent return volatility", "postevent_return_volatility"),
+    ]
 
     def _panel_lines(panel_title: str, spec_order: Sequence[tuple[str, str]]) -> list[str]:
-        cells = [
-            _coef_cell(lookup.get(signal_name, {}).get(signal_name), estimate_scale=estimate_scale)
-            for _, signal_name in spec_order
-        ]
-        return [
-            rf"\multicolumn{{7}}{{c}}{{{_latex_escape(panel_title)}}} \\",
-            r"\cmidrule(lr){1-7}",
+        lines = [
+            rf"\multicolumn{{8}}{{c}}{{{_latex_escape(panel_title)}}} \\",
+            r"\cmidrule(lr){1-8}",
             "Dependent Variable & " + " & ".join(_latex_escape(label) for label, _ in spec_order) + r" \\",
             r"\midrule",
-            "Event period excess return & " + " & ".join(cells) + r" \\",
         ]
+        for outcome_label, dependent_variable in outcome_order:
+            outcome_df = df.filter(pl.col("dependent_variable") == dependent_variable)
+            lookup, _ = _result_lookup(outcome_df)
+            cells = [
+                _coef_cell(lookup.get(signal_name, {}).get(signal_name), estimate_scale=estimate_scale)
+                for _, signal_name in spec_order
+            ]
+            lines.append(_latex_escape(outcome_label) + " & " + " & ".join(cells) + r" \\")
+        return lines
 
     lines = [
         r"\begin{table}[H]",
@@ -1150,7 +1167,7 @@ def _render_dictionary_surface_table(
         rf"{{\bfseries {title_number}}}\\[0.3em]",
         rf"{{\bfseries {_latex_escape(heading)}}}\\[0.25em]",
         rf"{{\itshape {_latex_escape(subtitle)}}}\\[0.7em]",
-        r"\begin{tabular}{lcccccc}",
+        r"\begin{tabular}{lccccccc}",
         r"\toprule",
         *_panel_lines("Panel A: Proportional Weights", panel_a_order),
         r"\addlinespace",
@@ -1159,10 +1176,11 @@ def _render_dictionary_surface_table(
         r"\end{tabular}",
         r"\end{table}",
     ]
+    _, fit_info = _result_lookup(df.filter(pl.col("dependent_variable") == "filing_period_excess_return"))
     note = _fit_summary_note(fit_info, [signal_name for _, signal_name in (*panel_a_order, *panel_b_order)])
     if note_suffix:
         note += f" {note_suffix}"
-    note += " The staged Table VI artifact retains the filing-period excess-return surface only; abnormal-volume and postevent-volatility surfaces are not stored in the selected run."
+    note += " Table VI rows are separate dependent-variable surfaces for filing-window excess return, filing-window abnormal volume, and postevent return volatility."
     lines.append(rf"{{\footnotesize\emph{{Note:}} {_latex_escape(note)}}}")
     return "\n".join(lines)
 
@@ -1544,10 +1562,10 @@ def _paper_table_sections(run_dir: Path) -> list[str]:
             sections.append(
                 _render_dictionary_surface_table(
                     title,
-                    "Additional Word Lists and Filing Period Excess Return Regressions",
+                    "Additional Word Lists, Filing Period Returns, Abnormal Volume, and Postevent Return Volatility",
                     "Finance-dictionary surface reconstructed from staged coefficients",
                     df,
-                    estimate_scale=100.0,
+                    estimate_scale=_scale_table_vi_estimate,
                     note_suffix=return_note,
                 )
             )

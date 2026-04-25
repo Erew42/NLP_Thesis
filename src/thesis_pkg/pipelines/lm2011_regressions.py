@@ -40,6 +40,27 @@ _RETURN_CONTROL_COLUMNS_NO_OWNERSHIP: tuple[str, ...] = tuple(
 _SUE_CONTROL_COLUMNS_NO_OWNERSHIP: tuple[str, ...] = tuple(
     column for column in _SUE_CONTROL_COLUMNS if column != "institutional_ownership"
 )
+_TABLE_VI_DEPENDENT_VARIABLES: tuple[str, ...] = (
+    "filing_period_excess_return",
+    "abnormal_volume",
+    "postevent_return_volatility",
+)
+_TABLE_VI_SIGNAL_COLUMNS: tuple[str, ...] = (
+    "h4n_inf_prop",
+    "lm_negative_prop",
+    "lm_positive_prop",
+    "lm_uncertainty_prop",
+    "lm_litigious_prop",
+    "lm_modal_strong_prop",
+    "lm_modal_weak_prop",
+    "h4n_inf_tfidf",
+    "lm_negative_tfidf",
+    "lm_positive_tfidf",
+    "lm_uncertainty_tfidf",
+    "lm_litigious_tfidf",
+    "lm_modal_strong_tfidf",
+    "lm_modal_weak_tfidf",
+)
 _TABLE_RESULT_SCHEMA: dict[str, pl.DataType] = {
     "table_id": pl.Utf8,
     "specification_id": pl.Utf8,
@@ -994,6 +1015,37 @@ def _run_signal_family(
     return pl.concat(nonempty_outputs, how="vertical_relaxed")
 
 
+def _concat_lm2011_table_results(frames: Sequence[pl.DataFrame]) -> pl.DataFrame:
+    nonempty_frames = [frame for frame in frames if frame.height > 0]
+    if not nonempty_frames:
+        return _empty_lm2011_table_results_df()
+    return pl.concat(nonempty_frames, how="vertical_relaxed")
+
+
+def _concat_lm2011_quarterly_bundles(
+    bundles: Sequence[_QuarterlyFamaMacbethBundle],
+) -> _QuarterlyFamaMacbethBundle:
+    return _QuarterlyFamaMacbethBundle(
+        results_df=_concat_lm2011_table_results([bundle.results_df for bundle in bundles]),
+        skipped_quarters_df=(
+            pl.concat(
+                [bundle.skipped_quarters_df for bundle in bundles if bundle.skipped_quarters_df.height > 0],
+                how="vertical_relaxed",
+            )
+            if any(bundle.skipped_quarters_df.height > 0 for bundle in bundles)
+            else _empty_skipped_quarters_df()
+        ),
+        quarter_fit_df=(
+            pl.concat(
+                [bundle.quarter_fit_df for bundle in bundles if bundle.quarter_fit_df.height > 0],
+                how="vertical_relaxed",
+            )
+            if any(bundle.quarter_fit_df.height > 0 for bundle in bundles)
+            else _empty_quarter_fit_df()
+        ),
+    )
+
+
 def _run_lm2011_table_signal_family(
     panel_lf: pl.LazyFrame,
     *,
@@ -1256,28 +1308,36 @@ def _build_lm2011_table_vi_results_impl(
         ff48_siccodes_path=ff48_siccodes_path,
         text_scope="full_10k",
     )
-    return _run_lm2011_table_signal_family(
-        panel_lf,
-        table_id="table_vi_full_10k_dictionary_surface",
-        text_scope="full_10k",
-        dependent_variable="filing_period_excess_return",
-        signal_columns=(
-            "lm_negative_prop",
-            "lm_negative_tfidf",
-            "lm_positive_prop",
-            "lm_positive_tfidf",
-            "lm_uncertainty_prop",
-            "lm_uncertainty_tfidf",
-            "lm_litigious_prop",
-            "lm_litigious_tfidf",
-            "lm_modal_strong_prop",
-            "lm_modal_strong_tfidf",
-            "lm_modal_weak_prop",
-            "lm_modal_weak_tfidf",
-        ),
-        control_columns=control_columns,
-        with_diagnostics=with_diagnostics,
-    )
+    if with_diagnostics:
+        bundles: list[_QuarterlyFamaMacbethBundle] = []
+        for dependent_variable in _TABLE_VI_DEPENDENT_VARIABLES:
+            outcome_bundle = _run_lm2011_table_signal_family(
+                panel_lf,
+                table_id="table_vi_full_10k_dictionary_surface",
+                text_scope="full_10k",
+                dependent_variable=dependent_variable,
+                signal_columns=_TABLE_VI_SIGNAL_COLUMNS,
+                control_columns=control_columns,
+                with_diagnostics=True,
+            )
+            assert isinstance(outcome_bundle, _QuarterlyFamaMacbethBundle)
+            bundles.append(outcome_bundle)
+        return _concat_lm2011_quarterly_bundles(bundles)
+
+    frames: list[pl.DataFrame] = []
+    for dependent_variable in _TABLE_VI_DEPENDENT_VARIABLES:
+        outcome_df = _run_lm2011_table_signal_family(
+            panel_lf,
+            table_id="table_vi_full_10k_dictionary_surface",
+            text_scope="full_10k",
+            dependent_variable=dependent_variable,
+            signal_columns=_TABLE_VI_SIGNAL_COLUMNS,
+            control_columns=control_columns,
+            with_diagnostics=False,
+        )
+        assert isinstance(outcome_df, pl.DataFrame)
+        frames.append(outcome_df)
+    return _concat_lm2011_table_results(frames)
 
 
 def _build_lm2011_table_vi_results_bundle(

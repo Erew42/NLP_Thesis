@@ -775,7 +775,7 @@ signal_tfidf_i,S = Sum_{t in S, tf_i,t > 0}(term_weight_i,t)
     for line in [
         "Table IV and Table VIII use h4n_inf_prop, lm_negative_prop, h4n_inf_tfidf, and lm_negative_tfidf.",
         "Table V uses the same four signals, but on the MD&A item-7 surface and only when total_token_count_mda >= 250.",
-        "Table VI broadens the signal family to LM negative, positive, uncertainty, litigious, modal_strong, and modal_weak, each in prop and tfidf form.",
+        "Table VI broadens the signal family to H4N-Inf plus LM negative, positive, uncertainty, litigious, modal_strong, and modal_weak, each in prop and tfidf form, and runs the grid for filing-period returns, abnormal volume, and postevent volatility.",
         "Table IA.I uses normalized_difference_negative and normalized_difference_h4n_inf, which are standardized within industry against prior-year means and standard deviations.",
         "The trading strategy uses only fin_neg_prop, fin_neg_tfidf, h4n_inf_prop, and h4n_inf_tfidf on full 10-K text.",
     ]:
@@ -936,8 +936,8 @@ t_stat           = theta_hat / SE_NW(theta_hat)
         ],
         [
             "Table VI",
-            "filing_period_excess_return",
-            "LM negative/positive/uncertainty/litigious/modal_strong/modal_weak in prop and tfidf form on full_10k",
+            "filing_period_excess_return, abnormal_volume, postevent_return_volatility",
+            "H4N-Inf plus LM negative/positive/uncertainty/litigious/modal_strong/modal_weak in prop and tfidf form on full_10k",
             "Same controls as Table IV.",
         ],
         [
@@ -963,7 +963,7 @@ t_stat           = theta_hat / SE_NW(theta_hat)
     story.append(Spacer(1, 4))
     story.append(
         _paragraph(
-            "<i>Economic interpretation of the table specifications.</i> Table IV is the baseline 'tone predicts short-horizon reaction' test on full 10-K text. Table V narrows to MD&amp;A, the section with the highest management discretion; stronger loadings there would indicate attention is concentrated on the narrative rather than the boilerplate sections. Table VI broadens the LM categories to test whether uncertainty, litigious, and modal-strength vocabularies add incremental information beyond pure negativity. Table VIII uses SUE as the outcome; a significant tone coefficient there means text signals carry information orthogonal to the numerical earnings surprise. Table IA.I uses industry-standardized normalized-difference tone so coefficients capture relative-to-industry deviations, purging permanent industry-style differences in cautionary language. Table IA.II is the tradeability check: a non-zero FF4 alpha on the Q1 minus Q5 long-short portfolio is <i>economic</i> evidence (an investable excess return unexplained by standard factor exposures) rather than merely statistical significance.",
+            "<i>Economic interpretation of the table specifications.</i> Table IV is the baseline 'tone predicts short-horizon reaction' test on full 10-K text. Table V narrows to MD&amp;A, the section with the highest management discretion; stronger loadings there would indicate attention is concentrated on the narrative rather than the boilerplate sections. Table VI broadens the dictionary categories and repeats the test across price reaction, attention/disagreement, and forward uncertainty outcomes. Table VIII uses SUE as the outcome; a significant tone coefficient there means text signals carry information orthogonal to the numerical earnings surprise. Table IA.I uses industry-standardized normalized-difference tone so coefficients capture relative-to-industry deviations, purging permanent industry-style differences in cautionary language. Table IA.II is the tradeability check: a non-zero FF4 alpha on the Q1 minus Q5 long-short portfolio is <i>economic</i> evidence (an investable excess return unexplained by standard factor exposures) rather than merely statistical significance.",
             styles["body"],
         )
     )
@@ -1074,8 +1074,8 @@ Reported outputs:
     story.append(
         _code_block(
             """
-Default runner outcome:  filing_period_excess_return
-Module-defined secondary outcomes: abnormal_volume, postevent_return_volatility
+Default extension runner outcome: filing_period_excess_return
+Core Table VI outcomes: filing_period_excess_return, abnormal_volume, postevent_return_volatility
 
 Base controls:
     log_size, log_book_to_market, log_share_turnover, pre_ffalpha, nasdaq_dummy
@@ -1096,7 +1096,7 @@ Control sets:
     )
     story.append(
         _paragraph(
-            "The module exposes abnormal_volume and postevent_return_volatility as secondary outcomes, but run_lm2011_extension_pipeline currently calls build_lm2011_extension_sample_loss_table and run_lm2011_extension_estimation_scaffold with their defaults. In the shipped runner path, extension_sample_loss and extension_results are therefore written for filing_period_excess_return unless a library caller overrides outcome_names directly (E1, E13).",
+            "The core LM2011 Table VI path uses abnormal_volume and postevent_return_volatility as paper-defined dependent variables. The extension path still defaults to filing_period_excess_return unless a library caller passes a broader outcome_names sequence directly (E1, E13).",
             styles["body"],
         )
     )

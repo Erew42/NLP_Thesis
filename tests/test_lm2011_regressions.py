@@ -5,6 +5,7 @@ import math
 
 import polars as pl
 import pytest
+from polars.testing import assert_frame_equal
 
 from thesis_pkg.pipeline import (
     build_lm2011_normalized_difference_panel,
@@ -931,7 +932,9 @@ def test_table_wrappers_follow_revised_spec_signal_scopes(tmp_path) -> None:
     }
     assert table_v.get_column("text_scope").unique().to_list() == ["mda_item_7"]
 
-    assert set(table_vi.get_column("signal_name").unique().to_list()) == {
+    expected_table_vi_signals = {
+        "h4n_inf_prop",
+        "h4n_inf_tfidf",
         "lm_negative_prop",
         "lm_negative_tfidf",
         "lm_positive_prop",
@@ -945,7 +948,12 @@ def test_table_wrappers_follow_revised_spec_signal_scopes(tmp_path) -> None:
         "lm_modal_weak_prop",
         "lm_modal_weak_tfidf",
     }
-    assert table_vi.filter(pl.col("signal_name").str.contains("h4n")).height == 0
+    assert set(table_vi.get_column("signal_name").unique().to_list()) == expected_table_vi_signals
+    assert set(table_vi.get_column("dependent_variable").unique().to_list()) == {
+        "filing_period_excess_return",
+        "abnormal_volume",
+        "postevent_return_volatility",
+    }
     assert table_viii.get_column("dependent_variable").unique().to_list() == ["sue"]
     assert set(table_viii.get_column("signal_name").unique().to_list()) == {
         "h4n_inf_prop",
@@ -953,6 +961,80 @@ def test_table_wrappers_follow_revised_spec_signal_scopes(tmp_path) -> None:
         "h4n_inf_tfidf",
         "lm_negative_tfidf",
     }
+
+
+def test_table_vi_preserves_legacy_lm_filing_return_coefficients(tmp_path) -> None:
+    inputs = _regression_test_inputs(tmp_path)
+    table_vi = build_lm2011_table_vi_results(
+        inputs["event_panel"].lazy(),
+        inputs["full_text_features"].lazy(),
+        inputs["company_history"].lazy(),
+        inputs["company_description"].lazy(),
+        ff48_siccodes_path=inputs["ff48_path"],
+    )
+    panel_lf = build_lm2011_return_regression_panel(
+        inputs["event_panel"].lazy(),
+        inputs["full_text_features"].lazy(),
+        inputs["company_history"].lazy(),
+        inputs["company_description"].lazy(),
+        ff48_siccodes_path=inputs["ff48_path"],
+        text_scope="full_10k",
+    )
+    legacy_signals = (
+        "lm_negative_prop",
+        "lm_negative_tfidf",
+        "lm_positive_prop",
+        "lm_positive_tfidf",
+        "lm_uncertainty_prop",
+        "lm_uncertainty_tfidf",
+        "lm_litigious_prop",
+        "lm_litigious_tfidf",
+        "lm_modal_strong_prop",
+        "lm_modal_strong_tfidf",
+        "lm_modal_weak_prop",
+        "lm_modal_weak_tfidf",
+    )
+    expected = pl.concat(
+        [
+            run_lm2011_quarterly_fama_macbeth(
+                panel_lf,
+                table_id="table_vi_full_10k_dictionary_surface",
+                text_scope="full_10k",
+                dependent_variable="filing_period_excess_return",
+                signal_column=signal,
+                control_columns=regressions._RETURN_CONTROL_COLUMNS,
+                specification_id=signal,
+                nw_lags=1,
+            )
+            for signal in legacy_signals
+        ],
+        how="vertical_relaxed",
+    )
+    comparison_columns = [
+        "table_id",
+        "specification_id",
+        "text_scope",
+        "signal_name",
+        "dependent_variable",
+        "coefficient_name",
+        "estimate",
+        "standard_error",
+        "t_stat",
+        "n_quarters",
+        "mean_quarter_n",
+        "weighting_rule",
+        "nw_lags",
+    ]
+    actual = (
+        table_vi.filter(
+            (pl.col("dependent_variable") == "filing_period_excess_return")
+            & pl.col("signal_name").is_in(legacy_signals)
+        )
+        .select(comparison_columns)
+        .sort("signal_name", "coefficient_name")
+    )
+    expected = expected.select(comparison_columns).sort("signal_name", "coefficient_name")
+    assert_frame_equal(actual, expected)
 
 
 def test_no_ownership_core_table_wrappers_preserve_signals_and_drop_only_ownership(tmp_path) -> None:
@@ -1022,9 +1104,9 @@ def test_no_ownership_core_table_wrappers_preserve_signals_and_drop_only_ownersh
         assert ownership_df.get_column("text_scope").unique().to_list() == no_ownership_df.get_column(
             "text_scope"
         ).unique().to_list()
-        assert ownership_df.get_column("dependent_variable").unique().to_list() == no_ownership_df.get_column(
-            "dependent_variable"
-        ).unique().to_list()
+        assert set(ownership_df.get_column("dependent_variable").unique().to_list()) == set(
+            no_ownership_df.get_column("dependent_variable").unique().to_list()
+        )
         assert set(ownership_df.get_column("signal_name").unique().to_list()) == set(
             no_ownership_df.get_column("signal_name").unique().to_list()
         )

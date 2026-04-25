@@ -214,6 +214,30 @@ def test_env_optional_date_helper(monkeypatch: MonkeyPatch) -> None:
     assert runner._env_optional_date("TEST_OPTIONAL_DATE_NONE", runner.dt.date(2024, 1, 1)) is None
 
 
+def test_lm2011_table_vi_stage_flag_enables_no_ownership_companion(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SEC_CCM_RUN_LM2011_TABLE_VI_RESULTS", "true")
+    monkeypatch.delenv("SEC_CCM_RUN_LM2011_TABLE_VI_RESULTS_NO_OWNERSHIP", raising=False)
+
+    flags = runner._resolve_lm2011_stage_flags(umbrella_enabled=False)
+
+    assert flags["table_vi_results"] is True
+    assert flags["table_vi_results_no_ownership"] is True
+
+
+def test_lm2011_table_vi_no_ownership_companion_can_be_explicitly_disabled(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SEC_CCM_RUN_LM2011_TABLE_VI_RESULTS", "true")
+    monkeypatch.setenv("SEC_CCM_RUN_LM2011_TABLE_VI_RESULTS_NO_OWNERSHIP", "false")
+
+    flags = runner._resolve_lm2011_stage_flags(umbrella_enabled=False)
+
+    assert flags["table_vi_results"] is True
+    assert flags["table_vi_results_no_ownership"] is False
+
+
 def test_runner_exposes_lseg_request_bound_env_defaults() -> None:
     source = _runner_source()
 
@@ -259,6 +283,9 @@ def test_runner_exposes_lm2011_extension_env_flags_and_orders_stage_after_finber
     source = _runner_source()
 
     assert 'SEC_CCM_RUN_LM2011_EXTENSION' in source
+    assert 'SEC_CCM_LM2011_EXTENSION_TEXT_SCOPES' in source
+    assert 'LM2011_EXTENSION_TEXT_FEATURES_FULL_10K_PATH = _env_optional_path(' in source
+    assert 'LM2011_EXTENSION_RECOMPUTE_TEXT_FEATURES_FULL_10K = _env_bool(' in source
     assert 'LM2011_EXTENSION_REQUIRE_CLEANED_SCOPE_MATCH = _env_bool(' in source
     assert 'LM2011_EXTENSION_FINBERT_ANALYSIS_RUN_DIR = _env_optional_path(' in source
     assert 'LM2011_EXTENSION_FINBERT_PREPROCESS_RUN_DIR = _env_optional_path(' in source
@@ -397,6 +424,9 @@ def test_build_lm2011_extension_run_config_prefers_same_run_finbert_artifacts() 
     assert cfg.full_10k_cleaning_contract == "lm2011_paper"
     assert cfg.full_10k_text_feature_batch_size == 4
     assert cfg.event_window_doc_batch_size == 50
+    assert cfg.text_scopes == tuple(runner.LM2011_EXTENSION_PRIMARY_TEXT_SCOPES)
+    assert cfg.extension_text_features_full_10k_path is None
+    assert cfg.recompute_extension_text_features_full_10k is False
     assert cfg.recompute_text_features_full_10k is True
     assert cfg.recompute_text_features_mda is True
     assert cfg.recompute_event_screen_surface is False
@@ -1576,6 +1606,12 @@ def test_main_resolves_extension_finbert_dirs_from_finbert_run_name(
     monkeypatch.setenv("SEC_CCM_RUN_LM2011_EXTENSION", "true")
     monkeypatch.setenv("SEC_CCM_FINBERT_OUTPUT_DIR", str(finbert_output_dir))
     monkeypatch.setenv("SEC_CCM_FINBERT_RUN_NAME", "shared_finbert")
+    monkeypatch.setenv("SEC_CCM_LM2011_EXTENSION_TEXT_SCOPES", "full_10k,item_7_mda")
+    explicit_extension_full_10k = tmp_path / "explicit_extension_full_10k.parquet"
+    monkeypatch.setenv(
+        "SEC_CCM_LM2011_EXTENSION_TEXT_FEATURES_FULL_10K_PATH",
+        str(explicit_extension_full_10k),
+    )
 
     captured: dict[str, object] = {}
 
@@ -1604,6 +1640,9 @@ def test_main_resolves_extension_finbert_dirs_from_finbert_run_name(
     kwargs = captured["kwargs"]
     assert kwargs["finbert_analysis_run_dir"] == analysis_run_dir.resolve()
     assert kwargs["finbert_preprocessing_run_dir"] == preprocess_run_dir.resolve()
+    assert kwargs["text_scopes"] == ("full_10k", "item_7_mda")
+    assert kwargs["extension_text_features_full_10k_path"] == explicit_extension_full_10k
+    assert kwargs["recompute_extension_text_features_full_10k"] is False
 
 
 def test_main_lm2011_defaults_daily_panel_to_ccm_daily_path(

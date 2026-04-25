@@ -29,9 +29,13 @@ EXTENSION_SECONDARY_OUTCOMES: tuple[str, ...] = (
     "abnormal_volume",
     "postevent_return_volatility",
 )
+EXTENSION_FULL_10K_SCOPE = "full_10k"
+EXTENSION_COMBINED_ITEM_1A_7_SCOPE = "items_1a_7_combined"
 EXTENSION_PRIMARY_TEXT_SCOPES: tuple[str, ...] = (
-    "item_7_mda",
+    EXTENSION_FULL_10K_SCOPE,
+    EXTENSION_COMBINED_ITEM_1A_7_SCOPE,
     "item_1a_risk_factors",
+    "item_7_mda",
 )
 EXTENSION_ITEM_SCOPE_IDS: Mapping[str, str] = {
     "item_7_mda": "7",
@@ -127,6 +131,10 @@ _COMPARISON_SPECS: tuple[Lm2011ExtensionComparisonSpec, ...] = (
         signal_inputs=("lm_negative_tfidf", "finbert_neg_prob_lenw_mean"),
     ),
 )
+_DEFAULT_COMPARISON_SPECIFICATION_NAMES: tuple[str, ...] = tuple(
+    comparison_spec.specification_name for comparison_spec in _COMPARISON_SPECS
+)
+_FULL_10K_COMPATIBLE_SPECIFICATION_NAMES: tuple[str, ...] = ("dictionary_only",)
 _EXTENSION_RESULTS_SCHEMA: dict[str, pl.DataType] = {
     "run_id": pl.Utf8,
     "sample_window": pl.Utf8,
@@ -379,8 +387,47 @@ def _comparison_signal_name(signal_inputs: Sequence[str]) -> str:
     return ",".join(signal_inputs)
 
 
+def _scope_role(text_scope: str) -> str:
+    normalized = _normalize_scope_value(text_scope)
+    if normalized == EXTENSION_FULL_10K_SCOPE:
+        return "primary_full_10k"
+    if normalized == EXTENSION_COMBINED_ITEM_1A_7_SCOPE:
+        return "primary_items_1a_7_combined"
+    if normalized in {"item_1a_risk_factors", "item_7_mda"}:
+        return "robustness_separate_item"
+    return "auxiliary"
+
+
+def _specification_names_for_text_scope(
+    text_scope: str,
+    specification_names: Sequence[str],
+) -> tuple[str, ...]:
+    normalized = _normalize_scope_value(text_scope)
+    allowed = (
+        _FULL_10K_COMPATIBLE_SPECIFICATION_NAMES
+        if normalized == EXTENSION_FULL_10K_SCOPE
+        else _DEFAULT_COMPARISON_SPECIFICATION_NAMES
+    )
+    return tuple(
+        specification_name
+        for specification_name in specification_names
+        if specification_name in allowed
+    )
+
+
 def _normalize_scope_value(value: str) -> str:
     raw = value.strip().casefold().replace("-", "_")
+    if raw in {"full_10k", "full_10_k", "10k", "10_k", "full_filing"}:
+        return EXTENSION_FULL_10K_SCOPE
+    if raw in {
+        "items_1a_7_combined",
+        "items_1a_7_concat",
+        "item_1a_item_7_combined",
+        "item_1a_item_7_concat",
+        "item_1a_7_combined",
+        "item_1a_7_concat",
+    }:
+        return EXTENSION_COMBINED_ITEM_1A_7_SCOPE
     if raw in {"7", "item_7", "mda_item_7", "item_7_mda"}:
         return "item_7_mda"
     if raw in {"1a", "item_1a", "item_1a_risk_factors"}:
@@ -395,7 +442,22 @@ def _normalize_scope_value(value: str) -> str:
 def normalize_lm2011_extension_text_scope_expr(expr: pl.Expr) -> pl.Expr:
     raw = expr.cast(pl.Utf8, strict=False).str.strip_chars().str.to_lowercase().str.replace_all("-", "_")
     return (
-        pl.when(raw.is_in(["7", "item_7", "mda_item_7", "item_7_mda"]))
+        pl.when(raw.is_in(["full_10k", "full_10_k", "10k", "10_k", "full_filing"]))
+        .then(pl.lit(EXTENSION_FULL_10K_SCOPE))
+        .when(
+            raw.is_in(
+                [
+                    "items_1a_7_combined",
+                    "items_1a_7_concat",
+                    "item_1a_item_7_combined",
+                    "item_1a_item_7_concat",
+                    "item_1a_7_combined",
+                    "item_1a_7_concat",
+                ]
+            )
+        )
+        .then(pl.lit(EXTENSION_COMBINED_ITEM_1A_7_SCOPE))
+        .when(raw.is_in(["7", "item_7", "mda_item_7", "item_7_mda"]))
         .then(pl.lit("item_7_mda"))
         .when(raw.is_in(["1a", "item_1a", "item_1a_risk_factors"]))
         .then(pl.lit("item_1a_risk_factors"))
@@ -431,17 +493,29 @@ def build_lm2011_extension_control_ladder() -> pl.DataFrame:
     )
 
 
-def build_lm2011_extension_specification_grid() -> pl.DataFrame:
+def build_lm2011_extension_specification_grid(
+    *,
+    text_scopes: Sequence[str] = EXTENSION_PRIMARY_TEXT_SCOPES,
+    specification_names: Sequence[str] = _DEFAULT_COMPARISON_SPECIFICATION_NAMES,
+) -> pl.DataFrame:
     return pl.DataFrame(
         [
             {
+                "text_scope": normalized_text_scope,
+                "scope_role": _scope_role(normalized_text_scope),
                 "specification_name": comparison_spec.specification_name,
                 "feature_family": comparison_spec.feature_family,
                 "signal_inputs": list(comparison_spec.signal_inputs),
             }
-            for comparison_spec in _COMPARISON_SPECS
+            for raw_text_scope in text_scopes
+            for normalized_text_scope in [_normalize_scope_value(raw_text_scope)]
+            for comparison_spec in _comparison_specs_by_name(
+                _specification_names_for_text_scope(normalized_text_scope, specification_names)
+            )
         ],
         schema_overrides={
+            "text_scope": pl.Utf8,
+            "scope_role": pl.Utf8,
             "specification_name": pl.Utf8,
             "feature_family": pl.Utf8,
             "signal_inputs": pl.List(pl.Utf8),
@@ -498,6 +572,7 @@ def build_lm2011_extension_dictionary_features_from_cleaned_scopes(
     harvard_negative_word_list: Iterable[str] | None,
     master_dictionary_words: Iterable[str],
     dictionary_family: str = EXTENSION_DICTIONARY_FAMILY_LM2011,
+    text_scopes: Sequence[str] | None = None,
     text_col: str = "cleaned_text",
     raw_form_col: str = "document_type_raw",
 ) -> pl.LazyFrame:
@@ -516,9 +591,21 @@ def build_lm2011_extension_dictionary_features_from_cleaned_scopes(
         "cleaned_item_scopes",
     )
 
+    normalized_text_scopes = tuple(
+        dict.fromkeys(
+            _normalize_scope_value(scope)
+            for scope in (
+                text_scopes
+                if text_scopes is not None
+                else (*EXTENSION_ITEM_SCOPE_IDS.keys(), EXTENSION_COMBINED_ITEM_1A_7_SCOPE)
+            )
+        )
+    )
     frames: list[pl.LazyFrame] = []
     for raw_text_scope, item_id in EXTENSION_ITEM_SCOPE_IDS.items():
         text_scope = _normalize_scope_value(raw_text_scope)
+        if text_scope not in normalized_text_scopes:
+            continue
         scope_lf = cleaned_scope_lf.filter(
             (normalize_lm2011_extension_text_scope_expr(pl.col("text_scope")) == pl.lit(text_scope))
             & (pl.col("item_id").cast(pl.Utf8, strict=False).str.to_uppercase() == pl.lit(item_id.upper()))
@@ -563,6 +650,116 @@ def build_lm2011_extension_dictionary_features_from_cleaned_scopes(
             )
             .select(_empty_extension_dictionary_features_df().columns)
         )
+    if EXTENSION_COMBINED_ITEM_1A_7_SCOPE in normalized_text_scopes:
+        item_1a_scope = "item_1a_risk_factors"
+        item_7_scope = "item_7_mda"
+        combined_item_id = "1A+7"
+        item_scopes_lf = cleaned_scope_lf.with_columns(
+            normalize_lm2011_extension_text_scope_expr(pl.col("text_scope")).alias("text_scope"),
+            pl.col("item_id").cast(pl.Utf8, strict=False).str.to_uppercase().alias("_item_id_upper"),
+            pl.col(text_col).cast(pl.Utf8, strict=False).alias(text_col),
+            pl.col(raw_form_col).cast(pl.Utf8, strict=False).alias(raw_form_col),
+            pl.col("cleaning_policy_id").cast(pl.Utf8, strict=False).alias("cleaning_policy_id"),
+        ).filter(
+            (pl.col("text_scope").is_in([item_1a_scope, item_7_scope]))
+            & (
+                ((pl.col("text_scope") == pl.lit(item_1a_scope)) & (pl.col("_item_id_upper") == pl.lit("1A")))
+                | ((pl.col("text_scope") == pl.lit(item_7_scope)) & (pl.col("_item_id_upper") == pl.lit("7")))
+            )
+        )
+        metadata_check_lf = item_scopes_lf.group_by("doc_id").agg(
+            pl.col("text_scope").n_unique().alias("_scope_count"),
+            pl.col("cleaning_policy_id").n_unique().alias("_cleaning_policy_count"),
+            pl.col("filing_date").n_unique().alias("_filing_date_count"),
+            pl.col(raw_form_col).n_unique().alias("_raw_form_count"),
+        )
+        metadata_mismatch = (
+            metadata_check_lf.filter(
+                (pl.col("_scope_count") >= 2)
+                & (
+                    (pl.col("_cleaning_policy_count") > 1)
+                    | (pl.col("_filing_date_count") > 1)
+                    | (pl.col("_raw_form_count") > 1)
+                )
+            )
+            .limit(1)
+            .collect()
+        )
+        if metadata_mismatch.height:
+            raise ValueError(
+                "Combined Item 1A+7 dictionary features require matching filing_date, "
+                "document_type_raw, and cleaning_policy_id metadata within each doc_id."
+            )
+        combined_lf = (
+            item_scopes_lf.group_by("doc_id")
+            .agg(
+                pl.col("cik_10").cast(pl.Utf8, strict=False).drop_nulls().first().alias("cik_10"),
+                pl.col("filing_date").cast(pl.Date, strict=False).drop_nulls().first().alias("filing_date"),
+                pl.col(raw_form_col).drop_nulls().first().alias(raw_form_col),
+                pl.col("cleaning_policy_id").drop_nulls().first().alias("cleaning_policy_id"),
+                pl.col("text_scope").n_unique().alias("_scope_count"),
+                pl.col(text_col).filter(pl.col("text_scope") == pl.lit(item_1a_scope)).drop_nulls().first().alias(
+                    "_item_1a_text"
+                ),
+                pl.col(text_col).filter(pl.col("text_scope") == pl.lit(item_7_scope)).drop_nulls().first().alias(
+                    "_item_7_text"
+                ),
+            )
+            .filter(
+                (pl.col("_scope_count") == 2)
+                & pl.col("_item_1a_text").is_not_null()
+                & pl.col("_item_7_text").is_not_null()
+            )
+            .with_columns(
+                pl.lit(combined_item_id, dtype=pl.Utf8).alias("item_id"),
+                pl.lit(EXTENSION_COMBINED_ITEM_1A_7_SCOPE, dtype=pl.Utf8).alias("text_scope"),
+                pl.concat_str(
+                    [pl.col("_item_1a_text"), pl.lit("\n\n"), pl.col("_item_7_text")]
+                ).alias(text_col),
+            )
+            .select(
+                "doc_id",
+                "cik_10",
+                "filing_date",
+                raw_form_col,
+                "item_id",
+                "text_scope",
+                "cleaning_policy_id",
+                text_col,
+            )
+        )
+        if combined_lf.select(pl.len()).collect().item() > 0:
+            scored_lf = build_lm2011_text_features_mda(
+                combined_lf,
+                dictionary_lists=dictionary_lists,
+                harvard_negative_word_list=harvard_negative_word_list,
+                master_dictionary_words=master_dictionary_words,
+                text_col=text_col,
+                raw_form_col=raw_form_col,
+                required_item_id=combined_item_id,
+            )
+            combined_metadata_lf = combined_lf.select(
+                pl.col("doc_id").cast(pl.Utf8, strict=False),
+                pl.col("item_id").cast(pl.Utf8, strict=False),
+                pl.col("text_scope").cast(pl.Utf8, strict=False),
+                pl.col("cleaning_policy_id").cast(pl.Utf8, strict=False),
+            ).unique(subset=["doc_id", "item_id"], keep="first")
+            frames.append(
+                scored_lf.join(combined_metadata_lf, on=["doc_id", "item_id"], how="left")
+                .with_columns(
+                    pl.lit(EXTENSION_COMBINED_ITEM_1A_7_SCOPE, dtype=pl.Utf8).alias("text_scope"),
+                    pl.coalesce(
+                        [
+                            pl.col("cleaning_policy_id_right").cast(pl.Utf8, strict=False),
+                            pl.col("cleaning_policy_id").cast(pl.Utf8, strict=False),
+                        ]
+                    ).alias("cleaning_policy_id"),
+                    pl.lit(dictionary_family, dtype=pl.Utf8).alias("dictionary_family"),
+                    pl.col("total_token_count_mda").cast(pl.Int32, strict=False).alias("total_token_count"),
+                    pl.col("token_count_mda").cast(pl.Int32, strict=False).alias("token_count"),
+                )
+                .select(_empty_extension_dictionary_features_df().columns)
+            )
     if not frames:
         return _empty_extension_dictionary_features_df().lazy()
     return pl.concat(frames, how="vertical_relaxed")
@@ -822,8 +1019,26 @@ def _validate_cleaned_scope_alignment(
     dictionary_surface_lf: pl.LazyFrame,
     model_surface_lf: pl.LazyFrame,
 ) -> None:
-    dictionary_cleaned = _has_cleaned_scope_policy(dictionary_surface_lf, "cleaning_policy_id")
-    model_cleaned = _has_cleaned_scope_policy(model_surface_lf, "cleaning_policy_id")
+    keys = ["doc_id", "filing_date", "text_scope", "cleaning_policy_id"]
+    model_scopes = (
+        model_surface_lf.select(pl.col("text_scope").cast(pl.Utf8, strict=False).alias("text_scope"))
+        .filter(pl.col("text_scope") != pl.lit(EXTENSION_FULL_10K_SCOPE))
+        .unique()
+    )
+    model_keys_source = (
+        model_surface_lf.select(keys)
+        .filter(pl.col("text_scope") != pl.lit(EXTENSION_FULL_10K_SCOPE))
+    )
+    if model_keys_source.limit(1).collect().height == 0:
+        return
+    dictionary_keys_source = (
+        dictionary_surface_lf.select(keys)
+        .filter(pl.col("text_scope") != pl.lit(EXTENSION_FULL_10K_SCOPE))
+        .join(model_scopes, on="text_scope", how="semi")
+    )
+
+    dictionary_cleaned = _has_cleaned_scope_policy(dictionary_keys_source, "cleaning_policy_id")
+    model_cleaned = _has_cleaned_scope_policy(model_keys_source, "cleaning_policy_id")
     if not dictionary_cleaned and not model_cleaned:
         return
     if not dictionary_cleaned or not model_cleaned:
@@ -832,9 +1047,8 @@ def _validate_cleaned_scope_alignment(
             "to carry cleaning_policy_id metadata from the same cleaned item-scope artifact."
         )
 
-    keys = ["doc_id", "filing_date", "text_scope", "cleaning_policy_id"]
-    dictionary_keys = dictionary_surface_lf.select(keys).unique()
-    model_keys = model_surface_lf.select(keys).unique()
+    dictionary_keys = dictionary_keys_source.unique()
+    model_keys = model_keys_source.unique()
     dictionary_only = dictionary_keys.join(model_keys, on=keys, how="anti").limit(1).collect()
     model_only = model_keys.join(dictionary_keys, on=keys, how="anti").limit(1).collect()
     if dictionary_only.height or model_only.height:
@@ -972,90 +1186,113 @@ def _build_extension_common_comparison_panel_lf(
     )
 
 
+def _panel_text_scopes(panel_lf: pl.LazyFrame) -> tuple[str, ...]:
+    _require_columns(panel_lf, ("text_scope",), "extension_analysis_panel")
+    return tuple(
+        panel_lf.select(normalize_lm2011_extension_text_scope_expr(pl.col("text_scope")).alias("text_scope"))
+        .drop_nulls(subset=["text_scope"])
+        .unique()
+        .sort("text_scope")
+        .collect()
+        .get_column("text_scope")
+        .to_list()
+    )
+
+
 def build_lm2011_extension_sample_loss_table(
     panel_lf: pl.LazyFrame,
     *,
+    text_scopes: Sequence[str] | None = None,
     outcome_names: Sequence[str] = (EXTENSION_PRIMARY_OUTCOME,),
     control_set_ids: Sequence[str] = ("C0", "C1", "C2"),
-    specification_names: Sequence[str] = ("dictionary_only", "finbert_only", "dictionary_finbert_joint"),
+    specification_names: Sequence[str] = _DEFAULT_COMPARISON_SPECIFICATION_NAMES,
     filing_date_col: str = "filing_date",
     industry_col: str = "ff48_industry_id",
 ) -> pl.DataFrame:
     rows: list[pl.DataFrame] = []
-    for outcome_name in outcome_names:
-        for specification_name in specification_names:
-            comparison_spec = _comparison_spec_by_name(specification_name)
-            for control_set_id in control_set_ids:
-                control_set = _control_set_by_id(control_set_id)
-                required = (
-                    "sample_window",
-                    "text_scope",
+    normalized_text_scopes = (
+        tuple(dict.fromkeys(_normalize_scope_value(text_scope) for text_scope in text_scopes))
+        if text_scopes is not None
+        else _panel_text_scopes(panel_lf)
+    )
+    for text_scope in normalized_text_scopes:
+        scope_panel_lf = panel_lf.filter(
+            normalize_lm2011_extension_text_scope_expr(pl.col("text_scope")) == pl.lit(text_scope)
+        )
+        for outcome_name in outcome_names:
+            for specification_name in _specification_names_for_text_scope(text_scope, specification_names):
+                comparison_spec = _comparison_spec_by_name(specification_name)
+                for control_set_id in control_set_ids:
+                    control_set = _control_set_by_id(control_set_id)
+                    required = (
+                        "sample_window",
+                        "text_scope",
                     filing_date_col,
                     outcome_name,
                     industry_col,
                     *comparison_spec.signal_inputs,
                     *control_set.controls,
-                )
-                _require_columns(panel_lf, required, "extension_analysis_panel")
-                scoped_lf = apply_lm2011_extension_control_set(panel_lf, control_set_id).with_columns(
-                    pl.col(filing_date_col).cast(pl.Date, strict=False).dt.year().cast(pl.Int32).alias("calendar_year"),
-                    _all_not_null_expr(comparison_spec.signal_inputs).alias("_signal_available"),
-                    _all_not_null_expr(control_set.controls).alias("_controls_available"),
-                    pl.col(outcome_name).is_not_null().alias("_outcome_available"),
-                    pl.col(industry_col).is_not_null().alias("_industry_available"),
-                )
-                row_df = (
-                    scoped_lf.group_by("sample_window", "calendar_year", "text_scope")
-                    .agg(
-                        pl.len().cast(pl.Int64).alias("n_control_set_rows"),
-                        pl.col("_outcome_available").cast(pl.Int64).sum().alias("n_outcome_available"),
-                        pl.col("_signal_available").cast(pl.Int64).sum().alias("n_signal_available"),
-                        pl.col("_controls_available").cast(pl.Int64).sum().alias("n_controls_available"),
-                        pl.col("_industry_available").cast(pl.Int64).sum().alias("n_industry_available"),
-                        (
-                            pl.col("_outcome_available")
-                            & pl.col("_signal_available")
-                            & pl.col("_controls_available")
-                            & pl.col("_industry_available")
+                    )
+                    _require_columns(panel_lf, required, "extension_analysis_panel")
+                    scoped_lf = apply_lm2011_extension_control_set(scope_panel_lf, control_set_id).with_columns(
+                        pl.col(filing_date_col).cast(pl.Date, strict=False).dt.year().cast(pl.Int32).alias("calendar_year"),
+                        _all_not_null_expr(comparison_spec.signal_inputs).alias("_signal_available"),
+                        _all_not_null_expr(control_set.controls).alias("_controls_available"),
+                        pl.col(outcome_name).is_not_null().alias("_outcome_available"),
+                        pl.col(industry_col).is_not_null().alias("_industry_available"),
+                    )
+                    row_df = (
+                        scoped_lf.group_by("sample_window", "calendar_year", "text_scope")
+                        .agg(
+                            pl.len().cast(pl.Int64).alias("n_control_set_rows"),
+                            pl.col("_outcome_available").cast(pl.Int64).sum().alias("n_outcome_available"),
+                            pl.col("_signal_available").cast(pl.Int64).sum().alias("n_signal_available"),
+                            pl.col("_controls_available").cast(pl.Int64).sum().alias("n_controls_available"),
+                            pl.col("_industry_available").cast(pl.Int64).sum().alias("n_industry_available"),
+                            (
+                                pl.col("_outcome_available")
+                                & pl.col("_signal_available")
+                                & pl.col("_controls_available")
+                                & pl.col("_industry_available")
+                            )
+                            .cast(pl.Int64)
+                            .sum()
+                            .alias("n_estimation_rows"),
                         )
-                        .cast(pl.Int64)
-                        .sum()
-                        .alias("n_estimation_rows"),
+                        .with_columns(
+                            pl.lit(outcome_name, dtype=pl.Utf8).alias("outcome_name"),
+                            pl.lit(comparison_spec.feature_family, dtype=pl.Utf8).alias("feature_family"),
+                            pl.lit(control_set.control_set_id, dtype=pl.Utf8).alias("control_set_id"),
+                            pl.lit(control_set.spec_alias, dtype=pl.Utf8).alias("control_set_alias"),
+                            pl.lit(specification_name, dtype=pl.Utf8).alias("specification_name"),
+                            (pl.col("n_control_set_rows") - pl.col("n_outcome_available")).alias("n_missing_outcome"),
+                            (pl.col("n_control_set_rows") - pl.col("n_signal_available")).alias("n_missing_signal"),
+                            (pl.col("n_control_set_rows") - pl.col("n_controls_available")).alias("n_missing_controls"),
+                            (pl.col("n_control_set_rows") - pl.col("n_industry_available")).alias("n_missing_industry"),
+                        )
+                        .select(
+                            "sample_window",
+                            "calendar_year",
+                            "text_scope",
+                            "outcome_name",
+                            "feature_family",
+                            "control_set_id",
+                            "control_set_alias",
+                            "specification_name",
+                            "n_control_set_rows",
+                            "n_outcome_available",
+                            "n_signal_available",
+                            "n_controls_available",
+                            "n_industry_available",
+                            "n_estimation_rows",
+                            "n_missing_outcome",
+                            "n_missing_signal",
+                            "n_missing_controls",
+                            "n_missing_industry",
+                        )
+                        .collect()
                     )
-                    .with_columns(
-                        pl.lit(outcome_name, dtype=pl.Utf8).alias("outcome_name"),
-                        pl.lit(comparison_spec.feature_family, dtype=pl.Utf8).alias("feature_family"),
-                        pl.lit(control_set.control_set_id, dtype=pl.Utf8).alias("control_set_id"),
-                        pl.lit(control_set.spec_alias, dtype=pl.Utf8).alias("control_set_alias"),
-                        pl.lit(specification_name, dtype=pl.Utf8).alias("specification_name"),
-                        (pl.col("n_control_set_rows") - pl.col("n_outcome_available")).alias("n_missing_outcome"),
-                        (pl.col("n_control_set_rows") - pl.col("n_signal_available")).alias("n_missing_signal"),
-                        (pl.col("n_control_set_rows") - pl.col("n_controls_available")).alias("n_missing_controls"),
-                        (pl.col("n_control_set_rows") - pl.col("n_industry_available")).alias("n_missing_industry"),
-                    )
-                    .select(
-                        "sample_window",
-                        "calendar_year",
-                        "text_scope",
-                        "outcome_name",
-                        "feature_family",
-                        "control_set_id",
-                        "control_set_alias",
-                        "specification_name",
-                        "n_control_set_rows",
-                        "n_outcome_available",
-                        "n_signal_available",
-                        "n_controls_available",
-                        "n_industry_available",
-                        "n_estimation_rows",
-                        "n_missing_outcome",
-                        "n_missing_signal",
-                        "n_missing_controls",
-                        "n_missing_industry",
-                    )
-                    .collect()
-                )
-                rows.append(row_df)
+                    rows.append(row_df)
     if not rows:
         return pl.DataFrame(
             schema={
@@ -1190,7 +1427,7 @@ def run_lm2011_extension_estimation_scaffold(
     text_scopes: Sequence[str] = EXTENSION_PRIMARY_TEXT_SCOPES,
     outcome_names: Sequence[str] = (EXTENSION_PRIMARY_OUTCOME,),
     control_set_ids: Sequence[str] = ("C0", "C1", "C2"),
-    specification_names: Sequence[str] = ("dictionary_only", "finbert_only", "dictionary_finbert_joint"),
+    specification_names: Sequence[str] = _DEFAULT_COMPARISON_SPECIFICATION_NAMES,
     nw_lags: int = 1,
     quarter_weighting: QuarterWeighting = "quarter_observation_count",
 ) -> pl.DataFrame:
@@ -1199,7 +1436,7 @@ def run_lm2011_extension_estimation_scaffold(
         normalized_text_scope = _normalize_scope_value(text_scope)
         scope_panel_lf = panel_lf.filter(pl.col("text_scope") == pl.lit(normalized_text_scope))
         for outcome_name in outcome_names:
-            for specification_name in specification_names:
+            for specification_name in _specification_names_for_text_scope(normalized_text_scope, specification_names):
                 comparison_spec = _comparison_spec_by_name(specification_name)
                 for control_set_id in control_set_ids:
                     control_set = _control_set_by_id(control_set_id)
@@ -1372,18 +1609,11 @@ def run_lm2011_extension_fit_comparison_scaffold(
     text_scopes: Sequence[str] = EXTENSION_PRIMARY_TEXT_SCOPES,
     outcome_names: Sequence[str] = (EXTENSION_PRIMARY_OUTCOME,),
     control_set_ids: Sequence[str] = ("C0", "C1", "C2"),
-    specification_names: Sequence[str] = ("dictionary_only", "finbert_only", "dictionary_finbert_joint"),
+    specification_names: Sequence[str] = _DEFAULT_COMPARISON_SPECIFICATION_NAMES,
     nw_lags: int = 1,
     filing_date_col: str = "filing_date",
     industry_col: str = "ff48_industry_id",
 ) -> Lm2011ExtensionFitComparisonArtifacts:
-    comparison_specs = _comparison_specs_by_name(specification_names)
-    comparison_spec_by_name = {
-        comparison_spec.specification_name: comparison_spec
-        for comparison_spec in comparison_specs
-    }
-    comparison_pairs = _extension_fit_comparison_pairs(specification_names)
-
     quarterly_fit_rows: list[dict[str, object]] = []
     quarterly_difference_rows: list[dict[str, object]] = []
     summary_rows: list[dict[str, object]] = []
@@ -1392,6 +1622,16 @@ def run_lm2011_extension_fit_comparison_scaffold(
 
     for text_scope in text_scopes:
         normalized_text_scope = _normalize_scope_value(text_scope)
+        scope_specification_names = _specification_names_for_text_scope(
+            normalized_text_scope,
+            specification_names,
+        )
+        comparison_specs = _comparison_specs_by_name(scope_specification_names)
+        comparison_spec_by_name = {
+            comparison_spec.specification_name: comparison_spec
+            for comparison_spec in comparison_specs
+        }
+        comparison_pairs = _extension_fit_comparison_pairs(scope_specification_names)
         scope_panel_lf = panel_lf.filter(pl.col("text_scope") == pl.lit(normalized_text_scope))
         for outcome_name in outcome_names:
             for control_set_id in control_set_ids:
@@ -1830,7 +2070,9 @@ def run_lm2011_extension_fit_comparison_scaffold(
 __all__ = [
     "EXTENSION_DICTIONARY_FAMILY_LM2011",
     "EXTENSION_FINBERT_MODEL_FAMILY",
+    "EXTENSION_FULL_10K_SCOPE",
     "EXTENSION_ITEM_SCOPE_IDS",
+    "EXTENSION_COMBINED_ITEM_1A_7_SCOPE",
     "EXTENSION_JOINT_FEATURE_FAMILY",
     "EXTENSION_PRIMARY_OUTCOME",
     "EXTENSION_PRIMARY_TEXT_SCOPES",

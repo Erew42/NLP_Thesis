@@ -93,7 +93,9 @@ from thesis_pkg.pipelines.lm2011_pipeline import (
 )
 from thesis_pkg.pipelines import lm2011_pipeline
 from thesis_pkg.pipelines.lm2011_extension import (
+    EXTENSION_COMBINED_ITEM_1A_7_SCOPE,
     EXTENSION_DICTIONARY_FAMILY_LM2011,
+    EXTENSION_FULL_10K_SCOPE,
     EXTENSION_ITEM_SCOPE_IDS,
     EXTENSION_PRIMARY_TEXT_SCOPES,
     EXTENSION_SAMPLE_END,
@@ -350,6 +352,7 @@ EXTENSION_DICTIONARY_FAMILY_COMPARISON_FAMILY_NAMES: tuple[str, ...] = (
     EXTENDED_DICTIONARY_FAMILY_NAME,
 )
 EXTENSION_STAGE_ARTIFACT_FILENAMES: dict[str, str] = {
+    "extension_text_features_full_10k": "lm2011_extension_text_features_full_10k.parquet",
     "extension_dictionary_surface": "lm2011_extension_dictionary_surface.parquet",
     "extension_finbert_surface": "lm2011_extension_finbert_surface.parquet",
     "extension_control_ladder": "lm2011_extension_control_ladder.parquet",
@@ -545,6 +548,8 @@ class LM2011ExtensionRunConfig:
     full_10k_cleaning_contract: str | None = None
     full_10k_text_feature_batch_size: int | None = None
     event_window_doc_batch_size: int | None = None
+    extension_text_features_full_10k_path: Path | None = None
+    recompute_extension_text_features_full_10k: bool = False
     recompute_text_features_full_10k: bool = False
     recompute_text_features_mda: bool = False
     recompute_event_screen_surface: bool = False
@@ -602,6 +607,11 @@ class LM2011ExtensionRunConfig:
             raise ValueError("LM2011 extension full_10k_text_feature_batch_size must be >= 1.")
         if self.event_window_doc_batch_size is not None and self.event_window_doc_batch_size < 1:
             raise ValueError("LM2011 extension event_window_doc_batch_size must be >= 1.")
+        if self.recompute_extension_text_features_full_10k and self.extension_text_features_full_10k_path is not None:
+            raise ValueError(
+                "LM2011 extension recompute_extension_text_features_full_10k cannot be combined with "
+                "extension_text_features_full_10k_path."
+            )
         if self.ram_log_interval_batches < 1:
             raise ValueError("LM2011 extension ram_log_interval_batches must be >= 1.")
 
@@ -1017,6 +1027,17 @@ def _checkpoint_manifest(manifest: dict[str, Any], manifest_path: Path) -> None:
 
 def _normalize_extension_text_scope_value(value: str) -> str:
     raw = value.strip().casefold().replace("-", "_")
+    if raw in {"full_10k", "full_10_k", "10k", "10_k", "full_filing"}:
+        return EXTENSION_FULL_10K_SCOPE
+    if raw in {
+        "items_1a_7_combined",
+        "items_1a_7_concat",
+        "item_1a_item_7_combined",
+        "item_1a_item_7_concat",
+        "item_1a_7_combined",
+        "item_1a_7_concat",
+    }:
+        return EXTENSION_COMBINED_ITEM_1A_7_SCOPE
     if raw in {"7", "item_7", "mda_item_7", "item_7_mda"}:
         return "item_7_mda"
     if raw in {"1a", "item_1a", "item_1a_risk_factors"}:
@@ -1198,6 +1219,8 @@ def _resolve_extension_shared_prereq_inputs(
     }
     provided_names = [name for name, value in path_values.items() if value is not None]
     if not provided_names:
+        return None
+    if run_cfg.event_panel_path is not None and set(provided_names) <= {"year_merged_dir"}:
         return None
     missing_names = [name for name, value in path_values.items() if value is None]
     if missing_names:
@@ -1459,6 +1482,7 @@ def _build_extension_manifest(
             "full_10k_cleaning_contract": run_cfg.full_10k_cleaning_contract,
             "full_10k_text_feature_batch_size": run_cfg.full_10k_text_feature_batch_size,
             "event_window_doc_batch_size": run_cfg.event_window_doc_batch_size,
+            "recompute_extension_text_features_full_10k": run_cfg.recompute_extension_text_features_full_10k,
             "recompute_text_features_full_10k": run_cfg.recompute_text_features_full_10k,
             "recompute_text_features_mda": run_cfg.recompute_text_features_mda,
             "recompute_event_screen_surface": run_cfg.recompute_event_screen_surface,
@@ -1484,6 +1508,9 @@ def _build_extension_manifest(
             "annual_fiscal_market_path": _absolute_path_str(run_cfg.annual_fiscal_market_path),
             "ff_daily_csv_path": _absolute_path_str(run_cfg.ff_daily_csv_path),
             "local_work_root": _absolute_path_str(run_cfg.local_work_root),
+            "extension_text_features_full_10k_path": _absolute_path_str(
+                run_cfg.extension_text_features_full_10k_path
+            ),
             "finbert_analysis_run_dir": _absolute_path_str(resolved_finbert_inputs["analysis_run_dir"]),
             "finbert_analysis_manifest_path": _absolute_path_str(
                 resolved_finbert_inputs["analysis_manifest_path"]
@@ -1544,6 +1571,7 @@ def _write_extension_stage(
     empty_reason: str | None = None,
     extra_artifacts: dict[str, Path] | None = None,
     warnings: Sequence[str] | None = None,
+    metadata: Mapping[str, Any] | None = None,
 ) -> pl.LazyFrame:
     artifact_path = _extension_artifact_output_path(output_dir, stage_name)
     written_path, row_count = _write_frame_artifact(frame, artifact_path)
@@ -1555,6 +1583,7 @@ def _write_extension_stage(
         empty_reason=empty_reason,
         extra_artifacts=extra_artifacts,
         warnings=warnings,
+        metadata=metadata,
     )
     if manifest_path is not None:
         _checkpoint_manifest(manifest, manifest_path)
@@ -1621,65 +1650,163 @@ def _build_extension_finbert_surface_lf(
             "FinBERT item features must contain text_scope, benchmark_item_code, or item_id."
         )
     normalized_text_scopes = list(_normalized_extension_text_scopes(text_scopes))
-    return (
-        item_features_lf.join(event_doc_ids_lf, on="doc_id", how="inner")
-        .select(
-            pl.col("doc_id").cast(pl.Utf8, strict=False),
-            (
-                pl.col("filing_date").cast(pl.Date, strict=False)
-                if "filing_date" in schema
-                else pl.lit(None, dtype=pl.Date)
-            ).alias("filing_date"),
-            normalize_lm2011_extension_text_scope_expr(raw_scope_expr).alias("text_scope"),
-            (
-                pl.col("cleaning_policy_id").cast(pl.Utf8, strict=False)
-                if "cleaning_policy_id" in schema
-                else pl.lit(None, dtype=pl.Utf8)
-            ).alias("cleaning_policy_id"),
-            (
-                pl.col("model_name").cast(pl.Utf8, strict=False)
-                if "model_name" in schema
-                else pl.lit(None, dtype=pl.Utf8)
-            ).alias("model_name"),
-            (
-                pl.col("model_version").cast(pl.Utf8, strict=False)
-                if "model_version" in schema
-                else pl.lit(None, dtype=pl.Utf8)
-            ).alias("model_version"),
-            (
-                pl.col("segment_policy_id").cast(pl.Utf8, strict=False)
-                if "segment_policy_id" in schema
-                else pl.lit(None, dtype=pl.Utf8)
-            ).alias("segment_policy_id"),
-            _coalesce_existing_expr(
-                schema,
-                ("finbert_segment_count", "sentence_count"),
-                dtype=pl.Int32,
-            ).alias("finbert_segment_count"),
-            _coalesce_existing_expr(
-                schema,
-                ("finbert_token_count_512", "finbert_token_count_512_sum"),
-                dtype=pl.Int64,
-            ).alias("finbert_token_count_512"),
-            _coalesce_existing_expr(
-                schema,
-                ("finbert_token_count_512_sum", "finbert_token_count_512"),
-                dtype=pl.Int64,
-            ).alias("finbert_token_count_512_sum"),
-            *[
-                _coalesce_existing_expr(schema, (column,), dtype=pl.Float64).alias(column)
-                for column in (
-                    "finbert_neg_prob_lenw_mean",
-                    "finbert_pos_prob_lenw_mean",
-                    "finbert_neu_prob_lenw_mean",
-                    "finbert_net_negative_lenw_mean",
-                    "finbert_neg_dominant_share",
-                )
-            ],
-        )
-        .filter(pl.col("text_scope").is_in(normalized_text_scopes))
-        .unique(subset=["doc_id", "text_scope"], keep="first")
+    selected_lf = item_features_lf.join(event_doc_ids_lf, on="doc_id", how="inner").select(
+        pl.col("doc_id").cast(pl.Utf8, strict=False),
+        (
+            pl.col("filing_date").cast(pl.Date, strict=False)
+            if "filing_date" in schema
+            else pl.lit(None, dtype=pl.Date)
+        ).alias("filing_date"),
+        normalize_lm2011_extension_text_scope_expr(raw_scope_expr).alias("text_scope"),
+        (
+            pl.col("cleaning_policy_id").cast(pl.Utf8, strict=False)
+            if "cleaning_policy_id" in schema
+            else pl.lit(None, dtype=pl.Utf8)
+        ).alias("cleaning_policy_id"),
+        (
+            pl.col("model_name").cast(pl.Utf8, strict=False)
+            if "model_name" in schema
+            else pl.lit(None, dtype=pl.Utf8)
+        ).alias("model_name"),
+        (
+            pl.col("model_version").cast(pl.Utf8, strict=False)
+            if "model_version" in schema
+            else pl.lit(None, dtype=pl.Utf8)
+        ).alias("model_version"),
+        (
+            pl.col("segment_policy_id").cast(pl.Utf8, strict=False)
+            if "segment_policy_id" in schema
+            else pl.lit(None, dtype=pl.Utf8)
+        ).alias("segment_policy_id"),
+        _coalesce_existing_expr(
+            schema,
+            ("finbert_segment_count", "sentence_count"),
+            dtype=pl.Int32,
+        ).alias("finbert_segment_count"),
+        _coalesce_existing_expr(
+            schema,
+            ("finbert_token_count_512", "finbert_token_count_512_sum"),
+            dtype=pl.Int64,
+        ).alias("finbert_token_count_512"),
+        _coalesce_existing_expr(
+            schema,
+            ("finbert_token_count_512_sum", "finbert_token_count_512"),
+            dtype=pl.Int64,
+        ).alias("finbert_token_count_512_sum"),
+        *[
+            _coalesce_existing_expr(schema, (column,), dtype=pl.Float64).alias(column)
+            for column in (
+                "finbert_neg_prob_lenw_mean",
+                "finbert_pos_prob_lenw_mean",
+                "finbert_neu_prob_lenw_mean",
+                "finbert_net_negative_lenw_mean",
+                "finbert_neg_dominant_share",
+            )
+        ],
     )
+    frames: list[pl.LazyFrame] = []
+    individual_scopes = [
+        scope
+        for scope in normalized_text_scopes
+        if scope not in {EXTENSION_FULL_10K_SCOPE, EXTENSION_COMBINED_ITEM_1A_7_SCOPE}
+    ]
+    if individual_scopes:
+        frames.append(
+            selected_lf.filter(pl.col("text_scope").is_in(individual_scopes)).unique(
+                subset=["doc_id", "text_scope"],
+                keep="first",
+            )
+        )
+    if EXTENSION_COMBINED_ITEM_1A_7_SCOPE in normalized_text_scopes:
+        item_1a_scope = "item_1a_risk_factors"
+        item_7_scope = "item_7_mda"
+        item_pair_lf = selected_lf.filter(pl.col("text_scope").is_in([item_1a_scope, item_7_scope]))
+        metadata_mismatch = (
+            item_pair_lf.group_by("doc_id")
+            .agg(
+                pl.col("text_scope").n_unique().alias("_scope_count"),
+                pl.col("filing_date").n_unique().alias("_filing_date_count"),
+                pl.col("cleaning_policy_id").n_unique().alias("_cleaning_policy_count"),
+                pl.col("model_name").n_unique().alias("_model_name_count"),
+                pl.col("model_version").n_unique().alias("_model_version_count"),
+                pl.col("segment_policy_id").n_unique().alias("_segment_policy_count"),
+            )
+            .filter(
+                (pl.col("_scope_count") >= 2)
+                & (
+                    (pl.col("_filing_date_count") > 1)
+                    | (pl.col("_cleaning_policy_count") > 1)
+                    | (pl.col("_model_name_count") > 1)
+                    | (pl.col("_model_version_count") > 1)
+                    | (pl.col("_segment_policy_count") > 1)
+                )
+            )
+            .limit(1)
+            .collect()
+        )
+        if metadata_mismatch.height:
+            raise ValueError(
+                "Combined Item 1A+7 FinBERT features require matching filing_date, cleaning_policy_id, "
+                "model_name, model_version, and segment_policy_id metadata within each doc_id."
+            )
+        token_weight = pl.col("finbert_token_count_512_sum").cast(pl.Float64).fill_null(0.0)
+        segment_weight = pl.col("finbert_segment_count").cast(pl.Float64).fill_null(0.0)
+        frames.append(
+            item_pair_lf.group_by("doc_id")
+            .agg(
+                pl.col("filing_date").drop_nulls().first().alias("filing_date"),
+                pl.lit(EXTENSION_COMBINED_ITEM_1A_7_SCOPE, dtype=pl.Utf8).alias("text_scope"),
+                pl.col("cleaning_policy_id").drop_nulls().first().alias("cleaning_policy_id"),
+                pl.col("model_name").drop_nulls().first().alias("model_name"),
+                pl.col("model_version").drop_nulls().first().alias("model_version"),
+                pl.col("segment_policy_id").drop_nulls().first().alias("segment_policy_id"),
+                pl.col("text_scope").n_unique().alias("_scope_count"),
+                pl.col("finbert_segment_count").fill_null(0).sum().cast(pl.Int32).alias("finbert_segment_count"),
+                pl.col("finbert_token_count_512").fill_null(0).sum().cast(pl.Int64).alias("finbert_token_count_512"),
+                pl.col("finbert_token_count_512_sum").fill_null(0).sum().cast(pl.Int64).alias(
+                    "finbert_token_count_512_sum"
+                ),
+                *[
+                    pl.when(token_weight.sum() > 0)
+                    .then((pl.col(column) * token_weight).sum() / token_weight.sum())
+                    .otherwise(None)
+                    .alias(column)
+                    for column in (
+                        "finbert_neg_prob_lenw_mean",
+                        "finbert_pos_prob_lenw_mean",
+                        "finbert_neu_prob_lenw_mean",
+                        "finbert_net_negative_lenw_mean",
+                    )
+                ],
+                pl.when(segment_weight.sum() > 0)
+                .then((pl.col("finbert_neg_dominant_share") * segment_weight).sum() / segment_weight.sum())
+                .otherwise(None)
+                .alias("finbert_neg_dominant_share"),
+            )
+            .filter(pl.col("_scope_count") == 2)
+            .drop("_scope_count")
+        )
+    if not frames:
+        return pl.DataFrame(
+            schema={
+                "doc_id": pl.Utf8,
+                "filing_date": pl.Date,
+                "text_scope": pl.Utf8,
+                "cleaning_policy_id": pl.Utf8,
+                "model_name": pl.Utf8,
+                "model_version": pl.Utf8,
+                "segment_policy_id": pl.Utf8,
+                "finbert_segment_count": pl.Int32,
+                "finbert_token_count_512": pl.Int64,
+                "finbert_token_count_512_sum": pl.Int64,
+                "finbert_neg_prob_lenw_mean": pl.Float64,
+                "finbert_pos_prob_lenw_mean": pl.Float64,
+                "finbert_neu_prob_lenw_mean": pl.Float64,
+                "finbert_net_negative_lenw_mean": pl.Float64,
+                "finbert_neg_dominant_share": pl.Float64,
+            }
+        ).lazy()
+    return pl.concat(frames, how="vertical_relaxed").unique(subset=["doc_id", "text_scope"], keep="first")
 
 
 def _build_extension_dictionary_surface_lf(
@@ -1688,8 +1815,63 @@ def _build_extension_dictionary_surface_lf(
     cleaned_item_scopes_dir: Path | None,
     event_doc_ids_lf: pl.LazyFrame,
     dictionary_inputs: Any,
+    full_10k_features_lf: pl.LazyFrame | None = None,
 ) -> pl.LazyFrame:
     normalized_text_scopes = _normalized_extension_text_scopes(run_cfg.text_scopes)
+    frames: list[pl.LazyFrame] = []
+    if EXTENSION_FULL_10K_SCOPE in normalized_text_scopes:
+        if full_10k_features_lf is None:
+            raise FileNotFoundError(
+                "LM2011 extension full_10k scope requires extension full-10-K text features."
+            )
+        full_schema = full_10k_features_lf.collect_schema()
+        frames.append(
+            full_10k_features_lf.join(event_doc_ids_lf, on="doc_id", how="inner")
+            .select(
+                pl.col("doc_id").cast(pl.Utf8, strict=False),
+                (
+                    pl.col("cik_10").cast(pl.Utf8, strict=False)
+                    if "cik_10" in full_schema
+                    else pl.lit(None, dtype=pl.Utf8)
+                ).alias("cik_10"),
+                (
+                    pl.col("filing_date").cast(pl.Date, strict=False)
+                    if "filing_date" in full_schema
+                    else pl.lit(None, dtype=pl.Date)
+                ).alias("filing_date"),
+                pl.lit(EXTENSION_FULL_10K_SCOPE, dtype=pl.Utf8).alias("text_scope"),
+                pl.lit(run_cfg.full_10k_cleaning_contract or DEFAULT_LM2011_FULL_10K_CLEANING_CONTRACT).alias(
+                    "cleaning_policy_id"
+                ),
+                pl.lit(run_cfg.dictionary_family_label, dtype=pl.Utf8).alias("dictionary_family"),
+                pl.col("total_token_count_full_10k").cast(pl.Int32, strict=False).alias("total_token_count"),
+                pl.col("token_count_full_10k").cast(pl.Int32, strict=False).alias("token_count"),
+                *[
+                    (
+                        pl.col(column).cast(pl.Float64, strict=False)
+                        if column in full_schema
+                        else pl.lit(None, dtype=pl.Float64)
+                    ).alias(column)
+                    for column in (
+                        "h4n_inf_prop",
+                        "h4n_inf_tfidf",
+                        "lm_negative_prop",
+                        "lm_negative_tfidf",
+                        "lm_positive_prop",
+                        "lm_positive_tfidf",
+                        "lm_uncertainty_prop",
+                        "lm_uncertainty_tfidf",
+                        "lm_litigious_prop",
+                        "lm_litigious_tfidf",
+                        "lm_modal_strong_prop",
+                        "lm_modal_strong_tfidf",
+                        "lm_modal_weak_prop",
+                        "lm_modal_weak_tfidf",
+                    )
+                ],
+            )
+        )
+    item_text_scopes = tuple(scope for scope in normalized_text_scopes if scope != EXTENSION_FULL_10K_SCOPE)
     if run_cfg.dictionary_source_mode == EXTENSION_DICTIONARY_SOURCE_PREFER_CLEANED:
         if cleaned_item_scopes_dir is not None:
             cleaned_scopes_lf = _scan_year_sharded_parquet_dir(
@@ -1701,20 +1883,31 @@ def _build_extension_dictionary_surface_lf(
                 .with_columns(
                     normalize_lm2011_extension_text_scope_expr(pl.col("text_scope")).alias("text_scope")
                 )
-                .filter(pl.col("text_scope").is_in(list(normalized_text_scopes)))
+                .filter(
+                    pl.col("text_scope").is_in(
+                        ["item_1a_risk_factors", "item_7_mda", "item_1_business"]
+                    )
+                )
             )
-            return build_lm2011_extension_dictionary_features_from_cleaned_scopes(
-                cleaned_scopes_lf,
-                dictionary_lists=dictionary_inputs.dictionary_lists,
-                harvard_negative_word_list=dictionary_inputs.harvard_negative_word_list,
-                master_dictionary_words=dictionary_inputs.master_dictionary_words,
-                dictionary_family=run_cfg.dictionary_family_label,
-            ).filter(pl.col("text_scope").is_in(list(normalized_text_scopes)))
-        if run_cfg.require_cleaned_scope_match:
+            item_features_lf = build_lm2011_extension_dictionary_features_from_cleaned_scopes(
+                    cleaned_scopes_lf,
+                    dictionary_lists=dictionary_inputs.dictionary_lists,
+                    harvard_negative_word_list=dictionary_inputs.harvard_negative_word_list,
+                    master_dictionary_words=dictionary_inputs.master_dictionary_words,
+                    dictionary_family=run_cfg.dictionary_family_label,
+                    text_scopes=item_text_scopes,
+                ).filter(pl.col("text_scope").is_in(list(item_text_scopes)))
+            frames.append(item_features_lf)
+            return pl.concat(frames, how="vertical_relaxed") if frames else item_features_lf
+        if run_cfg.require_cleaned_scope_match and item_text_scopes:
             raise FileNotFoundError(
                 "LM2011 extension requires FinBERT cleaned_item_scopes_dir for strict matched comparison."
             )
 
+    if not item_text_scopes:
+        if not frames:
+            raise ValueError("LM2011 extension dictionary surface has no requested dictionary text scopes.")
+        return pl.concat(frames, how="vertical_relaxed")
     if not _parquet_glob_exists(run_cfg.items_analysis_dir, ITEMS_ANALYSIS_GLOB):
         raise FileNotFoundError(
             f"LM2011 extension raw items_analysis directory not found or empty: {run_cfg.items_analysis_dir}"
@@ -1726,16 +1919,17 @@ def _build_extension_dictionary_surface_lf(
     text_scope_item_ids = {
         text_scope: item_id
         for text_scope, item_id in EXTENSION_ITEM_SCOPE_IDS.items()
-        if text_scope in normalized_text_scopes
+        if text_scope in item_text_scopes
     }
-    return build_lm2011_extension_dictionary_features(
+    frames.append(build_lm2011_extension_dictionary_features(
         items_analysis_lf,
         dictionary_lists=dictionary_inputs.dictionary_lists,
         harvard_negative_word_list=dictionary_inputs.harvard_negative_word_list,
         master_dictionary_words=dictionary_inputs.master_dictionary_words,
         text_scope_item_ids=text_scope_item_ids,
         dictionary_family=run_cfg.dictionary_family_label,
-    ).filter(pl.col("text_scope").is_in(list(normalized_text_scopes)))
+    ).filter(pl.col("text_scope").is_in(list(item_text_scopes))))
+    return pl.concat(frames, how="vertical_relaxed")
 
 
 def _validate_extension_comparison_mode(
@@ -1743,6 +1937,13 @@ def _validate_extension_comparison_mode(
     *,
     cleaned_item_scopes_dir: Path | None,
 ) -> None:
+    item_text_scopes = tuple(
+        scope
+        for scope in _normalized_extension_text_scopes(run_cfg.text_scopes)
+        if scope != EXTENSION_FULL_10K_SCOPE
+    )
+    if not item_text_scopes:
+        return
     if run_cfg.dictionary_source_mode != EXTENSION_DICTIONARY_SOURCE_PREFER_CLEANED:
         return
     if cleaned_item_scopes_dir is not None:
@@ -2157,6 +2358,204 @@ def _strategy_text_feature_metadata(
         "event_panel_doc_universe": event_panel_contract,
         "strategy_text_feature_doc_universe": strategy_feature_contract,
     }
+
+
+def _extension_full_10k_scope_enabled(text_scopes: Sequence[str]) -> bool:
+    return EXTENSION_FULL_10K_SCOPE in _normalized_extension_text_scopes(text_scopes)
+
+
+def _extension_full_10k_text_feature_metadata(
+    *,
+    artifact_path: Path,
+    event_panel_lf: pl.LazyFrame,
+    cleaning_contract: str,
+    source_year_start: int,
+    source_year_end: int,
+    dictionary_family: str,
+) -> dict[str, Any]:
+    event_panel_contract = _doc_id_universe_contract(
+        event_panel_lf,
+        universe_label="extension_event_panel",
+    )
+    feature_contract = _doc_id_universe_contract(
+        pl.scan_parquet(artifact_path),
+        universe_label="extension_text_features_full_10k",
+    )
+    if (
+        feature_contract["unique_doc_count"] != event_panel_contract["unique_doc_count"]
+        or feature_contract["doc_id_fingerprint"] != event_panel_contract["doc_id_fingerprint"]
+    ):
+        raise ValueError(
+            "LM2011 extension full-10-K text features must exactly match the extension event-panel "
+            f"doc_id universe: event_panel={event_panel_contract}, full_10k_features={feature_contract}"
+        )
+    return {
+        "idf_scope": "extension_event_panel_doc_ids",
+        "text_scope": EXTENSION_FULL_10K_SCOPE,
+        "dictionary_family": dictionary_family,
+        "full_10k_cleaning_contract": cleaning_contract,
+        "source_year_start": source_year_start,
+        "source_year_end": source_year_end,
+        "event_panel_doc_universe": event_panel_contract,
+        "feature_doc_universe": feature_contract,
+    }
+
+
+def _select_extension_full_10k_source_columns(lf: pl.LazyFrame) -> pl.LazyFrame:
+    schema_names = set(lf.collect_schema().names())
+    required = ("doc_id", "cik_10", "filing_date", "full_text", "document_type_filename")
+    missing = [name for name in required if name not in schema_names]
+    if missing:
+        raise ValueError(f"Extension full-10-K text source missing required columns: {missing}")
+    select_exprs: list[pl.Expr] = [pl.col(name) for name in required]
+    if "normalized_form" in schema_names:
+        select_exprs.append(pl.col("normalized_form"))
+    return lf.select(*select_exprs)
+
+
+def _build_extension_full_10k_text_feature_source_lf(
+    *,
+    year_merged_dir: Path,
+    event_panel_lf: pl.LazyFrame,
+) -> pl.LazyFrame:
+    year_merged_lf = _prepare_lm2011_sec_input_lf(
+        _scan_year_merged_window(
+            year_merged_dir,
+            sample_start=EXTENSION_SAMPLE_START,
+            sample_end=EXTENSION_SAMPLE_END,
+        )
+    )
+    event_doc_ids_lf = (
+        event_panel_lf.select(pl.col("doc_id").cast(pl.Utf8, strict=False).alias("doc_id"))
+        .drop_nulls(subset=["doc_id"])
+        .unique()
+    )
+    return _select_extension_full_10k_source_columns(
+        year_merged_lf.with_columns(pl.col("doc_id").cast(pl.Utf8, strict=False).alias("doc_id")).join(
+            event_doc_ids_lf,
+            on="doc_id",
+            how="semi",
+        )
+    )
+
+
+def _ensure_extension_full_10k_text_features_path(
+    run_cfg: LM2011ExtensionRunConfig,
+    *,
+    output_dir: Path,
+    event_panel_lf: pl.LazyFrame,
+    dictionary_inputs,
+    manifest: dict[str, Any] | None = None,
+    manifest_path: Path | None = None,
+) -> Path | None:
+    if not _extension_full_10k_scope_enabled(run_cfg.text_scopes):
+        return None
+
+    stage_name = "extension_text_features_full_10k"
+    explicit_path = (
+        Path(run_cfg.extension_text_features_full_10k_path).resolve()
+        if run_cfg.extension_text_features_full_10k_path is not None
+        else None
+    )
+    cleaning_contract = run_cfg.full_10k_cleaning_contract or DEFAULT_LM2011_FULL_10K_CLEANING_CONTRACT
+    if explicit_path is not None:
+        if not explicit_path.exists():
+            raise FileNotFoundError(f"LM2011 extension full-10-K text-features path not found: {explicit_path}")
+        metadata = _extension_full_10k_text_feature_metadata(
+            artifact_path=explicit_path,
+            event_panel_lf=event_panel_lf,
+            cleaning_contract=cleaning_contract,
+            source_year_start=EXTENSION_SAMPLE_START.year,
+            source_year_end=EXTENSION_SAMPLE_END.year,
+            dictionary_family=run_cfg.dictionary_family_label,
+        )
+        if manifest is not None:
+            _record_stage_success(
+                manifest,
+                stage_name=stage_name,
+                artifact_path=explicit_path,
+                row_count=int(pl.scan_parquet(explicit_path).select(pl.len()).collect().item()),
+                source_path=explicit_path,
+                warnings=["Reused explicit extension full-10-K text-features artifact."],
+                metadata=metadata,
+            )
+            if manifest_path is not None:
+                _checkpoint_manifest(manifest, manifest_path)
+        return explicit_path
+
+    output_path = _extension_artifact_output_path(output_dir, stage_name)
+    if output_path.exists() and not run_cfg.recompute_extension_text_features_full_10k:
+        metadata = _extension_full_10k_text_feature_metadata(
+            artifact_path=output_path,
+            event_panel_lf=event_panel_lf,
+            cleaning_contract=cleaning_contract,
+            source_year_start=EXTENSION_SAMPLE_START.year,
+            source_year_end=EXTENSION_SAMPLE_END.year,
+            dictionary_family=run_cfg.dictionary_family_label,
+        )
+        if manifest is not None:
+            _record_stage_success(
+                manifest,
+                stage_name=stage_name,
+                artifact_path=output_path,
+                row_count=int(pl.scan_parquet(output_path).select(pl.len()).collect().item()),
+                source_path=output_path,
+                warnings=["Reused existing extension full-10-K text-features artifact."],
+                metadata=metadata,
+            )
+            if manifest_path is not None:
+                _checkpoint_manifest(manifest, manifest_path)
+        return output_path
+
+    if run_cfg.year_merged_dir is None:
+        raise FileNotFoundError(
+            "LM2011 extension full_10k scope requires year_merged_dir unless "
+            "extension_text_features_full_10k_path is provided."
+        )
+    local_work_root = (
+        Path(run_cfg.local_work_root).resolve()
+        if run_cfg.local_work_root is not None
+        else (output_dir / ".extension_full_10k_work").resolve()
+    )
+    source_lf = _build_extension_full_10k_text_feature_source_lf(
+        year_merged_dir=Path(run_cfg.year_merged_dir).resolve(),
+        event_panel_lf=event_panel_lf,
+    )
+    output_path.unlink(missing_ok=True)
+    row_count = write_lm2011_text_features_full_10k_parquet(
+        source_lf,
+        output_path=output_path,
+        dictionary_lists=dictionary_inputs.dictionary_lists,
+        harvard_negative_word_list=dictionary_inputs.harvard_negative_word_list,
+        master_dictionary_words=dictionary_inputs.master_dictionary_words,
+        cleaning_contract=cleaning_contract,
+        batch_size=run_cfg.full_10k_text_feature_batch_size or DEFAULT_LM2011_FULL_10K_TEXT_FEATURE_BATCH_SIZE,
+        temp_root=local_work_root / "ext_full10k",
+        progress_callback=_make_text_feature_progress_logger(
+            "extension_text_features_full_10k",
+            print_ram_stats=run_cfg.print_ram_stats,
+            ram_log_interval_batches=run_cfg.ram_log_interval_batches,
+        ),
+    )
+    metadata = _extension_full_10k_text_feature_metadata(
+        artifact_path=output_path,
+        event_panel_lf=event_panel_lf,
+        cleaning_contract=cleaning_contract,
+        source_year_start=EXTENSION_SAMPLE_START.year,
+        source_year_end=EXTENSION_SAMPLE_END.year,
+        dictionary_family=run_cfg.dictionary_family_label,
+    )
+    if manifest is not None:
+        _record_stage_success(
+            manifest,
+            stage_name=stage_name,
+            artifact_path=output_path,
+            row_count=row_count,
+            metadata=metadata,
+        )
+        if manifest_path is not None:
+            _checkpoint_manifest(manifest, manifest_path)
+    return output_path
 
 
 def _empty_extension_full_10k_token_counts_df() -> pl.DataFrame:
@@ -4854,6 +5253,21 @@ def run_lm2011_extension_pipeline(run_cfg: LM2011ExtensionRunConfig) -> int:
         manifest["config"]["effective_dictionary_source_mode"] = run_cfg.dictionary_source_mode
         _checkpoint_manifest(manifest, manifest_path)
 
+        current_stage_name = "extension_text_features_full_10k"
+        extension_full_10k_features_path = _ensure_extension_full_10k_text_features_path(
+            run_cfg,
+            output_dir=output_dir,
+            event_panel_lf=event_panel_lf,
+            dictionary_inputs=dictionary_inputs,
+            manifest=manifest,
+            manifest_path=manifest_path,
+        )
+        extension_full_10k_features_lf = (
+            pl.scan_parquet(extension_full_10k_features_path)
+            if extension_full_10k_features_path is not None
+            else None
+        )
+
         current_stage_name = "extension_dictionary_surface"
         dictionary_surface_lf = _write_extension_stage(
             manifest,
@@ -4865,6 +5279,7 @@ def run_lm2011_extension_pipeline(run_cfg: LM2011ExtensionRunConfig) -> int:
                 cleaned_item_scopes_dir=resolved_finbert_inputs["cleaned_item_scopes_dir"],
                 event_doc_ids_lf=event_doc_ids_lf,
                 dictionary_inputs=dictionary_inputs,
+                full_10k_features_lf=extension_full_10k_features_lf,
             ),
         )
 
@@ -4896,7 +5311,7 @@ def run_lm2011_extension_pipeline(run_cfg: LM2011ExtensionRunConfig) -> int:
             manifest_path=manifest_path,
             output_dir=output_dir,
             stage_name="extension_specification_grid",
-            frame=build_lm2011_extension_specification_grid(),
+            frame=build_lm2011_extension_specification_grid(text_scopes=run_cfg.text_scopes),
         )
 
         current_stage_name = "extension_analysis_panel"
@@ -4921,7 +5336,10 @@ def run_lm2011_extension_pipeline(run_cfg: LM2011ExtensionRunConfig) -> int:
             manifest_path=manifest_path,
             output_dir=output_dir,
             stage_name="extension_sample_loss",
-            frame=build_lm2011_extension_sample_loss_table(extension_panel_lf),
+            frame=build_lm2011_extension_sample_loss_table(
+                extension_panel_lf,
+                text_scopes=_normalized_extension_text_scopes(run_cfg.text_scopes),
+            ),
         )
 
         current_stage_name = "extension_fit_quarterly"
@@ -5180,11 +5598,35 @@ def run_lm2011_extension_dictionary_family_comparison_pipeline(
             current_stage_name = f"family_run_{family_name}"
             family_definition = getattr(generated_dictionary_families, family_name)
             family_output_dir = _extension_family_run_output_dir(output_dir, family_name)
+            child_local_work_root = (
+                Path(run_cfg.local_work_root) / "fam" / family_name
+                if run_cfg.local_work_root is not None
+                else None
+            )
+            child_full_10k_features_path: Path | None = None
+            if _extension_full_10k_scope_enabled(run_cfg.text_scopes):
+                full_10k_build_cfg = replace(
+                    run_cfg,
+                    output_dir=family_output_dir,
+                    additional_data_dir=family_definition.directory,
+                    event_panel_path=effective_event_panel_path,
+                    extension_text_features_full_10k_path=None,
+                    dictionary_family_label=family_name,
+                    local_work_root=child_local_work_root,
+                )
+                child_full_10k_features_path = _ensure_extension_full_10k_text_features_path(
+                    full_10k_build_cfg,
+                    output_dir=family_output_dir,
+                    event_panel_lf=pl.scan_parquet(effective_event_panel_path),
+                    dictionary_inputs=load_lm2011_dictionary_inputs(family_definition.directory),
+                )
             child_cfg = replace(
                 run_cfg,
                 output_dir=family_output_dir,
                 additional_data_dir=family_definition.directory,
                 event_panel_path=effective_event_panel_path,
+                extension_text_features_full_10k_path=child_full_10k_features_path,
+                recompute_extension_text_features_full_10k=False,
                 year_merged_dir=None,
                 matched_clean_path=None,
                 filingdates_path=None,
@@ -5196,8 +5638,8 @@ def run_lm2011_extension_dictionary_family_comparison_pipeline(
                 annual_fiscal_market_path=None,
                 ff_daily_csv_path=None,
                 local_work_root=None,
-                full_10k_cleaning_contract=None,
-                full_10k_text_feature_batch_size=None,
+                full_10k_cleaning_contract=run_cfg.full_10k_cleaning_contract,
+                full_10k_text_feature_batch_size=run_cfg.full_10k_text_feature_batch_size,
                 event_window_doc_batch_size=None,
                 dictionary_family_label=family_name,
                 run_id=f"{run_cfg.run_id}_{family_name}",
@@ -5219,6 +5661,16 @@ def run_lm2011_extension_dictionary_family_comparison_pipeline(
             }
             manifest["family_runs"][family_name] = family_runs[family_name]
             _checkpoint_manifest(manifest, manifest_path)
+
+        if _extension_full_10k_scope_enabled(run_cfg.text_scopes):
+            current_stage_name = "extension_text_features_full_10k"
+            _write_stacked_extension_family_stage(
+                manifest,
+                manifest_path=manifest_path,
+                output_dir=output_dir,
+                stage_name="extension_text_features_full_10k",
+                family_names=EXTENSION_DICTIONARY_FAMILY_COMPARISON_FAMILY_NAMES,
+            )
 
         current_stage_name = "extension_dictionary_surface"
         _write_stacked_extension_family_stage(

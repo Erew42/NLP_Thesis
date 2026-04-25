@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import math
 import os
 from pathlib import Path
 from types import SimpleNamespace
@@ -545,6 +546,40 @@ def _write_valid_text_feature_artifact(
     _write_parquet(path, pl.DataFrame([row], schema_overrides=schema))
 
 
+def _write_extension_full_10k_feature_artifact(path: Path) -> None:
+    signal_values = {
+        "h4n_inf_prop": [0.10, 0.12],
+        "h4n_inf_tfidf": [0.11, 0.13],
+        "lm_negative_prop": [0.20, 0.22],
+        "lm_negative_tfidf": [0.21, 0.23],
+        "lm_positive_prop": [0.30, 0.32],
+        "lm_positive_tfidf": [0.31, 0.33],
+        "lm_uncertainty_prop": [0.40, 0.42],
+        "lm_uncertainty_tfidf": [0.41, 0.43],
+        "lm_litigious_prop": [0.50, 0.52],
+        "lm_litigious_tfidf": [0.51, 0.53],
+        "lm_modal_strong_prop": [0.60, 0.62],
+        "lm_modal_strong_tfidf": [0.61, 0.63],
+        "lm_modal_weak_prop": [0.70, 0.72],
+        "lm_modal_weak_tfidf": [0.71, 0.73],
+    }
+    _write_parquet(
+        path,
+        pl.DataFrame(
+            {
+                "doc_id": ["doc1", "doc2"],
+                "cik_10": ["0000000001", "0000000002"],
+                "filing_date": [dt.date(2009, 3, 2), dt.date(2009, 5, 15)],
+                "document_type_filename": ["10-K", "10-K"],
+                "normalized_form": ["10-K", "10-K"],
+                "total_token_count_full_10k": [100, 120],
+                "token_count_full_10k": [90, 110],
+                **signal_values,
+            }
+        ),
+    )
+
+
 def _write_text_feature_reuse_manifest(
     directory: Path,
     *,
@@ -575,10 +610,12 @@ def _build_extension_inputs(tmp_path: Path, additional_data_dir: Path) -> dict[s
     company_history_path = tmp_path / "companyhistory.parquet"
     company_description_path = tmp_path / "companydescription.parquet"
     items_analysis_dir = tmp_path / "items_analysis"
+    year_merged_dir = tmp_path / "extension_year_merged"
     finbert_analysis_run_dir = tmp_path / "finbert_analysis"
     finbert_preprocessing_run_dir = tmp_path / "finbert_preprocess"
     cleaned_item_scopes_dir = finbert_preprocessing_run_dir / "cleaned_item_scopes" / "by_year"
     item_features_long_path = finbert_analysis_run_dir / "item_features_long.parquet"
+    extension_text_features_full_10k_path = tmp_path / "extension_text_features_full_10k.parquet"
 
     _write_parquet(
         event_panel_path,
@@ -634,6 +671,21 @@ def _build_extension_inputs(tmp_path: Path, additional_data_dir: Path) -> dict[s
                     "loss uncertain lawsuit recognized",
                     "loss gain recognized may",
                     "loss uncertain recognized may",
+                ],
+            }
+        ),
+    )
+    _write_parquet(
+        year_merged_dir / "2009.parquet",
+        pl.DataFrame(
+            {
+                "doc_id": ["doc1", "doc2"],
+                "cik_10": ["0000000001", "0000000002"],
+                "filing_date": [dt.date(2009, 3, 2), dt.date(2009, 5, 15)],
+                "document_type_filename": ["10-K", "10-K"],
+                "full_text": [
+                    "token harvard recognized token",
+                    "harvard recognized token",
                 ],
             }
         ),
@@ -706,18 +758,116 @@ def _build_extension_inputs(tmp_path: Path, additional_data_dir: Path) -> dict[s
     )
     _write_text(finbert_analysis_run_dir / "run_manifest.json", json.dumps({"runner_name": "analysis"}))
     _write_text(finbert_preprocessing_run_dir / "run_manifest.json", json.dumps({"runner_name": "preprocess"}))
+    _write_extension_full_10k_feature_artifact(extension_text_features_full_10k_path)
 
     return {
         "event_panel_path": event_panel_path,
         "company_history_path": company_history_path,
         "company_description_path": company_description_path,
         "items_analysis_dir": items_analysis_dir,
+        "year_merged_dir": year_merged_dir,
         "finbert_analysis_run_dir": finbert_analysis_run_dir,
         "finbert_preprocessing_run_dir": finbert_preprocessing_run_dir,
         "item_features_long_path": item_features_long_path,
         "cleaned_item_scopes_dir": cleaned_item_scopes_dir,
+        "extension_text_features_full_10k_path": extension_text_features_full_10k_path,
         "ff48_siccodes_path": additional_data_dir / "FF_Siccodes_48_Industries.txt",
     }
+
+
+def test_extension_finbert_surface_builds_combined_item_scope_with_weighted_aggregation(
+    tmp_path: Path,
+) -> None:
+    _, _, additional_data_dir, _ = _build_temp_layout(tmp_path)
+    extension_inputs = _build_extension_inputs(tmp_path, additional_data_dir)
+    event_doc_ids_lf = pl.scan_parquet(extension_inputs["event_panel_path"]).select("doc_id").unique()
+
+    surface = runner._build_extension_finbert_surface_lf(
+        pl.scan_parquet(extension_inputs["item_features_long_path"]),
+        event_doc_ids_lf,
+        text_scopes=("items_1a_7_combined",),
+    ).collect().sort("doc_id")
+
+    assert surface.get_column("text_scope").to_list() == [
+        "items_1a_7_combined",
+        "items_1a_7_combined",
+    ]
+    doc1 = surface.filter(pl.col("doc_id") == "doc1").row(0, named=True)
+    assert doc1["finbert_segment_count"] == 5
+    assert doc1["finbert_token_count_512_sum"] == 50
+    assert doc1["finbert_neg_prob_lenw_mean"] == pytest.approx((0.6 * 30 + 0.5 * 20) / 50)
+    assert doc1["finbert_net_negative_lenw_mean"] == pytest.approx((0.5 * 30 + 0.3 * 20) / 50)
+    assert doc1["finbert_neg_dominant_share"] == pytest.approx((0.67 * 3 + 0.5 * 2) / 5)
+
+
+def test_extension_full_10k_text_features_use_global_event_panel_idf(
+    tmp_path: Path,
+) -> None:
+    _, _, additional_data_dir, _ = _build_temp_layout(tmp_path)
+    output_dir = tmp_path / "extension_full_10k"
+    output_dir.mkdir(parents=True)
+    event_panel_path = tmp_path / "event_panel.parquet"
+    year_merged_dir = tmp_path / "year_merged"
+    _write_parquet(
+        event_panel_path,
+        pl.DataFrame(
+            {
+                "doc_id": ["doc1", "doc2"],
+                "filing_date": [dt.date(2009, 3, 2), dt.date(2010, 3, 2)],
+            }
+        ),
+    )
+    _write_parquet(
+        year_merged_dir / "2009.parquet",
+        pl.DataFrame(
+            {
+                "doc_id": ["doc1"],
+                "cik_10": ["0000000001"],
+                "filing_date": [dt.date(2009, 3, 2)],
+                "document_type_filename": ["10-K"],
+                "full_text": ["token harvard"],
+            }
+        ),
+    )
+    _write_parquet(
+        year_merged_dir / "2010.parquet",
+        pl.DataFrame(
+            {
+                "doc_id": ["doc2"],
+                "cik_10": ["0000000002"],
+                "filing_date": [dt.date(2010, 3, 2)],
+                "document_type_filename": ["10-K"],
+                "full_text": ["harvard harvard"],
+            }
+        ),
+    )
+    cfg = runner.LM2011ExtensionRunConfig(
+        output_dir=output_dir,
+        additional_data_dir=additional_data_dir,
+        items_analysis_dir=tmp_path / "items_analysis",
+        event_panel_path=event_panel_path,
+        company_history_path=tmp_path / "companyhistory.parquet",
+        company_description_path=tmp_path / "companydescription.parquet",
+        ff48_siccodes_path=additional_data_dir / "FF_Siccodes_48_Industries.txt",
+        year_merged_dir=year_merged_dir,
+        full_10k_text_feature_batch_size=1,
+        text_scopes=("full_10k",),
+    )
+
+    feature_path = runner._ensure_extension_full_10k_text_features_path(
+        cfg,
+        output_dir=output_dir,
+        event_panel_lf=pl.scan_parquet(event_panel_path),
+        dictionary_inputs=runner.load_lm2011_dictionary_inputs(additional_data_dir),
+    )
+
+    assert feature_path is not None
+    features = pl.read_parquet(feature_path).sort("doc_id")
+    expected_global_tfidf = (1.0 / (1.0 + math.log(2.0))) * math.log(2.0 / 1.0)
+    assert features.filter(pl.col("doc_id") == "doc1").item(0, "lm_negative_tfidf") == pytest.approx(
+        expected_global_tfidf
+    )
+    assert features.filter(pl.col("doc_id") == "doc2").item(0, "lm_negative_tfidf") == 0.0
 
 
 def _write_extension_shared_prereq_artifacts(
@@ -978,6 +1128,7 @@ def test_extension_pipeline_writes_manifest_and_fully_enumerated_results(tmp_pat
             finbert_item_features_long_path=extension_inputs["item_features_long_path"],
             finbert_analysis_run_dir=extension_inputs["finbert_analysis_run_dir"],
             finbert_preprocessing_run_dir=extension_inputs["finbert_preprocessing_run_dir"],
+            extension_text_features_full_10k_path=extension_inputs["extension_text_features_full_10k_path"],
             require_cleaned_scope_match=True,
             run_id="unit_test_extension",
         )
@@ -1019,8 +1170,18 @@ def test_extension_pipeline_writes_manifest_and_fully_enumerated_results(tmp_pat
     assert manifest["failed_stage"] is None
     assert manifest["config"]["dictionary_source_mode"] == runner.EXTENSION_DICTIONARY_SOURCE_PREFER_CLEANED
     assert manifest["config"]["effective_dictionary_source_mode"] == runner.EXTENSION_DICTIONARY_SOURCE_PREFER_CLEANED
+    assert manifest["config"]["text_scopes"] == [
+        "full_10k",
+        "items_1a_7_combined",
+        "item_1a_risk_factors",
+        "item_7_mda",
+    ]
+    assert manifest["resolved_inputs"]["extension_text_features_full_10k_path"] == str(
+        extension_inputs["extension_text_features_full_10k_path"].resolve()
+    )
     assert manifest["config"]["recompute_text_features_full_10k"] is False
     assert manifest["config"]["recompute_text_features_mda"] is False
+    assert manifest["config"]["recompute_extension_text_features_full_10k"] is False
     assert manifest["config"]["recompute_event_screen_surface"] is False
     assert manifest["config"]["recompute_event_panel"] is False
     assert manifest["resolved_inputs"]["finbert_item_features_long_path"] == str(
@@ -1034,6 +1195,11 @@ def test_extension_pipeline_writes_manifest_and_fully_enumerated_results(tmp_pat
     )
     assert manifest["shared_prereq_artifacts"] == {}
     assert manifest["shared_prereq_row_counts"] == {}
+    assert manifest["stages"]["extension_text_features_full_10k"]["status"] == "generated"
+    assert (
+        manifest["stages"]["extension_text_features_full_10k"]["metadata"]["idf_scope"]
+        == "extension_event_panel_doc_ids"
+    )
     assert manifest["stages"]["extension_dictionary_surface"]["status"] == "generated"
     assert manifest["stages"]["extension_finbert_surface"]["status"] == "generated"
     assert manifest["stages"]["extension_fit_quarterly"]["status"] in {"generated", "generated_empty"}
@@ -1052,12 +1218,15 @@ def test_extension_pipeline_writes_manifest_and_fully_enumerated_results(tmp_pat
     panel = pl.read_parquet(analysis_panel_path).sort("doc_id", "text_scope")
     assert panel.get_column("sample_window").unique().to_list() == ["2009_2024"]
     assert set(panel.get_column("text_scope").unique().to_list()) == {
+        "full_10k",
+        "items_1a_7_combined",
         "item_7_mda",
         "item_1a_risk_factors",
     }
 
     finbert_surface = pl.read_parquet(finbert_surface_path).sort("doc_id", "text_scope")
     assert set(finbert_surface.get_column("text_scope").unique().to_list()) == {
+        "items_1a_7_combined",
         "item_7_mda",
         "item_1a_risk_factors",
     }
@@ -1096,12 +1265,25 @@ def test_extension_pipeline_writes_manifest_and_fully_enumerated_results(tmp_pat
     }
     expected_grid = {
         (text_scope, specification_name, control_set_id, "filing_period_excess_return")
-        for text_scope in ("item_7_mda", "item_1a_risk_factors")
-        for specification_name in (
-            "dictionary_only",
-            "finbert_only",
-            "dictionary_finbert_joint",
-        )
+        for text_scope, specification_names in {
+            "full_10k": ("dictionary_only",),
+            "items_1a_7_combined": (
+                "dictionary_only",
+                "finbert_only",
+                "dictionary_finbert_joint",
+            ),
+            "item_7_mda": (
+                "dictionary_only",
+                "finbert_only",
+                "dictionary_finbert_joint",
+            ),
+            "item_1a_risk_factors": (
+                "dictionary_only",
+                "finbert_only",
+                "dictionary_finbert_joint",
+            ),
+        }.items()
+        for specification_name in specification_names
         for control_set_id in ("C0", "C1", "C2")
     }
     assert observed_grid == expected_grid
@@ -1159,6 +1341,7 @@ def test_extension_pipeline_prefers_built_shared_event_panel_when_raw_prereqs_pr
             finbert_analysis_run_dir=extension_inputs["finbert_analysis_run_dir"],
             finbert_preprocessing_run_dir=extension_inputs["finbert_preprocessing_run_dir"],
             require_cleaned_scope_match=True,
+            text_scopes=("item_1a_risk_factors", "item_7_mda"),
             run_id="unit_test_extension_shared_prereq",
         )
     )
@@ -1200,6 +1383,9 @@ def test_extension_dictionary_family_comparison_pipeline_writes_root_and_family_
             finbert_item_features_long_path=extension_inputs["item_features_long_path"],
             finbert_analysis_run_dir=extension_inputs["finbert_analysis_run_dir"],
             finbert_preprocessing_run_dir=extension_inputs["finbert_preprocessing_run_dir"],
+            year_merged_dir=extension_inputs["year_merged_dir"],
+            local_work_root=tmp_path / "extension_family_work",
+            full_10k_text_feature_batch_size=1,
             require_cleaned_scope_match=True,
             run_id="unit_test_extension_family_compare",
         )
@@ -1299,6 +1485,7 @@ def test_extension_dictionary_family_comparison_builds_shared_prereqs_once_at_ro
             finbert_analysis_run_dir=extension_inputs["finbert_analysis_run_dir"],
             finbert_preprocessing_run_dir=extension_inputs["finbert_preprocessing_run_dir"],
             require_cleaned_scope_match=True,
+            text_scopes=("item_1a_risk_factors", "item_7_mda"),
             run_id="unit_test_extension_family_shared_prereq",
         )
     )
@@ -1447,6 +1634,7 @@ def test_extension_dictionary_surface_prefers_cleaned_scopes_when_available(
         company_description_path=extension_inputs["company_description_path"],
         ff48_siccodes_path=extension_inputs["ff48_siccodes_path"],
         finbert_item_features_long_path=extension_inputs["item_features_long_path"],
+        text_scopes=("item_1a_risk_factors", "item_7_mda"),
     )
 
     out = runner._build_extension_dictionary_surface_lf(
