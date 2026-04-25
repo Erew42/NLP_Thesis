@@ -11,9 +11,11 @@ from thesis_assets.config.constants import ARTIFACT_KEY_FINBERT_ROBUSTNESS_QUANT
 from thesis_assets.config.constants import ARTIFACT_KEY_FINBERT_ROBUSTNESS_QUANTILE_FIT_COMPARISONS
 from thesis_assets.config.constants import ARTIFACT_KEY_FINBERT_ROBUSTNESS_TAIL_COEFFICIENTS
 from thesis_assets.config.constants import ARTIFACT_KEY_FINBERT_ROBUSTNESS_TAIL_FIT_COMPARISONS
+from thesis_assets.config.constants import ARTIFACT_KEY_TABLE_VI_RESULTS_NO_OWNERSHIP
 from thesis_assets.config.constants import RUN_FAMILY_FINBERT_ROBUSTNESS
 from thesis_assets.config.constants import RUN_FAMILY_FINBERT_RUN
 from thesis_assets.config.constants import RUN_FAMILY_LM2011_EXTENSION
+from thesis_assets.config.constants import RUN_FAMILY_LM2011_POST_REFINITIV
 from thesis_assets.specs import ArtifactRequirement
 from thesis_assets.specs import AssetSpec
 
@@ -41,6 +43,45 @@ ASSETS: tuple[AssetSpec, ...] = (
                     "specification_name",
                     "common_success_policy",
                     "estimator_status",
+                ),
+            ),
+        ),
+    ),
+    AssetSpec(
+        asset_id="ch5_lm2011_table_vi_no_ownership_outcomes",
+        chapter="chapter5",
+        asset_kind="table",
+        output_stem="ch5_lm2011_table_vi_no_ownership_outcomes",
+        caption_stub=(
+            "LM2011 Table VI no-ownership dictionary regressions across filing-period return, "
+            "abnormal volume, and postevent return volatility."
+        ),
+        notes_stub=(
+            "Rows report the signal coefficient from the no-ownership Fama-MacBeth specification. "
+            "Filing-period excess-return and postevent-volatility coefficients are multiplied by 100; "
+            "abnormal-volume coefficients are reported on the stored scale."
+        ),
+        sample_contract_id="lm2011_table_vi_no_ownership",
+        builder_id="chapter5_lm2011_table_vi_no_ownership",
+        required_artifacts=(
+            ArtifactRequirement(
+                logical_name="table_vi_results_no_ownership",
+                run_family=RUN_FAMILY_LM2011_POST_REFINITIV,
+                artifact_key=ARTIFACT_KEY_TABLE_VI_RESULTS_NO_OWNERSHIP,
+                required_columns=(
+                    "table_id",
+                    "specification_id",
+                    "text_scope",
+                    "signal_name",
+                    "dependent_variable",
+                    "coefficient_name",
+                    "estimate",
+                    "standard_error",
+                    "t_stat",
+                    "n_quarters",
+                    "mean_quarter_n",
+                    "weighting_rule",
+                    "nw_lags",
                 ),
             ),
         ),

@@ -61,6 +61,10 @@ _TABLE_VI_SIGNAL_COLUMNS: tuple[str, ...] = (
     "lm_modal_strong_tfidf",
     "lm_modal_weak_tfidf",
 )
+_TABLE_VI_LEGACY_OWNERSHIP_DEPENDENT_VARIABLES: tuple[str, ...] = ("filing_period_excess_return",)
+_TABLE_VI_LEGACY_OWNERSHIP_SIGNAL_COLUMNS: tuple[str, ...] = tuple(
+    column for column in _TABLE_VI_SIGNAL_COLUMNS if not column.startswith("h4n_inf_")
+)
 _TABLE_RESULT_SCHEMA: dict[str, pl.DataType] = {
     "table_id": pl.Utf8,
     "specification_id": pl.Utf8,
@@ -1298,6 +1302,8 @@ def _build_lm2011_table_vi_results_impl(
     *,
     ff48_siccodes_path: Path | str,
     control_columns: Sequence[str],
+    dependent_variables: Sequence[str],
+    signal_columns: Sequence[str],
     with_diagnostics: bool,
 ) -> _QuarterlyFamaMacbethBundle | pl.DataFrame:
     panel_lf = build_lm2011_return_regression_panel(
@@ -1310,13 +1316,13 @@ def _build_lm2011_table_vi_results_impl(
     )
     if with_diagnostics:
         bundles: list[_QuarterlyFamaMacbethBundle] = []
-        for dependent_variable in _TABLE_VI_DEPENDENT_VARIABLES:
+        for dependent_variable in dependent_variables:
             outcome_bundle = _run_lm2011_table_signal_family(
                 panel_lf,
                 table_id="table_vi_full_10k_dictionary_surface",
                 text_scope="full_10k",
                 dependent_variable=dependent_variable,
-                signal_columns=_TABLE_VI_SIGNAL_COLUMNS,
+                signal_columns=signal_columns,
                 control_columns=control_columns,
                 with_diagnostics=True,
             )
@@ -1325,13 +1331,13 @@ def _build_lm2011_table_vi_results_impl(
         return _concat_lm2011_quarterly_bundles(bundles)
 
     frames: list[pl.DataFrame] = []
-    for dependent_variable in _TABLE_VI_DEPENDENT_VARIABLES:
+    for dependent_variable in dependent_variables:
         outcome_df = _run_lm2011_table_signal_family(
             panel_lf,
             table_id="table_vi_full_10k_dictionary_surface",
             text_scope="full_10k",
             dependent_variable=dependent_variable,
-            signal_columns=_TABLE_VI_SIGNAL_COLUMNS,
+            signal_columns=signal_columns,
             control_columns=control_columns,
             with_diagnostics=False,
         )
@@ -1355,6 +1361,8 @@ def _build_lm2011_table_vi_results_bundle(
         company_description_lf,
         ff48_siccodes_path=ff48_siccodes_path,
         control_columns=_RETURN_CONTROL_COLUMNS,
+        dependent_variables=_TABLE_VI_LEGACY_OWNERSHIP_DEPENDENT_VARIABLES,
+        signal_columns=_TABLE_VI_LEGACY_OWNERSHIP_SIGNAL_COLUMNS,
         with_diagnostics=True,
     )
 
@@ -1374,6 +1382,8 @@ def build_lm2011_table_vi_results(
         company_description_lf,
         ff48_siccodes_path=ff48_siccodes_path,
         control_columns=_RETURN_CONTROL_COLUMNS,
+        dependent_variables=_TABLE_VI_LEGACY_OWNERSHIP_DEPENDENT_VARIABLES,
+        signal_columns=_TABLE_VI_LEGACY_OWNERSHIP_SIGNAL_COLUMNS,
         with_diagnostics=False,
     )
 
@@ -1393,6 +1403,8 @@ def _build_lm2011_table_vi_results_no_ownership_bundle(
         company_description_lf,
         ff48_siccodes_path=ff48_siccodes_path,
         control_columns=_RETURN_CONTROL_COLUMNS_NO_OWNERSHIP,
+        dependent_variables=_TABLE_VI_DEPENDENT_VARIABLES,
+        signal_columns=_TABLE_VI_SIGNAL_COLUMNS,
         with_diagnostics=True,
     )
 
@@ -1412,6 +1424,8 @@ def build_lm2011_table_vi_results_no_ownership(
         company_description_lf,
         ff48_siccodes_path=ff48_siccodes_path,
         control_columns=_RETURN_CONTROL_COLUMNS_NO_OWNERSHIP,
+        dependent_variables=_TABLE_VI_DEPENDENT_VARIABLES,
+        signal_columns=_TABLE_VI_SIGNAL_COLUMNS,
         with_diagnostics=False,
     )
 

@@ -7,6 +7,7 @@ RUN_FAMILY_FINBERT_RUN = "finbert_run"
 RUN_FAMILY_FINBERT_ROBUSTNESS = "finbert_robustness"
 
 ARTIFACT_KEY_TABLE_I_SAMPLE_CREATION = "lm2011_table_i_sample_creation"
+ARTIFACT_KEY_TABLE_VI_RESULTS_NO_OWNERSHIP = "lm2011_table_vi_results_no_ownership"
 ARTIFACT_KEY_EXTENSION_ANALYSIS_PANEL = "lm2011_extension_analysis_panel"
 ARTIFACT_KEY_EXTENSION_FIT_SUMMARY = "lm2011_extension_fit_summary"
 ARTIFACT_KEY_EXTENSION_FIT_COMPARISONS = "lm2011_extension_fit_comparisons"
@@ -23,6 +24,7 @@ ARTIFACT_KEY_FINBERT_ROBUSTNESS_QUANTILE_FIT_COMPARISONS = "finbert_robustness_q
 
 ARTIFACT_FILENAMES: dict[str, str] = {
     ARTIFACT_KEY_TABLE_I_SAMPLE_CREATION: "lm2011_table_i_sample_creation.parquet",
+    ARTIFACT_KEY_TABLE_VI_RESULTS_NO_OWNERSHIP: "lm2011_table_vi_results_no_ownership.parquet",
     ARTIFACT_KEY_EXTENSION_ANALYSIS_PANEL: "lm2011_extension_analysis_panel.parquet",
     ARTIFACT_KEY_EXTENSION_FIT_SUMMARY: "lm2011_extension_fit_summary.parquet",
     ARTIFACT_KEY_EXTENSION_FIT_COMPARISONS: "lm2011_extension_fit_comparisons.parquet",
@@ -38,8 +40,13 @@ ARTIFACT_FILENAMES: dict[str, str] = {
     ARTIFACT_KEY_FINBERT_ROBUSTNESS_QUANTILE_FIT_COMPARISONS: "finbert_robustness_quantile_fit_comparisons.parquet",
 }
 
+ARTIFACT_ALTERNATE_FILENAMES: dict[str, tuple[str, ...]] = {
+    ARTIFACT_KEY_TABLE_VI_RESULTS_NO_OWNERSHIP: ("lm2011_table_vi_results_no_ownership_validation.parquet",),
+}
+
 ARTIFACT_MANIFEST_KEYS: dict[str, tuple[str, ...]] = {
     ARTIFACT_KEY_TABLE_I_SAMPLE_CREATION: ("table_i_sample_creation",),
+    ARTIFACT_KEY_TABLE_VI_RESULTS_NO_OWNERSHIP: ("table_vi_results_no_ownership",),
     ARTIFACT_KEY_EXTENSION_ANALYSIS_PANEL: ("extension_analysis_panel",),
     ARTIFACT_KEY_EXTENSION_FIT_SUMMARY: ("extension_fit_summary",),
     ARTIFACT_KEY_EXTENSION_FIT_COMPARISONS: ("extension_fit_comparisons",),

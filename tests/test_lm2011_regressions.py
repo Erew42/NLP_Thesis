@@ -16,7 +16,6 @@ from thesis_pkg.pipeline import (
     build_lm2011_table_ia_ii_results_from_monthly_returns,
     build_lm2011_table_iv_results,
     build_lm2011_table_v_results,
-    build_lm2011_table_vi_results,
     build_lm2011_table_viii_results,
     run_lm2011_quarterly_fama_macbeth,
     run_lm2011_quarterly_fama_macbeth_with_diagnostics,
@@ -900,7 +899,7 @@ def test_table_wrappers_follow_revised_spec_signal_scopes(tmp_path) -> None:
         inputs["company_description"].lazy(),
         ff48_siccodes_path=inputs["ff48_path"],
     )
-    table_vi = build_lm2011_table_vi_results(
+    table_vi = regressions.build_lm2011_table_vi_results_no_ownership(
         inputs["event_panel"].lazy(),
         inputs["full_text_features"].lazy(),
         inputs["company_history"].lazy(),
@@ -965,7 +964,7 @@ def test_table_wrappers_follow_revised_spec_signal_scopes(tmp_path) -> None:
 
 def test_table_vi_preserves_legacy_lm_filing_return_coefficients(tmp_path) -> None:
     inputs = _regression_test_inputs(tmp_path)
-    table_vi = build_lm2011_table_vi_results(
+    table_vi = regressions.build_lm2011_table_vi_results_no_ownership(
         inputs["event_panel"].lazy(),
         inputs["full_text_features"].lazy(),
         inputs["company_history"].lazy(),
@@ -1002,7 +1001,7 @@ def test_table_vi_preserves_legacy_lm_filing_return_coefficients(tmp_path) -> No
                 text_scope="full_10k",
                 dependent_variable="filing_period_excess_return",
                 signal_column=signal,
-                control_columns=regressions._RETURN_CONTROL_COLUMNS,
+                control_columns=regressions._RETURN_CONTROL_COLUMNS_NO_OWNERSHIP,
                 specification_id=signal,
                 nw_lags=1,
             )
@@ -1056,16 +1055,6 @@ def test_no_ownership_core_table_wrappers_preserve_signals_and_drop_only_ownersh
             (
                 inputs["event_panel"].lazy(),
                 inputs["mda_text_features"].lazy(),
-                inputs["company_history"].lazy(),
-                inputs["company_description"].lazy(),
-            ),
-        ),
-        (
-            build_lm2011_table_vi_results,
-            regressions.build_lm2011_table_vi_results_no_ownership,
-            (
-                inputs["event_panel"].lazy(),
-                inputs["full_text_features"].lazy(),
                 inputs["company_history"].lazy(),
                 inputs["company_description"].lazy(),
             ),

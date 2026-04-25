@@ -5,6 +5,7 @@ from pathlib import Path
 
 import polars as pl
 
+from thesis_assets.config.constants import ARTIFACT_ALTERNATE_FILENAMES
 from thesis_assets.config.constants import ARTIFACT_FILENAMES
 from thesis_assets.config.constants import ARTIFACT_MANIFEST_KEYS
 from thesis_assets.config.constants import RUN_FAMILY_SENTINEL_ARTIFACTS
@@ -128,7 +129,11 @@ def _is_compatible_run_root(root: Path, run_family: str) -> bool:
         return False
     if _find_manifest_path(root, run_family) is not None:
         return True
-    return any((root / ARTIFACT_FILENAMES[artifact_key]).exists() for artifact_key in RUN_FAMILY_SENTINEL_ARTIFACTS[run_family])
+    return any(
+        (root / filename).exists()
+        for artifact_key in RUN_FAMILY_SENTINEL_ARTIFACTS[run_family]
+        for filename in _artifact_filenames(artifact_key)
+    )
 
 
 def _find_manifest_path(root: Path, run_family: str) -> Path | None:
@@ -181,11 +186,15 @@ def _artifact_candidates(run: ResolvedRun, requirement: ArtifactRequirement) -> 
                     _resolve_manifest_value(raw_top_level, run.manifest_path, manifest),
                 )
 
-    filename = ARTIFACT_FILENAMES[requirement.artifact_key]
-    if requirement.relative_subdir is not None:
-        _append_candidate(candidates, seen, run.root / requirement.relative_subdir / filename)
-    _append_candidate(candidates, seen, run.root / filename)
+    for filename in _artifact_filenames(requirement.artifact_key):
+        if requirement.relative_subdir is not None:
+            _append_candidate(candidates, seen, run.root / requirement.relative_subdir / filename)
+        _append_candidate(candidates, seen, run.root / filename)
     return tuple(candidates)
+
+
+def _artifact_filenames(artifact_key: str) -> tuple[str, ...]:
+    return (ARTIFACT_FILENAMES[artifact_key], *ARTIFACT_ALTERNATE_FILENAMES.get(artifact_key, ()))
 
 
 def _resolve_manifest_value(raw_path: str, manifest_path: Path, manifest: dict[str, object]) -> Path:

@@ -775,7 +775,7 @@ signal_tfidf_i,S = Sum_{t in S, tf_i,t > 0}(term_weight_i,t)
     for line in [
         "Table IV and Table VIII use h4n_inf_prop, lm_negative_prop, h4n_inf_tfidf, and lm_negative_tfidf.",
         "Table V uses the same four signals, but on the MD&A item-7 surface and only when total_token_count_mda >= 250.",
-        "Table VI broadens the signal family to H4N-Inf plus LM negative, positive, uncertainty, litigious, modal_strong, and modal_weak, each in prop and tfidf form, and runs the grid for filing-period returns, abnormal volume, and postevent volatility.",
+        "The thesis Table VI surface uses the no-ownership specification, broadens the signal family to H4N-Inf plus LM negative, positive, uncertainty, litigious, modal_strong, and modal_weak, each in prop and tfidf form, and runs the grid for filing-period returns, abnormal volume, and postevent volatility.",
         "Table IA.I uses normalized_difference_negative and normalized_difference_h4n_inf, which are standardized within industry against prior-year means and standard deviations.",
         "The trading strategy uses only fin_neg_prop, fin_neg_tfidf, h4n_inf_prop, and h4n_inf_tfidf on full 10-K text.",
     ]:
@@ -938,7 +938,7 @@ t_stat           = theta_hat / SE_NW(theta_hat)
             "Table VI",
             "filing_period_excess_return, abnormal_volume, postevent_return_volatility",
             "H4N-Inf plus LM negative/positive/uncertainty/litigious/modal_strong/modal_weak in prop and tfidf form on full_10k",
-            "Same controls as Table IV.",
+            "Same controls as Table IV, excluding institutional_ownership for the thesis no-ownership surface.",
         ],
         [
             "Table VIII",
@@ -1096,7 +1096,7 @@ Control sets:
     )
     story.append(
         _paragraph(
-            "The core LM2011 Table VI path uses abnormal_volume and postevent_return_volatility as paper-defined dependent variables. The extension path still defaults to filing_period_excess_return unless a library caller passes a broader outcome_names sequence directly (E1, E13).",
+            "The core LM2011 Table VI no-ownership path uses abnormal_volume and postevent_return_volatility as paper-defined dependent variables. The extension path still defaults to filing_period_excess_return unless a library caller passes a broader outcome_names sequence directly (E1, E13).",
             styles["body"],
         )
     )

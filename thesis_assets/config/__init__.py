@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from thesis_assets.config.constants import ARTIFACT_FILENAMES
+from thesis_assets.config.constants import ARTIFACT_ALTERNATE_FILENAMES
 from thesis_assets.config.constants import ARTIFACT_MANIFEST_KEYS
 from thesis_assets.config.constants import BUILD_LOG_FILENAME
 from thesis_assets.config.constants import DEFAULT_COMMON_SUCCESS_POLICY
@@ -19,6 +20,7 @@ from thesis_assets.config.runtime import prepare_output_dirs
 
 __all__ = [
     "ARTIFACT_FILENAMES",
+    "ARTIFACT_ALTERNATE_FILENAMES",
     "ARTIFACT_MANIFEST_KEYS",
     "BUILD_LOG_FILENAME",
     "DEFAULT_COMMON_SUCCESS_POLICY",

@@ -33,6 +33,28 @@ from thesis_pkg.core.sec.lm2011_dictionary import load_lm2011_word_list
 
 
 TARGET_TEXT_SCOPES = ("item_7_mda", "item_1a_risk_factors")
+TABLE_VI_DEPENDENT_VARIABLES = (
+    "filing_period_excess_return",
+    "abnormal_volume",
+    "postevent_return_volatility",
+)
+TABLE_VI_SIGNAL_COLUMNS = (
+    "h4n_inf_prop",
+    "lm_negative_prop",
+    "lm_positive_prop",
+    "lm_uncertainty_prop",
+    "lm_litigious_prop",
+    "lm_modal_strong_prop",
+    "lm_modal_weak_prop",
+    "h4n_inf_tfidf",
+    "lm_negative_tfidf",
+    "lm_positive_tfidf",
+    "lm_uncertainty_tfidf",
+    "lm_litigious_tfidf",
+    "lm_modal_strong_tfidf",
+    "lm_modal_weak_tfidf",
+)
+TABLE_VI_EXPECTED_SPEC_COUNT = len(TABLE_VI_DEPENDENT_VARIABLES) * len(TABLE_VI_SIGNAL_COLUMNS)
 
 
 def build_asset(context: BuildContext, spec: AssetSpec) -> BuildResult:
@@ -49,6 +71,8 @@ def build_asset(context: BuildContext, spec: AssetSpec) -> BuildResult:
             return _build_chapter4_sample_stage_bridge(context, spec, artifact_map)
         if spec.builder_id == "chapter5_fit_horserace":
             return _build_chapter5_fit_horserace(context, spec, artifact_map)
+        if spec.builder_id == "chapter5_lm2011_table_vi_no_ownership":
+            return _build_chapter5_lm2011_table_vi_no_ownership(context, spec, artifact_map)
         if spec.builder_id == "chapter5_concordance":
             return _build_chapter5_concordance(context, spec, artifact_map)
         if spec.builder_id == "chapter5_lm_doc_score_ecdf":
@@ -309,6 +333,48 @@ def _build_chapter5_fit_horserace(
         resolved_inputs={"extension_fit_summary": str(source_artifact.path)},
         output_paths=output_paths,
         row_counts={"comparison_rows": selected.height},
+    )
+
+
+def _build_chapter5_lm2011_table_vi_no_ownership(
+    context: BuildContext,
+    spec: AssetSpec,
+    artifacts: dict[str, ResolvedArtifact],
+) -> BuildResult:
+    _require_contract(spec, "lm2011_table_vi_no_ownership")
+    source_artifact = artifacts["table_vi_results_no_ownership"]
+    selected_with_keys, resolved_artifact, warnings = _collect_table_vi_no_ownership_surface(
+        context,
+        source_artifact,
+    )
+    selected = selected_with_keys.select(
+        "outcome",
+        "signal",
+        "weighting",
+        "estimate",
+        "std_error",
+        "t_stat",
+        "n_quarters",
+        "mean_quarter_n",
+        "nw_lags",
+        "reported_scale",
+    )
+
+    output_paths = _write_table_outputs(context, spec, selected)
+    return BuildResult(
+        asset_id=spec.asset_id,
+        chapter=spec.chapter,
+        asset_kind=spec.asset_kind,
+        sample_contract_id=spec.sample_contract_id,
+        status="completed",
+        resolved_inputs={"table_vi_results_no_ownership": str(resolved_artifact.path)},
+        output_paths=output_paths,
+        row_counts={
+            "table_rows": selected.height,
+            "outcome_count": len(TABLE_VI_DEPENDENT_VARIABLES),
+            "signal_count": len(TABLE_VI_SIGNAL_COLUMNS),
+        },
+        warnings=warnings,
     )
 
 
@@ -708,6 +774,239 @@ def _build_chapter5_finbert_robustness_fit_comparisons(
         },
         output_paths=output_paths,
         row_counts={"table_rows": selected.height},
+    )
+
+
+def _table_vi_signal_coefficients_lf(lf: pl.LazyFrame) -> pl.LazyFrame:
+    return (
+        lf.filter(
+            pl.col("dependent_variable").is_in(TABLE_VI_DEPENDENT_VARIABLES)
+            & pl.col("signal_name").is_in(TABLE_VI_SIGNAL_COLUMNS)
+            & (pl.col("coefficient_name") == pl.col("signal_name"))
+        )
+        .with_columns(
+            _table_vi_outcome_order_expr().alias("_outcome_order"),
+            _table_vi_signal_order_expr().alias("_signal_order"),
+            _table_vi_weight_order_expr().alias("_weight_order"),
+            _table_vi_outcome_scale_expr().alias("_scale"),
+            _table_vi_outcome_label_expr().alias("outcome"),
+            _table_vi_signal_label_expr().alias("signal"),
+            _table_vi_weighting_label_expr().alias("weighting"),
+            _table_vi_reported_scale_expr().alias("reported_scale"),
+        )
+        .with_columns(
+            (pl.col("estimate").cast(pl.Float64, strict=False) * pl.col("_scale")).alias("estimate"),
+            (pl.col("standard_error").cast(pl.Float64, strict=False) * pl.col("_scale")).alias("std_error"),
+            pl.col("t_stat").cast(pl.Float64, strict=False).alias("t_stat"),
+            pl.col("mean_quarter_n").cast(pl.Float64, strict=False).alias("mean_quarter_n"),
+        )
+        .select(
+            "dependent_variable",
+            "signal_name",
+            "outcome",
+            "signal",
+            "weighting",
+            "estimate",
+            "std_error",
+            "t_stat",
+            "n_quarters",
+            "mean_quarter_n",
+            "nw_lags",
+            "reported_scale",
+            "_outcome_order",
+            "_weight_order",
+            "_signal_order",
+        )
+    )
+
+
+def _collect_table_vi_no_ownership_surface(
+    context: BuildContext,
+    source_artifact: ResolvedArtifact,
+) -> tuple[pl.DataFrame, ResolvedArtifact, tuple[str, ...]]:
+    selected = _collect_table_vi_signal_coefficients(source_artifact)
+    try:
+        _validate_table_vi_surface(selected)
+        return selected, source_artifact, ()
+    except AssetBuildError as original_error:
+        fallback_path = _resolve_table_vi_validation_fallback_path(context, source_artifact)
+        if fallback_path is None:
+            raise original_error
+
+    fallback_artifact = ResolvedArtifact(
+        requirement=source_artifact.requirement,
+        path=fallback_path,
+        run=source_artifact.run,
+    )
+    selected = _collect_table_vi_signal_coefficients(fallback_artifact)
+    _validate_table_vi_surface(selected)
+    warning = (
+        "Resolved canonical Table VI no-ownership artifact did not contain the full three-outcome "
+        f"surface; used validation artifact {fallback_path}."
+    )
+    return selected, fallback_artifact, (warning,)
+
+
+def _collect_table_vi_signal_coefficients(source_artifact: ResolvedArtifact) -> pl.DataFrame:
+    return (
+        _table_vi_signal_coefficients_lf(scan_parquet_artifact(source_artifact))
+        .sort("_outcome_order", "_weight_order", "_signal_order")
+        .collect()
+    )
+
+
+def _resolve_table_vi_validation_fallback_path(
+    context: BuildContext,
+    source_artifact: ResolvedArtifact,
+) -> Path | None:
+    filenames = (
+        "lm2011_table_vi_results_no_ownership_validation.parquet",
+        "lm2011_table_vi_results_no_ownership.parquet",
+    )
+    validation_dirs = ("lm2011_table_vi_validation_second_pass", "lm2011_table_vi_validation")
+    candidate_roots: list[Path] = [context.repo_root / "full_data_run"]
+    candidate_roots.extend(source_artifact.run.root.parents)
+    candidate_roots.append(source_artifact.run.root)
+
+    seen: set[Path] = set()
+    for root in candidate_roots:
+        for dirname in validation_dirs:
+            for filename in filenames:
+                candidate = (root / dirname / filename).resolve()
+                if candidate in seen:
+                    continue
+                seen.add(candidate)
+                if candidate == source_artifact.path.resolve():
+                    continue
+                if candidate.exists() and candidate.is_file():
+                    return candidate
+    return None
+
+
+def _validate_table_vi_surface(df: pl.DataFrame) -> None:
+    if df.is_empty():
+        raise AssetBuildError("LM2011 Table VI no-ownership selection returned zero signal rows.")
+
+    observed_pairs = {
+        (row["dependent_variable"], row["signal_name"])
+        for row in df.select("dependent_variable", "signal_name").to_dicts()
+    }
+    expected_pairs = {
+        (dependent_variable, signal_name)
+        for dependent_variable in TABLE_VI_DEPENDENT_VARIABLES
+        for signal_name in TABLE_VI_SIGNAL_COLUMNS
+    }
+    missing_pairs = sorted(expected_pairs.difference(observed_pairs))
+    if missing_pairs:
+        preview = ", ".join(f"{dependent_variable}:{signal_name}" for dependent_variable, signal_name in missing_pairs[:8])
+        suffix = "" if len(missing_pairs) <= 8 else f", ... ({len(missing_pairs)} missing total)"
+        raise AssetBuildError(f"LM2011 Table VI no-ownership artifact is missing expected specs: {preview}{suffix}")
+
+    duplicate_specs = (
+        df.group_by("dependent_variable", "signal_name")
+        .len()
+        .filter(pl.col("len") > 1)
+    )
+    if duplicate_specs.height:
+        preview = ", ".join(
+            f"{row['dependent_variable']}:{row['signal_name']}"
+            for row in duplicate_specs.select("dependent_variable", "signal_name").head(8).to_dicts()
+        )
+        raise AssetBuildError(f"LM2011 Table VI no-ownership artifact has duplicate signal specs: {preview}")
+
+    if df.height != TABLE_VI_EXPECTED_SPEC_COUNT:
+        raise AssetBuildError(
+            f"LM2011 Table VI no-ownership selection returned {df.height} rows; "
+            f"expected {TABLE_VI_EXPECTED_SPEC_COUNT}."
+        )
+
+
+def _table_vi_outcome_label_expr() -> pl.Expr:
+    return (
+        pl.when(pl.col("dependent_variable") == "filing_period_excess_return")
+        .then(pl.lit("Filing-period excess return"))
+        .when(pl.col("dependent_variable") == "abnormal_volume")
+        .then(pl.lit("Abnormal volume"))
+        .when(pl.col("dependent_variable") == "postevent_return_volatility")
+        .then(pl.lit("Postevent return volatility"))
+        .otherwise(pl.col("dependent_variable"))
+    )
+
+
+def _table_vi_outcome_order_expr() -> pl.Expr:
+    expr = pl.lit(999)
+    for order, dependent_variable in reversed(tuple(enumerate(TABLE_VI_DEPENDENT_VARIABLES, start=1))):
+        expr = pl.when(pl.col("dependent_variable") == dependent_variable).then(pl.lit(order)).otherwise(expr)
+    return expr
+
+
+def _table_vi_signal_label_expr() -> pl.Expr:
+    base_labels = {
+        "h4n_inf": "H4N-Inf",
+        "lm_negative": "LM negative",
+        "lm_positive": "LM positive",
+        "lm_uncertainty": "LM uncertainty",
+        "lm_litigious": "LM litigious",
+        "lm_modal_strong": "LM modal strong",
+        "lm_modal_weak": "LM modal weak",
+    }
+    expr = pl.col("signal_name")
+    for signal_name in reversed(TABLE_VI_SIGNAL_COLUMNS):
+        base_name = signal_name.removesuffix("_prop").removesuffix("_tfidf")
+        expr = pl.when(pl.col("signal_name") == signal_name).then(pl.lit(base_labels[base_name])).otherwise(expr)
+    return expr
+
+
+def _table_vi_signal_order_expr() -> pl.Expr:
+    base_order = {
+        "h4n_inf": 1,
+        "lm_negative": 2,
+        "lm_positive": 3,
+        "lm_uncertainty": 4,
+        "lm_litigious": 5,
+        "lm_modal_strong": 6,
+        "lm_modal_weak": 7,
+    }
+    expr = pl.lit(999)
+    for signal_name in reversed(TABLE_VI_SIGNAL_COLUMNS):
+        base_name = signal_name.removesuffix("_prop").removesuffix("_tfidf")
+        expr = pl.when(pl.col("signal_name") == signal_name).then(pl.lit(base_order[base_name])).otherwise(expr)
+    return expr
+
+
+def _table_vi_weighting_label_expr() -> pl.Expr:
+    return (
+        pl.when(pl.col("signal_name").str.ends_with("_prop"))
+        .then(pl.lit("Proportional"))
+        .when(pl.col("signal_name").str.ends_with("_tfidf"))
+        .then(pl.lit("tf-idf"))
+        .otherwise(pl.lit("unknown"))
+    )
+
+
+def _table_vi_weight_order_expr() -> pl.Expr:
+    return (
+        pl.when(pl.col("signal_name").str.ends_with("_prop"))
+        .then(pl.lit(1))
+        .when(pl.col("signal_name").str.ends_with("_tfidf"))
+        .then(pl.lit(2))
+        .otherwise(pl.lit(99))
+    )
+
+
+def _table_vi_outcome_scale_expr() -> pl.Expr:
+    return (
+        pl.when(pl.col("dependent_variable").is_in(("filing_period_excess_return", "postevent_return_volatility")))
+        .then(pl.lit(100.0))
+        .otherwise(pl.lit(1.0))
+    )
+
+
+def _table_vi_reported_scale_expr() -> pl.Expr:
+    return (
+        pl.when(pl.col("dependent_variable").is_in(("filing_period_excess_return", "postevent_return_volatility")))
+        .then(pl.lit("x100"))
+        .otherwise(pl.lit("raw"))
     )
 
 

@@ -39,6 +39,7 @@ def test_registry_loader_imports_expected_assets() -> None:
         "ch4_sample_attrition_losses_lm2011",
         "ch4_sample_stage_bridge_lm2011",
         "ch5_fit_horserace_item7_c0",
+        "ch5_lm2011_table_vi_no_ownership_outcomes",
         "ch5_concordance_item7_common_sample",
         "ch5_between_filing_ecdf_lm_negative_doc_scores",
         "ch5_between_filing_ecdf_finbert_doc_scores",
@@ -173,6 +174,72 @@ def test_chapter4_sample_funnel_figure_outputs(tmp_path: Path) -> None:
     assert Path(asset_result.output_paths["csv"]).exists()
     assert Path(asset_result.output_paths["png"]).exists()
     assert Path(asset_result.output_paths["pdf"]).exists()
+
+
+def test_chapter5_table_vi_no_ownership_asset_uses_validation_alias(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    run_root = repo_root / "inputs" / "lm2011_table_vi_validation_second_pass"
+    run_root.mkdir(parents=True)
+    _write_table_vi_no_ownership_parquet(run_root / "lm2011_table_vi_results_no_ownership_validation.parquet")
+
+    result = build_single_asset(
+        asset_id="ch5_lm2011_table_vi_no_ownership_outcomes",
+        run_id="unit_table_vi",
+        repo_root=repo_root,
+        lm2011_post_refinitiv_dir=run_root,
+    )
+
+    asset_result = result.asset_results["ch5_lm2011_table_vi_no_ownership_outcomes"]
+    assert asset_result.status == "completed"
+    assert asset_result.row_counts == {
+        "table_rows": 42,
+        "outcome_count": 3,
+        "signal_count": 14,
+    }
+    assert Path(asset_result.output_paths["csv"]).exists()
+    assert Path(asset_result.output_paths["tex"]).exists()
+    assert Path(asset_result.output_paths["table_preview"]).exists()
+
+    table_df = pl.read_csv(asset_result.output_paths["csv"])
+    assert table_df.height == 42
+    assert table_df.get_column("outcome").unique().sort().to_list() == [
+        "Abnormal volume",
+        "Filing-period excess return",
+        "Postevent return volatility",
+    ]
+    assert set(table_df.get_column("weighting").unique().to_list()) == {"Proportional", "tf-idf"}
+    assert "H4N-Inf" in table_df.get_column("signal").unique().to_list()
+    scales = table_df.group_by("outcome").agg(pl.col("reported_scale").unique().sort()).sort("outcome")
+    assert scales.to_dicts() == [
+        {"outcome": "Abnormal volume", "reported_scale": ["raw"]},
+        {"outcome": "Filing-period excess return", "reported_scale": ["x100"]},
+        {"outcome": "Postevent return volatility", "reported_scale": ["x100"]},
+    ]
+
+
+def test_chapter5_table_vi_no_ownership_asset_falls_back_to_validation_pack(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    run_root = repo_root / "full_data_run" / "lm2011_post_refinitiv"
+    validation_root = repo_root / "full_data_run" / "lm2011_table_vi_validation_second_pass"
+    run_root.mkdir(parents=True)
+    validation_root.mkdir(parents=True)
+    _write_incomplete_table_vi_no_ownership_parquet(run_root / "lm2011_table_vi_results_no_ownership.parquet")
+    _write_table_vi_no_ownership_parquet(validation_root / "lm2011_table_vi_results_no_ownership_validation.parquet")
+
+    result = build_single_asset(
+        asset_id="ch5_lm2011_table_vi_no_ownership_outcomes",
+        run_id="unit_table_vi_fallback",
+        repo_root=repo_root,
+        lm2011_post_refinitiv_dir=run_root,
+    )
+
+    asset_result = result.asset_results["ch5_lm2011_table_vi_no_ownership_outcomes"]
+    assert asset_result.status == "completed"
+    assert asset_result.row_counts["table_rows"] == 42
+    assert asset_result.warnings
+    assert asset_result.resolved_inputs["table_vi_results_no_ownership"] == str(
+        (validation_root / "lm2011_table_vi_results_no_ownership_validation.parquet").resolve()
+    )
 
 
 def test_lm_sentence_negative_share_scoring() -> None:
@@ -442,6 +509,71 @@ def _write_sample_attrition_parquet(path: Path) -> None:
         }
     )
     df.write_parquet(path)
+
+
+def _write_table_vi_no_ownership_parquet(path: Path) -> None:
+    outcomes = (
+        "filing_period_excess_return",
+        "abnormal_volume",
+        "postevent_return_volatility",
+    )
+    signals = (
+        "h4n_inf_prop",
+        "lm_negative_prop",
+        "lm_positive_prop",
+        "lm_uncertainty_prop",
+        "lm_litigious_prop",
+        "lm_modal_strong_prop",
+        "lm_modal_weak_prop",
+        "h4n_inf_tfidf",
+        "lm_negative_tfidf",
+        "lm_positive_tfidf",
+        "lm_uncertainty_tfidf",
+        "lm_litigious_tfidf",
+        "lm_modal_strong_tfidf",
+        "lm_modal_weak_tfidf",
+    )
+    rows = []
+    for outcome_idx, outcome in enumerate(outcomes, start=1):
+        for signal_idx, signal in enumerate(signals, start=1):
+            rows.append(
+                {
+                    "table_id": "table_vi_full_10k_dictionary_surface",
+                    "specification_id": f"{outcome}__{signal}",
+                    "text_scope": "full_10k",
+                    "signal_name": signal,
+                    "dependent_variable": outcome,
+                    "coefficient_name": signal,
+                    "estimate": 0.001 * outcome_idx * signal_idx,
+                    "standard_error": 0.0001 * signal_idx,
+                    "t_stat": 1.5,
+                    "n_quarters": 60,
+                    "mean_quarter_n": 750.0,
+                    "weighting_rule": "quarter_observation_count",
+                    "nw_lags": 1,
+                }
+            )
+    pl.DataFrame(rows).write_parquet(path)
+
+
+def _write_incomplete_table_vi_no_ownership_parquet(path: Path) -> None:
+    pl.DataFrame(
+        {
+            "table_id": ["table_vi_full_10k_dictionary_surface"],
+            "specification_id": ["filing_period_excess_return__lm_negative_prop"],
+            "text_scope": ["full_10k"],
+            "signal_name": ["lm_negative_prop"],
+            "dependent_variable": ["filing_period_excess_return"],
+            "coefficient_name": ["lm_negative_prop"],
+            "estimate": [0.001],
+            "standard_error": [0.0001],
+            "t_stat": [1.5],
+            "n_quarters": [60],
+            "mean_quarter_n": [750.0],
+            "weighting_rule": ["quarter_observation_count"],
+            "nw_lags": [1],
+        }
+    ).write_parquet(path)
 
 
 def _write_extension_analysis_panel(path: Path) -> None:
