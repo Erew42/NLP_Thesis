@@ -94,6 +94,111 @@ def build_sample_bridge_figure(
     return fig
 
 
+def build_multi_series_line_figure(
+    df: pl.DataFrame,
+    *,
+    x_col: str,
+    y_col: str,
+    series_col: str,
+    x_label: str,
+    y_label: str,
+    zero_line: bool = False,
+) -> plt.Figure:
+    fig, ax = plt.subplots(figsize=(8.4, 4.8))
+    series_values = df.get_column(series_col).unique().sort().to_list()
+    colors = ("#345c72", "#98633d", "#4d6f43", "#7a4f80", "#5b6770", "#b24f3a", "#3f7f7f", "#8b6b2f")
+    for index, series in enumerate(series_values):
+        series_df = df.filter(pl.col(series_col) == series).sort(x_col)
+        ax.plot(
+            series_df.get_column(x_col).to_list(),
+            series_df.get_column(y_col).to_list(),
+            linewidth=1.8,
+            marker="o" if series_df.height <= 24 else None,
+            markersize=3.2,
+            color=colors[index % len(colors)],
+            label=str(series),
+        )
+    if zero_line:
+        ax.axhline(0.0, color="#7f8c8d", linewidth=0.8, linestyle="--")
+    ax.set_xlabel(x_label)
+    ax.set_ylabel(y_label)
+    ax.grid(alpha=0.16, linewidth=0.6)
+    ax.set_axisbelow(True)
+    ax.legend(frameon=False, fontsize=8, ncol=1 if len(series_values) <= 4 else 2)
+    fig.autofmt_xdate(rotation=30, ha="right")
+    fig.tight_layout()
+    return fig
+
+
+def build_grouped_bar_figure(
+    df: pl.DataFrame,
+    *,
+    category_col: str,
+    value_col: str,
+    series_col: str,
+    x_label: str,
+    y_label: str,
+) -> plt.Figure:
+    categories = df.get_column(category_col).unique().sort().to_list()
+    series_values = df.get_column(series_col).unique().sort().to_list()
+    fig, ax = plt.subplots(figsize=(8.0, 4.8))
+    total_width = 0.82
+    bar_width = total_width / max(len(series_values), 1)
+    colors = ("#345c72", "#98633d", "#4d6f43", "#7a4f80", "#5b6770")
+
+    for series_index, series in enumerate(series_values):
+        values = []
+        for category in categories:
+            match = df.filter((pl.col(category_col) == category) & (pl.col(series_col) == series))
+            values.append(float(match.select(value_col).item()) if match.height else 0.0)
+        positions = [
+            category_index - (total_width / 2.0) + (series_index + 0.5) * bar_width
+            for category_index in range(len(categories))
+        ]
+        ax.bar(positions, values, width=bar_width, color=colors[series_index % len(colors)], label=str(series))
+
+    ax.set_xticks(list(range(len(categories))))
+    ax.set_xticklabels([_wrap_label(category, width=18) for category in categories], fontsize=8)
+    ax.set_xlabel(x_label)
+    ax.set_ylabel(y_label)
+    ax.grid(axis="y", alpha=0.16, linewidth=0.6)
+    ax.set_axisbelow(True)
+    ax.legend(frameon=False, fontsize=8)
+    fig.tight_layout()
+    return fig
+
+
+def build_percentile_band_figure(
+    df: pl.DataFrame,
+    *,
+    x_col: str,
+    median_col: str,
+    lower_col: str,
+    upper_col: str,
+    series_col: str,
+    x_label: str,
+    y_label: str,
+) -> plt.Figure:
+    fig, ax = plt.subplots(figsize=(8.2, 4.8))
+    colors = ("#345c72", "#98633d", "#4d6f43", "#7a4f80")
+    for index, series in enumerate(df.get_column(series_col).unique().sort().to_list()):
+        series_df = df.filter(pl.col(series_col) == series).sort(x_col)
+        x_values = series_df.get_column(x_col).to_list()
+        lower = series_df.get_column(lower_col).to_list()
+        median = series_df.get_column(median_col).to_list()
+        upper = series_df.get_column(upper_col).to_list()
+        color = colors[index % len(colors)]
+        ax.fill_between(x_values, lower, upper, color=color, alpha=0.16)
+        ax.plot(x_values, median, color=color, linewidth=1.8, label=str(series))
+    ax.set_xlabel(x_label)
+    ax.set_ylabel(y_label)
+    ax.grid(alpha=0.16, linewidth=0.6)
+    ax.set_axisbelow(True)
+    ax.legend(frameon=False, fontsize=8)
+    fig.tight_layout()
+    return fig
+
+
 def build_ecdf_lines_figure(
     df: pl.DataFrame,
     *,

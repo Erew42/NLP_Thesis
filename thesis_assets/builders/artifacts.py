@@ -43,7 +43,12 @@ def resolve_required_artifacts(
 ) -> dict[str, ResolvedArtifact]:
     resolved: dict[str, ResolvedArtifact] = {}
     for requirement in spec.required_artifacts:
-        artifact = resolve_artifact(context, requirement)
+        try:
+            artifact = resolve_artifact(context, requirement)
+        except MissingArtifactError:
+            if requirement.required:
+                raise
+            continue
         resolved[requirement.logical_name] = artifact
         context.resolved_artifacts[f"{spec.asset_id}:{requirement.logical_name}"] = artifact
     return resolved
@@ -218,6 +223,8 @@ def _append_candidate(candidates: list[Path], seen: set[Path], candidate: Path) 
 
 def _validate_required_columns(path: Path, requirement: ArtifactRequirement) -> None:
     if not requirement.required_columns:
+        return
+    if requirement.artifact_kind != "parquet":
         return
     schema_path: str | list[str]
     if path.is_dir():

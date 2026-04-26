@@ -4,6 +4,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 import os
 from pathlib import Path
+import re
 from typing import Iterable
 
 import polars as pl
@@ -13,8 +14,6 @@ from thesis_assets.builders.artifacts import parquet_artifact_paths
 from thesis_assets.builders.artifacts import scan_parquet_artifact
 from thesis_assets.errors import AssetBuildError
 from thesis_assets.specs import ResolvedArtifact
-from thesis_pkg.core.sec.lm2011_text import iter_lm2011_tokens
-
 
 DEFAULT_SENTENCE_BATCH_SIZE = 100_000
 DEFAULT_ECDF_BINS = 200
@@ -22,6 +21,8 @@ FINBERT_HIGH_NEGATIVE_THRESHOLD = 0.95
 LM_HIGH_NEGATIVE_SHARE_THRESHOLD = 0.05
 SENTENCE_BATCH_SIZE_ENV_VAR = "THESIS_ASSETS_SENTENCE_BATCH_SIZE"
 TARGET_TEXT_SCOPES = ("item_7_mda", "item_1a_risk_factors")
+LM2011_LINEBREAK_HYPHEN_PATTERN = r"([A-Za-z])-\s*(?:\r?\n)\s*([A-Za-z])"
+LM2011_TOKEN_PATTERN = r"[A-Za-z]{2,}(?:[-'][A-Za-z]+)*"
 SCOPE_LABELS = {
     "item_7_mda": "Item 7 MD&A",
     "item_1a_risk_factors": "Item 1A risk factors",
@@ -135,15 +136,30 @@ def build_lm_negative_sentence_summary(
             continue
         score_df = (
             filtered.lazy()
+            .with_columns(
+                pl.col("sentence_text")
+                .cast(pl.Utf8, strict=False)
+                .fill_null("")
+                .str.replace_all(LM2011_LINEBREAK_HYPHEN_PATTERN, "${1}${2}")
+                .str.to_lowercase()
+                .str.extract_all(LM2011_TOKEN_PATTERN)
+                .alias("_lm_tokens")
+            )
+            .with_columns(
+                pl.col("_lm_tokens").list.len().alias("_lm_token_count"),
+                pl.col("_lm_tokens")
+                .list.eval(pl.element().is_in(normalized_negative_words))
+                .list.sum()
+                .alias("_lm_negative_count"),
+            )
+            .filter(pl.col("_lm_token_count") > 0)
             .select(
                 pl.col("doc_id").cast(pl.Utf8, strict=False),
                 pl.col("text_scope").cast(pl.Utf8, strict=False),
-                pl.col("sentence_text")
-                .map_elements(
-                    lambda value: _lm_negative_sentence_share(value, normalized_negative_words),
-                    return_dtype=pl.Float64,
-                )
-                .alias("score"),
+                (
+                    pl.col("_lm_negative_count").cast(pl.Float64)
+                    / pl.col("_lm_token_count").cast(pl.Float64)
+                ).alias("score"),
             )
             .drop_nulls(subset=["doc_id", "text_scope", "score"])
             .collect()
@@ -231,7 +247,10 @@ def _filter_to_analysis_universe(batch: pl.DataFrame, universe_df: pl.DataFrame)
 
 
 def _lm_negative_sentence_share(text: object, negative_words: frozenset[str]) -> float | None:
-    tokens = list(iter_lm2011_tokens(text if isinstance(text, str) else None))
+    if not isinstance(text, str):
+        return None
+    normalized = re.sub(LM2011_LINEBREAK_HYPHEN_PATTERN, r"\1\2", text).lower()
+    tokens = re.findall(LM2011_TOKEN_PATTERN, normalized)
     if not tokens:
         return None
     negative_count = sum(1 for token in tokens if token in negative_words)

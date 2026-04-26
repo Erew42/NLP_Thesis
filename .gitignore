@@ -34,6 +34,7 @@ core_paper/
 replication_plan/
 repo_review/
 output/
+.codex_spreadsheet_work/
 # Agent ephemeral state and memory
 .agent/logs/
 .agent/cache/
