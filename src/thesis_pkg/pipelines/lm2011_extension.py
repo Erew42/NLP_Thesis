@@ -1568,6 +1568,7 @@ def _extension_fit_comparison_status_row(
     right_spec: Lm2011ExtensionComparisonSpec,
     estimator_status: str,
     failure_reason: str | None,
+    nw_lags: int,
 ) -> dict[str, object]:
     return {
         "run_id": run_id,
@@ -1590,7 +1591,7 @@ def _extension_fit_comparison_status_row(
         "weighted_avg_delta_adj_r2": None,
         "equal_quarter_avg_delta_raw_r2": None,
         "equal_quarter_avg_delta_adj_r2": None,
-        "nw_lags": None,
+        "nw_lags": nw_lags,
         "nw_se_delta_adj_r2": None,
         "nw_t_stat_delta_adj_r2": None,
         "nw_p_value_delta_adj_r2": None,
@@ -1673,6 +1674,7 @@ def run_lm2011_extension_fit_comparison_scaffold(
                                 right_spec=comparison_spec_by_name[right_name],
                                 estimator_status="failed",
                                 failure_reason=failure_reason,
+                                nw_lags=nw_lags,
                             )
                         )
                     continue
@@ -1838,6 +1840,7 @@ def run_lm2011_extension_fit_comparison_scaffold(
                                 right_spec=comparison_spec_by_name[right_name],
                                 estimator_status="failed",
                                 failure_reason=n_obs_mismatch_reason,
+                                nw_lags=nw_lags,
                             )
                         )
                     continue
@@ -1892,6 +1895,7 @@ def run_lm2011_extension_fit_comparison_scaffold(
                                 right_spec=comparison_spec_by_name[right_name],
                                 estimator_status=pair_status,
                                 failure_reason=pair_failure_reason,
+                                nw_lags=nw_lags,
                             )
                         )
                     continue

@@ -442,6 +442,26 @@ def test_extension_estimation_scaffold_propagates_equal_quarter_weighting() -> N
     assert joint_signal_rows.height > 0
 
 
+def test_extension_scaffolds_thread_nw_lags() -> None:
+    coefficient_results = run_lm2011_extension_estimation_scaffold(
+        _estimation_panel().lazy(),
+        run_id="unit_test_extension",
+        text_scopes=("item_7_mda",),
+        control_set_ids=("C0",),
+        nw_lags=4,
+    )
+    fit_artifacts = run_lm2011_extension_fit_comparison_scaffold(
+        _estimation_panel().lazy(),
+        run_id="unit_test_extension",
+        text_scopes=("item_7_mda",),
+        control_set_ids=("C0",),
+        nw_lags=4,
+    )
+
+    assert coefficient_results.get_column("nw_lags").drop_nulls().unique().to_list() == [4]
+    assert fit_artifacts.comparison_df.get_column("nw_lags").unique().to_list() == [4]
+
+
 def test_extension_fit_comparison_scaffold_uses_common_sample_only_for_fit_artifacts() -> None:
     panel = (
         _estimation_panel()

@@ -228,6 +228,62 @@ def build_ecdf_lines_figure(
     return fig
 
 
+def build_metric_panel_ecdf_figure(
+    df: pl.DataFrame,
+    *,
+    metric_panels: tuple[tuple[str, str, str], ...],
+    x_col: str,
+    metric_col: str = "metric_id",
+    y_col: str = "ecdf",
+    series_col: str = "scope_label",
+    y_label: str = "ECDF",
+) -> plt.Figure:
+    if not metric_panels:
+        raise ValueError("metric_panels must include at least one panel specification.")
+
+    fig, axes = plt.subplots(1, len(metric_panels), figsize=(5.6 * len(metric_panels), 4.8), sharey=True)
+    if len(metric_panels) == 1:
+        axes = [axes]
+
+    series_values = df.get_column(series_col).unique().sort().to_list()
+    colors = ("#345c72", "#98633d", "#4d6f43", "#7a4f80")
+    handles = []
+    labels = []
+
+    for ax, (metric_id, panel_title, x_label) in zip(axes, metric_panels):
+        panel_df = df.filter(pl.col(metric_col) == metric_id)
+        for index, series in enumerate(series_values):
+            series_df = panel_df.filter(pl.col(series_col) == series).sort(x_col)
+            if series_df.is_empty():
+                continue
+            (line,) = ax.step(
+                series_df.get_column(x_col).to_list(),
+                series_df.get_column(y_col).to_list(),
+                where="post",
+                linewidth=1.7,
+                color=colors[index % len(colors)],
+                label=str(series),
+            )
+            if str(series) not in labels:
+                handles.append(line)
+                labels.append(str(series))
+        ax.set_title(panel_title)
+        ax.set_xlabel(x_label)
+        ax.set_ylim(0.0, 1.02)
+        ax.grid(alpha=0.16, linewidth=0.6)
+        ax.set_axisbelow(True)
+        if panel_df.is_empty():
+            ax.text(0.5, 0.5, "No rows", transform=ax.transAxes, ha="center", va="center")
+
+    axes[0].set_ylabel(y_label)
+    if handles:
+        fig.legend(handles, labels, frameon=False, fontsize=8, loc="lower center", ncol=min(len(labels), 3))
+        fig.tight_layout(rect=(0.0, 0.08, 1.0, 1.0))
+    else:
+        fig.tight_layout()
+    return fig
+
+
 def build_concordance_figure(
     df: pl.DataFrame,
     *,

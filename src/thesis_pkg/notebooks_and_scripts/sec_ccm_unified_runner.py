@@ -554,6 +554,7 @@ from thesis_pkg.notebooks_and_scripts.lm2011_sample_post_refinitiv_runner import
     DEFAULT_LM2011_FULL_10K_CLEANING_CONTRACT,
     DEFAULT_LM2011_FULL_10K_TEXT_FEATURE_BATCH_SIZE,
     DEFAULT_LM2011_MDA_TEXT_FEATURE_BATCH_SIZE,
+    DEFAULT_LM2011_NW_LAGS,
     DEFAULT_LM2011_TEXT_FEATURE_BATCH_SIZE,
     EXTENSION_MANIFEST_FILENAME as LM2011_EXTENSION_MANIFEST_FILENAME,
     EXTENSION_PRIMARY_TEXT_SCOPES as LM2011_EXTENSION_PRIMARY_TEXT_SCOPES,
@@ -564,6 +565,7 @@ from thesis_pkg.notebooks_and_scripts.lm2011_sample_post_refinitiv_runner import
     MONTHLY_STOCK_CANDIDATES,
     RunnerPaths as LM2011RunnerPaths,
     STAGE_ARTIFACT_FILENAMES as LM2011_STAGE_ARTIFACT_FILENAMES,
+    normalize_lm2011_nw_lags,
     run_lm2011_extension_dictionary_family_comparison_pipeline,
     run_lm2011_post_refinitiv_pipeline,
 )
@@ -742,6 +744,7 @@ def _build_lm2011_extension_run_config(
     finbert_preprocessing_run_dir: Path | None,
     print_ram_stats: bool,
     ram_log_interval_batches: int,
+    nw_lags: tuple[int, ...] = DEFAULT_LM2011_NW_LAGS,
     text_scopes: tuple[str, ...] = LM2011_EXTENSION_PRIMARY_TEXT_SCOPES,
     extension_text_features_full_10k_path: Path | None = None,
     recompute_extension_text_features_full_10k: bool = False,
@@ -828,6 +831,7 @@ def _build_lm2011_extension_run_config(
         text_scopes=text_scopes,
         extension_text_features_full_10k_path=extension_text_features_full_10k_path,
         recompute_extension_text_features_full_10k=recompute_extension_text_features_full_10k,
+        nw_lags=nw_lags,
     )
 
 
@@ -848,6 +852,12 @@ def _lm2011_extension_stage_paths(output_dir: Path) -> dict[str, Path]:
             output_dir / "lm2011_extension_sample_loss.parquet"
         ),
         "lm2011_extension_results_parquet": output_dir / "lm2011_extension_results.parquet",
+        "lm2011_extension_results_nw_lag_sensitivity_parquet": (
+            output_dir / "extension_results_nw_lag_sensitivity.parquet"
+        ),
+        "lm2011_extension_fit_comparisons_nw_lag_sensitivity_parquet": (
+            output_dir / "extension_fit_comparisons_nw_lag_sensitivity.parquet"
+        ),
     }
 
 
@@ -1598,6 +1608,9 @@ def main() -> None:
         "SEC_CCM_LM2011_EVENT_WINDOW_DOC_BATCH_SIZE",
         DEFAULT_LM2011_EVENT_WINDOW_DOC_BATCH_SIZE,
     )
+    LM2011_NW_LAGS = normalize_lm2011_nw_lags(
+        _env_int_list("SEC_CCM_LM2011_NW_LAGS", list(DEFAULT_LM2011_NW_LAGS))
+    )
     PRINT_RAM_STATS = _env_bool("SEC_CCM_PRINT_RAM_STATS", False)
     RAM_LOG_INTERVAL_BATCHES = _env_int(
         "SEC_CCM_RAM_LOG_INTERVAL_BATCHES",
@@ -1819,6 +1832,7 @@ def main() -> None:
             "RUN_LM2011_POST_REFINITIV": RUN_LM2011_POST_REFINITIV,
             "LM2011_ENABLED_STAGE_COUNT": sum(1 for enabled in LM2011_STAGE_FLAGS.values() if enabled),
             "LM2011_POST_REFINITIV_DIR": str(LM2011_POST_REFINITIV_DIR),
+            "LM2011_NW_LAGS": list(LM2011_NW_LAGS),
             "RUN_LM2011_EXTENSION": RUN_LM2011_EXTENSION,
             "LM2011_EXTENSION_OUTPUT_DIR": str(LM2011_EXTENSION_OUTPUT_DIR),
             "LM2011_EXTENSION_REQUIRE_CLEANED_SCOPE_MATCH": LM2011_EXTENSION_REQUIRE_CLEANED_SCOPE_MATCH,
@@ -3233,6 +3247,7 @@ def main() -> None:
                 "lm2011_recompute_event_screen_surface": LM2011_RECOMPUTE_EVENT_SCREEN_SURFACE,
                 "lm2011_recompute_event_panel": LM2011_RECOMPUTE_EVENT_PANEL,
                 "lm2011_recompute_regression_tables": LM2011_RECOMPUTE_REGRESSION_TABLES,
+                "lm2011_nw_lags": list(LM2011_NW_LAGS),
                 "lm2011_items_analysis_dir": str(lm2011_items_analysis_dir),
                 "lm2011_items_analysis_year_files": len(lm2011_items_year_paths),
                 "lm2011_items_can_be_built_here": lm2011_items_can_be_built_here,
@@ -3354,6 +3369,7 @@ def main() -> None:
             event_window_doc_batch_size=LM2011_EVENT_WINDOW_DOC_BATCH_SIZE,
             print_ram_stats=PRINT_RAM_STATS,
             ram_log_interval_batches=RAM_LOG_INTERVAL_BATCHES,
+            nw_lags=LM2011_NW_LAGS,
         )
         _print_ram_snapshot("sec_ccm_unified_runner_before_lm2011", enabled=PRINT_RAM_STATS)
         gc.collect()
@@ -3543,6 +3559,7 @@ def main() -> None:
             finbert_preprocessing_run_dir=LM2011_EXTENSION_FINBERT_PREPROCESS_RUN_DIR,
             print_ram_stats=PRINT_RAM_STATS,
             ram_log_interval_batches=RAM_LOG_INTERVAL_BATCHES,
+            nw_lags=LM2011_NW_LAGS,
             finbert_analysis_artifacts=finbert_analysis_artifacts,
             finbert_preprocessing_artifacts=finbert_preprocessing_artifacts,
         )
@@ -3567,6 +3584,7 @@ def main() -> None:
                     LM2011_RECOMPUTE_EVENT_SCREEN_SURFACE
                 ),
                 "lm2011_extension_recompute_event_panel": LM2011_RECOMPUTE_EVENT_PANEL,
+                "lm2011_extension_nw_lags": list(LM2011_NW_LAGS),
                 "lm2011_extension_finbert_analysis_run_dir": (
                     str(LM2011_EXTENSION_FINBERT_ANALYSIS_RUN_DIR)
                     if LM2011_EXTENSION_FINBERT_ANALYSIS_RUN_DIR is not None

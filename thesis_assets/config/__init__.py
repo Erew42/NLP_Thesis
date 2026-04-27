@@ -13,6 +13,7 @@ from thesis_assets.config.constants import REGISTRY_MODULES
 from thesis_assets.config.constants import RUN_FAMILY_FINBERT_ROBUSTNESS
 from thesis_assets.config.constants import RUN_FAMILY_FINBERT_RUN
 from thesis_assets.config.constants import RUN_FAMILY_LM2011_EXTENSION
+from thesis_assets.config.constants import RUN_FAMILY_LM2011_NW_LAG_SENSITIVITY
 from thesis_assets.config.constants import RUN_FAMILY_LM2011_POST_REFINITIV
 from thesis_assets.config.runtime import build_output_root
 from thesis_assets.config.runtime import candidate_run_roots
@@ -32,6 +33,7 @@ __all__ = [
     "RUN_FAMILY_FINBERT_ROBUSTNESS",
     "RUN_FAMILY_FINBERT_RUN",
     "RUN_FAMILY_LM2011_EXTENSION",
+    "RUN_FAMILY_LM2011_NW_LAG_SENSITIVITY",
     "RUN_FAMILY_LM2011_POST_REFINITIV",
     "build_output_root",
     "candidate_run_roots",

@@ -6,6 +6,7 @@ import sys
 from datetime import date
 from pathlib import Path
 
+import matplotlib.pyplot as plt
 import polars as pl
 import pytest
 
@@ -25,6 +26,7 @@ from thesis_assets.cli.__main__ import main as cli_main
 from thesis_assets.config.constants import DEFAULT_COMMON_SUCCESS_POLICY
 from thesis_assets.errors import RegistryError
 from thesis_assets.errors import SampleContractError
+from thesis_assets.figures import build_metric_panel_ecdf_figure
 from thesis_assets.registry import loader
 from thesis_assets.specs import BuildResult
 from thesis_assets.specs import BuildSessionResult
@@ -59,6 +61,10 @@ def test_registry_loader_imports_expected_assets() -> None:
         "ch5_extension_c0_fit_comparisons",
         "ch5_extension_fit_delta_path",
         "ch5_lm2011_table_vi_no_ownership_outcomes",
+        "ch5_nw_lag_baseline_reconciliation",
+        "ch5_nw_lag_core_no_ownership_appendix",
+        "ch5_nw_lag_extension_coefficients_appendix",
+        "ch5_nw_lag_extension_fit_comparisons_appendix",
         "ch5_concordance_item7_common_sample",
         "ch5_between_filing_ecdf_lm_negative_doc_scores",
         "ch5_between_filing_ecdf_finbert_doc_scores",
@@ -481,6 +487,141 @@ def test_chapter5_extension_fit_delta_path_asset_filters_to_c0_replication(tmp_p
     assert 999 not in figure_df.get_column("n_obs").to_list()
 
 
+def test_chapter5_nw_lag_core_no_ownership_appendix_asset(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    sensitivity_root = repo_root / "inputs" / "lm2011_nw_lag_sensitivity"
+    sensitivity_root.mkdir(parents=True)
+    _write_nw_core_sensitivity_parquet(sensitivity_root / "core_tables_nw_lag_sensitivity.parquet")
+
+    result = build_single_asset(
+        asset_id="ch5_nw_lag_core_no_ownership_appendix",
+        run_id="unit_nw_core",
+        repo_root=repo_root,
+        lm2011_nw_lag_sensitivity_dir=sensitivity_root,
+    )
+
+    asset_result = result.asset_results["ch5_nw_lag_core_no_ownership_appendix"]
+    assert asset_result.status == "completed"
+    table_df = pl.read_csv(asset_result.output_paths["csv"])
+    assert {"t_nw1", "t_nw2", "t_nw3", "t_nw4"}.issubset(set(table_df.columns))
+
+    table_iv = table_df.filter(
+        (pl.col("table_or_surface") == "Table IV full 10-K returns")
+        & (pl.col("coefficient") == "H4N-Inf proportion")
+    )
+    assert table_iv.select("estimate").item() == pytest.approx(0.1)
+    assert table_iv.select("reported_scale").item() == "x100"
+    assert table_iv.select("t_nw4").item() == pytest.approx(1.2)
+
+    abnormal_volume = table_df.filter(
+        (pl.col("outcome") == "Abnormal volume")
+        & (pl.col("coefficient") == "H4N-Inf proportion")
+    )
+    assert abnormal_volume.select("estimate").item() == pytest.approx(0.002)
+    assert abnormal_volume.select("reported_scale").item() == "raw"
+
+
+def test_chapter5_nw_lag_extension_appendix_assets(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    sensitivity_root = repo_root / "inputs" / "lm2011_nw_lag_sensitivity"
+    sensitivity_root.mkdir(parents=True)
+    _write_nw_extension_results_sensitivity_parquet(
+        sensitivity_root / "extension_results_nw_lag_sensitivity.parquet"
+    )
+    _write_nw_extension_fit_comparisons_sensitivity_parquet(
+        sensitivity_root / "extension_fit_comparisons_nw_lag_sensitivity.parquet"
+    )
+
+    coefficient_result = build_single_asset(
+        asset_id="ch5_nw_lag_extension_coefficients_appendix",
+        run_id="unit_nw_extension_coefficients",
+        repo_root=repo_root,
+        lm2011_nw_lag_sensitivity_dir=sensitivity_root,
+    ).asset_results["ch5_nw_lag_extension_coefficients_appendix"]
+    assert coefficient_result.status == "completed"
+    coefficient_df = pl.read_csv(coefficient_result.output_paths["csv"])
+    assert set(coefficient_df.get_column("scope").unique().to_list()) == {
+        "Item 7 MD&A",
+        "Item 1A risk factors",
+    }
+    item7_finbert = coefficient_df.filter(
+        (pl.col("scope") == "Item 7 MD&A")
+        & (pl.col("specification") == "C0 FinBERT only")
+        & (pl.col("coefficient") == "FinBERT negative probability")
+    )
+    assert item7_finbert.select("estimate").item() == pytest.approx(-2.0)
+    assert item7_finbert.select("reported_scale").item() == "x100"
+    assert item7_finbert.select("t_nw1").item() == pytest.approx(-3.0)
+
+    fit_result = build_single_asset(
+        asset_id="ch5_nw_lag_extension_fit_comparisons_appendix",
+        run_id="unit_nw_extension_fit",
+        repo_root=repo_root,
+        lm2011_nw_lag_sensitivity_dir=sensitivity_root,
+    ).asset_results["ch5_nw_lag_extension_fit_comparisons_appendix"]
+    assert fit_result.status == "completed"
+    fit_df = pl.read_csv(fit_result.output_paths["csv"])
+    assert {"C0 Joint - FinBERT", "C1 Joint - FinBERT", "C2 Joint - FinBERT"}.issubset(
+        set(fit_df.get_column("specification").to_list())
+    )
+    assert set(fit_df.get_column("reported_scale").unique().to_list()) == {"raw"}
+
+
+def test_chapter5_nw_lag_baseline_reconciliation_asset(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    post_root = repo_root / "inputs" / "lm2011_post_refinitiv"
+    extension_root = repo_root / "inputs" / "lm2011_extension" / "replication"
+    sensitivity_root = repo_root / "inputs" / "lm2011_nw_lag_sensitivity"
+    post_root.mkdir(parents=True)
+    extension_root.mkdir(parents=True)
+    sensitivity_root.mkdir(parents=True)
+
+    _write_table_iv_return_coefficients_parquet(post_root / "lm2011_table_iv_results_no_ownership.parquet")
+    _write_table_vi_no_ownership_parquet(post_root / "lm2011_table_vi_results_no_ownership.parquet")
+    _write_extension_results_parquet(extension_root / "lm2011_extension_results.parquet")
+    _write_extension_fit_comparisons_parquet(extension_root / "lm2011_extension_fit_comparisons.parquet")
+    _write_nw_core_sensitivity_parquet(sensitivity_root / "core_tables_nw_lag_sensitivity.parquet")
+    _write_nw_extension_results_sensitivity_parquet(
+        sensitivity_root / "extension_results_nw_lag_sensitivity.parquet"
+    )
+    _write_nw_extension_fit_comparisons_sensitivity_parquet(
+        sensitivity_root / "extension_fit_comparisons_nw_lag_sensitivity.parquet"
+    )
+
+    result = build_single_asset(
+        asset_id="ch5_nw_lag_baseline_reconciliation",
+        run_id="unit_nw_reconciliation",
+        repo_root=repo_root,
+        lm2011_post_refinitiv_dir=post_root,
+        lm2011_extension_dir=extension_root.parent,
+        lm2011_nw_lag_sensitivity_dir=sensitivity_root,
+    )
+
+    asset_result = result.asset_results["ch5_nw_lag_baseline_reconciliation"]
+    assert asset_result.status == "completed"
+    table_df = pl.read_csv(asset_result.output_paths["csv"])
+    assert table_df.height == 4
+    assert table_df.get_column("max_abs_estimate_diff").max() == pytest.approx(0.0)
+    assert table_df.get_column("max_abs_t_diff").max() == pytest.approx(0.0)
+
+
+def test_chapter5_nw_lag_missing_artifact_failure_is_recorded(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    sensitivity_root = repo_root / "inputs" / "lm2011_nw_lag_sensitivity"
+    sensitivity_root.mkdir(parents=True)
+
+    result = build_single_asset(
+        asset_id="ch5_nw_lag_core_no_ownership_appendix",
+        run_id="unit_nw_missing",
+        repo_root=repo_root,
+        lm2011_nw_lag_sensitivity_dir=sensitivity_root,
+    )
+
+    asset_result = result.asset_results["ch5_nw_lag_core_no_ownership_appendix"]
+    assert asset_result.status == "failed"
+    assert "core_tables_nw_lag_sensitivity" in (asset_result.failure_reason or "")
+
+
 def test_chapter4_full_10k_regression_sample_summary_asset(tmp_path: Path) -> None:
     repo_root = tmp_path / "repo"
     run_root = repo_root / "inputs" / "lm2011_post_refinitiv"
@@ -764,6 +905,67 @@ def test_chapter5_score_drift_by_year_asset_filters_item_scopes(tmp_path: Path) 
     }
 
 
+def test_lm_negative_doc_score_ecdf_uses_separate_metric_panels(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    extension_root = repo_root / "inputs" / "lm2011_extension"
+    (extension_root / "replication").mkdir(parents=True)
+    _write_extension_dictionary_surface(
+        extension_root / "replication" / "lm2011_extension_dictionary_surface.parquet"
+    )
+
+    result = build_single_asset(
+        asset_id="ch5_between_filing_ecdf_lm_negative_doc_scores",
+        run_id="unit_lm_negative_doc_score_ecdf",
+        repo_root=repo_root,
+        lm2011_extension_dir=extension_root,
+    )
+
+    asset_result = result.asset_results["ch5_between_filing_ecdf_lm_negative_doc_scores"]
+    assert asset_result.status == "completed"
+    assert asset_result.row_counts == {"ecdf_rows": 8, "score_rows": 8}
+    assert Path(asset_result.output_paths["csv"]).exists()
+    assert Path(asset_result.output_paths["png"]).exists()
+    assert Path(asset_result.output_paths["pdf"]).exists()
+
+    ecdf_df = pl.read_csv(asset_result.output_paths["csv"])
+    series_counts = (
+        ecdf_df.group_by(["metric_id", "text_scope"])
+        .agg(
+            pl.len().alias("rows"),
+            pl.col("score").max().alias("max_score"),
+            pl.col("total_count").max().alias("total_count"),
+        )
+        .sort(["metric_id", "text_scope"])
+    )
+    assert series_counts.select(["metric_id", "text_scope", "rows", "total_count"]).to_dicts() == [
+        {"metric_id": "lm_negative_prop", "text_scope": "item_1a_risk_factors", "rows": 2, "total_count": 2},
+        {"metric_id": "lm_negative_prop", "text_scope": "item_7_mda", "rows": 2, "total_count": 2},
+        {"metric_id": "lm_negative_tfidf", "text_scope": "item_1a_risk_factors", "rows": 2, "total_count": 2},
+        {"metric_id": "lm_negative_tfidf", "text_scope": "item_7_mda", "rows": 2, "total_count": 2},
+    ]
+    item7_tfidf_max = series_counts.filter(
+        (pl.col("metric_id") == "lm_negative_tfidf") & (pl.col("text_scope") == "item_7_mda")
+    ).select("max_score").item()
+    assert item7_tfidf_max == pytest.approx(100.0)
+
+    figure = build_metric_panel_ecdf_figure(
+        ecdf_df,
+        metric_panels=(
+            ("lm_negative_prop", "Proportion", "LM2011 negative proportion"),
+            ("lm_negative_tfidf", "tf-idf", "LM2011 negative tf-idf"),
+        ),
+        x_col="score",
+    )
+    try:
+        assert len(figure.axes) == 2
+        assert [axis.get_xlabel() for axis in figure.axes] == [
+            "LM2011 negative proportion",
+            "LM2011 negative tf-idf",
+        ]
+    finally:
+        plt.close(figure)
+
+
 def test_lm_sentence_negative_share_scoring() -> None:
     negative_words = frozenset({"bad", "loss"})
     assert _lm_negative_sentence_share("Bad loss was offset by growth.", negative_words) == pytest.approx(2 / 6)
@@ -886,8 +1088,13 @@ def test_usage_run_paths_prefer_unified_runner_layout(tmp_path: Path) -> None:
 
     fallback_post = repo_root / "full_data_run" / "lm2011_post_refinitiv"
     fallback_ext = repo_root / "full_data_run" / "lm2011_extension"
+    sensitivity_root = repo_root / "full_data_run" / "lm2011_nw_lag_sensitivity_local_monitored"
     fallback_post.mkdir(parents=True)
     fallback_ext.mkdir(parents=True)
+    sensitivity_root.mkdir(parents=True)
+    (sensitivity_root / "core_tables_nw_lag_sensitivity.parquet").touch()
+    (sensitivity_root / "extension_results_nw_lag_sensitivity.parquet").touch()
+    (sensitivity_root / "extension_fit_comparisons_nw_lag_sensitivity.parquet").touch()
 
     resolved = resolve_usage_run_paths(
         repo_root=repo_root,
@@ -896,6 +1103,7 @@ def test_usage_run_paths_prefer_unified_runner_layout(tmp_path: Path) -> None:
 
     assert resolved["lm2011_post_refinitiv_dir"] == (unified_root / "lm2011_post_refinitiv").resolve()
     assert resolved["lm2011_extension_dir"] == (unified_root / "lm2011_extension").resolve()
+    assert resolved["lm2011_nw_lag_sensitivity_dir"] == sensitivity_root.resolve()
     assert resolved["finbert_run_dir"] == finbert_run.resolve()
 
 
@@ -951,6 +1159,7 @@ def test_tools_entrypoint_build_asset_emits_json_and_allows_failures(
     resolved_paths = {
         "lm2011_post_refinitiv_dir": tmp_path / "inputs" / "lm2011_post_refinitiv",
         "lm2011_extension_dir": tmp_path / "inputs" / "lm2011_extension",
+        "lm2011_nw_lag_sensitivity_dir": tmp_path / "inputs" / "lm2011_nw_lag_sensitivity",
         "finbert_run_dir": tmp_path / "inputs" / "finbert_item_analysis",
         "finbert_robustness_dir": tmp_path / "inputs" / "finbert_robustness",
     }
@@ -1108,6 +1317,8 @@ def _write_table_iv_return_coefficients_parquet(path: Path) -> None:
     ):
         rows.append(
             {
+                "table_id": "table_iv_full_10k",
+                "specification_id": signal_name,
                 "text_scope": "full_10k",
                 "signal_name": signal_name,
                 "dependent_variable": "filing_period_excess_return",
@@ -1245,6 +1456,270 @@ def _write_extension_fit_comparisons_parquet(path: Path) -> None:
     pl.DataFrame(rows).write_parquet(path)
 
 
+def _write_extension_results_parquet(path: Path) -> None:
+    rows = []
+    specs = (
+        ("dictionary_only", "lm2011_frozen", "lm_negative_tfidf", "lm_negative_tfidf", -0.010, -2.0),
+        ("finbert_only", "finbert", "finbert_neg_prob_lenw_mean", "finbert_neg_prob_lenw_mean", -0.020, -3.0),
+        (
+            "dictionary_finbert_joint",
+            "dictionary_plus_finbert",
+            "lm_negative_tfidf",
+            "lm_negative_tfidf,finbert_neg_prob_lenw_mean",
+            -0.011,
+            -2.2,
+        ),
+        (
+            "dictionary_finbert_joint",
+            "dictionary_plus_finbert",
+            "finbert_neg_prob_lenw_mean",
+            "lm_negative_tfidf,finbert_neg_prob_lenw_mean",
+            -0.021,
+            -3.2,
+        ),
+    )
+    for text_scope in ("item_7_mda", "item_1a_risk_factors"):
+        for specification_name, feature_family, coefficient_name, signal_name, estimate, t_stat in specs:
+            rows.append(
+                {
+                    "run_id": "unit",
+                    "sample_window": "2009_2024",
+                    "text_scope": text_scope,
+                    "outcome_name": "filing_period_excess_return",
+                    "feature_family": feature_family,
+                    "control_set_id": "C0",
+                    "control_set_alias": "no_ownership",
+                    "specification_name": specification_name,
+                    "coefficient_name": coefficient_name,
+                    "signal_name": signal_name,
+                    "estimate": estimate,
+                    "standard_error": abs(estimate / t_stat),
+                    "t_stat": t_stat,
+                    "p_value": 0.04,
+                    "n_obs": 1000,
+                    "n_quarters": 62,
+                    "mean_quarter_n": 500.0,
+                    "average_r2": 0.03,
+                    "weighting_rule": "quarter_observation_count",
+                    "nw_lags": 1,
+                    "estimator_status": "estimated",
+                    "failure_reason": None,
+                    "dictionary_family_source": "replication",
+                }
+            )
+    pl.DataFrame(rows).write_parquet(path)
+
+
+def _write_nw_core_sensitivity_parquet(path: Path) -> None:
+    base_rows = []
+    for signal_name, estimate, t_stat in (
+        ("h4n_inf_prop", 0.001, 1.5),
+        ("lm_negative_prop", -0.002, -2.0),
+        ("h4n_inf_tfidf", 0.003, 2.5),
+        ("lm_negative_tfidf", -0.004, -3.0),
+    ):
+        base_rows.append(
+            {
+                "table_id": "table_iv_full_10k",
+                "specification_id": signal_name,
+                "text_scope": "full_10k",
+                "signal_name": signal_name,
+                "dependent_variable": "filing_period_excess_return",
+                "coefficient_name": signal_name,
+                "estimate": estimate,
+                "base_t_stat": t_stat,
+                "n_quarters": 60,
+                "mean_quarter_n": 100.0,
+                "weighting_rule": "quarter_observation_count",
+                "stage_name": "table_iv_results_no_ownership",
+            }
+        )
+
+    outcomes = (
+        "filing_period_excess_return",
+        "abnormal_volume",
+        "postevent_return_volatility",
+    )
+    signals = (
+        "h4n_inf_prop",
+        "lm_negative_prop",
+        "lm_positive_prop",
+        "lm_uncertainty_prop",
+        "lm_litigious_prop",
+        "lm_modal_strong_prop",
+        "lm_modal_weak_prop",
+        "h4n_inf_tfidf",
+        "lm_negative_tfidf",
+        "lm_positive_tfidf",
+        "lm_uncertainty_tfidf",
+        "lm_litigious_tfidf",
+        "lm_modal_strong_tfidf",
+        "lm_modal_weak_tfidf",
+    )
+    for outcome_idx, outcome in enumerate(outcomes, start=1):
+        for signal_idx, signal in enumerate(signals, start=1):
+            base_rows.append(
+                {
+                    "table_id": "table_vi_full_10k_dictionary_surface",
+                    "specification_id": f"{outcome}__{signal}",
+                    "text_scope": "full_10k",
+                    "signal_name": signal,
+                    "dependent_variable": outcome,
+                    "coefficient_name": signal,
+                    "estimate": 0.001 * outcome_idx * signal_idx,
+                    "base_t_stat": 1.5,
+                    "n_quarters": 60,
+                    "mean_quarter_n": 750.0,
+                    "weighting_rule": "quarter_observation_count",
+                    "stage_name": "table_vi_results_no_ownership",
+                }
+            )
+
+    rows = []
+    for base_row in base_rows:
+        base_t_stat = float(base_row.pop("base_t_stat"))
+        for lag in (1, 2, 3, 4):
+            t_stat = _lagged_unit_t_stat(base_t_stat, lag)
+            estimate = float(base_row["estimate"])
+            rows.append(
+                {
+                    **base_row,
+                    "standard_error": abs(estimate / t_stat),
+                    "t_stat": t_stat,
+                    "nw_lags": lag,
+                }
+            )
+    pl.DataFrame(rows).write_parquet(path)
+
+
+def _write_nw_extension_results_sensitivity_parquet(path: Path) -> None:
+    base_rows = []
+    specs = (
+        ("dictionary_only", "lm2011_frozen", "lm_negative_tfidf", "lm_negative_tfidf", -0.010, -2.0),
+        ("finbert_only", "finbert", "finbert_neg_prob_lenw_mean", "finbert_neg_prob_lenw_mean", -0.020, -3.0),
+        (
+            "dictionary_finbert_joint",
+            "dictionary_plus_finbert",
+            "lm_negative_tfidf",
+            "lm_negative_tfidf,finbert_neg_prob_lenw_mean",
+            -0.011,
+            -2.2,
+        ),
+        (
+            "dictionary_finbert_joint",
+            "dictionary_plus_finbert",
+            "finbert_neg_prob_lenw_mean",
+            "lm_negative_tfidf,finbert_neg_prob_lenw_mean",
+            -0.021,
+            -3.2,
+        ),
+    )
+    for text_scope in ("item_7_mda", "item_1a_risk_factors"):
+        for specification_name, feature_family, coefficient_name, signal_name, estimate, t_stat in specs:
+            base_rows.append(
+                {
+                    "run_id": "unit",
+                    "sample_window": "2009_2024",
+                    "text_scope": text_scope,
+                    "outcome_name": "filing_period_excess_return",
+                    "feature_family": feature_family,
+                    "control_set_id": "C0",
+                    "control_set_alias": "no_ownership",
+                    "specification_name": specification_name,
+                    "coefficient_name": coefficient_name,
+                    "signal_name": signal_name,
+                    "estimate": estimate,
+                    "base_t_stat": t_stat,
+                    "n_obs": 1000,
+                    "n_quarters": 62,
+                    "mean_quarter_n": 500.0,
+                    "average_r2": 0.03,
+                    "weighting_rule": "quarter_observation_count",
+                    "estimator_status": "estimated",
+                    "failure_reason": None,
+                    "dictionary_family_source": "replication",
+                }
+            )
+    rows = []
+    for base_row in base_rows:
+        base_t_stat = float(base_row.pop("base_t_stat"))
+        for lag in (1, 2, 3, 4):
+            t_stat = _lagged_unit_t_stat(base_t_stat, lag)
+            estimate = float(base_row["estimate"])
+            rows.append(
+                {
+                    **base_row,
+                    "standard_error": abs(estimate / t_stat),
+                    "t_stat": t_stat,
+                    "p_value": 0.04,
+                    "nw_lags": lag,
+                }
+            )
+    pl.DataFrame(rows).write_parquet(path)
+
+
+def _write_nw_extension_fit_comparisons_sensitivity_parquet(path: Path) -> None:
+    base_rows = []
+    for family in ("replication", "extended"):
+        for text_scope in ("item_7_mda", "item_1a_risk_factors"):
+            for control_set_id in ("C0", "C1", "C2"):
+                for comparison_name, delta, t_stat in (
+                    ("finbert_minus_dictionary", 0.001, 1.1),
+                    ("joint_minus_dictionary", 0.002, 2.2),
+                    ("joint_minus_finbert", 0.003, 1.8),
+                ):
+                    base_rows.append(
+                        {
+                            "run_id": "unit",
+                            "sample_window": "2009_2024",
+                            "text_scope": text_scope,
+                            "outcome_name": "filing_period_excess_return",
+                            "control_set_id": control_set_id,
+                            "control_set_alias": "no_ownership",
+                            "comparison_name": comparison_name,
+                            "left_specification_name": "dictionary_only",
+                            "left_signal_name": "lm_negative_tfidf",
+                            "left_signal_inputs": "lm_negative_tfidf",
+                            "right_specification_name": "finbert_only",
+                            "right_signal_name": "finbert_neg_prob_lenw_mean",
+                            "right_signal_inputs": "finbert_neg_prob_lenw_mean",
+                            "n_quarters": 62,
+                            "total_n_obs": 1000,
+                            "mean_quarter_n": 500.0,
+                            "weighted_avg_delta_raw_r2": delta + 0.01,
+                            "weighted_avg_delta_adj_r2": delta,
+                            "equal_quarter_avg_delta_raw_r2": delta + 0.02,
+                            "equal_quarter_avg_delta_adj_r2": delta + 0.01,
+                            "base_t_stat": t_stat,
+                            "weighting_rule": "quarter_observation_count",
+                            "common_success_policy": DEFAULT_COMMON_SUCCESS_POLICY,
+                            "estimator_status": "estimated",
+                            "failure_reason": None,
+                            "dictionary_family_source": family,
+                        }
+                    )
+    rows = []
+    for base_row in base_rows:
+        base_t_stat = float(base_row.pop("base_t_stat"))
+        for lag in (1, 2, 3, 4):
+            t_stat = _lagged_unit_t_stat(base_t_stat, lag)
+            rows.append(
+                {
+                    **base_row,
+                    "nw_lags": lag,
+                    "nw_se_delta_adj_r2": abs(float(base_row["weighted_avg_delta_adj_r2"]) / t_stat),
+                    "nw_t_stat_delta_adj_r2": t_stat,
+                    "nw_p_value_delta_adj_r2": 0.04,
+                }
+            )
+    pl.DataFrame(rows).write_parquet(path)
+
+
+def _lagged_unit_t_stat(base_t_stat: float, lag: int) -> float:
+    sign = -1.0 if base_t_stat < 0 else 1.0
+    return sign * max(abs(base_t_stat) - (0.1 * (lag - 1)), 0.1)
+
+
 def _write_extension_fit_difference_quarterly_parquet(path: Path) -> None:
     rows = []
     comparisons = (
@@ -1379,6 +1854,32 @@ def _write_extension_analysis_panel(path: Path) -> None:
             "dictionary_family": ["replication", "replication"],
             "lm_negative_tfidf": [0.020, 0.030],
             "finbert_neg_prob_lenw_mean": [0.400, 0.450],
+        }
+    )
+    df.write_parquet(path)
+
+
+def _write_extension_dictionary_surface(path: Path) -> None:
+    df = pl.DataFrame(
+        {
+            "doc_id": ["doc_a", "doc_b", "doc_c", "doc_d", "doc_e"],
+            "filing_date": [
+                date(2020, 1, 1),
+                date(2020, 2, 1),
+                date(2020, 3, 1),
+                date(2020, 4, 1),
+                date(2020, 5, 1),
+            ],
+            "text_scope": [
+                "item_7_mda",
+                "item_7_mda",
+                "item_1a_risk_factors",
+                "item_1a_risk_factors",
+                "item_7_mda",
+            ],
+            "dictionary_family": ["replication", "replication", "replication", "replication", "extended"],
+            "lm_negative_prop": [0.01, 0.02, 0.04, 0.05, 0.99],
+            "lm_negative_tfidf": [10.0, 100.0, 20.0, 30.0, 999.0],
         }
     )
     df.write_parquet(path)

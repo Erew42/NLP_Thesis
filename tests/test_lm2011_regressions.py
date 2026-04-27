@@ -415,6 +415,43 @@ def test_run_lm2011_quarterly_fama_macbeth_supports_equal_quarter_aggregation() 
     assert by_name["signal"]["n_quarters"] == 2
 
 
+def test_run_lm2011_quarterly_fama_macbeth_threads_nw_lags_into_inference() -> None:
+    rows: list[dict[str, object]] = []
+    for filing_date, slope, x_values in (
+        (dt.date(2021, 2, 15), 1.0, [0.0, 1.0]),
+        (dt.date(2021, 5, 15), 3.0, [0.0, 1.0, 2.0]),
+    ):
+        for industry_id in (1, 12):
+            for x_value in x_values:
+                rows.append(
+                    {
+                        "filing_date": filing_date,
+                        "ff48_industry_id": industry_id,
+                        "signal": x_value,
+                        "dependent": 1.0 + slope * x_value + (5.0 if industry_id == 12 else 0.0),
+                    }
+                )
+
+    signal_rows = []
+    for nw_lags in (1, 2, 3, 4):
+        results = run_lm2011_quarterly_fama_macbeth(
+            pl.DataFrame(rows).lazy(),
+            table_id="unit_test_table",
+            text_scope="full_10k",
+            dependent_variable="dependent",
+            signal_column="signal",
+            control_columns=(),
+            nw_lags=nw_lags,
+        )
+        signal_rows.append(results.filter(pl.col("coefficient_name") == "signal").to_dicts()[0])
+
+    assert [row["nw_lags"] for row in signal_rows] == [1, 2, 3, 4]
+    assert all(math.isclose(row["estimate"], 2.2, rel_tol=0.0, abs_tol=1e-12) for row in signal_rows)
+    assert {row["n_quarters"] for row in signal_rows} == {2}
+    assert len({round(float(row["standard_error"]), 12) for row in signal_rows}) > 1
+    assert len({round(float(row["t_stat"]), 12) for row in signal_rows}) > 1
+
+
 def test_run_lm2011_quarterly_fama_macbeth_collects_narrowed_panel_once() -> None:
     rows: list[dict[str, object]] = []
     for filing_date, slope, x_values in (

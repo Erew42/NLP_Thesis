@@ -34,6 +34,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "repo_root": args.repo_root,
         "lm2011_post_refinitiv_dir": args.lm2011_post_refinitiv_dir,
         "lm2011_extension_dir": args.lm2011_extension_dir,
+        "lm2011_nw_lag_sensitivity_dir": args.lm2011_nw_lag_sensitivity_dir,
         "finbert_run_dir": args.finbert_run_dir,
         "finbert_robustness_dir": args.finbert_robustness_dir,
     }
@@ -61,6 +62,7 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--repo-root", type=Path, default=None)
     parser.add_argument("--lm2011-post-refinitiv-dir", type=Path, default=None)
     parser.add_argument("--lm2011-extension-dir", type=Path, default=None)
+    parser.add_argument("--lm2011-nw-lag-sensitivity-dir", type=Path, default=None)
     parser.add_argument("--finbert-run-dir", type=Path, default=None)
     parser.add_argument("--finbert-robustness-dir", type=Path, default=None)
 

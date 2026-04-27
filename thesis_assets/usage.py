@@ -34,6 +34,7 @@ def resolve_usage_run_paths(
     drive_data_root: Path | None = None,
     lm2011_post_refinitiv_dir: Path | None = None,
     lm2011_extension_dir: Path | None = None,
+    lm2011_nw_lag_sensitivity_dir: Path | None = None,
     finbert_run_dir: Path | None = None,
     finbert_robustness_dir: Path | None = None,
 ) -> dict[str, Path | None]:
@@ -41,6 +42,7 @@ def resolve_usage_run_paths(
         return {
             "lm2011_post_refinitiv_dir": _resolve_optional_path(lm2011_post_refinitiv_dir),
             "lm2011_extension_dir": _resolve_optional_path(lm2011_extension_dir),
+            "lm2011_nw_lag_sensitivity_dir": _resolve_optional_path(lm2011_nw_lag_sensitivity_dir),
             "finbert_run_dir": _resolve_optional_path(finbert_run_dir),
             "finbert_robustness_dir": _resolve_optional_path(finbert_robustness_dir),
         }
@@ -62,6 +64,8 @@ def resolve_usage_run_paths(
         or defaults["lm2011_post_refinitiv_dir"],
         "lm2011_extension_dir": _resolve_optional_path(lm2011_extension_dir)
         or defaults["lm2011_extension_dir"],
+        "lm2011_nw_lag_sensitivity_dir": _resolve_optional_path(lm2011_nw_lag_sensitivity_dir)
+        or defaults["lm2011_nw_lag_sensitivity_dir"],
         "finbert_run_dir": _resolve_optional_path(finbert_run_dir)
         or defaults["finbert_run_dir"],
         "finbert_robustness_dir": _resolve_optional_path(finbert_robustness_dir)
@@ -88,6 +92,7 @@ def resolve_local_profile_paths(repo_root: Path) -> dict[str, Path | None]:
                 _resolve_direct_or_snapshot_dir(full_data_root, "lm2011_extension"),
             )
         ),
+        "lm2011_nw_lag_sensitivity_dir": _resolve_latest_nw_lag_sensitivity_run(full_data_root),
         "finbert_run_dir": _first_existing_path(
             (
                 _resolve_latest_finbert_run_with_sentence_scores(full_data_root),
@@ -110,6 +115,12 @@ def resolve_colab_profile_paths(drive_data_root: Path) -> dict[str, Path | None]
             )
         ),
         "lm2011_extension_dir": _first_existing_path((unified_root / "lm2011_extension",)),
+        "lm2011_nw_lag_sensitivity_dir": _first_existing_path(
+            (
+                results_root / "lm2011_nw_lag_sensitivity",
+                unified_root / "lm2011_nw_lag_sensitivity",
+            )
+        ),
         "finbert_run_dir": _first_existing_path(
             (
                 _resolve_latest_finbert_run_with_sentence_scores(results_root),
@@ -187,6 +198,24 @@ def _resolve_latest_finbert_robustness_run(parent: Path) -> Path | None:
         child.resolve()
         for child in parent.glob("finbert_robustness*")
         if child.is_dir() and (child / "finbert_robustness_run_manifest.json").exists()
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda path: path.stat().st_mtime)
+
+
+def _resolve_latest_nw_lag_sensitivity_run(parent: Path) -> Path | None:
+    if not parent.exists() or not parent.is_dir():
+        return None
+    required_filenames = (
+        "core_tables_nw_lag_sensitivity.parquet",
+        "extension_results_nw_lag_sensitivity.parquet",
+        "extension_fit_comparisons_nw_lag_sensitivity.parquet",
+    )
+    candidates = [
+        child.resolve()
+        for child in parent.glob("lm2011_nw_lag_sensitivity*")
+        if child.is_dir() and all((child / filename).exists() for filename in required_filenames)
     ]
     if not candidates:
         return None

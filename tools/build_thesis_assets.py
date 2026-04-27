@@ -79,6 +79,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         drive_data_root=args.drive_data_root,
         lm2011_post_refinitiv_dir=args.lm2011_post_refinitiv_dir,
         lm2011_extension_dir=args.lm2011_extension_dir,
+        lm2011_nw_lag_sensitivity_dir=args.lm2011_nw_lag_sensitivity_dir,
         finbert_run_dir=args.finbert_run_dir,
         finbert_robustness_dir=args.finbert_robustness_dir,
     )
@@ -89,6 +90,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "output_root": args.output_root.resolve() if args.output_root is not None else None,
         "lm2011_post_refinitiv_dir": resolved_paths["lm2011_post_refinitiv_dir"],
         "lm2011_extension_dir": resolved_paths["lm2011_extension_dir"],
+        "lm2011_nw_lag_sensitivity_dir": resolved_paths["lm2011_nw_lag_sensitivity_dir"],
         "finbert_run_dir": resolved_paths["finbert_run_dir"],
         "finbert_robustness_dir": resolved_paths["finbert_robustness_dir"],
     }
@@ -149,6 +151,7 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--lm2011-post-refinitiv-dir", type=Path, default=None)
     parser.add_argument("--lm2011-extension-dir", type=Path, default=None)
+    parser.add_argument("--lm2011-nw-lag-sensitivity-dir", type=Path, default=None)
     parser.add_argument("--finbert-run-dir", type=Path, default=None)
     parser.add_argument("--finbert-robustness-dir", type=Path, default=None)
     parser.add_argument(
@@ -165,6 +168,7 @@ def _resolve_run_paths(
     drive_data_root: Path,
     lm2011_post_refinitiv_dir: Path | None,
     lm2011_extension_dir: Path | None,
+    lm2011_nw_lag_sensitivity_dir: Path | None,
     finbert_run_dir: Path | None,
     finbert_robustness_dir: Path | None,
 ) -> dict[str, Path | None]:
@@ -174,6 +178,7 @@ def _resolve_run_paths(
         drive_data_root=drive_data_root.resolve(),
         lm2011_post_refinitiv_dir=lm2011_post_refinitiv_dir,
         lm2011_extension_dir=lm2011_extension_dir,
+        lm2011_nw_lag_sensitivity_dir=lm2011_nw_lag_sensitivity_dir,
         finbert_run_dir=finbert_run_dir,
         finbert_robustness_dir=finbert_robustness_dir,
     )

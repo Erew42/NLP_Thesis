@@ -25,6 +25,7 @@ from thesis_assets.errors import AssetBuildError
 from thesis_assets.figures import build_concordance_figure
 from thesis_assets.figures import build_concordance_by_scope_figure
 from thesis_assets.figures import build_ecdf_lines_figure
+from thesis_assets.figures import build_metric_panel_ecdf_figure
 from thesis_assets.figures import build_multi_series_line_figure
 from thesis_assets.figures import build_sample_attrition_figure
 from thesis_assets.figures import build_sample_bridge_figure
@@ -65,6 +66,9 @@ TABLE_VI_SIGNAL_COLUMNS = (
 )
 TABLE_VI_EXPECTED_SPEC_COUNT = len(TABLE_VI_DEPENDENT_VARIABLES) * len(TABLE_VI_SIGNAL_COLUMNS)
 PORTFOLIO_SPREAD_DEFINITION = "Q5 - Q1; Q5 = most negative filings; Q1 = least negative filings"
+NW_LAG_GRID = (1, 2, 3, 4)
+NW_SIG_5_ABS_T = 1.959963984540054
+NW_SIG_10_ABS_T = 1.6448536269514722
 
 
 def build_asset(context: BuildContext, spec: AssetSpec) -> BuildResult:
@@ -121,6 +125,14 @@ def build_asset(context: BuildContext, spec: AssetSpec) -> BuildResult:
             return _build_chapter5_extension_fit_delta_path(context, spec, artifact_map)
         if spec.builder_id == "chapter5_lm2011_table_vi_no_ownership":
             return _build_chapter5_lm2011_table_vi_no_ownership(context, spec, artifact_map)
+        if spec.builder_id == "chapter5_nw_lag_baseline_reconciliation":
+            return _build_chapter5_nw_lag_baseline_reconciliation(context, spec, artifact_map)
+        if spec.builder_id == "chapter5_nw_lag_core_no_ownership_appendix":
+            return _build_chapter5_nw_lag_core_no_ownership_appendix(context, spec, artifact_map)
+        if spec.builder_id == "chapter5_nw_lag_extension_coefficients_appendix":
+            return _build_chapter5_nw_lag_extension_coefficients_appendix(context, spec, artifact_map)
+        if spec.builder_id == "chapter5_nw_lag_extension_fit_comparisons_appendix":
+            return _build_chapter5_nw_lag_extension_fit_comparisons_appendix(context, spec, artifact_map)
         if spec.builder_id == "chapter5_concordance":
             return _build_chapter5_concordance(context, spec, artifact_map)
         if spec.builder_id == "chapter5_lm_doc_score_ecdf":
@@ -1712,6 +1724,308 @@ def _build_chapter5_lm2011_table_vi_no_ownership(
     )
 
 
+def _build_chapter5_nw_lag_baseline_reconciliation(
+    context: BuildContext,
+    spec: AssetSpec,
+    artifacts: dict[str, ResolvedArtifact],
+) -> BuildResult:
+    core_sensitivity = artifacts["core_tables_nw_lag_sensitivity"]
+    extension_sensitivity = artifacts["extension_results_nw_lag_sensitivity"]
+    fit_sensitivity = artifacts["extension_fit_comparisons_nw_lag_sensitivity"]
+    table_iv_artifact = artifacts["table_iv_results_no_ownership"]
+    _, table_vi_artifact, table_vi_warnings = _collect_table_vi_no_ownership_surface(
+        context,
+        artifacts["table_vi_results_no_ownership"],
+    )
+    extension_results = artifacts["extension_results"]
+    extension_fit_comparisons = artifacts["extension_fit_comparisons"]
+
+    core_lf = scan_parquet_artifact(core_sensitivity)
+    rows = [
+        _nw_baseline_comparison_row(
+            asset="ch5_lm2011_full_10k_return_coefficients",
+            baseline_input="lm2011_table_iv_results_no_ownership",
+            canonical_lf=scan_parquet_artifact(table_iv_artifact),
+            sensitivity_lf=core_lf.filter(pl.col("stage_name") == pl.lit("table_iv_results_no_ownership")),
+            join_keys=(
+                "table_id",
+                "specification_id",
+                "text_scope",
+                "signal_name",
+                "dependent_variable",
+                "coefficient_name",
+                "weighting_rule",
+            ),
+            estimate_col="estimate",
+            t_col="t_stat",
+        ),
+        _nw_baseline_comparison_row(
+            asset="ch5_lm2011_table_vi_no_ownership_outcomes",
+            baseline_input="lm2011_table_vi_results_no_ownership",
+            canonical_lf=scan_parquet_artifact(table_vi_artifact),
+            sensitivity_lf=core_lf.filter(pl.col("stage_name") == pl.lit("table_vi_results_no_ownership")),
+            join_keys=(
+                "table_id",
+                "specification_id",
+                "text_scope",
+                "signal_name",
+                "dependent_variable",
+                "coefficient_name",
+                "weighting_rule",
+            ),
+            estimate_col="estimate",
+            t_col="t_stat",
+        ),
+        _nw_baseline_comparison_row(
+            asset="ch5_matched_dictionary_finbert_coefficients_full",
+            baseline_input="lm2011_extension_results",
+            canonical_lf=_ensure_dictionary_family_source(scan_parquet_artifact(extension_results)).filter(
+                (pl.col("estimator_status") == pl.lit("estimated"))
+                & (pl.col("dictionary_family_source") == pl.lit("replication"))
+            ),
+            sensitivity_lf=_ensure_dictionary_family_source(scan_parquet_artifact(extension_sensitivity)).filter(
+                (pl.col("nw_lags") == 1)
+                & (pl.col("estimator_status") == pl.lit("estimated"))
+                & (pl.col("dictionary_family_source") == pl.lit("replication"))
+            ),
+            join_keys=(
+                "text_scope",
+                "outcome_name",
+                "feature_family",
+                "control_set_id",
+                "specification_name",
+                "coefficient_name",
+                "signal_name",
+                "weighting_rule",
+            ),
+            estimate_col="estimate",
+            t_col="t_stat",
+            sensitivity_already_nw1=True,
+        ),
+        _nw_baseline_comparison_row(
+            asset="ch5_extension_fit_comparisons",
+            baseline_input="lm2011_extension_fit_comparisons",
+            canonical_lf=_ensure_dictionary_family_source(scan_parquet_artifact(extension_fit_comparisons)).filter(
+                (pl.col("estimator_status") == pl.lit("estimated"))
+                & (pl.col("dictionary_family_source") == pl.lit("replication"))
+            ),
+            sensitivity_lf=_ensure_dictionary_family_source(scan_parquet_artifact(fit_sensitivity)).filter(
+                (pl.col("nw_lags") == 1)
+                & (pl.col("estimator_status") == pl.lit("estimated"))
+                & (pl.col("dictionary_family_source") == pl.lit("replication"))
+            ),
+            join_keys=(
+                "text_scope",
+                "outcome_name",
+                "control_set_id",
+                "comparison_name",
+                "left_specification_name",
+                "right_specification_name",
+                "weighting_rule",
+                "common_success_policy",
+            ),
+            estimate_col="weighted_avg_delta_adj_r2",
+            t_col="nw_t_stat_delta_adj_r2",
+            sensitivity_already_nw1=True,
+        ),
+    ]
+    selected = pl.DataFrame(rows)
+    output_paths = _write_table_outputs(context, spec, selected)
+    return BuildResult(
+        asset_id=spec.asset_id,
+        chapter=spec.chapter,
+        asset_kind=spec.asset_kind,
+        sample_contract_id=spec.sample_contract_id,
+        status="completed",
+        resolved_inputs={
+            "core_tables_nw_lag_sensitivity": str(core_sensitivity.path),
+            "extension_results_nw_lag_sensitivity": str(extension_sensitivity.path),
+            "extension_fit_comparisons_nw_lag_sensitivity": str(fit_sensitivity.path),
+            "table_iv_results_no_ownership": str(table_iv_artifact.path),
+            "table_vi_results_no_ownership": str(table_vi_artifact.path),
+            "extension_results": str(extension_results.path),
+            "extension_fit_comparisons": str(extension_fit_comparisons.path),
+        },
+        output_paths=output_paths,
+        row_counts={"table_rows": selected.height},
+        warnings=table_vi_warnings,
+    )
+
+
+def _build_chapter5_nw_lag_core_no_ownership_appendix(
+    context: BuildContext,
+    spec: AssetSpec,
+    artifacts: dict[str, ResolvedArtifact],
+) -> BuildResult:
+    source_artifact = artifacts["core_tables_nw_lag_sensitivity"]
+    no_ownership_stages = (
+        "table_iv_results_no_ownership",
+        "table_v_results_no_ownership",
+        "table_vi_results_no_ownership",
+        "table_viii_results_no_ownership",
+        "table_ia_i_results_no_ownership",
+    )
+    base_lf = (
+        scan_parquet_artifact(source_artifact)
+        .filter(
+            pl.col("stage_name").is_in(no_ownership_stages)
+            & (pl.col("coefficient_name") == pl.col("signal_name"))
+            & pl.col("nw_lags").is_in(NW_LAG_GRID)
+        )
+        .with_columns(
+            _nw_core_table_label_expr().alias("table_or_surface"),
+            _nw_scope_label_expr("text_scope").alias("scope"),
+            _nw_outcome_label_expr("dependent_variable").alias("outcome"),
+            pl.col("specification_id").cast(pl.Utf8, strict=False).alias("specification"),
+            _nw_coefficient_label_expr().alias("coefficient"),
+            _nw_scale_label_expr("dependent_variable").alias("reported_scale"),
+            _nw_core_stage_order_expr().alias("_surface_order"),
+            _nw_scope_order_expr("text_scope").alias("_scope_order"),
+            _nw_outcome_order_expr("dependent_variable").alias("_outcome_order"),
+            pl.lit(0).alias("_specification_order"),
+            _nw_coefficient_order_expr().alias("_coefficient_order"),
+        )
+        .with_columns(
+            (pl.col("estimate").cast(pl.Float64, strict=False) * _nw_scale_expr("dependent_variable")).alias(
+                "estimate"
+            ),
+            (pl.col("standard_error").cast(pl.Float64, strict=False) * _nw_scale_expr("dependent_variable")).alias(
+                "standard_error"
+            ),
+            pl.col("t_stat").cast(pl.Float64, strict=False).alias("t_stat"),
+            pl.col("n_quarters").cast(pl.Int64, strict=False).alias("n_quarters"),
+            pl.col("mean_quarter_n").cast(pl.Float64, strict=False).alias("mean_quarter_n"),
+        )
+    )
+    selected = _collect_nw_lag_grid(base_lf)
+    if selected.is_empty():
+        raise AssetBuildError("Core no-ownership NW lag appendix selection returned zero rows.")
+
+    output_paths = _write_table_outputs(context, spec, selected)
+    return BuildResult(
+        asset_id=spec.asset_id,
+        chapter=spec.chapter,
+        asset_kind=spec.asset_kind,
+        sample_contract_id=spec.sample_contract_id,
+        status="completed",
+        resolved_inputs={"core_tables_nw_lag_sensitivity": str(source_artifact.path)},
+        output_paths=output_paths,
+        row_counts={"table_rows": selected.height},
+    )
+
+
+def _build_chapter5_nw_lag_extension_coefficients_appendix(
+    context: BuildContext,
+    spec: AssetSpec,
+    artifacts: dict[str, ResolvedArtifact],
+) -> BuildResult:
+    source_artifact = artifacts["extension_results_nw_lag_sensitivity"]
+    base_lf = (
+        _ensure_dictionary_family_source(scan_parquet_artifact(source_artifact))
+        .filter(
+            (pl.col("estimator_status") == pl.lit("estimated"))
+            & (pl.col("dictionary_family_source") == pl.lit("replication"))
+            & pl.col("text_scope").is_in(TARGET_TEXT_SCOPES)
+            & (pl.col("outcome_name") == pl.lit("filing_period_excess_return"))
+            & pl.col("coefficient_name").is_in(("lm_negative_tfidf", "finbert_neg_prob_lenw_mean"))
+            & pl.col("nw_lags").is_in(NW_LAG_GRID)
+        )
+        .with_columns(
+            pl.lit("Extension matched coefficients (replication dictionary)").alias("table_or_surface"),
+            _scope_label_expr().alias("scope"),
+            _nw_outcome_label_expr("outcome_name").alias("outcome"),
+            pl.concat_str([pl.col("control_set_id"), pl.lit(" "), _specification_label_expr()]).alias(
+                "specification"
+            ),
+            _nw_coefficient_label_expr().alias("coefficient"),
+            _nw_scale_label_expr("outcome_name").alias("reported_scale"),
+            pl.lit(1).alias("_surface_order"),
+            _scope_order_expr().alias("_scope_order"),
+            _nw_control_set_order_expr().alias("_outcome_order"),
+            _specification_order_expr().alias("_specification_order"),
+            _nw_coefficient_order_expr().alias("_coefficient_order"),
+        )
+        .with_columns(
+            (pl.col("estimate").cast(pl.Float64, strict=False) * _nw_scale_expr("outcome_name")).alias("estimate"),
+            (pl.col("standard_error").cast(pl.Float64, strict=False) * _nw_scale_expr("outcome_name")).alias(
+                "standard_error"
+            ),
+            pl.col("t_stat").cast(pl.Float64, strict=False).alias("t_stat"),
+            pl.col("n_quarters").cast(pl.Int64, strict=False).alias("n_quarters"),
+            pl.col("mean_quarter_n").cast(pl.Float64, strict=False).alias("mean_quarter_n"),
+        )
+    )
+    selected = _collect_nw_lag_grid(base_lf)
+    if selected.is_empty():
+        raise AssetBuildError("Extension coefficient NW lag appendix selection returned zero rows.")
+
+    output_paths = _write_table_outputs(context, spec, selected)
+    return BuildResult(
+        asset_id=spec.asset_id,
+        chapter=spec.chapter,
+        asset_kind=spec.asset_kind,
+        sample_contract_id=spec.sample_contract_id,
+        status="completed",
+        resolved_inputs={"extension_results_nw_lag_sensitivity": str(source_artifact.path)},
+        output_paths=output_paths,
+        row_counts={"table_rows": selected.height},
+    )
+
+
+def _build_chapter5_nw_lag_extension_fit_comparisons_appendix(
+    context: BuildContext,
+    spec: AssetSpec,
+    artifacts: dict[str, ResolvedArtifact],
+) -> BuildResult:
+    source_artifact = artifacts["extension_fit_comparisons_nw_lag_sensitivity"]
+    base_lf = (
+        _ensure_dictionary_family_source(scan_parquet_artifact(source_artifact))
+        .filter(
+            (pl.col("estimator_status") == pl.lit("estimated"))
+            & pl.col("text_scope").is_in(TARGET_TEXT_SCOPES)
+            & (pl.col("outcome_name") == pl.lit("filing_period_excess_return"))
+            & pl.col("control_set_id").is_in(("C0", "C1", "C2"))
+            & pl.col("dictionary_family_source").is_in(("replication", "extended"))
+            & pl.col("nw_lags").is_in(NW_LAG_GRID)
+        )
+        .with_columns(
+            pl.concat_str([_dictionary_family_label_expr(), pl.lit(" fit comparison")]).alias("table_or_surface"),
+            _scope_label_expr().alias("scope"),
+            _nw_outcome_label_expr("outcome_name").alias("outcome"),
+            pl.concat_str([pl.col("control_set_id"), pl.lit(" "), _comparison_label_expr()]).alias("specification"),
+            pl.concat_str([pl.lit("Delta adj R2: "), _comparison_label_expr()]).alias("coefficient"),
+            pl.lit("raw").alias("reported_scale"),
+            _dictionary_family_order_expr().alias("_surface_order"),
+            _scope_order_expr().alias("_scope_order"),
+            _nw_control_set_order_expr().alias("_outcome_order"),
+            _comparison_order_expr().alias("_specification_order"),
+            _comparison_order_expr().alias("_coefficient_order"),
+        )
+        .with_columns(
+            pl.col("weighted_avg_delta_adj_r2").cast(pl.Float64, strict=False).alias("estimate"),
+            pl.col("nw_se_delta_adj_r2").cast(pl.Float64, strict=False).alias("standard_error"),
+            pl.col("nw_t_stat_delta_adj_r2").cast(pl.Float64, strict=False).alias("t_stat"),
+            pl.col("n_quarters").cast(pl.Int64, strict=False).alias("n_quarters"),
+            pl.col("mean_quarter_n").cast(pl.Float64, strict=False).alias("mean_quarter_n"),
+        )
+    )
+    selected = _collect_nw_lag_grid(base_lf)
+    if selected.is_empty():
+        raise AssetBuildError("Extension fit-comparison NW lag appendix selection returned zero rows.")
+
+    output_paths = _write_table_outputs(context, spec, selected)
+    return BuildResult(
+        asset_id=spec.asset_id,
+        chapter=spec.chapter,
+        asset_kind=spec.asset_kind,
+        sample_contract_id=spec.sample_contract_id,
+        status="completed",
+        resolved_inputs={"extension_fit_comparisons_nw_lag_sensitivity": str(source_artifact.path)},
+        output_paths=output_paths,
+        row_counts={"table_rows": selected.height},
+    )
+
+
 def _build_chapter5_concordance(
     context: BuildContext,
     spec: AssetSpec,
@@ -1800,7 +2114,14 @@ def _build_chapter5_lm_doc_score_ecdf(
     if ecdf_df.is_empty():
         raise AssetBuildError("LM2011 document score ECDF selection returned zero rows.")
 
-    figure = build_ecdf_lines_figure(ecdf_df, x_col="score", x_label="Document score")
+    figure = build_metric_panel_ecdf_figure(
+        ecdf_df,
+        metric_panels=(
+            ("lm_negative_prop", "Proportion", "LM2011 negative proportion"),
+            ("lm_negative_tfidf", "tf-idf", "LM2011 negative tf-idf"),
+        ),
+        x_col="score",
+    )
     output_paths = _write_figure_outputs(context, spec, ecdf_df, figure)
     return BuildResult(
         asset_id=spec.asset_id,
@@ -2602,6 +2923,298 @@ def _validate_table_vi_surface(df: pl.DataFrame) -> None:
             f"LM2011 Table VI no-ownership selection returned {df.height} rows; "
             f"expected {TABLE_VI_EXPECTED_SPEC_COUNT}."
         )
+
+
+def _nw_baseline_comparison_row(
+    *,
+    asset: str,
+    baseline_input: str,
+    canonical_lf: pl.LazyFrame,
+    sensitivity_lf: pl.LazyFrame,
+    join_keys: tuple[str, ...],
+    estimate_col: str,
+    t_col: str,
+    sensitivity_already_nw1: bool = False,
+) -> dict[str, object]:
+    canonical_selected = canonical_lf.select(
+        *[pl.col(column).cast(pl.Utf8, strict=False) for column in join_keys],
+        pl.col(estimate_col).cast(pl.Float64, strict=False).alias("_canonical_estimate"),
+        pl.col(t_col).cast(pl.Float64, strict=False).alias("_canonical_t"),
+    )
+    sensitivity_source = sensitivity_lf if sensitivity_already_nw1 else sensitivity_lf.filter(pl.col("nw_lags") == 1)
+    sensitivity_selected = sensitivity_source.select(
+        *[pl.col(column).cast(pl.Utf8, strict=False) for column in join_keys],
+        pl.col(estimate_col).cast(pl.Float64, strict=False).alias("_sensitivity_estimate"),
+        pl.col(t_col).cast(pl.Float64, strict=False).alias("_sensitivity_t"),
+    )
+    canonical_rows = _lazy_count(canonical_selected)
+    sensitivity_rows = _lazy_count(sensitivity_selected)
+    joined = canonical_selected.join(sensitivity_selected, on=list(join_keys), how="inner")
+    summary = (
+        joined.select(
+            pl.len().alias("joined_rows"),
+            (pl.col("_canonical_estimate") - pl.col("_sensitivity_estimate"))
+            .abs()
+            .max()
+            .alias("max_abs_estimate_diff"),
+            (pl.col("_canonical_t") - pl.col("_sensitivity_t")).abs().max().alias("max_abs_t_diff"),
+        )
+        .collect()
+        .row(0, named=True)
+    )
+    return {
+        "asset": asset,
+        "baseline_input": baseline_input,
+        "canonical_rows": canonical_rows,
+        "sensitivity_nw1_rows": sensitivity_rows,
+        "joined_rows": int(summary["joined_rows"]),
+        "max_abs_estimate_diff": summary["max_abs_estimate_diff"],
+        "max_abs_t_diff": summary["max_abs_t_diff"],
+    }
+
+
+def _lazy_count(lf: pl.LazyFrame) -> int:
+    return int(lf.select(pl.len().alias("_n")).collect().item())
+
+
+def _collect_nw_lag_grid(base_lf: pl.LazyFrame) -> pl.DataFrame:
+    identity_columns = (
+        "table_or_surface",
+        "scope",
+        "outcome",
+        "specification",
+        "coefficient",
+        "reported_scale",
+        "_surface_order",
+        "_scope_order",
+        "_outcome_order",
+        "_specification_order",
+        "_coefficient_order",
+    )
+    aggregations: list[pl.Expr] = [
+        pl.col("estimate").first().alias("estimate"),
+        pl.col("n_quarters").first().alias("n_quarters"),
+        pl.col("mean_quarter_n").first().alias("mean_quarter_n"),
+    ]
+    for lag in NW_LAG_GRID:
+        aggregations.extend(
+            (
+                pl.col("standard_error").filter(pl.col("nw_lags") == lag).first().alias(f"se_nw{lag}"),
+                pl.col("t_stat").filter(pl.col("nw_lags") == lag).first().alias(f"t_nw{lag}"),
+                pl.col("_stars").filter(pl.col("nw_lags") == lag).first().alias(f"stars_nw{lag}"),
+            )
+        )
+
+    return (
+        base_lf.with_columns(
+            _stars_expr(_normal_p_value_expr(pl.col("t_stat"))).alias("_stars"),
+        )
+        .group_by(*identity_columns)
+        .agg(*aggregations)
+        .with_columns(
+            (pl.col("se_nw4") / pl.col("se_nw1")).alias("se_ratio_nw4_to_nw1"),
+            pl.all_horizontal([pl.col(f"t_nw{lag}").abs() >= NW_SIG_5_ABS_T for lag in NW_LAG_GRID])
+            .fill_null(False)
+            .alias("sig5_all_lags"),
+            ((pl.col("t_nw1").abs() >= NW_SIG_5_ABS_T) & (pl.col("t_nw4").abs() < NW_SIG_5_ABS_T))
+            .fill_null(False)
+            .alias("lost_5pct_by_nw4"),
+            ((pl.col("t_nw1").abs() < NW_SIG_10_ABS_T) & (pl.col("t_nw4").abs() >= NW_SIG_10_ABS_T))
+            .fill_null(False)
+            .alias("gained_10pct_by_nw4"),
+        )
+        .sort("_surface_order", "_scope_order", "_outcome_order", "_specification_order", "_coefficient_order")
+        .select(
+            "table_or_surface",
+            "scope",
+            "outcome",
+            "specification",
+            "coefficient",
+            "estimate",
+            "t_nw1",
+            "t_nw2",
+            "t_nw3",
+            "t_nw4",
+            "stars_nw1",
+            "stars_nw2",
+            "stars_nw3",
+            "stars_nw4",
+            "se_ratio_nw4_to_nw1",
+            "sig5_all_lags",
+            "lost_5pct_by_nw4",
+            "gained_10pct_by_nw4",
+            "n_quarters",
+            "mean_quarter_n",
+            "reported_scale",
+        )
+        .collect()
+    )
+
+
+def _nw_core_table_label_expr() -> pl.Expr:
+    return (
+        pl.when(pl.col("stage_name") == "table_iv_results_no_ownership")
+        .then(pl.lit("Table IV full 10-K returns"))
+        .when(pl.col("stage_name") == "table_v_results_no_ownership")
+        .then(pl.lit("Table V MD&A returns"))
+        .when(pl.col("stage_name") == "table_vi_results_no_ownership")
+        .then(pl.lit("Table VI full 10-K outcomes"))
+        .when(pl.col("stage_name") == "table_viii_results_no_ownership")
+        .then(pl.lit("Table VIII SUE"))
+        .when(pl.col("stage_name") == "table_ia_i_results_no_ownership")
+        .then(pl.lit("Table IA.I normalized differences"))
+        .otherwise(pl.col("stage_name"))
+    )
+
+
+def _nw_core_stage_order_expr() -> pl.Expr:
+    return (
+        pl.when(pl.col("stage_name") == "table_iv_results_no_ownership")
+        .then(pl.lit(1))
+        .when(pl.col("stage_name") == "table_v_results_no_ownership")
+        .then(pl.lit(2))
+        .when(pl.col("stage_name") == "table_vi_results_no_ownership")
+        .then(pl.lit(3))
+        .when(pl.col("stage_name") == "table_viii_results_no_ownership")
+        .then(pl.lit(4))
+        .when(pl.col("stage_name") == "table_ia_i_results_no_ownership")
+        .then(pl.lit(5))
+        .otherwise(pl.lit(99))
+    )
+
+
+def _nw_scope_label_expr(column: str) -> pl.Expr:
+    return (
+        pl.when(pl.col(column) == "full_10k")
+        .then(pl.lit("Full 10-K"))
+        .when(pl.col(column) == "mda_item_7")
+        .then(pl.lit("MD&A Item 7"))
+        .when(pl.col(column) == "item_7_mda")
+        .then(pl.lit("Item 7 MD&A"))
+        .when(pl.col(column) == "item_1a_risk_factors")
+        .then(pl.lit("Item 1A risk factors"))
+        .otherwise(pl.col(column))
+    )
+
+
+def _nw_scope_order_expr(column: str) -> pl.Expr:
+    return (
+        pl.when(pl.col(column) == "full_10k")
+        .then(pl.lit(1))
+        .when(pl.col(column).is_in(("mda_item_7", "item_7_mda")))
+        .then(pl.lit(2))
+        .when(pl.col(column) == "item_1a_risk_factors")
+        .then(pl.lit(3))
+        .otherwise(pl.lit(99))
+    )
+
+
+def _nw_outcome_label_expr(column: str) -> pl.Expr:
+    return (
+        pl.when(pl.col(column) == "filing_period_excess_return")
+        .then(pl.lit("Filing-period excess return"))
+        .when(pl.col(column) == "abnormal_volume")
+        .then(pl.lit("Abnormal volume"))
+        .when(pl.col(column) == "postevent_return_volatility")
+        .then(pl.lit("Postevent return volatility"))
+        .when(pl.col(column) == "sue")
+        .then(pl.lit("SUE"))
+        .otherwise(pl.col(column))
+    )
+
+
+def _nw_outcome_order_expr(column: str) -> pl.Expr:
+    return (
+        pl.when(pl.col(column) == "filing_period_excess_return")
+        .then(pl.lit(1))
+        .when(pl.col(column) == "abnormal_volume")
+        .then(pl.lit(2))
+        .when(pl.col(column) == "postevent_return_volatility")
+        .then(pl.lit(3))
+        .when(pl.col(column) == "sue")
+        .then(pl.lit(4))
+        .otherwise(pl.lit(99))
+    )
+
+
+def _nw_control_set_order_expr() -> pl.Expr:
+    return (
+        pl.when(pl.col("control_set_id") == "C0")
+        .then(pl.lit(1))
+        .when(pl.col("control_set_id") == "C1")
+        .then(pl.lit(2))
+        .when(pl.col("control_set_id") == "C2")
+        .then(pl.lit(3))
+        .otherwise(pl.lit(99))
+    )
+
+
+def _nw_coefficient_label_expr() -> pl.Expr:
+    labels = {
+        "h4n_inf_prop": "H4N-Inf proportion",
+        "h4n_inf_tfidf": "H4N-Inf tf-idf",
+        "lm_negative_prop": "LM negative proportion",
+        "lm_negative_tfidf": "LM negative tf-idf",
+        "lm_positive_prop": "LM positive proportion",
+        "lm_positive_tfidf": "LM positive tf-idf",
+        "lm_uncertainty_prop": "LM uncertainty proportion",
+        "lm_uncertainty_tfidf": "LM uncertainty tf-idf",
+        "lm_litigious_prop": "LM litigious proportion",
+        "lm_litigious_tfidf": "LM litigious tf-idf",
+        "lm_modal_strong_prop": "LM modal strong proportion",
+        "lm_modal_strong_tfidf": "LM modal strong tf-idf",
+        "lm_modal_weak_prop": "LM modal weak proportion",
+        "lm_modal_weak_tfidf": "LM modal weak tf-idf",
+        "finbert_neg_prob_lenw_mean": "FinBERT negative probability",
+        "normalized_difference_h4n_inf": "H4N-Inf normalized difference",
+        "normalized_difference_negative": "LM negative normalized difference",
+    }
+    expr = pl.col("coefficient_name")
+    for raw_value, label in reversed(tuple(labels.items())):
+        expr = pl.when(pl.col("coefficient_name") == raw_value).then(pl.lit(label)).otherwise(expr)
+    return expr
+
+
+def _nw_coefficient_order_expr() -> pl.Expr:
+    order = {
+        "h4n_inf_prop": 10,
+        "lm_negative_prop": 20,
+        "lm_positive_prop": 30,
+        "lm_uncertainty_prop": 40,
+        "lm_litigious_prop": 50,
+        "lm_modal_strong_prop": 60,
+        "lm_modal_weak_prop": 70,
+        "h4n_inf_tfidf": 110,
+        "lm_negative_tfidf": 120,
+        "lm_positive_tfidf": 130,
+        "lm_uncertainty_tfidf": 140,
+        "lm_litigious_tfidf": 150,
+        "lm_modal_strong_tfidf": 160,
+        "lm_modal_weak_tfidf": 170,
+        "finbert_neg_prob_lenw_mean": 220,
+        "normalized_difference_h4n_inf": 310,
+        "normalized_difference_negative": 320,
+    }
+    expr = pl.lit(999)
+    for raw_value, order_value in reversed(tuple(order.items())):
+        expr = pl.when(pl.col("coefficient_name") == raw_value).then(pl.lit(order_value)).otherwise(expr)
+    return expr
+
+
+def _nw_scale_expr(column: str) -> pl.Expr:
+    return (
+        pl.when(pl.col(column).is_in(("filing_period_excess_return", "postevent_return_volatility")))
+        .then(pl.lit(100.0))
+        .otherwise(pl.lit(1.0))
+    )
+
+
+def _nw_scale_label_expr(column: str) -> pl.Expr:
+    return (
+        pl.when(pl.col(column).is_in(("filing_period_excess_return", "postevent_return_volatility")))
+        .then(pl.lit("x100"))
+        .otherwise(pl.lit("raw"))
+    )
 
 
 def _table_vi_outcome_label_expr() -> pl.Expr:

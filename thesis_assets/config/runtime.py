@@ -3,9 +3,14 @@ from __future__ import annotations
 from pathlib import Path
 
 from thesis_assets.config.constants import OUTPUT_SUBDIRS
+from thesis_assets.config.constants import ARTIFACT_FILENAMES
+from thesis_assets.config.constants import ARTIFACT_KEY_NW_LAG_CORE_TABLES
+from thesis_assets.config.constants import ARTIFACT_KEY_NW_LAG_EXTENSION_FIT_COMPARISONS
+from thesis_assets.config.constants import ARTIFACT_KEY_NW_LAG_EXTENSION_RESULTS
 from thesis_assets.config.constants import RUN_FAMILY_FINBERT_ROBUSTNESS
 from thesis_assets.config.constants import RUN_FAMILY_FINBERT_RUN
 from thesis_assets.config.constants import RUN_FAMILY_LM2011_EXTENSION
+from thesis_assets.config.constants import RUN_FAMILY_LM2011_NW_LAG_SENSITIVITY
 from thesis_assets.config.constants import RUN_FAMILY_LM2011_POST_REFINITIV
 
 
@@ -75,6 +80,16 @@ def candidate_run_roots(repo_root: Path, run_family: str) -> tuple[Path, ...]:
                 Path("/content/drive/MyDrive/Data_LM/results/finbert_robustness"),
                 Path("/content/drive/My Drive/Data_LM/results/finbert_robustness"),
             ]
+    elif run_family == RUN_FAMILY_LM2011_NW_LAG_SENSITIVITY:
+        local_candidate = _resolve_latest_nw_lag_sensitivity_run(full_data_run)
+        candidates = (
+            [local_candidate]
+            if local_candidate is not None
+            else [
+                Path("/content/drive/MyDrive/Data_LM/results/lm2011_nw_lag_sensitivity"),
+                Path("/content/drive/My Drive/Data_LM/results/lm2011_nw_lag_sensitivity"),
+            ]
+        )
     else:
         raise ValueError(f"Unsupported run family: {run_family!r}")
 
@@ -87,3 +102,24 @@ def candidate_run_roots(repo_root: Path, run_family: str) -> tuple[Path, ...]:
         seen.add(resolved)
         deduped.append(candidate)
     return tuple(deduped)
+
+
+def _resolve_latest_nw_lag_sensitivity_run(parent: Path) -> Path | None:
+    if not parent.exists() or not parent.is_dir():
+        return None
+    required_filenames = tuple(
+        ARTIFACT_FILENAMES[key]
+        for key in (
+            ARTIFACT_KEY_NW_LAG_CORE_TABLES,
+            ARTIFACT_KEY_NW_LAG_EXTENSION_RESULTS,
+            ARTIFACT_KEY_NW_LAG_EXTENSION_FIT_COMPARISONS,
+        )
+    )
+    candidates = [
+        child.resolve()
+        for child in parent.glob("lm2011_nw_lag_sensitivity*")
+        if child.is_dir() and all((child / filename).exists() for filename in required_filenames)
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda path: path.stat().st_mtime)

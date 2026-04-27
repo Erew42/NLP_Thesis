@@ -1091,6 +1091,7 @@ def _build_lm2011_table_iv_results_impl(
     ff48_siccodes_path: Path | str,
     control_columns: Sequence[str],
     with_diagnostics: bool,
+    nw_lags: int = 1,
 ) -> _QuarterlyFamaMacbethBundle | pl.DataFrame:
     panel_lf = build_lm2011_return_regression_panel(
         event_panel_lf,
@@ -1108,6 +1109,7 @@ def _build_lm2011_table_iv_results_impl(
         signal_columns=("h4n_inf_prop", "lm_negative_prop", "h4n_inf_tfidf", "lm_negative_tfidf"),
         control_columns=control_columns,
         with_diagnostics=with_diagnostics,
+        nw_lags=nw_lags,
     )
 
 
@@ -1118,6 +1120,7 @@ def _build_lm2011_table_iv_results_bundle(
     company_description_lf: pl.LazyFrame,
     *,
     ff48_siccodes_path: Path | str,
+    nw_lags: int = 1,
 ) -> _QuarterlyFamaMacbethBundle:
     return _build_lm2011_table_iv_results_impl(
         event_panel_lf,
@@ -1127,6 +1130,7 @@ def _build_lm2011_table_iv_results_bundle(
         ff48_siccodes_path=ff48_siccodes_path,
         control_columns=_RETURN_CONTROL_COLUMNS,
         with_diagnostics=True,
+        nw_lags=nw_lags,
     )
 
 
@@ -1137,6 +1141,7 @@ def build_lm2011_table_iv_results(
     company_description_lf: pl.LazyFrame,
     *,
     ff48_siccodes_path: Path | str,
+    nw_lags: int = 1,
 ) -> pl.DataFrame:
     return _build_lm2011_table_iv_results_impl(
         event_panel_lf,
@@ -1146,6 +1151,7 @@ def build_lm2011_table_iv_results(
         ff48_siccodes_path=ff48_siccodes_path,
         control_columns=_RETURN_CONTROL_COLUMNS,
         with_diagnostics=False,
+        nw_lags=nw_lags,
     )
 
 
@@ -1156,6 +1162,7 @@ def _build_lm2011_table_iv_results_no_ownership_bundle(
     company_description_lf: pl.LazyFrame,
     *,
     ff48_siccodes_path: Path | str,
+    nw_lags: int = 1,
 ) -> _QuarterlyFamaMacbethBundle:
     return _build_lm2011_table_iv_results_impl(
         event_panel_lf,
@@ -1165,6 +1172,7 @@ def _build_lm2011_table_iv_results_no_ownership_bundle(
         ff48_siccodes_path=ff48_siccodes_path,
         control_columns=_RETURN_CONTROL_COLUMNS_NO_OWNERSHIP,
         with_diagnostics=True,
+        nw_lags=nw_lags,
     )
 
 
@@ -1175,6 +1183,7 @@ def build_lm2011_table_iv_results_no_ownership(
     company_description_lf: pl.LazyFrame,
     *,
     ff48_siccodes_path: Path | str,
+    nw_lags: int = 1,
 ) -> pl.DataFrame:
     return _build_lm2011_table_iv_results_impl(
         event_panel_lf,
@@ -1184,6 +1193,7 @@ def build_lm2011_table_iv_results_no_ownership(
         ff48_siccodes_path=ff48_siccodes_path,
         control_columns=_RETURN_CONTROL_COLUMNS_NO_OWNERSHIP,
         with_diagnostics=False,
+        nw_lags=nw_lags,
     )
 
 
@@ -1196,6 +1206,7 @@ def _build_lm2011_table_v_results_impl(
     ff48_siccodes_path: Path | str,
     control_columns: Sequence[str],
     with_diagnostics: bool,
+    nw_lags: int = 1,
 ) -> _QuarterlyFamaMacbethBundle | pl.DataFrame:
     _require_columns(mda_text_features_lf, ("doc_id", "total_token_count_mda"), "mda_text_features")
     panel_lf = build_lm2011_return_regression_panel(
@@ -1215,6 +1226,7 @@ def _build_lm2011_table_v_results_impl(
         signal_columns=("h4n_inf_prop", "lm_negative_prop", "h4n_inf_tfidf", "lm_negative_tfidf"),
         control_columns=control_columns,
         with_diagnostics=with_diagnostics,
+        nw_lags=nw_lags,
     )
 
 
@@ -1225,6 +1237,7 @@ def _build_lm2011_table_v_results_bundle(
     company_description_lf: pl.LazyFrame,
     *,
     ff48_siccodes_path: Path | str,
+    nw_lags: int = 1,
 ) -> _QuarterlyFamaMacbethBundle:
     return _build_lm2011_table_v_results_impl(
         event_panel_lf,
@@ -1234,6 +1247,7 @@ def _build_lm2011_table_v_results_bundle(
         ff48_siccodes_path=ff48_siccodes_path,
         control_columns=_RETURN_CONTROL_COLUMNS,
         with_diagnostics=True,
+        nw_lags=nw_lags,
     )
 
 
@@ -1244,6 +1258,7 @@ def build_lm2011_table_v_results(
     company_description_lf: pl.LazyFrame,
     *,
     ff48_siccodes_path: Path | str,
+    nw_lags: int = 1,
 ) -> pl.DataFrame:
     return _build_lm2011_table_v_results_impl(
         event_panel_lf,
@@ -1253,6 +1268,7 @@ def build_lm2011_table_v_results(
         ff48_siccodes_path=ff48_siccodes_path,
         control_columns=_RETURN_CONTROL_COLUMNS,
         with_diagnostics=False,
+        nw_lags=nw_lags,
     )
 
 
@@ -1263,6 +1279,7 @@ def _build_lm2011_table_v_results_no_ownership_bundle(
     company_description_lf: pl.LazyFrame,
     *,
     ff48_siccodes_path: Path | str,
+    nw_lags: int = 1,
 ) -> _QuarterlyFamaMacbethBundle:
     return _build_lm2011_table_v_results_impl(
         event_panel_lf,
@@ -1272,6 +1289,7 @@ def _build_lm2011_table_v_results_no_ownership_bundle(
         ff48_siccodes_path=ff48_siccodes_path,
         control_columns=_RETURN_CONTROL_COLUMNS_NO_OWNERSHIP,
         with_diagnostics=True,
+        nw_lags=nw_lags,
     )
 
 
@@ -1282,6 +1300,7 @@ def build_lm2011_table_v_results_no_ownership(
     company_description_lf: pl.LazyFrame,
     *,
     ff48_siccodes_path: Path | str,
+    nw_lags: int = 1,
 ) -> pl.DataFrame:
     return _build_lm2011_table_v_results_impl(
         event_panel_lf,
@@ -1291,6 +1310,7 @@ def build_lm2011_table_v_results_no_ownership(
         ff48_siccodes_path=ff48_siccodes_path,
         control_columns=_RETURN_CONTROL_COLUMNS_NO_OWNERSHIP,
         with_diagnostics=False,
+        nw_lags=nw_lags,
     )
 
 
@@ -1305,6 +1325,7 @@ def _build_lm2011_table_vi_results_impl(
     dependent_variables: Sequence[str],
     signal_columns: Sequence[str],
     with_diagnostics: bool,
+    nw_lags: int = 1,
 ) -> _QuarterlyFamaMacbethBundle | pl.DataFrame:
     panel_lf = build_lm2011_return_regression_panel(
         event_panel_lf,
@@ -1325,6 +1346,7 @@ def _build_lm2011_table_vi_results_impl(
                 signal_columns=signal_columns,
                 control_columns=control_columns,
                 with_diagnostics=True,
+                nw_lags=nw_lags,
             )
             assert isinstance(outcome_bundle, _QuarterlyFamaMacbethBundle)
             bundles.append(outcome_bundle)
@@ -1340,6 +1362,7 @@ def _build_lm2011_table_vi_results_impl(
             signal_columns=signal_columns,
             control_columns=control_columns,
             with_diagnostics=False,
+            nw_lags=nw_lags,
         )
         assert isinstance(outcome_df, pl.DataFrame)
         frames.append(outcome_df)
@@ -1353,6 +1376,7 @@ def _build_lm2011_table_vi_results_bundle(
     company_description_lf: pl.LazyFrame,
     *,
     ff48_siccodes_path: Path | str,
+    nw_lags: int = 1,
 ) -> _QuarterlyFamaMacbethBundle:
     return _build_lm2011_table_vi_results_impl(
         event_panel_lf,
@@ -1364,6 +1388,7 @@ def _build_lm2011_table_vi_results_bundle(
         dependent_variables=_TABLE_VI_LEGACY_OWNERSHIP_DEPENDENT_VARIABLES,
         signal_columns=_TABLE_VI_LEGACY_OWNERSHIP_SIGNAL_COLUMNS,
         with_diagnostics=True,
+        nw_lags=nw_lags,
     )
 
 
@@ -1374,6 +1399,7 @@ def build_lm2011_table_vi_results(
     company_description_lf: pl.LazyFrame,
     *,
     ff48_siccodes_path: Path | str,
+    nw_lags: int = 1,
 ) -> pl.DataFrame:
     return _build_lm2011_table_vi_results_impl(
         event_panel_lf,
@@ -1385,6 +1411,7 @@ def build_lm2011_table_vi_results(
         dependent_variables=_TABLE_VI_LEGACY_OWNERSHIP_DEPENDENT_VARIABLES,
         signal_columns=_TABLE_VI_LEGACY_OWNERSHIP_SIGNAL_COLUMNS,
         with_diagnostics=False,
+        nw_lags=nw_lags,
     )
 
 
@@ -1395,6 +1422,7 @@ def _build_lm2011_table_vi_results_no_ownership_bundle(
     company_description_lf: pl.LazyFrame,
     *,
     ff48_siccodes_path: Path | str,
+    nw_lags: int = 1,
 ) -> _QuarterlyFamaMacbethBundle:
     return _build_lm2011_table_vi_results_impl(
         event_panel_lf,
@@ -1406,6 +1434,7 @@ def _build_lm2011_table_vi_results_no_ownership_bundle(
         dependent_variables=_TABLE_VI_DEPENDENT_VARIABLES,
         signal_columns=_TABLE_VI_SIGNAL_COLUMNS,
         with_diagnostics=True,
+        nw_lags=nw_lags,
     )
 
 
@@ -1416,6 +1445,7 @@ def build_lm2011_table_vi_results_no_ownership(
     company_description_lf: pl.LazyFrame,
     *,
     ff48_siccodes_path: Path | str,
+    nw_lags: int = 1,
 ) -> pl.DataFrame:
     return _build_lm2011_table_vi_results_impl(
         event_panel_lf,
@@ -1427,6 +1457,7 @@ def build_lm2011_table_vi_results_no_ownership(
         dependent_variables=_TABLE_VI_DEPENDENT_VARIABLES,
         signal_columns=_TABLE_VI_SIGNAL_COLUMNS,
         with_diagnostics=False,
+        nw_lags=nw_lags,
     )
 
 
@@ -1439,6 +1470,7 @@ def _build_lm2011_table_viii_results_impl(
     ff48_siccodes_path: Path | str,
     control_columns: Sequence[str],
     with_diagnostics: bool,
+    nw_lags: int = 1,
 ) -> _QuarterlyFamaMacbethBundle | pl.DataFrame:
     panel_lf = build_lm2011_sue_regression_panel(
         sue_panel_lf,
@@ -1455,6 +1487,7 @@ def _build_lm2011_table_viii_results_impl(
         signal_columns=("h4n_inf_prop", "lm_negative_prop", "h4n_inf_tfidf", "lm_negative_tfidf"),
         control_columns=control_columns,
         with_diagnostics=with_diagnostics,
+        nw_lags=nw_lags,
     )
 
 
@@ -1465,6 +1498,7 @@ def _build_lm2011_table_viii_results_bundle(
     company_description_lf: pl.LazyFrame,
     *,
     ff48_siccodes_path: Path | str,
+    nw_lags: int = 1,
 ) -> _QuarterlyFamaMacbethBundle:
     return _build_lm2011_table_viii_results_impl(
         sue_panel_lf,
@@ -1474,6 +1508,7 @@ def _build_lm2011_table_viii_results_bundle(
         ff48_siccodes_path=ff48_siccodes_path,
         control_columns=_SUE_CONTROL_COLUMNS,
         with_diagnostics=True,
+        nw_lags=nw_lags,
     )
 
 
@@ -1484,6 +1519,7 @@ def build_lm2011_table_viii_results(
     company_description_lf: pl.LazyFrame,
     *,
     ff48_siccodes_path: Path | str,
+    nw_lags: int = 1,
 ) -> pl.DataFrame:
     return _build_lm2011_table_viii_results_impl(
         sue_panel_lf,
@@ -1493,6 +1529,7 @@ def build_lm2011_table_viii_results(
         ff48_siccodes_path=ff48_siccodes_path,
         control_columns=_SUE_CONTROL_COLUMNS,
         with_diagnostics=False,
+        nw_lags=nw_lags,
     )
 
 
@@ -1503,6 +1540,7 @@ def _build_lm2011_table_viii_results_no_ownership_bundle(
     company_description_lf: pl.LazyFrame,
     *,
     ff48_siccodes_path: Path | str,
+    nw_lags: int = 1,
 ) -> _QuarterlyFamaMacbethBundle:
     return _build_lm2011_table_viii_results_impl(
         sue_panel_lf,
@@ -1512,6 +1550,7 @@ def _build_lm2011_table_viii_results_no_ownership_bundle(
         ff48_siccodes_path=ff48_siccodes_path,
         control_columns=_SUE_CONTROL_COLUMNS_NO_OWNERSHIP,
         with_diagnostics=True,
+        nw_lags=nw_lags,
     )
 
 
@@ -1522,6 +1561,7 @@ def build_lm2011_table_viii_results_no_ownership(
     company_description_lf: pl.LazyFrame,
     *,
     ff48_siccodes_path: Path | str,
+    nw_lags: int = 1,
 ) -> pl.DataFrame:
     return _build_lm2011_table_viii_results_impl(
         sue_panel_lf,
@@ -1531,6 +1571,7 @@ def build_lm2011_table_viii_results_no_ownership(
         ff48_siccodes_path=ff48_siccodes_path,
         control_columns=_SUE_CONTROL_COLUMNS_NO_OWNERSHIP,
         with_diagnostics=False,
+        nw_lags=nw_lags,
     )
 
 
@@ -1543,6 +1584,7 @@ def _build_lm2011_table_ia_i_results_impl(
     ff48_siccodes_path: Path | str,
     control_columns: Sequence[str],
     with_diagnostics: bool,
+    nw_lags: int = 1,
 ) -> _QuarterlyFamaMacbethBundle | pl.DataFrame:
     return_panel_lf = build_lm2011_return_regression_panel(
         event_panel_lf,
@@ -1561,6 +1603,7 @@ def _build_lm2011_table_ia_i_results_impl(
         signal_columns=("normalized_difference_negative", "normalized_difference_h4n_inf"),
         control_columns=control_columns,
         with_diagnostics=with_diagnostics,
+        nw_lags=nw_lags,
     )
 
 
@@ -1571,6 +1614,7 @@ def _build_lm2011_table_ia_i_results_bundle(
     company_description_lf: pl.LazyFrame,
     *,
     ff48_siccodes_path: Path | str,
+    nw_lags: int = 1,
 ) -> _QuarterlyFamaMacbethBundle:
     return _build_lm2011_table_ia_i_results_impl(
         event_panel_lf,
@@ -1580,6 +1624,7 @@ def _build_lm2011_table_ia_i_results_bundle(
         ff48_siccodes_path=ff48_siccodes_path,
         control_columns=_RETURN_CONTROL_COLUMNS,
         with_diagnostics=True,
+        nw_lags=nw_lags,
     )
 
 
@@ -1590,6 +1635,7 @@ def build_lm2011_table_ia_i_results(
     company_description_lf: pl.LazyFrame,
     *,
     ff48_siccodes_path: Path | str,
+    nw_lags: int = 1,
 ) -> pl.DataFrame:
     return _build_lm2011_table_ia_i_results_impl(
         event_panel_lf,
@@ -1599,6 +1645,7 @@ def build_lm2011_table_ia_i_results(
         ff48_siccodes_path=ff48_siccodes_path,
         control_columns=_RETURN_CONTROL_COLUMNS,
         with_diagnostics=False,
+        nw_lags=nw_lags,
     )
 
 
@@ -1609,6 +1656,7 @@ def _build_lm2011_table_ia_i_results_no_ownership_bundle(
     company_description_lf: pl.LazyFrame,
     *,
     ff48_siccodes_path: Path | str,
+    nw_lags: int = 1,
 ) -> _QuarterlyFamaMacbethBundle:
     return _build_lm2011_table_ia_i_results_impl(
         event_panel_lf,
@@ -1618,6 +1666,7 @@ def _build_lm2011_table_ia_i_results_no_ownership_bundle(
         ff48_siccodes_path=ff48_siccodes_path,
         control_columns=_RETURN_CONTROL_COLUMNS_NO_OWNERSHIP,
         with_diagnostics=True,
+        nw_lags=nw_lags,
     )
 
 
@@ -1628,6 +1677,7 @@ def build_lm2011_table_ia_i_results_no_ownership(
     company_description_lf: pl.LazyFrame,
     *,
     ff48_siccodes_path: Path | str,
+    nw_lags: int = 1,
 ) -> pl.DataFrame:
     return _build_lm2011_table_ia_i_results_impl(
         event_panel_lf,
@@ -1637,6 +1687,7 @@ def build_lm2011_table_ia_i_results_no_ownership(
         ff48_siccodes_path=ff48_siccodes_path,
         control_columns=_RETURN_CONTROL_COLUMNS_NO_OWNERSHIP,
         with_diagnostics=False,
+        nw_lags=nw_lags,
     )
 
 

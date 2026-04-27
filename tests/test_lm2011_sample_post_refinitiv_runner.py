@@ -1729,6 +1729,51 @@ def test_parse_args_uses_memory_hardened_defaults() -> None:
     assert args.local_work_root == runner.DEFAULT_LOCAL_WORK_ROOT
     assert args.print_ram_stats is False
     assert args.ram_log_interval_batches == runner.DEFAULT_RAM_LOG_INTERVAL_BATCHES
+    assert args.nw_lags == runner.DEFAULT_LM2011_NW_LAGS
+
+
+def test_parse_args_normalizes_nw_lag_grid() -> None:
+    args = runner.parse_args(["--nw-lags", "1", "2", "2", "4"])
+
+    assert args.nw_lags == (1, 2, 4)
+
+
+def test_parse_args_rejects_invalid_nw_lags() -> None:
+    with pytest.raises(SystemExit):
+        runner.parse_args(["--nw-lags", "-1"])
+
+
+def test_core_nw_lag_sensitivity_frame_stacks_enabled_lags() -> None:
+    def _builder(nw_lags: int) -> runner._QuarterlyFamaMacbethBundle:
+        return runner._QuarterlyFamaMacbethBundle(
+            results_df=pl.DataFrame(
+                {
+                    "table_id": ["table"],
+                    "specification_id": ["signal"],
+                    "text_scope": ["full_10k"],
+                    "signal_name": ["signal"],
+                    "dependent_variable": ["ret"],
+                    "coefficient_name": ["signal"],
+                    "estimate": [1.0],
+                    "standard_error": [0.1 * nw_lags],
+                    "t_stat": [10.0 / nw_lags],
+                    "n_quarters": [4],
+                    "mean_quarter_n": [10.0],
+                    "weighting_rule": ["quarter_observation_count"],
+                    "nw_lags": [nw_lags],
+                }
+            ),
+            skipped_quarters_df=pl.DataFrame(),
+        )
+
+    stacked = runner._build_core_nw_lag_sensitivity_frame(
+        (("table_iv_results", _builder, True),),
+        nw_lags=(1, 2, 4),
+    )
+
+    assert stacked.height == 3
+    assert stacked.get_column("nw_lags").to_list() == [1, 2, 4]
+    assert stacked.get_column("stage_name").unique().to_list() == ["table_iv_results"]
 
 
 def test_no_ownership_stage_names_are_registered_and_block_text_feature_reuse() -> None:

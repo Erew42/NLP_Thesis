@@ -9,6 +9,7 @@ from thesis_assets.config.constants import ARTIFACT_ALTERNATE_FILENAMES
 from thesis_assets.config.constants import ARTIFACT_FILENAMES
 from thesis_assets.config.constants import ARTIFACT_MANIFEST_KEYS
 from thesis_assets.config.constants import RUN_FAMILY_SENTINEL_ARTIFACTS
+from thesis_assets.config.constants import RUN_FAMILY_LM2011_NW_LAG_SENSITIVITY
 from thesis_assets.config.constants import RUN_MANIFEST_FILENAMES
 from thesis_assets.config.runtime import candidate_run_roots
 from thesis_assets.errors import MissingArtifactError
@@ -134,6 +135,12 @@ def _is_compatible_run_root(root: Path, run_family: str) -> bool:
         return False
     if _find_manifest_path(root, run_family) is not None:
         return True
+    if run_family == RUN_FAMILY_LM2011_NW_LAG_SENSITIVITY:
+        return all(
+            (root / filename).exists()
+            for artifact_key in RUN_FAMILY_SENTINEL_ARTIFACTS[run_family]
+            for filename in _artifact_filenames(artifact_key)
+        )
     return any(
         (root / filename).exists()
         for artifact_key in RUN_FAMILY_SENTINEL_ARTIFACTS[run_family]

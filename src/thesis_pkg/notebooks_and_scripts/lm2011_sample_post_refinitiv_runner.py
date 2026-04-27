@@ -278,7 +278,16 @@ DEFAULT_LM2011_MDA_TEXT_FEATURE_BATCH_SIZE = DEFAULT_PRODUCTION_MDA_MICROBATCH_S
 DEFAULT_LM2011_TEXT_FEATURE_BATCH_SIZE = DEFAULT_LM2011_FULL_10K_TEXT_FEATURE_BATCH_SIZE
 DEFAULT_LM2011_EVENT_WINDOW_DOC_BATCH_SIZE = 50
 DEFAULT_RAM_LOG_INTERVAL_BATCHES = 10
+DEFAULT_LM2011_NW_LAGS: tuple[int, ...] = (1,)
 STRATEGY_TEXT_FEATURE_STAGE_NAME = "strategy_text_features_full_10k"
+CORE_NW_LAG_SENSITIVITY_STAGE_NAME = "core_tables_nw_lag_sensitivity"
+CORE_NW_LAG_SENSITIVITY_FILENAME = "core_tables_nw_lag_sensitivity.parquet"
+EXTENSION_RESULTS_NW_LAG_SENSITIVITY_STAGE_NAME = "extension_results_nw_lag_sensitivity"
+EXTENSION_FIT_COMPARISONS_NW_LAG_SENSITIVITY_STAGE_NAME = "extension_fit_comparisons_nw_lag_sensitivity"
+EXTENSION_RESULTS_NW_LAG_SENSITIVITY_FILENAME = "extension_results_nw_lag_sensitivity.parquet"
+EXTENSION_FIT_COMPARISONS_NW_LAG_SENSITIVITY_FILENAME = "extension_fit_comparisons_nw_lag_sensitivity.parquet"
+NW_LAG_SENSITIVITY_SUMMARY_CSV = "nw_lag_sensitivity_summary.csv"
+NW_LAG_SENSITIVITY_SUMMARY_MARKDOWN = "nw_lag_sensitivity_summary.md"
 
 STAGE_ARTIFACT_FILENAMES: dict[str, str] = {
     "sample_backbone": "lm2011_sample_backbone.parquet",
@@ -366,6 +375,10 @@ EXTENSION_STAGE_ARTIFACT_FILENAMES: dict[str, str] = {
     "extension_fit_skipped_quarters": "lm2011_extension_fit_skipped_quarters.parquet",
     "extension_results": "lm2011_extension_results.parquet",
 }
+EXTENSION_NW_LAG_SENSITIVITY_FILENAMES: dict[str, str] = {
+    EXTENSION_RESULTS_NW_LAG_SENSITIVITY_STAGE_NAME: EXTENSION_RESULTS_NW_LAG_SENSITIVITY_FILENAME,
+    EXTENSION_FIT_COMPARISONS_NW_LAG_SENSITIVITY_STAGE_NAME: EXTENSION_FIT_COMPARISONS_NW_LAG_SENSITIVITY_FILENAME,
+}
 EXTENSION_SHARED_PREREQ_FILENAMES: dict[str, str] = {
     "sample_backbone": "lm2011_extension_sample_backbone.parquet",
     "full_10k_token_counts": "lm2011_extension_full_10k_token_counts.parquet",
@@ -421,6 +434,7 @@ class RunnerPaths:
     event_window_doc_batch_size: int
     print_ram_stats: bool
     ram_log_interval_batches: int
+    nw_lags: tuple[int, ...] = DEFAULT_LM2011_NW_LAGS
 
 
 @dataclass(frozen=True)
@@ -568,8 +582,10 @@ class LM2011ExtensionRunConfig:
     note: str = ""
     print_ram_stats: bool = False
     ram_log_interval_batches: int = DEFAULT_RAM_LOG_INTERVAL_BATCHES
+    nw_lags: tuple[int, ...] = DEFAULT_LM2011_NW_LAGS
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "nw_lags", normalize_lm2011_nw_lags(self.nw_lags))
         if self.dictionary_source_mode not in EXTENSION_ALLOWED_DICTIONARY_SOURCE_MODES:
             raise ValueError(
                 "Unknown LM2011 extension dictionary_source_mode: "
@@ -737,6 +753,17 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             "result-table artifacts in the output directory."
         ),
     )
+    parser.add_argument(
+        "--nw-lags",
+        type=int,
+        nargs="+",
+        default=list(DEFAULT_LM2011_NW_LAGS),
+        help=(
+            "Newey-West lag grid for quarterly Fama-MacBeth inference. "
+            "A single value preserves canonical result tables; multiple values also write "
+            "additive NW-lag sensitivity artifacts."
+        ),
+    )
     parser.add_argument("--items-analysis-dir", type=Path, default=None)
     parser.add_argument("--ccm-base-dir", type=Path, default=None)
     parser.add_argument(
@@ -810,7 +837,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=DEFAULT_RAM_LOG_INTERVAL_BATCHES,
         help="Emit LM2011 batch progress logs every N batches.",
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    try:
+        args.nw_lags = normalize_lm2011_nw_lags(args.nw_lags)
+    except ValueError as exc:
+        parser.error(str(exc))
+    return args
 
 
 def _first_existing_path(*paths: Path) -> Path:
@@ -1056,8 +1088,30 @@ def _normalized_extension_text_scopes(text_scopes: Sequence[str]) -> tuple[str, 
     return normalized
 
 
+def normalize_lm2011_nw_lags(values: Sequence[int] | None) -> tuple[int, ...]:
+    if values is None:
+        return DEFAULT_LM2011_NW_LAGS
+    normalized: list[int] = []
+    seen: set[int] = set()
+    for raw_value in values:
+        value = int(raw_value)
+        if value < 1:
+            raise ValueError(f"LM2011 Newey-West lags must be positive integers; got {value}.")
+        if value in seen:
+            continue
+        normalized.append(value)
+        seen.add(value)
+    if not normalized:
+        raise ValueError("LM2011 Newey-West lags must include at least one positive integer.")
+    return tuple(normalized)
+
+
 def _extension_artifact_output_path(output_dir: Path, stage_name: str) -> Path:
     return output_dir / EXTENSION_STAGE_ARTIFACT_FILENAMES[stage_name]
+
+
+def _extension_nw_lag_sensitivity_artifact_output_path(output_dir: Path, stage_name: str) -> Path:
+    return output_dir / EXTENSION_NW_LAG_SENSITIVITY_FILENAMES[stage_name]
 
 
 def _read_json_payload(path: Path) -> dict[str, Any]:
@@ -1489,6 +1543,7 @@ def _build_extension_manifest(
             "recompute_event_panel": run_cfg.recompute_event_panel,
             "print_ram_stats": run_cfg.print_ram_stats,
             "ram_log_interval_batches": run_cfg.ram_log_interval_batches,
+            "nw_lags": list(run_cfg.nw_lags),
         },
         "resolved_inputs": {
             "items_analysis_dir": _absolute_path_str(run_cfg.items_analysis_dir),
@@ -1548,6 +1603,8 @@ def _record_extension_stage_failed(
     artifact_path = (
         _absolute_path_str(_extension_artifact_output_path(output_dir, stage_name))
         if stage_name in EXTENSION_STAGE_ARTIFACT_FILENAMES
+        else _absolute_path_str(_extension_nw_lag_sensitivity_artifact_output_path(output_dir, stage_name))
+        if stage_name in EXTENSION_NW_LAG_SENSITIVITY_FILENAMES
         else None
     )
     manifest["stages"][stage_name] = {
@@ -2221,6 +2278,7 @@ def _resolve_paths(args: argparse.Namespace) -> RunnerPaths:
         event_window_doc_batch_size=int(args.event_window_doc_batch_size),
         print_ram_stats=bool(args.print_ram_stats),
         ram_log_interval_batches=int(args.ram_log_interval_batches),
+        nw_lags=normalize_lm2011_nw_lags(args.nw_lags),
     )
 
 
@@ -3243,6 +3301,7 @@ def _build_manifest(paths: RunnerPaths) -> dict[str, Any]:
             "event_window_doc_batch_size": paths.event_window_doc_batch_size,
             "print_ram_stats": paths.print_ram_stats,
             "ram_log_interval_batches": paths.ram_log_interval_batches,
+            "nw_lags": list(paths.nw_lags),
         },
         "resolved_inputs": {
             "year_merged_dir": _absolute_path_str(paths.year_merged_dir),
@@ -3572,6 +3631,227 @@ def _write_stage(
     if manifest_path is not None:
         _checkpoint_manifest(manifest, manifest_path)
     return pl.scan_parquet(written_path)
+
+
+def _write_named_artifact_stage(
+    manifest: dict[str, Any],
+    *,
+    manifest_path: Path | None,
+    output_dir: Path,
+    stage_name: str,
+    artifact_filename: str,
+    frame: pl.LazyFrame | pl.DataFrame,
+    extra_artifacts: dict[str, Path] | None = None,
+    metadata: Mapping[str, Any] | None = None,
+) -> pl.LazyFrame:
+    artifact_path = output_dir / artifact_filename
+    written_path, row_count = _write_frame_artifact(frame, artifact_path)
+    _record_stage_success(
+        manifest,
+        stage_name=stage_name,
+        artifact_path=written_path,
+        row_count=row_count,
+        extra_artifacts=extra_artifacts,
+        metadata=metadata,
+    )
+    if manifest_path is not None:
+        _checkpoint_manifest(manifest, manifest_path)
+    return pl.scan_parquet(written_path)
+
+
+def _concat_relaxed_or_empty(frames: Sequence[pl.DataFrame]) -> pl.DataFrame:
+    nonempty_frames = [frame for frame in frames if frame.height > 0]
+    if not nonempty_frames:
+        return pl.DataFrame()
+    return pl.concat(nonempty_frames, how="vertical_relaxed")
+
+
+def _build_core_nw_lag_sensitivity_frame(
+    table_stage_specs: Sequence[tuple[str, Callable[[int], _QuarterlyFamaMacbethBundle], bool]],
+    *,
+    nw_lags: Sequence[int],
+) -> pl.DataFrame:
+    frames: list[pl.DataFrame] = []
+    for nw_lag in nw_lags:
+        for stage_name, builder, should_run in table_stage_specs:
+            if not should_run:
+                continue
+            frame = builder(nw_lag).results_df.with_columns(
+                pl.lit(stage_name, dtype=pl.Utf8).alias("stage_name")
+            )
+            frames.append(frame)
+    return _concat_relaxed_or_empty(frames)
+
+
+def _build_extension_nw_lag_sensitivity_frames(
+    extension_panel_lf: pl.LazyFrame,
+    *,
+    run_cfg: LM2011ExtensionRunConfig,
+) -> tuple[pl.DataFrame, pl.DataFrame]:
+    normalized_text_scopes = _normalized_extension_text_scopes(run_cfg.text_scopes)
+    results_frames: list[pl.DataFrame] = []
+    fit_comparison_frames: list[pl.DataFrame] = []
+    for nw_lag in run_cfg.nw_lags:
+        results_frames.append(
+            run_lm2011_extension_estimation_scaffold(
+                extension_panel_lf,
+                run_id=run_cfg.run_id,
+                text_scopes=normalized_text_scopes,
+                nw_lags=nw_lag,
+            )
+        )
+        fit_artifacts = run_lm2011_extension_fit_comparison_scaffold(
+            extension_panel_lf,
+            run_id=run_cfg.run_id,
+            sample_window="2009_2024",
+            text_scopes=normalized_text_scopes,
+            nw_lags=nw_lag,
+        )
+        fit_comparison_frames.append(fit_artifacts.comparison_df)
+    return (
+        _concat_relaxed_or_empty(results_frames),
+        _concat_relaxed_or_empty(fit_comparison_frames),
+    )
+
+
+def _summary_key(row: Mapping[str, Any], columns: Sequence[str]) -> str:
+    payload = {column: row.get(column) for column in columns}
+    return json.dumps(payload, sort_keys=True, default=str, separators=(",", ":"))
+
+
+def _build_nw_lag_summary_rows(
+    frame: pl.DataFrame,
+    *,
+    artifact_family: str,
+    id_columns: Sequence[str],
+    estimate_column: str,
+    standard_error_column: str,
+    t_stat_column: str,
+) -> list[dict[str, Any]]:
+    rows_by_key: dict[str, dict[str, Any]] = {}
+    for row in frame.iter_rows(named=True):
+        nw_lag = row.get("nw_lags")
+        if nw_lag is None:
+            continue
+        key = _summary_key(row, id_columns)
+        summary_row = rows_by_key.setdefault(
+            key,
+            {
+                "artifact_family": artifact_family,
+                "row_key": key,
+            },
+        )
+        summary_row[f"estimate_nw_{nw_lag}"] = row.get(estimate_column)
+        summary_row[f"standard_error_nw_{nw_lag}"] = row.get(standard_error_column)
+        summary_row[f"t_stat_nw_{nw_lag}"] = row.get(t_stat_column)
+    return list(rows_by_key.values())
+
+
+def _write_nw_lag_sensitivity_summary(
+    output_dir: Path,
+    *,
+    nw_lags: Sequence[int],
+    core_frame: pl.DataFrame | None = None,
+    extension_results_frame: pl.DataFrame | None = None,
+    extension_fit_comparisons_frame: pl.DataFrame | None = None,
+) -> dict[str, Path]:
+    summary_rows: list[dict[str, Any]] = []
+    if core_frame is not None and core_frame.height > 0:
+        summary_rows.extend(
+            _build_nw_lag_summary_rows(
+                core_frame,
+                artifact_family="core_tables",
+                id_columns=(
+                    "stage_name",
+                    "table_id",
+                    "specification_id",
+                    "text_scope",
+                    "signal_name",
+                    "dependent_variable",
+                    "coefficient_name",
+                ),
+                estimate_column="estimate",
+                standard_error_column="standard_error",
+                t_stat_column="t_stat",
+            )
+        )
+    if extension_results_frame is not None and extension_results_frame.height > 0:
+        summary_rows.extend(
+            _build_nw_lag_summary_rows(
+                extension_results_frame,
+                artifact_family="extension_results",
+                id_columns=(
+                    "dictionary_family_source",
+                    "run_id",
+                    "sample_window",
+                    "text_scope",
+                    "outcome_name",
+                    "feature_family",
+                    "control_set_id",
+                    "specification_name",
+                    "coefficient_name",
+                    "signal_name",
+                ),
+                estimate_column="estimate",
+                standard_error_column="standard_error",
+                t_stat_column="t_stat",
+            )
+        )
+    if extension_fit_comparisons_frame is not None and extension_fit_comparisons_frame.height > 0:
+        summary_rows.extend(
+            _build_nw_lag_summary_rows(
+                extension_fit_comparisons_frame,
+                artifact_family="extension_fit_comparisons",
+                id_columns=(
+                    "dictionary_family_source",
+                    "run_id",
+                    "sample_window",
+                    "text_scope",
+                    "outcome_name",
+                    "control_set_id",
+                    "comparison_name",
+                    "left_specification_name",
+                    "right_specification_name",
+                ),
+                estimate_column="weighted_avg_delta_adj_r2",
+                standard_error_column="nw_se_delta_adj_r2",
+                t_stat_column="nw_t_stat_delta_adj_r2",
+            )
+        )
+
+    summary_df = pl.DataFrame(summary_rows) if summary_rows else pl.DataFrame()
+    csv_path = output_dir / NW_LAG_SENSITIVITY_SUMMARY_CSV
+    markdown_path = output_dir / NW_LAG_SENSITIVITY_SUMMARY_MARKDOWN
+    summary_df.write_csv(csv_path)
+
+    family_counts = (
+        summary_df.group_by("artifact_family").len().sort("artifact_family").to_dicts()
+        if summary_df.height > 0
+        else []
+    )
+    markdown_lines = [
+        "# Newey-West Lag Sensitivity Summary",
+        "",
+        f"- Lag grid: {', '.join(str(value) for value in nw_lags)}",
+        f"- Pivot rows: {summary_df.height}",
+        "",
+        "| Artifact family | Pivot rows |",
+        "| --- | ---: |",
+    ]
+    if family_counts:
+        markdown_lines.extend(
+            f"| {row['artifact_family']} | {row['len']} |" for row in family_counts
+        )
+    else:
+        markdown_lines.append("| n/a | 0 |")
+    markdown_lines.extend(
+        [
+            "",
+            "The CSV contains one row per coefficient or fit-comparison key with estimate, standard error, and t-stat columns by lag.",
+        ]
+    )
+    markdown_path.write_text("\n".join(markdown_lines) + "\n", encoding="utf-8")
+    return {"summary_csv": csv_path, "summary_markdown": markdown_path}
 
 
 def _record_existing_stage_artifact(
@@ -4916,114 +5196,125 @@ def run_lm2011_post_refinitiv_pipeline(run_cfg: LM2011PostRefinitivRunConfig) ->
                 ),
             )
 
+        primary_nw_lag = paths.nw_lags[0]
         table_stage_specs = (
             (
                 "table_iv_results",
-                lambda: _build_lm2011_table_iv_results_bundle(
+                lambda nw_lags: _build_lm2011_table_iv_results_bundle(
                     event_panel_lf,
                     text_features_full_10k_lf,
                     pl.scan_parquet(paths.company_history_path),
                     pl.scan_parquet(paths.company_description_path),
                     ff48_siccodes_path=paths.ff48_siccodes_path,
+                    nw_lags=nw_lags,
                 ),
                 event_panel_lf is not None and text_features_full_10k_lf is not None and can_run_regressions,
             ),
             (
                 "table_iv_results_no_ownership",
-                lambda: _build_lm2011_table_iv_results_no_ownership_bundle(
+                lambda nw_lags: _build_lm2011_table_iv_results_no_ownership_bundle(
                     event_panel_lf,
                     text_features_full_10k_lf,
                     pl.scan_parquet(paths.company_history_path),
                     pl.scan_parquet(paths.company_description_path),
                     ff48_siccodes_path=paths.ff48_siccodes_path,
+                    nw_lags=nw_lags,
                 ),
                 event_panel_lf is not None and text_features_full_10k_lf is not None and can_run_regressions,
             ),
             (
                 "table_v_results",
-                lambda: _build_lm2011_table_v_results_bundle(
+                lambda nw_lags: _build_lm2011_table_v_results_bundle(
                     event_panel_lf,
                     text_features_mda_lf,
                     pl.scan_parquet(paths.company_history_path),
                     pl.scan_parquet(paths.company_description_path),
                     ff48_siccodes_path=paths.ff48_siccodes_path,
+                    nw_lags=nw_lags,
                 ),
                 event_panel_lf is not None and text_features_mda_lf is not None and can_run_regressions,
             ),
             (
                 "table_v_results_no_ownership",
-                lambda: _build_lm2011_table_v_results_no_ownership_bundle(
+                lambda nw_lags: _build_lm2011_table_v_results_no_ownership_bundle(
                     event_panel_lf,
                     text_features_mda_lf,
                     pl.scan_parquet(paths.company_history_path),
                     pl.scan_parquet(paths.company_description_path),
                     ff48_siccodes_path=paths.ff48_siccodes_path,
+                    nw_lags=nw_lags,
                 ),
                 event_panel_lf is not None and text_features_mda_lf is not None and can_run_regressions,
             ),
             (
                 "table_vi_results",
-                lambda: _build_lm2011_table_vi_results_bundle(
+                lambda nw_lags: _build_lm2011_table_vi_results_bundle(
                     event_panel_lf,
                     text_features_full_10k_lf,
                     pl.scan_parquet(paths.company_history_path),
                     pl.scan_parquet(paths.company_description_path),
                     ff48_siccodes_path=paths.ff48_siccodes_path,
+                    nw_lags=nw_lags,
                 ),
                 event_panel_lf is not None and text_features_full_10k_lf is not None and can_run_regressions,
             ),
             (
                 "table_vi_results_no_ownership",
-                lambda: _build_lm2011_table_vi_results_no_ownership_bundle(
+                lambda nw_lags: _build_lm2011_table_vi_results_no_ownership_bundle(
                     event_panel_lf,
                     text_features_full_10k_lf,
                     pl.scan_parquet(paths.company_history_path),
                     pl.scan_parquet(paths.company_description_path),
                     ff48_siccodes_path=paths.ff48_siccodes_path,
+                    nw_lags=nw_lags,
                 ),
                 event_panel_lf is not None and text_features_full_10k_lf is not None and can_run_regressions,
             ),
             (
                 "table_viii_results",
-                lambda: _build_lm2011_table_viii_results_bundle(
+                lambda nw_lags: _build_lm2011_table_viii_results_bundle(
                     sue_panel_lf,
                     text_features_full_10k_lf,
                     pl.scan_parquet(paths.company_history_path),
                     pl.scan_parquet(paths.company_description_path),
                     ff48_siccodes_path=paths.ff48_siccodes_path,
+                    nw_lags=nw_lags,
                 ),
                 sue_panel_lf is not None and text_features_full_10k_lf is not None and can_run_regressions,
             ),
             (
                 "table_viii_results_no_ownership",
-                lambda: _build_lm2011_table_viii_results_no_ownership_bundle(
+                lambda nw_lags: _build_lm2011_table_viii_results_no_ownership_bundle(
                     sue_panel_lf,
                     text_features_full_10k_lf,
                     pl.scan_parquet(paths.company_history_path),
                     pl.scan_parquet(paths.company_description_path),
                     ff48_siccodes_path=paths.ff48_siccodes_path,
+                    nw_lags=nw_lags,
                 ),
                 sue_panel_lf is not None and text_features_full_10k_lf is not None and can_run_regressions,
             ),
             (
                 "table_ia_i_results",
-                lambda: _build_lm2011_table_ia_i_results_bundle(
+                lambda nw_lags: _build_lm2011_table_ia_i_results_bundle(
                     event_panel_lf,
                     text_features_full_10k_lf,
                     pl.scan_parquet(paths.company_history_path),
                     pl.scan_parquet(paths.company_description_path),
                     ff48_siccodes_path=paths.ff48_siccodes_path,
+                    nw_lags=nw_lags,
                 ),
                 event_panel_lf is not None and text_features_full_10k_lf is not None and can_run_regressions,
             ),
             (
                 "table_ia_i_results_no_ownership",
-                lambda: _build_lm2011_table_ia_i_results_no_ownership_bundle(
+                lambda nw_lags: _build_lm2011_table_ia_i_results_no_ownership_bundle(
                     event_panel_lf,
                     text_features_full_10k_lf,
                     pl.scan_parquet(paths.company_history_path),
                     pl.scan_parquet(paths.company_description_path),
                     ff48_siccodes_path=paths.ff48_siccodes_path,
+                    nw_lags=nw_lags,
                 ),
                 event_panel_lf is not None and text_features_full_10k_lf is not None and can_run_regressions,
             ),
@@ -5048,7 +5339,7 @@ def run_lm2011_post_refinitiv_pipeline(run_cfg: LM2011PostRefinitivRunConfig) ->
                     manifest_path=manifest_path,
                     output_dir=paths.output_dir,
                     stage_name=stage_name,
-                    bundle=builder(),
+                    bundle=builder(primary_nw_lag),
                 )
             else:
                 _skip_or_raise_stage(
@@ -5059,6 +5350,31 @@ def run_lm2011_post_refinitiv_pipeline(run_cfg: LM2011PostRefinitivRunConfig) ->
                     reason=SKIPPED_MISSING_OPTIONAL_INPUT,
                     detail="missing upstream regression inputs",
                 )
+
+        enabled_table_stage_specs = tuple(
+            spec for spec in table_stage_specs if _stage_enabled(run_cfg, spec[0])
+        )
+        if len(paths.nw_lags) > 1 and enabled_table_stage_specs:
+            current_stage_name = CORE_NW_LAG_SENSITIVITY_STAGE_NAME
+            core_sensitivity_df = _build_core_nw_lag_sensitivity_frame(
+                enabled_table_stage_specs,
+                nw_lags=paths.nw_lags,
+            )
+            summary_artifacts = _write_nw_lag_sensitivity_summary(
+                paths.output_dir,
+                nw_lags=paths.nw_lags,
+                core_frame=core_sensitivity_df,
+            )
+            _write_named_artifact_stage(
+                manifest,
+                manifest_path=manifest_path,
+                output_dir=paths.output_dir,
+                stage_name=CORE_NW_LAG_SENSITIVITY_STAGE_NAME,
+                artifact_filename=CORE_NW_LAG_SENSITIVITY_FILENAME,
+                frame=core_sensitivity_df,
+                extra_artifacts=summary_artifacts,
+                metadata={"nw_lags": list(paths.nw_lags)},
+            )
 
         current_stage_name = "trading_strategy_monthly_returns"
         if _stage_disabled(
@@ -5343,11 +5659,13 @@ def run_lm2011_extension_pipeline(run_cfg: LM2011ExtensionRunConfig) -> int:
         )
 
         current_stage_name = "extension_fit_quarterly"
+        primary_nw_lag = run_cfg.nw_lags[0]
         fit_artifacts: Lm2011ExtensionFitComparisonArtifacts = run_lm2011_extension_fit_comparison_scaffold(
             extension_panel_lf,
             run_id=run_cfg.run_id,
             sample_window="2009_2024",
             text_scopes=_normalized_extension_text_scopes(run_cfg.text_scopes),
+            nw_lags=primary_nw_lag,
         )
         _write_extension_stage(
             manifest,
@@ -5409,8 +5727,46 @@ def run_lm2011_extension_pipeline(run_cfg: LM2011ExtensionRunConfig) -> int:
                 extension_panel_lf,
                 run_id=run_cfg.run_id,
                 text_scopes=_normalized_extension_text_scopes(run_cfg.text_scopes),
+                nw_lags=primary_nw_lag,
             ),
         )
+
+        if len(run_cfg.nw_lags) > 1:
+            (
+                extension_results_sensitivity_df,
+                extension_fit_comparisons_sensitivity_df,
+            ) = _build_extension_nw_lag_sensitivity_frames(
+                extension_panel_lf,
+                run_cfg=run_cfg,
+            )
+            summary_artifacts = _write_nw_lag_sensitivity_summary(
+                output_dir,
+                nw_lags=run_cfg.nw_lags,
+                extension_results_frame=extension_results_sensitivity_df,
+                extension_fit_comparisons_frame=extension_fit_comparisons_sensitivity_df,
+            )
+            current_stage_name = EXTENSION_RESULTS_NW_LAG_SENSITIVITY_STAGE_NAME
+            _write_named_artifact_stage(
+                manifest,
+                manifest_path=manifest_path,
+                output_dir=output_dir,
+                stage_name=EXTENSION_RESULTS_NW_LAG_SENSITIVITY_STAGE_NAME,
+                artifact_filename=EXTENSION_RESULTS_NW_LAG_SENSITIVITY_FILENAME,
+                frame=extension_results_sensitivity_df,
+                extra_artifacts=summary_artifacts,
+                metadata={"nw_lags": list(run_cfg.nw_lags)},
+            )
+            current_stage_name = EXTENSION_FIT_COMPARISONS_NW_LAG_SENSITIVITY_STAGE_NAME
+            _write_named_artifact_stage(
+                manifest,
+                manifest_path=manifest_path,
+                output_dir=output_dir,
+                stage_name=EXTENSION_FIT_COMPARISONS_NW_LAG_SENSITIVITY_STAGE_NAME,
+                artifact_filename=EXTENSION_FIT_COMPARISONS_NW_LAG_SENSITIVITY_FILENAME,
+                frame=extension_fit_comparisons_sensitivity_df,
+                extra_artifacts=summary_artifacts,
+                metadata={"nw_lags": list(run_cfg.nw_lags)},
+            )
 
         completed_at_utc = _utc_timestamp()
         manifest["run_status"] = "completed"
@@ -5485,6 +5841,15 @@ def _extension_family_output_artifact_path(
     return _extension_family_run_output_dir(output_dir, family_name) / EXTENSION_STAGE_ARTIFACT_FILENAMES[stage_name]
 
 
+def _extension_family_nw_sensitivity_artifact_path(
+    output_dir: Path,
+    *,
+    family_name: str,
+    stage_name: str,
+) -> Path:
+    return _extension_family_run_output_dir(output_dir, family_name) / EXTENSION_NW_LAG_SENSITIVITY_FILENAMES[stage_name]
+
+
 def _write_stacked_extension_family_stage(
     manifest: dict[str, Any],
     *,
@@ -5546,6 +5911,29 @@ def _write_stacked_extension_family_stage(
         }
         _checkpoint_manifest(manifest, manifest_path)
     return out_lf
+
+
+def _stack_extension_family_nw_sensitivity_frame(
+    output_dir: Path,
+    *,
+    stage_name: str,
+    family_names: Sequence[str],
+) -> pl.DataFrame:
+    return pl.concat(
+        [
+            pl.scan_parquet(
+                _extension_family_nw_sensitivity_artifact_path(
+                    output_dir,
+                    family_name=family_name,
+                    stage_name=stage_name,
+                )
+            )
+            .with_columns(pl.lit(family_name, dtype=pl.Utf8).alias("dictionary_family_source"))
+            .collect()
+            for family_name in family_names
+        ],
+        how="vertical_relaxed",
+    )
 
 
 def run_lm2011_extension_dictionary_family_comparison_pipeline(
@@ -5727,6 +6115,46 @@ def run_lm2011_extension_dictionary_family_comparison_pipeline(
                 output_dir=output_dir,
                 stage_name=stage_name,
                 family_names=EXTENSION_DICTIONARY_FAMILY_COMPARISON_FAMILY_NAMES,
+            )
+
+        if len(run_cfg.nw_lags) > 1:
+            extension_results_sensitivity_df = _stack_extension_family_nw_sensitivity_frame(
+                output_dir,
+                stage_name=EXTENSION_RESULTS_NW_LAG_SENSITIVITY_STAGE_NAME,
+                family_names=EXTENSION_DICTIONARY_FAMILY_COMPARISON_FAMILY_NAMES,
+            )
+            extension_fit_comparisons_sensitivity_df = _stack_extension_family_nw_sensitivity_frame(
+                output_dir,
+                stage_name=EXTENSION_FIT_COMPARISONS_NW_LAG_SENSITIVITY_STAGE_NAME,
+                family_names=EXTENSION_DICTIONARY_FAMILY_COMPARISON_FAMILY_NAMES,
+            )
+            summary_artifacts = _write_nw_lag_sensitivity_summary(
+                output_dir,
+                nw_lags=run_cfg.nw_lags,
+                extension_results_frame=extension_results_sensitivity_df,
+                extension_fit_comparisons_frame=extension_fit_comparisons_sensitivity_df,
+            )
+            current_stage_name = EXTENSION_RESULTS_NW_LAG_SENSITIVITY_STAGE_NAME
+            _write_named_artifact_stage(
+                manifest,
+                manifest_path=manifest_path,
+                output_dir=output_dir,
+                stage_name=EXTENSION_RESULTS_NW_LAG_SENSITIVITY_STAGE_NAME,
+                artifact_filename=EXTENSION_RESULTS_NW_LAG_SENSITIVITY_FILENAME,
+                frame=extension_results_sensitivity_df,
+                extra_artifacts=summary_artifacts,
+                metadata={"nw_lags": list(run_cfg.nw_lags)},
+            )
+            current_stage_name = EXTENSION_FIT_COMPARISONS_NW_LAG_SENSITIVITY_STAGE_NAME
+            _write_named_artifact_stage(
+                manifest,
+                manifest_path=manifest_path,
+                output_dir=output_dir,
+                stage_name=EXTENSION_FIT_COMPARISONS_NW_LAG_SENSITIVITY_STAGE_NAME,
+                artifact_filename=EXTENSION_FIT_COMPARISONS_NW_LAG_SENSITIVITY_FILENAME,
+                frame=extension_fit_comparisons_sensitivity_df,
+                extra_artifacts=summary_artifacts,
+                metadata={"nw_lags": list(run_cfg.nw_lags)},
             )
 
         current_stage_name = "extension_fit_skipped_quarters"

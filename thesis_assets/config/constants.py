@@ -3,6 +3,7 @@ from __future__ import annotations
 
 RUN_FAMILY_LM2011_POST_REFINITIV = "lm2011_post_refinitiv"
 RUN_FAMILY_LM2011_EXTENSION = "lm2011_extension"
+RUN_FAMILY_LM2011_NW_LAG_SENSITIVITY = "lm2011_nw_lag_sensitivity"
 RUN_FAMILY_FINBERT_RUN = "finbert_run"
 RUN_FAMILY_FINBERT_ROBUSTNESS = "finbert_robustness"
 
@@ -22,6 +23,9 @@ ARTIFACT_KEY_EXTENSION_FIT_SUMMARY = "lm2011_extension_fit_summary"
 ARTIFACT_KEY_EXTENSION_FIT_COMPARISONS = "lm2011_extension_fit_comparisons"
 ARTIFACT_KEY_EXTENSION_FIT_DIFFERENCE_QUARTERLY = "lm2011_extension_fit_difference_quarterly"
 ARTIFACT_KEY_EXTENSION_FIT_SKIPPED_QUARTERS = "lm2011_extension_fit_skipped_quarters"
+ARTIFACT_KEY_NW_LAG_CORE_TABLES = "core_tables_nw_lag_sensitivity"
+ARTIFACT_KEY_NW_LAG_EXTENSION_RESULTS = "extension_results_nw_lag_sensitivity"
+ARTIFACT_KEY_NW_LAG_EXTENSION_FIT_COMPARISONS = "extension_fit_comparisons_nw_lag_sensitivity"
 ARTIFACT_KEY_EXTENSION_SAMPLE_LOSS = "lm2011_extension_sample_loss"
 ARTIFACT_KEY_EXTENSION_CONTROL_LADDER = "lm2011_extension_control_ladder"
 ARTIFACT_KEY_EXTENSION_DICTIONARY_SURFACE = "lm2011_extension_dictionary_surface"
@@ -59,6 +63,9 @@ ARTIFACT_FILENAMES: dict[str, str] = {
     ARTIFACT_KEY_EXTENSION_FIT_COMPARISONS: "lm2011_extension_fit_comparisons.parquet",
     ARTIFACT_KEY_EXTENSION_FIT_DIFFERENCE_QUARTERLY: "lm2011_extension_fit_difference_quarterly.parquet",
     ARTIFACT_KEY_EXTENSION_FIT_SKIPPED_QUARTERS: "lm2011_extension_fit_skipped_quarters.parquet",
+    ARTIFACT_KEY_NW_LAG_CORE_TABLES: "core_tables_nw_lag_sensitivity.parquet",
+    ARTIFACT_KEY_NW_LAG_EXTENSION_RESULTS: "extension_results_nw_lag_sensitivity.parquet",
+    ARTIFACT_KEY_NW_LAG_EXTENSION_FIT_COMPARISONS: "extension_fit_comparisons_nw_lag_sensitivity.parquet",
     ARTIFACT_KEY_EXTENSION_SAMPLE_LOSS: "lm2011_extension_sample_loss.parquet",
     ARTIFACT_KEY_EXTENSION_CONTROL_LADDER: "lm2011_extension_control_ladder.parquet",
     ARTIFACT_KEY_EXTENSION_DICTIONARY_SURFACE: "lm2011_extension_dictionary_surface.parquet",
@@ -104,6 +111,9 @@ ARTIFACT_MANIFEST_KEYS: dict[str, tuple[str, ...]] = {
     ARTIFACT_KEY_EXTENSION_FIT_COMPARISONS: ("extension_fit_comparisons",),
     ARTIFACT_KEY_EXTENSION_FIT_DIFFERENCE_QUARTERLY: ("extension_fit_difference_quarterly",),
     ARTIFACT_KEY_EXTENSION_FIT_SKIPPED_QUARTERS: ("extension_fit_skipped_quarters",),
+    ARTIFACT_KEY_NW_LAG_CORE_TABLES: ("core_tables_nw_lag_sensitivity",),
+    ARTIFACT_KEY_NW_LAG_EXTENSION_RESULTS: ("extension_results_nw_lag_sensitivity",),
+    ARTIFACT_KEY_NW_LAG_EXTENSION_FIT_COMPARISONS: ("extension_fit_comparisons_nw_lag_sensitivity",),
     ARTIFACT_KEY_EXTENSION_SAMPLE_LOSS: ("extension_sample_loss",),
     ARTIFACT_KEY_EXTENSION_CONTROL_LADDER: ("extension_control_ladder",),
     ARTIFACT_KEY_EXTENSION_DICTIONARY_SURFACE: ("extension_dictionary_surface",),
@@ -123,6 +133,7 @@ ARTIFACT_MANIFEST_KEYS: dict[str, tuple[str, ...]] = {
 RUN_MANIFEST_FILENAMES: dict[str, tuple[str, ...]] = {
     RUN_FAMILY_LM2011_POST_REFINITIV: ("lm2011_sample_run_manifest.json", "run_manifest.json"),
     RUN_FAMILY_LM2011_EXTENSION: ("lm2011_extension_run_manifest.json", "run_manifest.json"),
+    RUN_FAMILY_LM2011_NW_LAG_SENSITIVITY: ("lm2011_nw_lag_sensitivity_run_manifest.json", "run_manifest.json"),
     RUN_FAMILY_FINBERT_RUN: ("run_manifest.json",),
     RUN_FAMILY_FINBERT_ROBUSTNESS: ("finbert_robustness_run_manifest.json",),
 }
@@ -132,6 +143,11 @@ RUN_FAMILY_SENTINEL_ARTIFACTS: dict[str, tuple[str, ...]] = {
     RUN_FAMILY_LM2011_EXTENSION: (
         ARTIFACT_KEY_EXTENSION_FIT_SUMMARY,
         ARTIFACT_KEY_EXTENSION_FIT_COMPARISONS,
+    ),
+    RUN_FAMILY_LM2011_NW_LAG_SENSITIVITY: (
+        ARTIFACT_KEY_NW_LAG_CORE_TABLES,
+        ARTIFACT_KEY_NW_LAG_EXTENSION_RESULTS,
+        ARTIFACT_KEY_NW_LAG_EXTENSION_FIT_COMPARISONS,
     ),
     RUN_FAMILY_FINBERT_RUN: (ARTIFACT_KEY_FINBERT_ITEM_FEATURES_LONG,),
     RUN_FAMILY_FINBERT_ROBUSTNESS: (

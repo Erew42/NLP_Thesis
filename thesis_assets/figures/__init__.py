@@ -4,6 +4,7 @@ from thesis_assets.figures.plots import build_concordance_figure
 from thesis_assets.figures.plots import build_concordance_by_scope_figure
 from thesis_assets.figures.plots import build_ecdf_lines_figure
 from thesis_assets.figures.plots import build_grouped_bar_figure
+from thesis_assets.figures.plots import build_metric_panel_ecdf_figure
 from thesis_assets.figures.plots import build_multi_series_line_figure
 from thesis_assets.figures.plots import build_percentile_band_figure
 from thesis_assets.figures.plots import build_sample_attrition_figure
@@ -15,6 +16,7 @@ __all__ = [
     "build_concordance_by_scope_figure",
     "build_ecdf_lines_figure",
     "build_grouped_bar_figure",
+    "build_metric_panel_ecdf_figure",
     "build_multi_series_line_figure",
     "build_percentile_band_figure",
     "build_sample_attrition_figure",
