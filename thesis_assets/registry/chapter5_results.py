@@ -70,14 +70,14 @@ ASSETS: tuple[AssetSpec, ...] = (
         ),
     ),
     AssetSpec(
-        asset_id="ch5_lm2011_portfolio_long_short",
+        asset_id="ch5_lm2011_portfolio_q1_minus_q5",
         chapter="chapter5",
         asset_kind="table",
-        output_stem="ch5_lm2011_portfolio_long_short",
-        caption_stub="Text-sorted portfolio high-minus-low negativity spreads.",
-        notes_stub="Rows report available long-short portfolio results. Current stored artifacts do not include separate Q1 and Q5 leg returns.",
+        output_stem="ch5_lm2011_portfolio_q1_minus_q5",
+        caption_stub="Text-sorted portfolio Q1-Q5 least-minus-most negative spreads.",
+        notes_stub="Rows report Q1-Q5 thesis portfolio results. Source Table IA.II artifacts store Q5-Q1, so estimates and t-statistics are sign-flipped for presentation. Standard errors and R2 are unchanged.",
         sample_contract_id="portfolio_long_short",
-        builder_id="chapter5_lm2011_portfolio_long_short",
+        builder_id="chapter5_lm2011_portfolio_q1_minus_q5",
         required_artifacts=(
             ArtifactRequirement(
                 logical_name="table_ia_ii_results",
@@ -99,7 +99,7 @@ ASSETS: tuple[AssetSpec, ...] = (
         asset_kind="table",
         output_stem="ch5_lm2011_portfolio_formation_diagnostics",
         caption_stub="Portfolio formation sample and timing diagnostics.",
-        notes_stub="Diagnostics summarize available monthly high-minus-low strategy returns. Separate Q1/Q5 leg diagnostics are not stored.",
+        notes_stub="Diagnostics summarize thesis Q1-Q5 strategy returns after sign-flipping stored Q5-Q1 monthly artifacts. Separate Q1/Q5 leg diagnostics are not stored.",
         sample_contract_id="portfolio_diagnostics",
         builder_id="chapter5_lm2011_portfolio_formation_diagnostics",
         required_artifacts=(
@@ -113,14 +113,14 @@ ASSETS: tuple[AssetSpec, ...] = (
         ),
     ),
     AssetSpec(
-        asset_id="ch5_portfolio_cumulative_q5_minus_q1",
+        asset_id="ch5_portfolio_cumulative_q1_minus_q5",
         chapter="chapter5",
         asset_kind="figure",
-        output_stem="ch5_portfolio_cumulative_q5_minus_q1",
-        caption_stub="Cumulative Q5-Q1 high-minus-low negativity portfolio returns by text signal.",
-        notes_stub="The stored convention is Q5 - Q1; Q5 is most negative filings and Q1 is least negative filings. Separate Q1 and Q5 legs are not stored.",
+        output_stem="ch5_portfolio_cumulative_q1_minus_q5",
+        caption_stub="Cumulative Q1-Q5 least-minus-most negative portfolio returns by text signal.",
+        notes_stub="Source monthly artifacts store Q5-Q1; this figure sign-flips monthly returns to report Q1-Q5. Separate Q1 and Q5 legs are not stored.",
         sample_contract_id="portfolio_diagnostics",
-        builder_id="chapter5_portfolio_cumulative_q5_minus_q1",
+        builder_id="chapter5_portfolio_cumulative_q1_minus_q5",
         required_artifacts=(
             ArtifactRequirement(
                 logical_name="trading_strategy_monthly_returns",

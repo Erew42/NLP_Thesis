@@ -29,7 +29,12 @@ def resolve_run(context: BuildContext, run_family: str) -> ResolvedRun:
 
     explicit_root = context.explicit_run_roots.get(run_family)
     if explicit_root is not None:
-        resolved = _resolve_explicit_run(run_family, explicit_root)
+        source = "submission_lock" if context.strict_submission else "explicit"
+        resolved = _resolve_explicit_run(run_family, explicit_root, source=source)
+    elif context.strict_submission:
+        raise ResolutionError(
+            f"Strict submission mode requires locked root for run family {run_family!r}."
+        )
     else:
         resolved = _auto_resolve_run(context.repo_root, run_family)
 
@@ -60,8 +65,35 @@ def resolve_artifact(
     requirement: ArtifactRequirement,
 ) -> ResolvedArtifact:
     run = resolve_run(context, requirement.run_family)
-    candidates = _artifact_candidates(run, requirement)
+    if context.strict_submission and context.submission_lock is not None:
+        override = context.submission_lock.artifact_overrides.get(requirement.artifact_key)
+        if override is not None:
+            if override.run_family is not None and override.run_family != requirement.run_family:
+                raise MissingArtifactError(
+                    f"Locked override for {requirement.artifact_key!r} belongs to "
+                    f"{override.run_family!r}, not {requirement.run_family!r}."
+                )
+            _validate_required_columns(override.path, requirement)
+            context.submission_warnings.append(
+                f"Used locked artifact override for {requirement.artifact_key}: "
+                f"{override.relative_path} ({override.reason})"
+            )
+            return ResolvedArtifact(
+                requirement=requirement,
+                path=override.path,
+                run=run,
+                source="submission_lock_override",
+                override_reason=override.reason,
+            )
+
+    candidates = _artifact_candidates(
+        run,
+        requirement,
+        include_alternates=not context.strict_submission,
+    )
     for candidate in candidates:
+        if context.strict_submission and not _is_submission_path_allowed(context, candidate):
+            continue
         if candidate.exists():
             _validate_required_columns(candidate, requirement)
             return ResolvedArtifact(requirement=requirement, path=candidate.resolve(), run=run)
@@ -86,7 +118,7 @@ def parquet_artifact_paths(artifact: ResolvedArtifact) -> tuple[Path, ...]:
     return (path,)
 
 
-def _resolve_explicit_run(run_family: str, root: Path) -> ResolvedRun:
+def _resolve_explicit_run(run_family: str, root: Path, *, source: str = "explicit") -> ResolvedRun:
     resolved_root = root.resolve()
     if not resolved_root.exists():
         raise ResolutionError(f"Explicit {run_family} root does not exist: {resolved_root}")
@@ -97,7 +129,7 @@ def _resolve_explicit_run(run_family: str, root: Path) -> ResolvedRun:
     return ResolvedRun(
         run_family=run_family,
         root=resolved_root,
-        source="explicit",
+        source=source,
         manifest_path=manifest_path,
         manifest=manifest,
     )
@@ -162,7 +194,12 @@ def _read_manifest_json(path: Path | None) -> dict[str, object] | None:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _artifact_candidates(run: ResolvedRun, requirement: ArtifactRequirement) -> tuple[Path, ...]:
+def _artifact_candidates(
+    run: ResolvedRun,
+    requirement: ArtifactRequirement,
+    *,
+    include_alternates: bool = True,
+) -> tuple[Path, ...]:
     candidates: list[Path] = []
     seen: set[Path] = set()
 
@@ -198,15 +235,16 @@ def _artifact_candidates(run: ResolvedRun, requirement: ArtifactRequirement) -> 
                     _resolve_manifest_value(raw_top_level, run.manifest_path, manifest),
                 )
 
-    for filename in _artifact_filenames(requirement.artifact_key):
+    for filename in _artifact_filenames(requirement.artifact_key, include_alternates=include_alternates):
         if requirement.relative_subdir is not None:
             _append_candidate(candidates, seen, run.root / requirement.relative_subdir / filename)
         _append_candidate(candidates, seen, run.root / filename)
     return tuple(candidates)
 
 
-def _artifact_filenames(artifact_key: str) -> tuple[str, ...]:
-    return (ARTIFACT_FILENAMES[artifact_key], *ARTIFACT_ALTERNATE_FILENAMES.get(artifact_key, ()))
+def _artifact_filenames(artifact_key: str, *, include_alternates: bool = True) -> tuple[str, ...]:
+    alternates = ARTIFACT_ALTERNATE_FILENAMES.get(artifact_key, ()) if include_alternates else ()
+    return (ARTIFACT_FILENAMES[artifact_key], *alternates)
 
 
 def _resolve_manifest_value(raw_path: str, manifest_path: Path, manifest: dict[str, object]) -> Path:
@@ -226,6 +264,13 @@ def _append_candidate(candidates: list[Path], seen: set[Path], candidate: Path) 
         return
     seen.add(resolved)
     candidates.append(candidate)
+
+
+def _is_submission_path_allowed(context: BuildContext, candidate: Path) -> bool:
+    if context.submission_lock is None:
+        return True
+    resolved = candidate.resolve()
+    return resolved.is_relative_to(context.submission_lock.submission_root)
 
 
 def _validate_required_columns(path: Path, requirement: ArtifactRequirement) -> None:

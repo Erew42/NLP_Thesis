@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
 from pathlib import Path
 
 import polars as pl
@@ -432,8 +433,9 @@ def test_finbert_item_analysis_runner_preprocess_only_uses_backbone_path(
     pl.DataFrame({"doc_id": ["doc1"]}).write_parquet(backbone_path)
     captured: dict[str, object] = {}
 
-    def _fake_run_preprocessing(run_cfg):
+    def _fake_run_preprocessing(run_cfg, **kwargs):
         captured["run_cfg"] = run_cfg
+        captured["authority"] = kwargs.get("authority")
         run_dir = tmp_path / "sentence_prep"
         sentence_dataset_dir = run_dir / "sentence_dataset" / "by_year"
         sentence_dataset_dir.mkdir(parents=True, exist_ok=True)
@@ -464,6 +466,7 @@ def test_finbert_item_analysis_runner_preprocess_only_uses_backbone_path(
     run_cfg = captured["run_cfg"]
     assert run_cfg.target_doc_universe_path == backbone_path.resolve()
     assert run_cfg.sentence_dataset.postprocess_policy == "reference_stitch_protect_v3"
+    assert captured["authority"].model_revision == runner.DEFAULT_FINBERT_REVISION
 
 
 def test_finbert_item_analysis_runner_default_sentence_postprocess_policy(
@@ -610,15 +613,15 @@ def test_run_finbert_pipeline_analysis_only_reuses_existing_preprocessing(
     sentence_run_dir = tmp_path / "runs" / "_staged_intermediates" / "shared_run_sentence_preprocessing"
     sentence_dataset_dir = sentence_run_dir / "sentence_dataset" / "by_year"
     sentence_dataset_dir.mkdir(parents=True, exist_ok=True)
-    (sentence_run_dir / "run_manifest.json").write_text("{}", encoding="utf-8")
     pl.DataFrame({"benchmark_sentence_id": ["s1"]}).write_parquet(sentence_dataset_dir / "2009.parquet")
     captured: dict[str, object] = {}
 
     def _unexpected_preprocess(*_: object, **__: object):
         raise AssertionError("preprocessing should not rerun when analysis-only mode reuses staged artifacts")
 
-    def _fake_inference(run_cfg):
+    def _fake_inference(run_cfg, **kwargs):
         captured["run_cfg"] = run_cfg
+        captured["authority"] = kwargs.get("authority")
         run_dir = tmp_path / "runs" / "analysis"
         run_dir.mkdir(parents=True, exist_ok=True)
         item_features_long_path = run_dir / "item_features_long.parquet"
@@ -646,6 +649,40 @@ def test_run_finbert_pipeline_analysis_only_reuses_existing_preprocessing(
         year_filter=(2009,),
         run_name="shared_run",
     )
+    preprocessing_cfg = runner._analysis_preprocessing_run_config(
+        analysis_cfg,
+        analysis_run_name="shared_run",
+    )
+    authority = runner._default_authority()
+    (sentence_run_dir / "run_manifest.json").write_text(
+        json.dumps(
+            {
+                "semantic_reuse_guard": {
+                    "payload": json.loads(
+                        json.dumps(
+                            {
+                                "authority": asdict(authority),
+                                "sentence_dataset": asdict(preprocessing_cfg.sentence_dataset),
+                                "cleaning": asdict(preprocessing_cfg.cleaning),
+                                "cleaning_policy_id": preprocessing_cfg.cleaning.cleaning_policy_id,
+                                "year_filter": [2009],
+                                "section_collect_batch_size": preprocessing_cfg.section_collect_batch_size,
+                            }
+                        )
+                    )
+                },
+                "accepted_universe_contract": json.loads(
+                    json.dumps(
+                        runner.section_universe_contract_payload(
+                            preprocessing_cfg.section_universe,
+                            target_doc_universe_path=preprocessing_cfg.target_doc_universe_path,
+                        )
+                    )
+                ),
+            }
+        ),
+        encoding="utf-8",
+    )
     artifacts = runner.run_finbert_pipeline(
         analysis_cfg,
         run_preprocess=False,
@@ -655,6 +692,7 @@ def test_run_finbert_pipeline_analysis_only_reuses_existing_preprocessing(
     assert artifacts.preprocessing_artifacts is not None
     assert artifacts.analysis_artifacts is not None
     assert captured["run_cfg"].sentence_dataset_dir == sentence_dataset_dir.resolve()
+    assert captured["authority"].model_revision == runner.DEFAULT_FINBERT_REVISION
 
 
 def test_runner_main_analysis_path_delegates_to_shared_pipeline(
@@ -708,4 +746,6 @@ def test_runner_main_analysis_path_delegates_to_shared_pipeline(
     )
 
     assert exit_code == 0
-    assert captured["kwargs"] == {"run_preprocess": True, "run_analysis": True}
+    assert captured["kwargs"]["run_preprocess"] is True
+    assert captured["kwargs"]["run_analysis"] is True
+    assert captured["kwargs"]["authority"].model_revision == runner.DEFAULT_FINBERT_REVISION

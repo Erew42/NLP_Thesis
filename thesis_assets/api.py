@@ -21,6 +21,8 @@ from thesis_assets.registry import load_registry
 from thesis_assets.renderers import write_build_manifest
 from thesis_assets.specs import BuildContext
 from thesis_assets.specs import BuildSessionResult
+from thesis_assets.submission_lock import SubmissionLock
+from thesis_assets.submission_lock import load_submission_lock
 
 
 ensure_repo_src_on_path()
@@ -36,6 +38,7 @@ def build_all_assets(
     lm2011_nw_lag_sensitivity_dir: Path | None = None,
     finbert_run_dir: Path | None = None,
     finbert_robustness_dir: Path | None = None,
+    submission_lock_path: Path | None = None,
 ) -> BuildSessionResult:
     return _build_assets(
         load_registry(),
@@ -47,6 +50,7 @@ def build_all_assets(
         lm2011_nw_lag_sensitivity_dir=lm2011_nw_lag_sensitivity_dir,
         finbert_run_dir=finbert_run_dir,
         finbert_robustness_dir=finbert_robustness_dir,
+        submission_lock_path=submission_lock_path,
     )
 
 
@@ -61,6 +65,7 @@ def build_chapter_assets(
     lm2011_nw_lag_sensitivity_dir: Path | None = None,
     finbert_run_dir: Path | None = None,
     finbert_robustness_dir: Path | None = None,
+    submission_lock_path: Path | None = None,
 ) -> BuildSessionResult:
     return _build_assets(
         load_assets_by_chapter(chapter),
@@ -72,6 +77,7 @@ def build_chapter_assets(
         lm2011_nw_lag_sensitivity_dir=lm2011_nw_lag_sensitivity_dir,
         finbert_run_dir=finbert_run_dir,
         finbert_robustness_dir=finbert_robustness_dir,
+        submission_lock_path=submission_lock_path,
     )
 
 
@@ -86,6 +92,7 @@ def build_single_asset(
     lm2011_nw_lag_sensitivity_dir: Path | None = None,
     finbert_run_dir: Path | None = None,
     finbert_robustness_dir: Path | None = None,
+    submission_lock_path: Path | None = None,
 ) -> BuildSessionResult:
     return _build_assets(
         (load_asset_by_id(asset_id),),
@@ -97,6 +104,7 @@ def build_single_asset(
         lm2011_nw_lag_sensitivity_dir=lm2011_nw_lag_sensitivity_dir,
         finbert_run_dir=finbert_run_dir,
         finbert_robustness_dir=finbert_robustness_dir,
+        submission_lock_path=submission_lock_path,
     )
 
 
@@ -111,25 +119,45 @@ def _build_assets(
     lm2011_nw_lag_sensitivity_dir: Path | None,
     finbert_run_dir: Path | None,
     finbert_robustness_dir: Path | None,
+    submission_lock_path: Path | None,
 ) -> BuildSessionResult:
     repo_root = resolve_repo_root() if repo_root is None else repo_root.resolve()
     ensure_repo_src_on_path(repo_root)
 
+    submission_lock = (
+        load_submission_lock(submission_lock_path)
+        if submission_lock_path is not None
+        else None
+    )
+    strict_submission = submission_lock is not None
+    explicit_args = {
+        RUN_FAMILY_LM2011_POST_REFINITIV: lm2011_post_refinitiv_dir,
+        RUN_FAMILY_LM2011_EXTENSION: lm2011_extension_dir,
+        RUN_FAMILY_LM2011_NW_LAG_SENSITIVITY: lm2011_nw_lag_sensitivity_dir,
+        RUN_FAMILY_FINBERT_RUN: finbert_run_dir,
+        RUN_FAMILY_FINBERT_ROBUSTNESS: finbert_robustness_dir,
+    }
+    if strict_submission and any(path is not None for path in explicit_args.values()):
+        raise ValueError("Do not combine submission_lock_path with explicit run-root arguments.")
+
+    if output_root is None and submission_lock is not None:
+        output_root = submission_lock.submission_root / "output" / "thesis_assets" / run_id
     output_root = build_output_root(repo_root, run_id) if output_root is None else output_root.resolve()
     _ensure_output_root_is_safe(repo_root, output_root)
     output_dirs = prepare_output_dirs(output_root)
     logger = _configure_logger(output_dirs["logs"] / BUILD_LOG_FILENAME)
-    explicit_run_roots = {
-        run_family: path.resolve()
-        for run_family, path in {
-            RUN_FAMILY_LM2011_POST_REFINITIV: lm2011_post_refinitiv_dir,
-            RUN_FAMILY_LM2011_EXTENSION: lm2011_extension_dir,
-            RUN_FAMILY_LM2011_NW_LAG_SENSITIVITY: lm2011_nw_lag_sensitivity_dir,
-            RUN_FAMILY_FINBERT_RUN: finbert_run_dir,
-            RUN_FAMILY_FINBERT_ROBUSTNESS: finbert_robustness_dir,
-        }.items()
-        if path is not None
-    }
+    explicit_run_roots = (
+        {
+            run_family: locked.path
+            for run_family, locked in submission_lock.run_roots.items()
+        }
+        if submission_lock is not None
+        else {
+            run_family: path.resolve()
+            for run_family, path in explicit_args.items()
+            if path is not None
+        }
+    )
 
     context = BuildContext(
         repo_root=repo_root,
@@ -138,7 +166,11 @@ def _build_assets(
         output_dirs=output_dirs,
         logger=logger,
         explicit_run_roots=explicit_run_roots,
+        strict_submission=strict_submission,
+        submission_lock=submission_lock,
     )
+    if submission_lock is not None:
+        context.submission_warnings.extend(_submission_disclosure_warnings(submission_lock))
 
     asset_results = {}
     for spec in specs:
@@ -162,6 +194,21 @@ def _ensure_output_root_is_safe(repo_root: Path, output_root: Path) -> None:
     thesis_assets_root = (repo_root / "thesis_assets").resolve()
     if output_root.resolve().is_relative_to(thesis_assets_root):
         raise ValueError("Generated outputs must not be written inside thesis_assets/.")
+
+
+def _submission_disclosure_warnings(submission_lock: SubmissionLock) -> list[str]:
+    warnings: list[str] = []
+    for disclosure in submission_lock.provenance_disclosures:
+        severity = str(disclosure.get("severity", "")).lower()
+        if severity != "warning":
+            continue
+        disclosure_id = disclosure.get("id", "<unknown>")
+        reason = disclosure.get("reason")
+        message = f"Submission provenance disclosure {disclosure_id}"
+        if reason:
+            message = f"{message}: {reason}"
+        warnings.append(message)
+    return warnings
 
 
 def _configure_logger(log_path: Path) -> logging.Logger:

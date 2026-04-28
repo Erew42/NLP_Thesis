@@ -17,6 +17,10 @@ class MissingArtifactError(ThesisAssetsError):
     """Raised when a required source artifact is unavailable."""
 
 
+class SubmissionLockError(ThesisAssetsError):
+    """Raised when a supervisor submission lock is invalid or incomplete."""
+
+
 class SampleContractError(ThesisAssetsError):
     """Raised when a sample contract cannot be satisfied safely."""
 

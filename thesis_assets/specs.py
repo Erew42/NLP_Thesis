@@ -6,6 +6,8 @@ from dataclasses import field
 from pathlib import Path
 from typing import Any
 
+from thesis_assets.submission_lock import SubmissionLock
+
 
 @dataclass(frozen=True)
 class ArtifactRequirement:
@@ -45,6 +47,8 @@ class ResolvedArtifact:
     requirement: ArtifactRequirement
     path: Path
     run: ResolvedRun
+    source: str = "resolved"
+    override_reason: str | None = None
 
 
 @dataclass
@@ -55,9 +59,12 @@ class BuildContext:
     output_dirs: dict[str, Path]
     logger: logging.Logger
     explicit_run_roots: dict[str, Path]
+    strict_submission: bool = False
+    submission_lock: SubmissionLock | None = None
     resolved_runs: dict[str, ResolvedRun] = field(default_factory=dict)
     resolved_artifacts: dict[str, ResolvedArtifact] = field(default_factory=dict)
     asset_cache: dict[str, Any] = field(default_factory=dict)
+    submission_warnings: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

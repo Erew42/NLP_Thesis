@@ -14,13 +14,30 @@ def write_build_manifest(
     asset_results: dict[str, BuildResult],
     path: Path,
 ) -> Path:
+    def _display_path(raw_path: str) -> str:
+        if context.submission_lock is None:
+            return raw_path
+        try:
+            resolved = Path(raw_path).resolve()
+        except OSError:
+            return raw_path
+        root = context.submission_lock.submission_root
+        return resolved.relative_to(root).as_posix() if resolved.is_relative_to(root) else raw_path
+
     payload = {
         "runner_name": "thesis_assets",
         "generated_at_utc": utc_timestamp(),
         "run_id": context.run_id,
         "output_root": str(context.output_root),
+        "strict_submission": context.strict_submission,
+        "submission_lock": (
+            context.submission_lock.metadata_payload()
+            if context.submission_lock is not None
+            else None
+        ),
+        "submission_warnings": sorted(set(context.submission_warnings)),
         "source_roots": {
-            run_family: str(resolved.root)
+            run_family: _display_path(str(resolved.root))
             for run_family, resolved in sorted(context.resolved_runs.items())
         },
         "logs": {
@@ -37,8 +54,14 @@ def write_build_manifest(
                 "asset_kind": result.asset_kind,
                 "sample_contract_id": result.sample_contract_id,
                 "status": result.status,
-                "resolved_inputs": result.resolved_inputs,
-                "output_paths": result.output_paths,
+                "resolved_inputs": {
+                    key: _display_path(value)
+                    for key, value in result.resolved_inputs.items()
+                },
+                "output_paths": {
+                    key: _display_path(value)
+                    for key, value in result.output_paths.items()
+                },
                 "row_counts": result.row_counts,
                 "warnings": list(result.warnings),
                 "failure_reason": result.failure_reason,

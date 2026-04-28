@@ -26,10 +26,20 @@ from thesis_assets.cli.__main__ import main as cli_main
 from thesis_assets.config.constants import DEFAULT_COMMON_SUCCESS_POLICY
 from thesis_assets.errors import RegistryError
 from thesis_assets.errors import SampleContractError
+from thesis_assets.errors import SubmissionLockError
 from thesis_assets.figures import build_metric_panel_ecdf_figure
+from thesis_assets.figures import build_sample_funnel_figure
 from thesis_assets.registry import loader
 from thesis_assets.specs import BuildResult
 from thesis_assets.specs import BuildSessionResult
+from thesis_assets.submission_lock import DEFAULT_FINBERT_MODEL_NAME
+from thesis_assets.submission_lock import DEFAULT_FINBERT_REVISION
+from thesis_assets.submission_lock import FINBERT_INFERRED_REVISION_DISCLOSURE_ID
+from thesis_assets.submission_lock import SUBMISSION_LOCK_SCHEMA_VERSION
+from thesis_assets.submission_lock import SUBMISSION_PATH_SEMANTICS
+from thesis_assets.submission_lock import build_submission_lock_payload
+from thesis_assets.submission_lock import validate_submission_lock
+from thesis_assets.submission_lock import write_submission_lock
 from thesis_assets.usage import resolve_usage_run_paths
 
 
@@ -53,9 +63,9 @@ def test_registry_loader_imports_expected_assets() -> None:
         "ch4_score_family_descriptive_statistics",
         "ch4_variable_definitions",
         "ch5_lm2011_full_10k_return_coefficients",
-        "ch5_lm2011_portfolio_long_short",
+        "ch5_lm2011_portfolio_q1_minus_q5",
         "ch5_lm2011_portfolio_formation_diagnostics",
-        "ch5_portfolio_cumulative_q5_minus_q1",
+        "ch5_portfolio_cumulative_q1_minus_q5",
         "ch5_fit_horserace_item7_c0",
         "ch5_extension_c0_fit_summary",
         "ch5_extension_c0_fit_comparisons",
@@ -208,6 +218,64 @@ def test_chapter4_sample_funnel_figure_outputs(tmp_path: Path) -> None:
     assert Path(asset_result.output_paths["pdf"]).exists()
 
 
+def test_sample_funnel_figure_keeps_labels_inside_publication_layout() -> None:
+    values = [
+        121993.0,
+        120849.0,
+        120131.0,
+        60965.0,
+        56728.0,
+        56727.0,
+        49506.0,
+        49469.0,
+        49453.0,
+        48522.0,
+        46860.0,
+        46856.0,
+        46856.0,
+        43329.0,
+        32566.0,
+    ]
+    df = pl.DataFrame(
+        {
+            "display_label": [
+                "EDGAR 10-K/10-K405 1994-2008 complete sample (excluding duplicates)",
+                "Include only first filing in a given year",
+                "At least 180 days between a given firm's 10-K filings",
+                "CRSP PERMNO match",
+                "Reported on CRSP as an ordinary common equity firm",
+                "CRSP market capitalization data available",
+                "Price on filing date day minus one >= $3",
+                "Returns and volume for day 0-3 event period",
+                "NYSE, AMEX, or Nasdaq exchange listing",
+                "At least 60 days of returns and volume in year prior to and following file date",
+                "Book-to-market COMPUSTAT data available and book value > 0",
+                "Number of words in 10-K >= 2,000",
+                "Firm-Year Sample",
+                "Subset of 10-K sample where MD&A section could be identified",
+                "MD&A section >= 250 words",
+            ],
+            "sample_size_value": values,
+        }
+    )
+
+    figure = build_sample_funnel_figure(df)
+    try:
+        width, height = figure.get_size_inches()
+        assert width == pytest.approx(7.2)
+        assert height == pytest.approx(5.7)
+
+        ax = figure.axes[0]
+        assert ax.get_xlim()[1] == pytest.approx(max(values) * 1.04)
+        assert len(ax.texts) == len(values)
+        for text, value in zip(ax.texts, values):
+            assert text.get_horizontalalignment() == "right"
+            assert text.get_position()[0] < value
+            assert text.get_clip_on()
+    finally:
+        plt.close(figure)
+
+
 def test_chapter5_table_vi_no_ownership_asset_uses_validation_alias(tmp_path: Path) -> None:
     repo_root = tmp_path / "repo"
     run_root = repo_root / "inputs" / "lm2011_table_vi_validation_second_pass"
@@ -274,6 +342,208 @@ def test_chapter5_table_vi_no_ownership_asset_falls_back_to_validation_pack(tmp_
     )
 
 
+def test_submission_lock_rejects_escaped_run_root_path(tmp_path: Path) -> None:
+    lock_path = tmp_path / "submission" / "submission_lock.json"
+    lock_path.parent.mkdir(parents=True)
+    lock_payload = {
+        "schema_version": SUBMISSION_LOCK_SCHEMA_VERSION,
+        "path_semantics": SUBMISSION_PATH_SEMANTICS,
+        "run_id": "escaped",
+        "run_roots": {
+            "lm2011_post_refinitiv": {
+                "path": "../outside",
+            },
+        },
+        "artifact_overrides": {},
+        "provenance_disclosures": [],
+        "strict_policy": {},
+        "input_fingerprints": {},
+    }
+    lock_path.write_text(json.dumps(lock_payload), encoding="utf-8")
+
+    with pytest.raises(SubmissionLockError, match="escapes submission_root"):
+        validate_submission_lock(lock_path)
+
+
+def test_submission_lock_requires_disclosure_for_missing_finbert_revision(tmp_path: Path) -> None:
+    submission_root = tmp_path / "submission"
+    finbert_root = submission_root / "analysis_outputs" / "finbert_item_analysis"
+    finbert_root.mkdir(parents=True)
+    (finbert_root / "run_manifest.json").write_text(
+        json.dumps(
+            {
+                "authority": {
+                    "model_name": DEFAULT_FINBERT_MODEL_NAME,
+                    "model_revision": None,
+                    "tokenizer_revision": None,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    pl.DataFrame(
+        {
+            "doc_id": ["0000000001:000000000100000001"],
+            "model_version": [None],
+        }
+    ).with_columns(pl.col("model_version").cast(pl.Utf8)).write_parquet(
+        finbert_root / "item_features_long.parquet"
+    )
+
+    undisclosed_payload = build_submission_lock_payload(
+        submission_root=submission_root,
+        run_id="finbert_undisclosed",
+        run_roots={"finbert_run": finbert_root},
+        artifact_overrides=[],
+        provenance_disclosures=[],
+    )
+    undisclosed_lock = write_submission_lock(submission_root / "undisclosed_lock.json", undisclosed_payload)
+    with pytest.raises(SubmissionLockError, match="missing model/tokenizer revision provenance"):
+        validate_submission_lock(undisclosed_lock)
+
+    disclosed_payload = build_submission_lock_payload(
+        submission_root=submission_root,
+        run_id="finbert_disclosed",
+        run_roots={"finbert_run": finbert_root},
+        artifact_overrides=[],
+        provenance_disclosures=[
+            {
+                "id": FINBERT_INFERRED_REVISION_DISCLOSURE_ID,
+                "severity": "warning",
+                "run_family": "finbert_run",
+                "model_name": DEFAULT_FINBERT_MODEL_NAME,
+                "model_revision": DEFAULT_FINBERT_REVISION,
+                "tokenizer_revision": DEFAULT_FINBERT_REVISION,
+                "reason": "Unit-test disclosure for missing retained FinBERT revision metadata.",
+            }
+        ],
+    )
+    disclosed_lock = write_submission_lock(submission_root / "disclosed_lock.json", disclosed_payload)
+
+    lock = validate_submission_lock(disclosed_lock)
+    assert FINBERT_INFERRED_REVISION_DISCLOSURE_ID in lock.disclosure_ids()
+
+
+def test_strict_submission_build_uses_locked_table_vi_override(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    submission_root = tmp_path / "submission"
+    run_root = submission_root / "analysis_outputs" / "lm2011_post_refinitiv"
+    override_path = submission_root / "locked_overrides" / "lm2011_table_vi_results_no_ownership_validation.parquet"
+    run_root.mkdir(parents=True)
+    override_path.parent.mkdir(parents=True)
+    _write_sample_attrition_parquet(run_root / "lm2011_table_i_sample_creation.parquet")
+    _write_incomplete_table_vi_no_ownership_parquet(run_root / "lm2011_table_vi_results_no_ownership.parquet")
+    _write_table_vi_no_ownership_parquet(override_path)
+    lock_payload = build_submission_lock_payload(
+        submission_root=submission_root,
+        run_id="strict_table_vi",
+        run_roots={"lm2011_post_refinitiv": run_root},
+        artifact_overrides=[
+            (
+                "lm2011_table_vi_results_no_ownership",
+                override_path,
+                "Promote retained Table VI validation surface for thesis asset rebuild.",
+            )
+        ],
+        provenance_disclosures=[
+            {
+                "id": "table_vi_validation_surface_promoted",
+                "severity": "warning",
+                "reason": "Unit-test disclosure for a locked one-off retained artifact.",
+            }
+        ],
+    )
+    lock_path = write_submission_lock(submission_root / "submission_lock.json", lock_payload)
+
+    result = build_single_asset(
+        asset_id="ch5_lm2011_table_vi_no_ownership_outcomes",
+        run_id="strict_table_vi",
+        repo_root=repo_root,
+        submission_lock_path=lock_path,
+    )
+
+    asset_result = result.asset_results["ch5_lm2011_table_vi_no_ownership_outcomes"]
+    assert asset_result.status == "completed"
+    assert asset_result.row_counts["table_rows"] == 42
+
+    manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
+    assert manifest["strict_submission"] is True
+    assert manifest["source_roots"]["lm2011_post_refinitiv"] == "analysis_outputs/lm2011_post_refinitiv"
+    assert (
+        manifest["assets"]["ch5_lm2011_table_vi_no_ownership_outcomes"]["resolved_inputs"][
+            "table_vi_results_no_ownership"
+        ]
+        == "locked_overrides/lm2011_table_vi_results_no_ownership_validation.parquet"
+    )
+    assert manifest["submission_lock"]["artifact_overrides"]["lm2011_table_vi_results_no_ownership"]["reason"] == (
+        "Promote retained Table VI validation surface for thesis asset rebuild."
+    )
+    assert manifest["submission_lock"]["provenance_disclosures"][0]["id"] == "table_vi_validation_surface_promoted"
+    assert any("Used locked artifact override" in warning for warning in manifest["submission_warnings"])
+    assert any("table_vi_validation_surface_promoted" in warning for warning in manifest["submission_warnings"])
+
+
+def test_strict_submission_disables_table_vi_validation_fallback(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    submission_root = tmp_path / "submission"
+    run_root = submission_root / "analysis_outputs" / "lm2011_post_refinitiv"
+    validation_root = repo_root / "full_data_run" / "lm2011_table_vi_validation_second_pass"
+    run_root.mkdir(parents=True)
+    validation_root.mkdir(parents=True)
+    _write_sample_attrition_parquet(run_root / "lm2011_table_i_sample_creation.parquet")
+    _write_incomplete_table_vi_no_ownership_parquet(run_root / "lm2011_table_vi_results_no_ownership.parquet")
+    _write_table_vi_no_ownership_parquet(validation_root / "lm2011_table_vi_results_no_ownership_validation.parquet")
+    lock_payload = build_submission_lock_payload(
+        submission_root=submission_root,
+        run_id="strict_no_fallback",
+        run_roots={"lm2011_post_refinitiv": run_root},
+        artifact_overrides=[],
+        provenance_disclosures=[],
+    )
+    lock_path = write_submission_lock(submission_root / "submission_lock.json", lock_payload)
+
+    result = build_single_asset(
+        asset_id="ch5_lm2011_table_vi_no_ownership_outcomes",
+        run_id="strict_no_fallback",
+        repo_root=repo_root,
+        submission_lock_path=lock_path,
+    )
+
+    asset_result = result.asset_results["ch5_lm2011_table_vi_no_ownership_outcomes"]
+    assert asset_result.status == "failed"
+    assert "Table VI no-ownership artifact is missing expected specs" in (asset_result.failure_reason or "")
+
+
+def test_strict_submission_disables_latest_portfolio_rerun_search(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    submission_root = tmp_path / "submission"
+    run_root = submission_root / "analysis_outputs" / "lm2011_post_refinitiv"
+    rerun_root = repo_root / "full_data_run" / "lm2011_table_ia_ii_local_rerun_sample_20260425_000000"
+    run_root.mkdir(parents=True)
+    rerun_root.mkdir(parents=True)
+    _write_sample_attrition_parquet(run_root / "lm2011_table_i_sample_creation.parquet")
+    _write_portfolio_table_ia_ii_parquet(rerun_root / "lm2011_table_ia_ii_results.rerun.parquet")
+    lock_payload = build_submission_lock_payload(
+        submission_root=submission_root,
+        run_id="strict_portfolio_no_latest",
+        run_roots={"lm2011_post_refinitiv": run_root},
+        artifact_overrides=[],
+        provenance_disclosures=[],
+    )
+    lock_path = write_submission_lock(submission_root / "submission_lock.json", lock_payload)
+
+    result = build_single_asset(
+        asset_id="ch5_lm2011_portfolio_q1_minus_q5",
+        run_id="strict_portfolio_no_latest",
+        repo_root=repo_root,
+        submission_lock_path=lock_path,
+    )
+
+    asset_result = result.asset_results["ch5_lm2011_portfolio_q1_minus_q5"]
+    assert asset_result.status == "failed"
+    assert asset_result.failure_reason == "No locked portfolio Table IA.II artifact could be resolved."
+
+
 def test_chapter5_full_10k_return_coefficients_asset(tmp_path: Path) -> None:
     repo_root = tmp_path / "repo"
     run_root = repo_root / "inputs" / "lm2011_post_refinitiv"
@@ -330,16 +600,17 @@ def test_chapter5_portfolio_table_prefers_latest_local_rerun_and_warns(tmp_path:
     _write_portfolio_table_ia_ii_parquet(rerun_root / "lm2011_table_ia_ii_results.rerun.parquet")
 
     result = build_single_asset(
-        asset_id="ch5_lm2011_portfolio_long_short",
+        asset_id="ch5_lm2011_portfolio_q1_minus_q5",
         run_id="unit_portfolio_rerun",
         repo_root=repo_root,
         lm2011_post_refinitiv_dir=run_root,
     )
 
-    asset_result = result.asset_results["ch5_lm2011_portfolio_long_short"]
+    asset_result = result.asset_results["ch5_lm2011_portfolio_q1_minus_q5"]
     assert asset_result.status == "completed"
-    assert asset_result.row_counts == {"table_rows": 3}
+    assert asset_result.row_counts == {"table_rows": 4}
     assert any("local Table IA.II rerun artifact" in warning for warning in asset_result.warnings)
+    assert any("Q1 - Q5 via an explicit sign flip" in warning for warning in asset_result.warnings)
     assert asset_result.resolved_inputs["table_ia_ii_results"] == str(
         (rerun_root / "lm2011_table_ia_ii_results.rerun.parquet").resolve()
     )
@@ -348,11 +619,27 @@ def test_chapter5_portfolio_table_prefers_latest_local_rerun_and_warns(tmp_path:
     assert set(table_df.get_column("q1_return").unique().to_list()) == {"not stored"}
     assert set(table_df.get_column("q5_return").unique().to_list()) == {"not stored"}
     assert set(table_df.get_column("spread_definition").unique().to_list()) == {
-        "Q5 - Q1; Q5 = most negative filings; Q1 = least negative filings"
+        "Q1 - Q5; Q1 = least negative filings; Q5 = most negative filings"
     }
+    assert set(table_df.get_column("source_presentation_note").unique().to_list()) == {
+        "Source artifacts store Q5 - Q1; thesis assets report Q1 - Q5 via an explicit sign flip."
+    }
+    rows_by_metric = {row["metric"]: row for row in table_df.to_dicts()}
+    assert rows_by_metric["Mean long-short return"]["estimate"] == pytest.approx(-0.002)
+    assert rows_by_metric["Mean long-short return"]["standard_error"] == pytest.approx(0.0005)
+    assert rows_by_metric["Mean long-short return"]["t_stat"] == pytest.approx(-1.1)
+    assert rows_by_metric["FF3 + momentum alpha"]["estimate"] == pytest.approx(-0.001)
+    assert rows_by_metric["FF3 + momentum alpha"]["standard_error"] == pytest.approx(0.0004)
+    assert rows_by_metric["FF3 + momentum alpha"]["t_stat"] == pytest.approx(-0.9)
+    assert rows_by_metric["Market beta"]["estimate"] == pytest.approx(-0.5)
+    assert rows_by_metric["Market beta"]["standard_error"] == pytest.approx(0.05)
+    assert rows_by_metric["Market beta"]["t_stat"] == pytest.approx(-2.0)
+    assert rows_by_metric["Factor regression R2"]["estimate"] == pytest.approx(0.12)
+    assert rows_by_metric["Factor regression R2"]["standard_error"] is None
+    assert rows_by_metric["Factor regression R2"]["t_stat"] is None
 
 
-def test_chapter5_portfolio_cumulative_q5_minus_q1_asset(tmp_path: Path) -> None:
+def test_chapter5_portfolio_cumulative_q1_minus_q5_asset(tmp_path: Path) -> None:
     repo_root = tmp_path / "repo"
     run_root = repo_root / "inputs" / "lm2011_post_refinitiv"
     rerun_root = repo_root / "full_data_run" / "lm2011_table_ia_ii_local_rerun_sample_20260425_010000"
@@ -363,13 +650,13 @@ def test_chapter5_portfolio_cumulative_q5_minus_q1_asset(tmp_path: Path) -> None
     )
 
     result = build_single_asset(
-        asset_id="ch5_portfolio_cumulative_q5_minus_q1",
+        asset_id="ch5_portfolio_cumulative_q1_minus_q5",
         run_id="unit_portfolio_cumulative",
         repo_root=repo_root,
         lm2011_post_refinitiv_dir=run_root,
     )
 
-    asset_result = result.asset_results["ch5_portfolio_cumulative_q5_minus_q1"]
+    asset_result = result.asset_results["ch5_portfolio_cumulative_q1_minus_q5"]
     assert asset_result.status == "completed"
     assert asset_result.row_counts == {"monthly_rows": 4}
     assert Path(asset_result.output_paths["csv"]).exists()
@@ -378,10 +665,14 @@ def test_chapter5_portfolio_cumulative_q5_minus_q1_asset(tmp_path: Path) -> None
 
     figure_df = pl.read_csv(asset_result.output_paths["csv"])
     assert set(figure_df.get_column("spread_definition").unique().to_list()) == {
-        "Q5 - Q1; Q5 = most negative filings; Q1 = least negative filings"
+        "Q1 - Q5; Q1 = least negative filings; Q5 = most negative filings"
+    }
+    assert set(figure_df.get_column("source_presentation_note").unique().to_list()) == {
+        "Source artifacts store Q5 - Q1; thesis assets report Q1 - Q5 via an explicit sign flip."
     }
     fin_neg = figure_df.filter(pl.col("sort_signal_name") == "fin_neg_prop").sort("portfolio_month")
-    assert fin_neg.get_column("cumulative_q5_minus_q1_return").to_list() == pytest.approx([0.10, 0.045])
+    assert fin_neg.get_column("long_short_return").to_list() == pytest.approx([-0.10, 0.05])
+    assert fin_neg.get_column("cumulative_q1_minus_q5_return").to_list() == pytest.approx([-0.10, -0.055])
 
 
 def test_chapter5_extension_c0_fit_summary_asset_filters_to_c0(tmp_path: Path) -> None:
@@ -856,7 +1147,7 @@ def test_chapter4_variable_definitions_and_chapter5_evidence_map_include_sign_co
     assert variable_result.status == "completed"
     assert variable_result.row_counts == {"table_rows": 6}
     variable_df = pl.read_csv(variable_result.output_paths["csv"])
-    assert "Q5 - Q1; Q5 = most negative filings; Q1 = least negative filings" in " ".join(
+    assert "Q1 - Q5; Q1 = least negative filings; Q5 = most negative filings" in " ".join(
         variable_df.get_column("definition").to_list()
     )
 
@@ -869,7 +1160,7 @@ def test_chapter4_variable_definitions_and_chapter5_evidence_map_include_sign_co
     assert evidence_result.row_counts == {"table_rows": 5}
     evidence_df = pl.read_csv(evidence_result.output_paths["csv"])
     assert "ch5_extension_c0_fit_comparisons" in " ".join(evidence_df.get_column("evidence_asset").to_list())
-    assert "Q5 - Q1; Q5 = most negative filings; Q1 = least negative filings" in " ".join(
+    assert "Q1 - Q5; Q1 = least negative filings; Q5 = most negative filings" in " ".join(
         evidence_df.get_column("claim_guardrail").to_list()
     )
 
@@ -1220,6 +1511,139 @@ def test_tools_entrypoint_build_asset_emits_json_and_allows_failures(
     assert payload["resolved_paths"] == {key: str(value) for key, value in resolved_paths.items()}
 
 
+def test_tools_entrypoint_init_and_validate_submission_lock(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module_path = REPO_ROOT / "tools" / "build_thesis_assets.py"
+    spec = importlib.util.spec_from_file_location("test_build_thesis_assets_tool_lock", module_path)
+    assert spec is not None
+    assert spec.loader is not None
+    tool_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tool_module)
+
+    submission_root = tmp_path / "submission"
+    run_root = submission_root / "analysis_outputs" / "lm2011_post_refinitiv"
+    run_root.mkdir(parents=True)
+    _write_sample_attrition_parquet(run_root / "lm2011_table_i_sample_creation.parquet")
+    lock_path = submission_root / "submission_lock.json"
+
+    init_exit = tool_module.main(
+        [
+            "init-lock",
+            "--submission-root",
+            str(submission_root),
+            "--output",
+            str(lock_path),
+            "--run-id",
+            "tool_lock",
+            "--lm2011-post-refinitiv-dir",
+            str(run_root),
+        ]
+    )
+    assert init_exit == 0
+    init_payload = json.loads(capsys.readouterr().out)
+    assert init_payload["run_roots"] == ["lm2011_post_refinitiv"]
+    assert init_payload["provenance_disclosures"] == [FINBERT_INFERRED_REVISION_DISCLOSURE_ID]
+
+    validate_exit = tool_module.main(
+        [
+            "validate-lock",
+            "--submission-lock",
+            str(lock_path),
+        ]
+    )
+    assert validate_exit == 0
+    validate_payload = json.loads(capsys.readouterr().out)
+    assert validate_payload["status"] == "valid"
+    assert validate_payload["artifact_overrides"] == []
+
+    lock_payload = json.loads(lock_path.read_text(encoding="utf-8"))
+    assert lock_payload["run_roots"]["lm2011_post_refinitiv"]["path"] == "analysis_outputs/lm2011_post_refinitiv"
+
+
+def test_tools_entrypoint_build_asset_uses_submission_lock_without_auto_resolution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module_path = REPO_ROOT / "tools" / "build_thesis_assets.py"
+    spec = importlib.util.spec_from_file_location("test_build_thesis_assets_tool_strict", module_path)
+    assert spec is not None
+    assert spec.loader is not None
+    tool_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tool_module)
+
+    repo_root = tmp_path / "repo"
+    submission_root = tmp_path / "submission"
+    run_root = submission_root / "analysis_outputs" / "lm2011_post_refinitiv"
+    output_root = submission_root / "output" / "thesis_assets" / "tool_strict"
+    manifest_path = output_root / "manifest.json"
+    run_root.mkdir(parents=True)
+    _write_sample_attrition_parquet(run_root / "lm2011_table_i_sample_creation.parquet")
+    lock_payload = build_submission_lock_payload(
+        submission_root=submission_root,
+        run_id="tool_strict",
+        run_roots={"lm2011_post_refinitiv": run_root},
+        artifact_overrides=[],
+        provenance_disclosures=[],
+    )
+    lock_path = write_submission_lock(submission_root / "submission_lock.json", lock_payload)
+
+    def _unexpected_auto_resolution(**_: object) -> None:
+        raise AssertionError("strict submission builds must not auto-resolve run roots")
+
+    monkeypatch.setattr(tool_module, "_resolve_run_paths", _unexpected_auto_resolution)
+
+    captured_kwargs: dict[str, object] = {}
+
+    def _fake_build_single_asset(**kwargs: object) -> BuildSessionResult:
+        captured_kwargs.update(kwargs)
+        return BuildSessionResult(
+            run_id="tool_strict",
+            output_root=output_root,
+            manifest_path=manifest_path,
+            asset_results={
+                "ch4_sample_attrition_lm2011_1994_2008": BuildResult(
+                    asset_id="ch4_sample_attrition_lm2011_1994_2008",
+                    chapter="chapter4",
+                    asset_kind="table",
+                    sample_contract_id="raw_available",
+                    status="completed",
+                    resolved_inputs={},
+                    output_paths={},
+                    row_counts={},
+                )
+            },
+        )
+
+    monkeypatch.setattr(tool_module, "build_single_asset", _fake_build_single_asset)
+
+    exit_code = tool_module.main(
+        [
+            "build-asset",
+            "--asset-id",
+            "ch4_sample_attrition_lm2011_1994_2008",
+            "--run-id",
+            "tool_strict",
+            "--repo-root",
+            str(repo_root),
+            "--submission-lock",
+            str(lock_path),
+        ]
+    )
+
+    assert exit_code == 0
+    assert captured_kwargs["submission_lock_path"] == lock_path
+    assert captured_kwargs["lm2011_post_refinitiv_dir"] is None
+    assert captured_kwargs["finbert_run_dir"] is None
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["submission_lock"] == str(lock_path.resolve())
+    assert payload["resolved_paths"]["lm2011_post_refinitiv_dir"] == str(run_root.resolve())
+    assert payload["resolved_paths"]["finbert_run_dir"] is None
+
+
 def _write_sample_attrition_parquet(path: Path) -> None:
     df = pl.DataFrame(
         {
@@ -1338,11 +1762,12 @@ def _write_table_iv_return_coefficients_parquet(path: Path) -> None:
 def _write_portfolio_table_ia_ii_parquet(path: Path) -> None:
     pl.DataFrame(
         {
-            "signal_name": ["fin_neg_prop", "fin_neg_prop", "fin_neg_prop"],
-            "dependent_variable": ["long_short_return", "long_short_return", "long_short_return"],
-            "coefficient_name": ["mean_long_short_return", "alpha_ff3_mom", "r2"],
-            "estimate": [0.002, 0.001, 0.12],
-            "t_stat": [1.1, 0.9, None],
+            "signal_name": ["fin_neg_prop", "fin_neg_prop", "fin_neg_prop", "fin_neg_prop"],
+            "dependent_variable": ["long_short_return", "long_short_return", "long_short_return", "long_short_return"],
+            "coefficient_name": ["mean_long_short_return", "alpha_ff3_mom", "beta_market", "r2"],
+            "estimate": [0.002, 0.001, 0.5, 0.12],
+            "standard_error": [0.0005, 0.0004, 0.05, None],
+            "t_stat": [1.1, 0.9, 2.0, None],
         }
     ).write_parquet(path)
 

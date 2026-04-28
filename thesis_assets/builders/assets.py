@@ -65,7 +65,23 @@ TABLE_VI_SIGNAL_COLUMNS = (
     "lm_modal_weak_tfidf",
 )
 TABLE_VI_EXPECTED_SPEC_COUNT = len(TABLE_VI_DEPENDENT_VARIABLES) * len(TABLE_VI_SIGNAL_COLUMNS)
-PORTFOLIO_SPREAD_DEFINITION = "Q5 - Q1; Q5 = most negative filings; Q1 = least negative filings"
+PORTFOLIO_SOURCE_SPREAD_DEFINITION = "Q5 - Q1; Q5 = most negative filings; Q1 = least negative filings"
+PORTFOLIO_SPREAD_DEFINITION = "Q1 - Q5; Q1 = least negative filings; Q5 = most negative filings"
+PORTFOLIO_SOURCE_TO_PRESENTATION_NOTE = (
+    "Source artifacts store Q5 - Q1; thesis assets report Q1 - Q5 via an explicit sign flip."
+)
+PORTFOLIO_Q1_MINUS_Q5_SIGN_FLIPPED_COEFFICIENTS = (
+    "mean_long_short_return",
+    "alpha_ff3_mom",
+    "beta_market",
+    "beta_smb",
+    "beta_hml",
+    "beta_mom",
+)
+PORTFOLIO_Q1_MINUS_Q5_DISPLAY_COEFFICIENTS = (
+    *PORTFOLIO_Q1_MINUS_Q5_SIGN_FLIPPED_COEFFICIENTS,
+    "r2",
+)
 NW_LAG_GRID = (1, 2, 3, 4)
 NW_SIG_5_ABS_T = 1.959963984540054
 NW_SIG_10_ABS_T = 1.6448536269514722
@@ -109,12 +125,12 @@ def build_asset(context: BuildContext, spec: AssetSpec) -> BuildResult:
             return _build_chapter4_variable_definitions(context, spec, artifact_map)
         if spec.builder_id == "chapter5_lm2011_full_10k_return_coefficients":
             return _build_chapter5_lm2011_full_10k_return_coefficients(context, spec, artifact_map)
-        if spec.builder_id == "chapter5_lm2011_portfolio_long_short":
-            return _build_chapter5_lm2011_portfolio_long_short(context, spec, artifact_map)
+        if spec.builder_id == "chapter5_lm2011_portfolio_q1_minus_q5":
+            return _build_chapter5_lm2011_portfolio_q1_minus_q5(context, spec, artifact_map)
         if spec.builder_id == "chapter5_lm2011_portfolio_formation_diagnostics":
             return _build_chapter5_lm2011_portfolio_formation_diagnostics(context, spec, artifact_map)
-        if spec.builder_id == "chapter5_portfolio_cumulative_q5_minus_q1":
-            return _build_chapter5_portfolio_cumulative_q5_minus_q1(context, spec, artifact_map)
+        if spec.builder_id == "chapter5_portfolio_cumulative_q1_minus_q5":
+            return _build_chapter5_portfolio_cumulative_q1_minus_q5(context, spec, artifact_map)
         if spec.builder_id == "chapter5_fit_horserace":
             return _build_chapter5_fit_horserace(context, spec, artifact_map)
         if spec.builder_id == "chapter5_extension_c0_fit_summary":
@@ -1174,17 +1190,20 @@ def _build_chapter4_variable_definitions(
         },
         {
             "category": "Portfolio convention",
-            "variable_or_rule": "Q5 - Q1",
+            "variable_or_rule": "Q1 - Q5",
             "definition": PORTFOLIO_SPREAD_DEFINITION,
             "source_or_artifact": "lm2011_trading_strategy_monthly_returns",
-            "reporting_note": "Do not flip signs when reporting portfolio spreads.",
+            "reporting_note": PORTFOLIO_SOURCE_TO_PRESENTATION_NOTE,
         },
         {
             "category": "Timing",
             "variable_or_rule": "portfolio sort year",
             "definition": "Latest eligible filing by KYPERMNO/sort year; July-December filings map to the following sort year and January-June filings stay in the current sort year.",
             "source_or_artifact": "lm2011_trading_strategy_monthly_returns",
-            "reporting_note": "Stored monthly returns contain Q5-Q1 only, not separate Q1/Q5 legs.",
+            "reporting_note": (
+                "Stored monthly returns contain source Q5-Q1 only; thesis assets report Q1-Q5; "
+                "separate Q1/Q5 legs are not stored."
+            ),
         },
     ]
     selected = pl.DataFrame(rows)
@@ -1259,19 +1278,24 @@ def _build_chapter5_lm2011_full_10k_return_coefficients(
     )
 
 
-def _build_chapter5_lm2011_portfolio_long_short(
+def _build_chapter5_lm2011_portfolio_q1_minus_q5(
     context: BuildContext,
     spec: AssetSpec,
     artifacts: dict[str, ResolvedArtifact],
 ) -> BuildResult:
     source_artifact, warning = _resolve_portfolio_table_artifact(context, artifacts.get("table_ia_ii_results"))
+    source_lf = scan_parquet_artifact(source_artifact)
+    source_schema = source_lf.collect_schema()
     selected = (
-        scan_parquet_artifact(source_artifact)
-        .filter(pl.col("coefficient_name").is_in(("mean_long_short_return", "alpha_ff3_mom", "r2")))
+        source_lf.filter(pl.col("coefficient_name").is_in(PORTFOLIO_Q1_MINUS_Q5_DISPLAY_COEFFICIENTS))
         .with_columns(
+            _portfolio_q1_minus_q5_signed_expr(pl.col("estimate").cast(pl.Float64, strict=False)).alias("estimate"),
+            _optional_float_column_expr(source_schema, "standard_error").alias("standard_error"),
+            _portfolio_q1_minus_q5_signed_expr(_optional_float_column_expr(source_schema, "t_stat")).alias("t_stat"),
             _portfolio_signal_label_expr().alias("signal"),
             _portfolio_metric_label_expr().alias("metric"),
             pl.lit(PORTFOLIO_SPREAD_DEFINITION).alias("spread_definition"),
+            pl.lit(PORTFOLIO_SOURCE_TO_PRESENTATION_NOTE).alias("source_presentation_note"),
             pl.lit("not stored").alias("q1_return"),
             pl.lit("not stored").alias("q5_return"),
         )
@@ -1280,8 +1304,10 @@ def _build_chapter5_lm2011_portfolio_long_short(
             "signal",
             "metric",
             "estimate",
+            "standard_error",
             "t_stat",
             "spread_definition",
+            "source_presentation_note",
             "q1_return",
             "q5_return",
         )
@@ -1290,7 +1316,8 @@ def _build_chapter5_lm2011_portfolio_long_short(
     if selected.is_empty():
         raise AssetBuildError("Portfolio long-short table returned zero rows.")
 
-    warnings = (warning,) if warning else ()
+    warnings = [warning] if warning else []
+    warnings.append(PORTFOLIO_SOURCE_TO_PRESENTATION_NOTE)
     output_paths = _write_table_outputs(context, spec, selected)
     return BuildResult(
         asset_id=spec.asset_id,
@@ -1301,7 +1328,7 @@ def _build_chapter5_lm2011_portfolio_long_short(
         resolved_inputs={"table_ia_ii_results": str(source_artifact.path)},
         output_paths=output_paths,
         row_counts={"table_rows": selected.height},
-        warnings=warnings,
+        warnings=tuple(warnings),
     )
 
 
@@ -1315,8 +1342,7 @@ def _build_chapter5_lm2011_portfolio_formation_diagnostics(
         artifacts.get("trading_strategy_monthly_returns"),
     )
     selected = (
-        scan_parquet_artifact(source_artifact)
-        .with_columns(pl.col("portfolio_month").cast(pl.Date, strict=False))
+        _portfolio_monthly_q1_minus_q5_lf(source_artifact)
         .group_by("sort_signal_name")
         .agg(
             pl.len().alias("months"),
@@ -1356,7 +1382,7 @@ def _build_chapter5_lm2011_portfolio_formation_diagnostics(
 
     warnings = [warning] if warning else []
     warnings.append(
-        "Stored monthly strategy artifact contains Q5 - Q1 high-minus-low returns only; Q1/Q5 leg diagnostics are unavailable."
+        "Stored monthly strategy artifact contains source Q5 - Q1 returns; thesis diagnostics report Q1 - Q5 after sign flip; Q1/Q5 leg diagnostics are unavailable."
     )
     output_paths = _write_table_outputs(context, spec, selected)
     return BuildResult(
@@ -1372,7 +1398,7 @@ def _build_chapter5_lm2011_portfolio_formation_diagnostics(
     )
 
 
-def _build_chapter5_portfolio_cumulative_q5_minus_q1(
+def _build_chapter5_portfolio_cumulative_q1_minus_q5(
     context: BuildContext,
     spec: AssetSpec,
     artifacts: dict[str, ResolvedArtifact],
@@ -1382,46 +1408,43 @@ def _build_chapter5_portfolio_cumulative_q5_minus_q1(
         artifacts.get("trading_strategy_monthly_returns"),
     )
     selected = (
-        scan_parquet_artifact(source_artifact)
-        .select(
-            pl.col("portfolio_month").cast(pl.Date, strict=False).alias("portfolio_month"),
-            pl.col("sort_signal_name").cast(pl.Utf8, strict=False),
-            pl.col("long_short_return").cast(pl.Float64, strict=False),
-        )
+        _portfolio_monthly_q1_minus_q5_lf(source_artifact)
         .drop_nulls(subset=["portfolio_month", "sort_signal_name", "long_short_return"])
         .sort("sort_signal_name", "portfolio_month")
         .with_columns(
             _portfolio_sort_signal_label_expr().alias("signal"),
             (
                 (pl.col("long_short_return") + 1.0).cum_prod().over("sort_signal_name") - 1.0
-            ).alias("cumulative_q5_minus_q1_return"),
+            ).alias("cumulative_q1_minus_q5_return"),
             pl.lit(PORTFOLIO_SPREAD_DEFINITION).alias("spread_definition"),
+            pl.lit(PORTFOLIO_SOURCE_TO_PRESENTATION_NOTE).alias("source_presentation_note"),
         )
         .select(
             "portfolio_month",
             "sort_signal_name",
             "signal",
             "long_short_return",
-            "cumulative_q5_minus_q1_return",
+            "cumulative_q1_minus_q5_return",
             "spread_definition",
+            "source_presentation_note",
         )
         .collect()
     )
     if selected.is_empty():
-        raise AssetBuildError("Portfolio cumulative Q5-Q1 figure returned zero monthly rows.")
+        raise AssetBuildError("Portfolio cumulative Q1-Q5 figure returned zero monthly rows.")
 
     figure = build_multi_series_line_figure(
         selected,
         x_col="portfolio_month",
-        y_col="cumulative_q5_minus_q1_return",
+        y_col="cumulative_q1_minus_q5_return",
         series_col="signal",
         x_label="Portfolio month",
-        y_label="Cumulative Q5 - Q1 return",
+        y_label="Cumulative Q1 - Q5 return",
         zero_line=True,
     )
     warnings = [warning] if warning else []
     warnings.append(
-        "Stored monthly strategy artifact contains Q5 - Q1 high-minus-low returns only; Q5 is most negative filings."
+        "Stored monthly strategy artifact contains source Q5 - Q1 returns; thesis figure reports Q1 - Q5 after sign flip."
     )
     output_paths = _write_figure_outputs(context, spec, selected, figure)
     return BuildResult(
@@ -2749,14 +2772,14 @@ def _build_chapter5_research_question_evidence_map(
             "research_question": "RQ3: Does FinBERT improve model fit relative to dictionary scores?",
             "evidence_asset": "ch5_extension_c0_fit_summary; ch5_extension_c0_fit_comparisons; ch5_extension_fit_delta_path",
             "evidence_status": "Generated from common-success C0 fit artifacts",
-            "claim_guardrail": "Report Q5-Q1 and fit deltas on stored sign/scaling; do not infer C1/C2 centrality.",
+            "claim_guardrail": "Report fit deltas on stored sign/scaling; do not infer C1/C2 centrality.",
             "recommended_thesis_placement": "Chapter 5 main results / appendix",
         },
         {
-            "research_question": "RQ4: Are high-minus-low negativity portfolio returns interpretable from current artifacts?",
-            "evidence_asset": "ch5_lm2011_portfolio_long_short; ch5_lm2011_portfolio_formation_diagnostics; ch5_portfolio_cumulative_q5_minus_q1",
-            "evidence_status": "Generated from stored Q5-Q1 monthly and summary portfolio artifacts",
-            "claim_guardrail": PORTFOLIO_SPREAD_DEFINITION + "; separate Q1/Q5 legs are not stored.",
+            "research_question": "RQ4: Are least-minus-most negative portfolio returns interpretable from current artifacts?",
+            "evidence_asset": "ch5_lm2011_portfolio_q1_minus_q5; ch5_lm2011_portfolio_formation_diagnostics; ch5_portfolio_cumulative_q1_minus_q5",
+            "evidence_status": "Generated from stored Q5-Q1 monthly and summary portfolio artifacts after the thesis Q1-Q5 presentation adapter",
+            "claim_guardrail": PORTFOLIO_SPREAD_DEFINITION + "; " + PORTFOLIO_SOURCE_TO_PRESENTATION_NOTE,
             "recommended_thesis_placement": "Chapter 5 portfolio subsection",
         },
         {
@@ -2833,6 +2856,8 @@ def _collect_table_vi_no_ownership_surface(
         _validate_table_vi_surface(selected)
         return selected, source_artifact, ()
     except AssetBuildError as original_error:
+        if context.strict_submission:
+            raise original_error
         fallback_path = _resolve_table_vi_validation_fallback_path(context, source_artifact)
         if fallback_path is None:
             raise original_error
@@ -3737,6 +3762,28 @@ def _signal_label_expr() -> pl.Expr:
     return expr
 
 
+def _optional_float_column_expr(schema: pl.Schema, column: str) -> pl.Expr:
+    if column in schema:
+        return pl.col(column).cast(pl.Float64, strict=False)
+    return pl.lit(None, dtype=pl.Float64)
+
+
+def _portfolio_q1_minus_q5_signed_expr(value_expr: pl.Expr) -> pl.Expr:
+    return (
+        pl.when(pl.col("coefficient_name").is_in(PORTFOLIO_Q1_MINUS_Q5_SIGN_FLIPPED_COEFFICIENTS))
+        .then(-value_expr)
+        .otherwise(value_expr)
+    )
+
+
+def _portfolio_monthly_q1_minus_q5_lf(source_artifact: ResolvedArtifact) -> pl.LazyFrame:
+    return scan_parquet_artifact(source_artifact).select(
+        pl.col("portfolio_month").cast(pl.Date, strict=False).alias("portfolio_month"),
+        pl.col("sort_signal_name").cast(pl.Utf8, strict=False),
+        (-pl.col("long_short_return").cast(pl.Float64, strict=False)).alias("long_short_return"),
+    )
+
+
 def _portfolio_signal_label_expr() -> pl.Expr:
     return (
         pl.when(pl.col("signal_name") == "fin_neg_prop")
@@ -3771,6 +3818,14 @@ def _portfolio_metric_label_expr() -> pl.Expr:
         .then(pl.lit("Mean long-short return"))
         .when(pl.col("coefficient_name") == "alpha_ff3_mom")
         .then(pl.lit("FF3 + momentum alpha"))
+        .when(pl.col("coefficient_name") == "beta_market")
+        .then(pl.lit("Market beta"))
+        .when(pl.col("coefficient_name") == "beta_smb")
+        .then(pl.lit("SMB beta"))
+        .when(pl.col("coefficient_name") == "beta_hml")
+        .then(pl.lit("HML beta"))
+        .when(pl.col("coefficient_name") == "beta_mom")
+        .then(pl.lit("Momentum beta"))
         .when(pl.col("coefficient_name") == "r2")
         .then(pl.lit("Factor regression R2"))
         .otherwise(pl.col("coefficient_name"))
@@ -3810,6 +3865,10 @@ def _resolve_portfolio_table_artifact(
     context: BuildContext,
     fallback_artifact: ResolvedArtifact | None,
 ) -> tuple[ResolvedArtifact, str | None]:
+    if context.strict_submission:
+        if fallback_artifact is None:
+            raise AssetBuildError("No locked portfolio Table IA.II artifact could be resolved.")
+        return fallback_artifact, None
     rerun_path = _latest_portfolio_rerun_path(context.repo_root, "lm2011_table_ia_ii_results.rerun.parquet")
     if rerun_path is not None:
         return _resolved_manual_lm2011_artifact(
@@ -3828,6 +3887,10 @@ def _resolve_portfolio_monthly_artifact(
     context: BuildContext,
     fallback_artifact: ResolvedArtifact | None,
 ) -> tuple[ResolvedArtifact, str | None]:
+    if context.strict_submission:
+        if fallback_artifact is None:
+            raise AssetBuildError("No locked monthly strategy artifact could be resolved.")
+        return fallback_artifact, None
     rerun_path = _latest_portfolio_rerun_path(context.repo_root, "lm2011_trading_strategy_monthly_returns.rerun.parquet")
     if rerun_path is not None:
         return _resolved_manual_lm2011_artifact(

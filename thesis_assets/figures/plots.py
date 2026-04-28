@@ -23,7 +23,7 @@ def build_sample_funnel_figure(
     label_col: str = "display_label",
     value_col: str = "sample_size_value",
 ) -> plt.Figure:
-    fig, ax = plt.subplots(figsize=(8.5, max(4.5, 0.38 * max(df.height, 1))))
+    fig, ax = plt.subplots(figsize=(7.2, max(4.5, 0.38 * max(df.height, 1))))
     labels = [_wrap_label(value, width=42) for value in df.get_column(label_col).to_list()]
     values = [float(value or 0.0) for value in df.get_column(value_col).to_list()]
     positions = list(range(len(values)))
@@ -35,8 +35,10 @@ def build_sample_funnel_figure(
     ax.set_xlabel("Filings / observations")
     ax.grid(axis="x", alpha=0.18, linewidth=0.6)
     ax.set_axisbelow(True)
-    _annotate_horizontal_bars(ax, positions, values)
-    fig.tight_layout()
+    max_value = max(values) if values else 0.0
+    ax.set_xlim(0.0, max_value * 1.04 if max_value > 0 else 1.0)
+    _annotate_horizontal_bars(ax, positions, values, inside=True)
+    fig.tight_layout(pad=0.35)
     return fig
 
 
@@ -379,16 +381,27 @@ def build_concordance_by_scope_figure(
     return fig
 
 
-def _annotate_horizontal_bars(ax: plt.Axes, positions: list[int], values: list[float]) -> None:
+def _annotate_horizontal_bars(
+    ax: plt.Axes,
+    positions: list[int],
+    values: list[float],
+    *,
+    inside: bool = False,
+) -> None:
     max_value = max(values) if values else 0.0
     offset = max_value * 0.01 if max_value > 0 else 1.0
+    inside_threshold = max_value * 0.08
     for position, value in zip(positions, values):
+        use_inside_label = inside and value > inside_threshold
         ax.text(
-            value + offset,
+            value - offset if use_inside_label else value + offset,
             position,
             f"{int(round(value)):,}",
             va="center",
+            ha="right" if use_inside_label else "left",
             fontsize=8,
+            color="white" if use_inside_label else "black",
+            clip_on=use_inside_label,
         )
 
 

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
+from dataclasses import asdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
@@ -52,6 +54,7 @@ if str(SRC) not in sys.path:
 
 from thesis_pkg.benchmarking import BucketBatchConfig
 from thesis_pkg.benchmarking import FinbertAnalysisRunConfig
+from thesis_pkg.benchmarking import FinbertAuthoritySpec
 from thesis_pkg.benchmarking import FinbertSentenceParquetInferenceRunArtifacts
 from thesis_pkg.benchmarking import FinbertSentenceParquetInferenceRunConfig
 from thesis_pkg.benchmarking import FinbertSentencePreprocessingRunConfig
@@ -65,6 +68,7 @@ from thesis_pkg.benchmarking import SentenceDatasetConfig
 from thesis_pkg.benchmarking import run_finbert_sentence_parquet_inference
 from thesis_pkg.benchmarking import run_finbert_sentence_preprocessing
 from thesis_pkg.benchmarking import resolve_bucket_lengths_for_edges
+from thesis_pkg.benchmarking import section_universe_contract_payload
 from thesis_pkg.benchmarking.run_logging import utc_timestamp
 
 
@@ -105,6 +109,8 @@ BATCH_PRESETS: dict[str, BucketBatchConfig] = {
     "xlarge": BucketBatchConfig(name="xlarge", short_batch_size=256, medium_batch_size=128, long_batch_size=64),
 }
 ANALYSIS_RUNNER_NAME = "finbert_item_analysis"
+DEFAULT_FINBERT_MODEL_NAME = "yiyanghkust/finbert-tone"
+DEFAULT_FINBERT_REVISION = "4921590d3c0c3832c0efea24c8381ce0bda7844b"
 
 
 def _resolve_bucket_edges(
@@ -155,15 +161,47 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--short-edge", type=int, default=None)
     parser.add_argument("--medium-edge", type=int, default=None)
     parser.add_argument("--device", type=str, default=None)
+    parser.add_argument("--model-name", type=str, default=DEFAULT_FINBERT_MODEL_NAME)
+    parser.add_argument("--model-revision", type=str, default=DEFAULT_FINBERT_REVISION)
+    parser.add_argument("--tokenizer-revision", type=str, default=DEFAULT_FINBERT_REVISION)
     parser.add_argument("--write-sentence-scores", action="store_true")
-    parser.add_argument(
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument(
         "--preprocess-only",
         action="store_true",
         help="Stop after sentence splitting and token-length bucketing; do not run FinBERT inference.",
     )
+    mode_group.add_argument(
+        "--analysis-only",
+        action="store_true",
+        help="Run model inference from the named sentence-preprocessing checkpoint; do not rerun preprocessing.",
+    )
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--note", type=str, default="")
     return parser.parse_args(argv)
+
+
+def _none_if_literal_none(value: str | None) -> str | None:
+    if value is None:
+        return None
+    stripped = value.strip()
+    return None if stripped.lower() in {"", "none", "null"} else stripped
+
+
+def _resolve_authority(args: argparse.Namespace) -> FinbertAuthoritySpec:
+    return FinbertAuthoritySpec(
+        model_name=str(args.model_name),
+        model_revision=_none_if_literal_none(args.model_revision),
+        tokenizer_revision=_none_if_literal_none(args.tokenizer_revision),
+    )
+
+
+def _default_authority() -> FinbertAuthoritySpec:
+    return FinbertAuthoritySpec(
+        model_name=DEFAULT_FINBERT_MODEL_NAME,
+        model_revision=DEFAULT_FINBERT_REVISION,
+        tokenizer_revision=DEFAULT_FINBERT_REVISION,
+    )
 
 
 def _resolve_run_config(args: argparse.Namespace) -> FinbertAnalysisRunConfig:
@@ -293,16 +331,67 @@ def _resolve_existing_preprocessing_artifacts(
     )
 
 
+def _validate_existing_preprocessing_artifacts_compatible(
+    artifacts: FinbertSentencePreprocessingRunArtifacts,
+    run_cfg: FinbertSentencePreprocessingRunConfig,
+    authority: FinbertAuthoritySpec,
+) -> None:
+    manifest_path = artifacts.run_manifest_path
+    if not manifest_path.exists():
+        raise FileNotFoundError(f"FinBERT preprocessing checkpoint manifest is missing: {manifest_path}")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    guard_payload = (manifest.get("semantic_reuse_guard") or {}).get("payload")
+    if not isinstance(guard_payload, dict):
+        raise ValueError(
+            "FinBERT analysis-only requires a preprocessing checkpoint with a semantic_reuse_guard."
+        )
+
+    expected_payload = {
+        "authority": asdict(authority),
+        "sentence_dataset": asdict(run_cfg.sentence_dataset),
+        "cleaning": asdict(run_cfg.cleaning),
+        "cleaning_policy_id": (
+            run_cfg.cleaning.cleaning_policy_id
+            if run_cfg.cleaning.enabled
+            else "raw_item_text"
+        ),
+        "year_filter": list(run_cfg.year_filter) if run_cfg.year_filter is not None else None,
+        "section_collect_batch_size": run_cfg.section_collect_batch_size,
+    }
+    expected_payload = json.loads(json.dumps(expected_payload))
+    mismatches = [
+        key
+        for key, expected_value in expected_payload.items()
+        if guard_payload.get(key) != expected_value
+    ]
+
+    expected_contract = section_universe_contract_payload(
+        run_cfg.section_universe,
+        target_doc_universe_path=run_cfg.target_doc_universe_path,
+    )
+    expected_contract = json.loads(json.dumps(expected_contract))
+    if manifest.get("accepted_universe_contract") != expected_contract:
+        mismatches.append("accepted_universe_contract")
+
+    if mismatches:
+        raise ValueError(
+            "FinBERT analysis-only preprocessing checkpoint is semantically incompatible "
+            f"for {mismatches}. Rerun preprocessing with the same run_name/settings or use --overwrite."
+        )
+
+
 def run_finbert_pipeline(
     analysis_cfg: FinbertAnalysisRunConfig,
     *,
     preprocessing_cfg: FinbertSentencePreprocessingRunConfig | None = None,
+    authority: FinbertAuthoritySpec | None = None,
     run_preprocess: bool = True,
     run_analysis: bool = True,
 ) -> FinbertPipelineRunArtifacts:
     if not run_preprocess and not run_analysis:
         raise ValueError("At least one of run_preprocess or run_analysis must be True.")
 
+    resolved_authority = authority or _default_authority()
     analysis_run_name = _analysis_run_name(analysis_cfg)
     resolved_preprocessing_cfg = preprocessing_cfg or _analysis_preprocessing_run_config(
         analysis_cfg,
@@ -315,10 +404,18 @@ def run_finbert_pipeline(
 
     preprocessing_artifacts: FinbertSentencePreprocessingRunArtifacts | None = None
     if run_preprocess:
-        preprocessing_artifacts = run_finbert_sentence_preprocessing(resolved_preprocessing_cfg)
+        preprocessing_artifacts = run_finbert_sentence_preprocessing(
+            resolved_preprocessing_cfg,
+            authority=resolved_authority,
+        )
     elif run_analysis:
         preprocessing_artifacts = _resolve_existing_preprocessing_artifacts(
             resolved_preprocessing_cfg
+        )
+        _validate_existing_preprocessing_artifacts_compatible(
+            preprocessing_artifacts,
+            resolved_preprocessing_cfg,
+            resolved_authority,
         )
 
     analysis_artifacts: FinbertSentenceParquetInferenceRunArtifacts | None = None
@@ -340,7 +437,8 @@ def run_finbert_pipeline(
                 overwrite=analysis_cfg.overwrite,
                 run_name=analysis_run_name,
                 note=analysis_cfg.note,
-            )
+            ),
+            authority=resolved_authority,
         )
 
     return FinbertPipelineRunArtifacts(
@@ -352,21 +450,11 @@ def run_finbert_pipeline(
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     run_cfg = _resolve_run_config(args)
+    authority = _resolve_authority(args)
     if args.preprocess_only:
         artifacts = run_finbert_pipeline(
             run_cfg,
-            preprocessing_cfg=FinbertSentencePreprocessingRunConfig(
-                source_items_dir=run_cfg.source_items_dir,
-                out_root=run_cfg.out_root,
-                section_universe=run_cfg.section_universe,
-                sentence_dataset=run_cfg.sentence_dataset,
-                cleaning=run_cfg.cleaning,
-                target_doc_universe_path=run_cfg.backbone_path,
-                year_filter=run_cfg.year_filter,
-                overwrite=run_cfg.overwrite,
-                run_name=run_cfg.run_name,
-                note=run_cfg.note,
-            ),
+            authority=authority,
             run_preprocess=True,
             run_analysis=False,
         )
@@ -379,7 +467,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"yearly_summary={preprocessing_artifacts.yearly_summary_path}")
         return 0
 
-    artifacts = run_finbert_pipeline(run_cfg, run_preprocess=True, run_analysis=True)
+    artifacts = run_finbert_pipeline(
+        run_cfg,
+        authority=authority,
+        run_preprocess=not args.analysis_only,
+        run_analysis=True,
+    )
     analysis_artifacts = artifacts.analysis_artifacts
     if analysis_artifacts is None:
         raise RuntimeError("FinBERT analysis did not produce artifacts.")
