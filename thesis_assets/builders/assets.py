@@ -65,6 +65,20 @@ TABLE_VI_SIGNAL_COLUMNS = (
     "lm_modal_weak_tfidf",
 )
 TABLE_VI_EXPECTED_SPEC_COUNT = len(TABLE_VI_DEPENDENT_VARIABLES) * len(TABLE_VI_SIGNAL_COLUMNS)
+TABLE_VI_OBSERVED_SCALE_SIGNALS = ("lm_negative_prop", "lm_negative_tfidf")
+NO_OWNERSHIP_CONTROL_COLUMNS = (
+    "log_size",
+    "log_book_to_market",
+    "pre_ffalpha",
+    "log_share_turnover",
+    "nasdaq_dummy",
+)
+EXTENSION_OBSERVED_SCALE_COEFFICIENTS = ("lm_negative_tfidf", "finbert_neg_prob_lenw_mean")
+EXTENSION_OBSERVED_SCALE_SPECS = (
+    "dictionary_only",
+    "finbert_only",
+    "dictionary_finbert_joint",
+)
 PORTFOLIO_SOURCE_SPREAD_DEFINITION = "Q5 - Q1; Q5 = most negative filings; Q1 = least negative filings"
 PORTFOLIO_SPREAD_DEFINITION = "Q1 - Q5; Q1 = least negative filings; Q5 = most negative filings"
 PORTFOLIO_SOURCE_TO_PRESENTATION_NOTE = (
@@ -141,6 +155,10 @@ def build_asset(context: BuildContext, spec: AssetSpec) -> BuildResult:
             return _build_chapter5_extension_fit_delta_path(context, spec, artifact_map)
         if spec.builder_id == "chapter5_lm2011_table_vi_no_ownership":
             return _build_chapter5_lm2011_table_vi_no_ownership(context, spec, artifact_map)
+        if spec.builder_id == "chapter5_lm2011_table_vi_volatility_observed_scale":
+            return _build_chapter5_lm2011_table_vi_volatility_observed_scale(context, spec, artifact_map)
+        if spec.builder_id == "chapter5_extension_c0_observed_scale_effects":
+            return _build_chapter5_extension_c0_observed_scale_effects(context, spec, artifact_map)
         if spec.builder_id == "chapter5_nw_lag_baseline_reconciliation":
             return _build_chapter5_nw_lag_baseline_reconciliation(context, spec, artifact_map)
         if spec.builder_id == "chapter5_nw_lag_core_no_ownership_appendix":
@@ -1747,6 +1765,198 @@ def _build_chapter5_lm2011_table_vi_no_ownership(
     )
 
 
+def _build_chapter5_lm2011_table_vi_volatility_observed_scale(
+    context: BuildContext,
+    spec: AssetSpec,
+    artifacts: dict[str, ResolvedArtifact],
+) -> BuildResult:
+    source_artifact = artifacts["table_vi_results_no_ownership"]
+    panel_artifact = artifacts["return_regression_panel_full_10k"]
+    selected_with_keys, resolved_artifact, warnings = _collect_table_vi_no_ownership_surface(
+        context,
+        source_artifact,
+    )
+    coefficient_rows = (
+        selected_with_keys.filter(
+            (pl.col("dependent_variable") == pl.lit("postevent_return_volatility"))
+            & pl.col("signal_name").is_in(TABLE_VI_OBSERVED_SCALE_SIGNALS)
+        )
+        .sort("_weight_order")
+        .to_dicts()
+    )
+    if not coefficient_rows:
+        raise AssetBuildError("Table VI observed-scale selection returned zero postevent-volatility rows.")
+
+    skipped_path = _resolve_table_vi_no_ownership_skipped_quarters_path(resolved_artifact)
+    output_rows: list[dict[str, object]] = []
+    for coefficient_row in coefficient_rows:
+        signal_name = str(coefficient_row["signal_name"])
+        skipped_quarters = _table_vi_no_ownership_skipped_quarters(
+            skipped_path,
+            dependent_variable="postevent_return_volatility",
+            signal_name=signal_name,
+        )
+        support = _observed_scale_support_summary(
+            scan_parquet_artifact(panel_artifact),
+            outcome_column="postevent_return_volatility",
+            signal_column=signal_name,
+            control_columns=NO_OWNERSHIP_CONTROL_COLUMNS,
+            skipped_quarters=skipped_quarters,
+        )
+        coefficient_x100 = float(coefficient_row["estimate"])
+        effect_percentage_points = coefficient_x100 * support["score_iqr"]
+        mean_percentage_points = support["outcome_mean"] * 100.0
+        output_rows.append(
+            {
+                "outcome": coefficient_row["outcome"],
+                "signal": coefficient_row["signal"],
+                "weighting": coefficient_row["weighting"],
+                "coefficient_x100": coefficient_x100,
+                "t_stat": coefficient_row["t_stat"],
+                "score_q25": support["score_q25"],
+                "score_q75": support["score_q75"],
+                "score_iqr": support["score_iqr"],
+                "iqr_effect_percentage_points": effect_percentage_points,
+                "mean_postevent_volatility_percentage_points": mean_percentage_points,
+                "effect_share_of_mean": effect_percentage_points / mean_percentage_points
+                if mean_percentage_points
+                else None,
+                "n_obs": support["n_obs"],
+                "n_quarters": support["n_quarters"],
+                "coefficient_n_quarters": coefficient_row["n_quarters"],
+                "skipped_quarters_excluded": skipped_quarters.height,
+                "reported_scale": coefficient_row["reported_scale"],
+            }
+        )
+
+    selected = pl.DataFrame(output_rows)
+    output_paths = _write_table_outputs(context, spec, selected)
+    resolved_inputs = {
+        "table_vi_results_no_ownership": str(resolved_artifact.path),
+        "return_regression_panel_full_10k": str(panel_artifact.path),
+    }
+    if skipped_path is not None:
+        resolved_inputs["table_vi_no_ownership_skipped_quarters"] = str(skipped_path)
+    return BuildResult(
+        asset_id=spec.asset_id,
+        chapter=spec.chapter,
+        asset_kind=spec.asset_kind,
+        sample_contract_id=spec.sample_contract_id,
+        status="completed",
+        resolved_inputs=resolved_inputs,
+        output_paths=output_paths,
+        row_counts={
+            "table_rows": selected.height,
+            "skipped_quarter_applications": sum(int(row["skipped_quarters_excluded"]) for row in output_rows),
+        },
+        warnings=warnings,
+    )
+
+
+def _build_chapter5_extension_c0_observed_scale_effects(
+    context: BuildContext,
+    spec: AssetSpec,
+    artifacts: dict[str, ResolvedArtifact],
+) -> BuildResult:
+    results_artifact = artifacts["extension_results"]
+    panel_artifact = artifacts["extension_analysis_panel"]
+    skipped_artifact = artifacts.get("extension_fit_skipped_quarters")
+
+    coefficient_rows = (
+        _ensure_dictionary_family_source(scan_parquet_artifact(results_artifact))
+        .filter(
+            (pl.col("dictionary_family_source") == pl.lit("replication"))
+            & pl.col("text_scope").is_in(TARGET_TEXT_SCOPES)
+            & (pl.col("outcome_name") == pl.lit("filing_period_excess_return"))
+            & (pl.col("control_set_id") == pl.lit("C0"))
+            & (pl.col("estimator_status") == pl.lit("estimated"))
+            & pl.col("specification_name").is_in(EXTENSION_OBSERVED_SCALE_SPECS)
+            & pl.col("coefficient_name").is_in(EXTENSION_OBSERVED_SCALE_COEFFICIENTS)
+            & _extension_observed_scale_coefficient_filter()
+        )
+        .with_columns(
+            _scope_label_expr().alias("scope"),
+            _scope_order_expr().alias("_scope_order"),
+            _specification_label_expr().alias("specification"),
+            _specification_order_expr().alias("_spec_order"),
+            _signal_label_expr().alias("coefficient"),
+            _stars_expr(pl.col("p_value")).alias("stars"),
+        )
+        .sort("_scope_order", "_spec_order", "coefficient_name")
+        .collect()
+    )
+    if coefficient_rows.is_empty():
+        raise AssetBuildError("Extension C0 observed-scale selection returned zero coefficient rows.")
+
+    skipped_lf = scan_parquet_artifact(skipped_artifact) if skipped_artifact is not None else None
+    output_rows: list[dict[str, object]] = []
+    for coefficient_row in coefficient_rows.to_dicts():
+        text_scope = str(coefficient_row["text_scope"])
+        specification_name = str(coefficient_row["specification_name"])
+        coefficient_name = str(coefficient_row["coefficient_name"])
+        skipped_quarters = _extension_skipped_quarters(
+            skipped_lf,
+            text_scope=text_scope,
+            specification_name=specification_name,
+        )
+        support = _observed_scale_support_summary(
+            scan_parquet_artifact(panel_artifact),
+            outcome_column="filing_period_excess_return",
+            signal_column=coefficient_name,
+            control_columns=NO_OWNERSHIP_CONTROL_COLUMNS,
+            skipped_quarters=skipped_quarters,
+            filters=(pl.col("text_scope") == pl.lit(text_scope),),
+        )
+        coefficient = float(coefficient_row["estimate"])
+        effect_return = coefficient * support["score_iqr"]
+        output_rows.append(
+            {
+                "scope": coefficient_row["scope"],
+                "specification": coefficient_row["specification"],
+                "coefficient": coefficient_row["coefficient"],
+                "estimate": coefficient,
+                "std_error": coefficient_row["standard_error"],
+                "t_stat": coefficient_row["t_stat"],
+                "p_value": coefficient_row["p_value"],
+                "stars": coefficient_row["stars"],
+                "score_q25": support["score_q25"],
+                "score_q75": support["score_q75"],
+                "score_iqr": support["score_iqr"],
+                "iqr_effect_return": effect_return,
+                "iqr_effect_basis_points": effect_return * 10000.0,
+                "mean_filing_period_excess_return": support["outcome_mean"],
+                "n_obs": support["n_obs"],
+                "n_quarters": support["n_quarters"],
+                "coefficient_n_obs": coefficient_row["n_obs"],
+                "coefficient_n_quarters": coefficient_row["n_quarters"],
+                "skipped_quarters_excluded": skipped_quarters.height,
+                "dictionary_family": "replication",
+            }
+        )
+
+    selected = pl.DataFrame(output_rows)
+    output_paths = _write_table_outputs(context, spec, selected)
+    resolved_inputs = {
+        "extension_results": str(results_artifact.path),
+        "extension_analysis_panel": str(panel_artifact.path),
+    }
+    if skipped_artifact is not None:
+        resolved_inputs["extension_fit_skipped_quarters"] = str(skipped_artifact.path)
+    return BuildResult(
+        asset_id=spec.asset_id,
+        chapter=spec.chapter,
+        asset_kind=spec.asset_kind,
+        sample_contract_id=spec.sample_contract_id,
+        status="completed",
+        resolved_inputs=resolved_inputs,
+        output_paths=output_paths,
+        row_counts={
+            "table_rows": selected.height,
+            "skipped_quarter_applications": sum(int(row["skipped_quarters_excluded"]) for row in output_rows),
+        },
+    )
+
+
 def _build_chapter5_nw_lag_baseline_reconciliation(
     context: BuildContext,
     spec: AssetSpec,
@@ -2948,6 +3158,151 @@ def _validate_table_vi_surface(df: pl.DataFrame) -> None:
             f"LM2011 Table VI no-ownership selection returned {df.height} rows; "
             f"expected {TABLE_VI_EXPECTED_SPEC_COUNT}."
         )
+
+
+def _extension_observed_scale_coefficient_filter() -> pl.Expr:
+    return (
+        ((pl.col("specification_name") == pl.lit("dictionary_only")) & (pl.col("coefficient_name") == "lm_negative_tfidf"))
+        | (
+            (pl.col("specification_name") == pl.lit("finbert_only"))
+            & (pl.col("coefficient_name") == "finbert_neg_prob_lenw_mean")
+        )
+        | (
+            (pl.col("specification_name") == pl.lit("dictionary_finbert_joint"))
+            & pl.col("coefficient_name").is_in(EXTENSION_OBSERVED_SCALE_COEFFICIENTS)
+        )
+    )
+
+
+def _observed_scale_support_summary(
+    panel_lf: pl.LazyFrame,
+    *,
+    outcome_column: str,
+    signal_column: str,
+    control_columns: tuple[str, ...],
+    skipped_quarters: pl.DataFrame,
+    filters: tuple[pl.Expr, ...] = (),
+) -> dict[str, float | int]:
+    schema = panel_lf.collect_schema()
+    required_columns = ("filing_date", "ff48_industry_id", outcome_column, signal_column, *control_columns)
+    missing = [column for column in required_columns if column not in schema]
+    if missing:
+        raise AssetBuildError(
+            f"Observed-scale support panel is missing required columns for {signal_column}: {missing}"
+        )
+
+    selected_lf = panel_lf
+    for predicate in filters:
+        selected_lf = selected_lf.filter(predicate)
+    selected_lf = selected_lf.with_columns(
+        pl.col("filing_date")
+        .cast(pl.Date, strict=False)
+        .dt.truncate("1q")
+        .cast(pl.Date)
+        .alias("quarter_start")
+    ).drop_nulls(subset=required_columns + ("quarter_start",))
+    if skipped_quarters.height:
+        selected_lf = selected_lf.join(
+            skipped_quarters.select(pl.col("quarter_start").cast(pl.Date)).lazy(),
+            on="quarter_start",
+            how="anti",
+        )
+
+    summary = (
+        selected_lf.select(
+            pl.len().alias("n_obs"),
+            pl.col("quarter_start").n_unique().alias("n_quarters"),
+            pl.col(signal_column).cast(pl.Float64, strict=False).quantile(0.25, interpolation="linear").alias("score_q25"),
+            pl.col(signal_column).cast(pl.Float64, strict=False).quantile(0.75, interpolation="linear").alias("score_q75"),
+            pl.col(outcome_column).cast(pl.Float64, strict=False).mean().alias("outcome_mean"),
+        )
+        .collect()
+        .row(0, named=True)
+    )
+    n_obs = int(summary["n_obs"])
+    if n_obs == 0:
+        raise AssetBuildError(f"Observed-scale support panel has zero retained rows for {signal_column}.")
+    score_q25 = summary["score_q25"]
+    score_q75 = summary["score_q75"]
+    if score_q25 is None or score_q75 is None:
+        raise AssetBuildError(f"Observed-scale support panel has null quantiles for {signal_column}.")
+    return {
+        "n_obs": n_obs,
+        "n_quarters": int(summary["n_quarters"]),
+        "score_q25": float(score_q25),
+        "score_q75": float(score_q75),
+        "score_iqr": float(score_q75) - float(score_q25),
+        "outcome_mean": float(summary["outcome_mean"]) if summary["outcome_mean"] is not None else math.nan,
+    }
+
+
+def _resolve_table_vi_no_ownership_skipped_quarters_path(source_artifact: ResolvedArtifact) -> Path | None:
+    filenames = (
+        "lm2011_table_vi_results_no_ownership_validation_skipped_quarters.parquet",
+        "lm2011_table_vi_results_no_ownership_skipped_quarters.parquet",
+    )
+    for filename in filenames:
+        candidate = source_artifact.path.with_name(filename)
+        if candidate.exists() and candidate.is_file():
+            return candidate.resolve()
+    return None
+
+
+def _table_vi_no_ownership_skipped_quarters(
+    path: Path | None,
+    *,
+    dependent_variable: str,
+    signal_name: str,
+) -> pl.DataFrame:
+    if path is None or not path.exists():
+        return _empty_quarter_frame()
+    return _skipped_quarters_from_lf(
+        pl.scan_parquet(str(path)),
+        filters=(
+            ("dependent_variable", dependent_variable),
+            ("signal_name", signal_name),
+        ),
+    )
+
+
+def _extension_skipped_quarters(
+    skipped_lf: pl.LazyFrame | None,
+    *,
+    text_scope: str,
+    specification_name: str,
+) -> pl.DataFrame:
+    if skipped_lf is None:
+        return _empty_quarter_frame()
+    return _skipped_quarters_from_lf(
+        skipped_lf,
+        filters=(
+            ("text_scope", text_scope),
+            ("outcome_name", "filing_period_excess_return"),
+            ("control_set_id", "C0"),
+            ("specification_name", specification_name),
+        ),
+    )
+
+
+def _skipped_quarters_from_lf(
+    skipped_lf: pl.LazyFrame,
+    *,
+    filters: tuple[tuple[str, str], ...],
+) -> pl.DataFrame:
+    schema = skipped_lf.collect_schema()
+    if "quarter_start" not in schema:
+        return _empty_quarter_frame()
+    selected_lf = skipped_lf.with_columns(
+        pl.col("quarter_start").cast(pl.Date, strict=False).alias("quarter_start")
+    )
+    for column, value in filters:
+        if column in schema:
+            selected_lf = selected_lf.filter(pl.col(column).cast(pl.Utf8, strict=False) == pl.lit(value))
+    return selected_lf.select("quarter_start").drop_nulls().unique().collect()
+
+
+def _empty_quarter_frame() -> pl.DataFrame:
+    return pl.DataFrame(schema={"quarter_start": pl.Date})
 
 
 def _nw_baseline_comparison_row(

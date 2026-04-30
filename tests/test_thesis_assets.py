@@ -70,7 +70,9 @@ def test_registry_loader_imports_expected_assets() -> None:
         "ch5_extension_c0_fit_summary",
         "ch5_extension_c0_fit_comparisons",
         "ch5_extension_fit_delta_path",
+        "ch5_extension_c0_observed_scale_effects",
         "ch5_lm2011_table_vi_no_ownership_outcomes",
+        "ch5_lm2011_table_vi_volatility_observed_scale",
         "ch5_nw_lag_baseline_reconciliation",
         "ch5_nw_lag_core_no_ownership_appendix",
         "ch5_nw_lag_extension_coefficients_appendix",
@@ -340,6 +342,37 @@ def test_chapter5_table_vi_no_ownership_asset_falls_back_to_validation_pack(tmp_
     assert asset_result.resolved_inputs["table_vi_results_no_ownership"] == str(
         (validation_root / "lm2011_table_vi_results_no_ownership_validation.parquet").resolve()
     )
+
+
+def test_chapter5_table_vi_volatility_observed_scale_asset(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    run_root = repo_root / "inputs" / "lm2011_post_refinitiv"
+    run_root.mkdir(parents=True)
+    _write_table_vi_no_ownership_parquet(run_root / "lm2011_table_vi_results_no_ownership.parquet")
+    _write_full_10k_regression_panel(run_root / "lm2011_return_regression_panel_full_10k.parquet")
+    _write_empty_table_vi_skipped_quarters(
+        run_root / "lm2011_table_vi_results_no_ownership_skipped_quarters.parquet"
+    )
+
+    result = build_single_asset(
+        asset_id="ch5_lm2011_table_vi_volatility_observed_scale",
+        run_id="unit_table_vi_observed_scale",
+        repo_root=repo_root,
+        lm2011_post_refinitiv_dir=run_root,
+    )
+
+    asset_result = result.asset_results["ch5_lm2011_table_vi_volatility_observed_scale"]
+    assert asset_result.status == "completed"
+    assert asset_result.row_counts == {"table_rows": 2, "skipped_quarter_applications": 0}
+
+    table_df = pl.read_csv(asset_result.output_paths["csv"])
+    prop = table_df.filter((pl.col("signal") == "LM negative") & (pl.col("weighting") == "Proportional"))
+    tfidf = table_df.filter((pl.col("signal") == "LM negative") & (pl.col("weighting") == "tf-idf"))
+    assert prop.select("score_iqr").item() == pytest.approx(0.1)
+    assert prop.select("coefficient_x100").item() == pytest.approx(0.6)
+    assert prop.select("iqr_effect_percentage_points").item() == pytest.approx(0.06)
+    assert tfidf.select("score_iqr").item() == pytest.approx(0.01)
+    assert tfidf.select("iqr_effect_percentage_points").item() == pytest.approx(0.027)
 
 
 def test_submission_lock_rejects_escaped_run_root_path(tmp_path: Path) -> None:
@@ -776,6 +809,53 @@ def test_chapter5_extension_fit_delta_path_asset_filters_to_c0_replication(tmp_p
     }
     assert set(figure_df.get_column("dictionary_family_source").unique().to_list()) == {"replication"}
     assert 999 not in figure_df.get_column("n_obs").to_list()
+
+
+def test_chapter5_extension_c0_observed_scale_effects_excludes_skipped_quarter(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    extension_root = repo_root / "inputs" / "lm2011_extension"
+    replication_root = extension_root / "replication"
+    replication_root.mkdir(parents=True)
+    _write_extension_results_observed_scale_parquet(replication_root / "lm2011_extension_results.parquet")
+    _write_extension_analysis_panel_observed_scale(
+        replication_root / "lm2011_extension_analysis_panel.parquet"
+    )
+    _write_extension_fit_skipped_quarters_observed_scale(
+        replication_root / "lm2011_extension_fit_skipped_quarters.parquet"
+    )
+
+    result = build_single_asset(
+        asset_id="ch5_extension_c0_observed_scale_effects",
+        run_id="unit_extension_observed_scale",
+        repo_root=repo_root,
+        lm2011_extension_dir=extension_root,
+    )
+
+    asset_result = result.asset_results["ch5_extension_c0_observed_scale_effects"]
+    assert asset_result.status == "completed"
+    assert asset_result.row_counts == {"table_rows": 8, "skipped_quarter_applications": 8}
+
+    table_df = pl.read_csv(asset_result.output_paths["csv"])
+    assert set(table_df.get_column("scope").unique().to_list()) == {
+        "Item 7 MD&A",
+        "Item 1A risk factors",
+    }
+    assert table_df.get_column("n_obs").to_list() == [4] * 8
+    assert table_df.get_column("n_quarters").to_list() == [1] * 8
+    item7_dictionary = table_df.filter(
+        (pl.col("scope") == "Item 7 MD&A")
+        & (pl.col("specification") == "Dictionary only")
+        & (pl.col("coefficient") == "LM negative tf-idf")
+    )
+    item7_finbert = table_df.filter(
+        (pl.col("scope") == "Item 7 MD&A")
+        & (pl.col("specification") == "FinBERT only")
+        & (pl.col("coefficient") == "FinBERT negative probability")
+    )
+    assert item7_dictionary.select("score_iqr").item() == pytest.approx(15.0)
+    assert item7_dictionary.select("iqr_effect_basis_points").item() == pytest.approx(-1500.0)
+    assert item7_finbert.select("score_iqr").item() == pytest.approx(0.15)
+    assert item7_finbert.select("iqr_effect_basis_points").item() == pytest.approx(-30.0)
 
 
 def test_chapter5_nw_lag_core_no_ownership_appendix_asset(tmp_path: Path) -> None:
@@ -1711,6 +1791,21 @@ def _write_table_vi_no_ownership_parquet(path: Path) -> None:
     pl.DataFrame(rows).write_parquet(path)
 
 
+def _write_empty_table_vi_skipped_quarters(path: Path) -> None:
+    pl.DataFrame(
+        schema={
+            "table_id": pl.Utf8,
+            "specification_id": pl.Utf8,
+            "text_scope": pl.Utf8,
+            "dependent_variable": pl.Utf8,
+            "signal_name": pl.Utf8,
+            "quarter_start": pl.Date,
+            "skip_reason": pl.Utf8,
+            "n_obs": pl.Int32,
+        }
+    ).write_parquet(path)
+
+
 def _write_incomplete_table_vi_no_ownership_parquet(path: Path) -> None:
     pl.DataFrame(
         {
@@ -1924,6 +2019,60 @@ def _write_extension_results_parquet(path: Path) -> None:
                     "n_obs": 1000,
                     "n_quarters": 62,
                     "mean_quarter_n": 500.0,
+                    "average_r2": 0.03,
+                    "weighting_rule": "quarter_observation_count",
+                    "nw_lags": 1,
+                    "estimator_status": "estimated",
+                    "failure_reason": None,
+                    "dictionary_family_source": "replication",
+                }
+            )
+    pl.DataFrame(rows).write_parquet(path)
+
+
+def _write_extension_results_observed_scale_parquet(path: Path) -> None:
+    rows = []
+    specs = (
+        ("dictionary_only", "lm2011_frozen", "lm_negative_tfidf", "lm_negative_tfidf", -0.010, -2.0),
+        ("finbert_only", "finbert", "finbert_neg_prob_lenw_mean", "finbert_neg_prob_lenw_mean", -0.020, -3.0),
+        (
+            "dictionary_finbert_joint",
+            "dictionary_plus_finbert",
+            "lm_negative_tfidf",
+            "lm_negative_tfidf,finbert_neg_prob_lenw_mean",
+            -0.011,
+            -2.2,
+        ),
+        (
+            "dictionary_finbert_joint",
+            "dictionary_plus_finbert",
+            "finbert_neg_prob_lenw_mean",
+            "lm_negative_tfidf,finbert_neg_prob_lenw_mean",
+            -0.021,
+            -3.2,
+        ),
+    )
+    for text_scope in ("item_7_mda", "item_1a_risk_factors"):
+        for specification_name, feature_family, coefficient_name, signal_name, estimate, t_stat in specs:
+            rows.append(
+                {
+                    "run_id": "unit",
+                    "sample_window": "2009_2024",
+                    "text_scope": text_scope,
+                    "outcome_name": "filing_period_excess_return",
+                    "feature_family": feature_family,
+                    "control_set_id": "C0",
+                    "control_set_alias": "no_ownership",
+                    "specification_name": specification_name,
+                    "coefficient_name": coefficient_name,
+                    "signal_name": signal_name,
+                    "estimate": estimate,
+                    "standard_error": abs(estimate / t_stat),
+                    "t_stat": t_stat,
+                    "p_value": 0.04,
+                    "n_obs": 4,
+                    "n_quarters": 1,
+                    "mean_quarter_n": 4.0,
                     "average_r2": 0.03,
                     "weighting_rule": "quarter_observation_count",
                     "nw_lags": 1,
@@ -2193,10 +2342,12 @@ def _write_full_10k_regression_panel(path: Path) -> None:
             "filing_date": [date(2020, 1, 1), date(2020, 2, 1), date(2020, 3, 1)],
             "text_scope": ["full_10k", "full_10k", "full_10k"],
             "filing_period_excess_return": [0.01, -0.02, 0.03],
+            "postevent_return_volatility": [0.02, 0.03, 0.04],
             "lm_negative_prop": [0.1, 0.2, 0.3],
             "lm_negative_tfidf": [0.01, 0.02, 0.03],
             "h4n_inf_prop": [0.4, 0.5, 0.6],
             "h4n_inf_tfidf": [0.04, 0.05, 0.06],
+            "ff48_industry_id": [1, 1, 2],
             "log_size": [1.0, 2.0, 3.0],
             "log_book_to_market": [0.7, 0.8, 0.9],
             "log_share_turnover": [0.11, 0.12, 0.13],
@@ -2282,6 +2433,81 @@ def _write_extension_analysis_panel(path: Path) -> None:
         }
     )
     df.write_parquet(path)
+
+
+def _write_extension_analysis_panel_observed_scale(path: Path) -> None:
+    rows = []
+    retained_lm = [10.0, 20.0, 30.0, 40.0]
+    retained_finbert = [0.10, 0.20, 0.30, 0.40]
+    for text_scope in ("item_7_mda", "item_1a_risk_factors"):
+        for idx, (lm_score, finbert_score) in enumerate(zip(retained_lm, retained_finbert), start=1):
+            rows.append(
+                {
+                    "doc_id": f"{text_scope}_kept_{idx}",
+                    "filing_date": date(2024, 4, idx),
+                    "text_scope": text_scope,
+                    "ff48_industry_id": idx,
+                    "filing_period_excess_return": 0.001 * idx,
+                    "lm_negative_tfidf": lm_score,
+                    "finbert_neg_prob_lenw_mean": finbert_score,
+                    "log_size": float(idx),
+                    "log_book_to_market": 0.1 * idx,
+                    "pre_ffalpha": 0.001 * idx,
+                    "log_share_turnover": 0.01 * idx,
+                    "nasdaq_dummy": idx % 2,
+                    "dictionary_family": "replication",
+                }
+            )
+        for idx, (lm_score, finbert_score) in enumerate(((1000.0, 9.0), (2000.0, 10.0)), start=1):
+            rows.append(
+                {
+                    "doc_id": f"{text_scope}_skipped_{idx}",
+                    "filing_date": date(2024, 7, idx),
+                    "text_scope": text_scope,
+                    "ff48_industry_id": idx,
+                    "filing_period_excess_return": 0.50,
+                    "lm_negative_tfidf": lm_score,
+                    "finbert_neg_prob_lenw_mean": finbert_score,
+                    "log_size": float(idx),
+                    "log_book_to_market": 0.1 * idx,
+                    "pre_ffalpha": 0.001 * idx,
+                    "log_share_turnover": 0.01 * idx,
+                    "nasdaq_dummy": idx % 2,
+                    "dictionary_family": "replication",
+                }
+            )
+    pl.DataFrame(rows).write_parquet(path)
+
+
+def _write_extension_fit_skipped_quarters_observed_scale(path: Path) -> None:
+    rows = []
+    for text_scope, n_obs in (("item_7_mda", 6), ("item_1a_risk_factors", 7)):
+        for specification_name in ("dictionary_only", "finbert_only", "dictionary_finbert_joint"):
+            rows.append(
+                {
+                    "run_id": "unit",
+                    "sample_window": "2009_2024",
+                    "text_scope": text_scope,
+                    "outcome_name": "filing_period_excess_return",
+                    "feature_family": "unit",
+                    "control_set_id": "C0",
+                    "control_set_alias": "no_ownership",
+                    "specification_name": specification_name,
+                    "signal_name": "unit",
+                    "signal_inputs": "unit",
+                    "quarter_start": date(2024, 7, 1),
+                    "skip_reason": "insufficient_degrees_of_freedom",
+                    "n_obs": n_obs,
+                    "industry_count": 1,
+                    "rank": 1,
+                    "column_count": 2,
+                    "condition_number": None,
+                    "regressors": "unit",
+                    "duplicate_regressor_pairs": None,
+                    "restoring_drop_candidates": None,
+                }
+            )
+    pl.DataFrame(rows).write_parquet(path)
 
 
 def _write_extension_dictionary_surface(path: Path) -> None:
