@@ -12,9 +12,20 @@ import polars as pl
 
 
 _SCOPE_LABELS = {
-    "item_7_mda": "Item 7 MD&A",
-    "item_1a_risk_factors": "Item 1A risk factors",
+    "item_7_mda": "Item 7",
+    "item_1a_risk_factors": "Item 1A",
+    "items_1a_7_combined": "Items 1A+7",
 }
+
+_LEGEND_LABEL_REPLACEMENTS = (
+    ("FinBERT negative probability", "Neg. prob."),
+    ("FinBERT net negative", "Net neg."),
+    ("LM2011 negative proportion", "Neg. prop."),
+    ("LM2011 negative tf-idf", "Neg. tf-idf"),
+    ("Item 1A risk factors", "Item 1A"),
+    ("Item 7 MD&A", "Item 7"),
+    ("Items 1A + 7 combined", "Items 1A+7"),
+)
 
 
 def build_sample_funnel_figure(
@@ -170,6 +181,60 @@ def build_grouped_bar_figure(
     return fig
 
 
+def build_visible_prefix_token_mass_figure(df: pl.DataFrame) -> plt.Figure:
+    scopes = df.get_column("scope").to_list()
+    original = [float(value or 0.0) / 1_000_000.0 for value in df.get_column("original_lm_token_mass").to_list()]
+    visible = [
+        float(value or 0.0) / 1_000_000.0
+        for value in df.get_column("visible_prefix_lm_token_mass").to_list()
+    ]
+    true_over_share = [
+        float(value or 0.0) * 100.0 for value in df.get_column("true_over_512_sentence_share").to_list()
+    ]
+    positions = list(range(len(scopes)))
+    bar_width = 0.34
+
+    fig, ax = plt.subplots(figsize=(8.2, 4.8))
+    ax.bar(
+        [position - bar_width / 2.0 for position in positions],
+        original,
+        width=bar_width,
+        color="#345c72",
+        label="Original LM tokens",
+    )
+    ax.bar(
+        [position + bar_width / 2.0 for position in positions],
+        visible,
+        width=bar_width,
+        color="#98633d",
+        label="FinBERT-visible LM tokens",
+    )
+    ax.set_xticks(positions)
+    ax.set_xticklabels([_wrap_label(scope, width=18) for scope in scopes], fontsize=8)
+    ax.set_ylabel("LM token mass (millions)")
+    ax.grid(axis="y", alpha=0.16, linewidth=0.6)
+    ax.set_axisbelow(True)
+
+    share_ax = ax.twinx()
+    share_ax.plot(
+        positions,
+        true_over_share,
+        color="#4d6f43",
+        marker="o",
+        linewidth=1.8,
+        label="Truly >512 sentence share",
+    )
+    share_ax.set_ylabel("Truly >512 sentence share (%)")
+    max_share = max(true_over_share) if true_over_share else 0.0
+    share_ax.set_ylim(0.0, max_share * 1.20 if max_share > 0.0 else 1.0)
+
+    handles, labels = ax.get_legend_handles_labels()
+    share_handles, share_labels = share_ax.get_legend_handles_labels()
+    ax.legend(handles + share_handles, labels + share_labels, frameon=False, fontsize=8, loc="best")
+    fig.tight_layout()
+    return fig
+
+
 def build_percentile_band_figure(
     df: pl.DataFrame,
     *,
@@ -211,22 +276,37 @@ def build_ecdf_lines_figure(
     y_label: str = "ECDF",
 ) -> plt.Figure:
     fig, ax = plt.subplots(figsize=(7.0, 4.8))
+    handles = []
+    labels = []
     for series in df.get_column(series_col).unique().sort().to_list():
         series_df = df.filter(pl.col(series_col) == series).sort(x_col)
-        ax.step(
+        (line,) = ax.step(
             series_df.get_column(x_col).to_list(),
             series_df.get_column(y_col).to_list(),
             where="post",
             linewidth=1.7,
-            label=str(series),
+            label=_compact_legend_label(str(series)),
         )
+        handles.append(line)
+        labels.append(_compact_legend_label(str(series)))
     ax.set_xlabel(x_label)
     ax.set_ylabel(y_label)
     ax.set_ylim(0.0, 1.02)
     ax.grid(alpha=0.16, linewidth=0.6)
     ax.set_axisbelow(True)
-    ax.legend(frameon=False, fontsize=8)
-    fig.tight_layout()
+    if handles:
+        legend_columns = min(2, len(labels))
+        fig.legend(
+            handles,
+            labels,
+            frameon=False,
+            fontsize=8,
+            loc="lower center",
+            ncol=legend_columns,
+        )
+        fig.tight_layout(rect=(0.0, 0.16, 1.0, 1.0))
+    else:
+        fig.tight_layout()
     return fig
 
 
@@ -279,7 +359,15 @@ def build_metric_panel_ecdf_figure(
 
     axes[0].set_ylabel(y_label)
     if handles:
-        fig.legend(handles, labels, frameon=False, fontsize=8, loc="lower center", ncol=min(len(labels), 3))
+        compact_labels = [_compact_legend_label(label) for label in labels]
+        fig.legend(
+            handles,
+            compact_labels,
+            frameon=False,
+            fontsize=8,
+            loc="lower center",
+            ncol=min(len(compact_labels), 3),
+        )
         fig.tight_layout(rect=(0.0, 0.08, 1.0, 1.0))
     else:
         fig.tight_layout()
@@ -411,3 +499,10 @@ def _wrap_label(value: object, *, width: int) -> str:
 
 def _scope_label(scope: str) -> str:
     return _SCOPE_LABELS.get(scope, scope)
+
+
+def _compact_legend_label(label: str) -> str:
+    compact = label
+    for source, replacement in _LEGEND_LABEL_REPLACEMENTS:
+        compact = compact.replace(source, replacement)
+    return compact

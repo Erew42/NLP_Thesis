@@ -27,9 +27,12 @@ from thesis_assets.config.constants import DEFAULT_COMMON_SUCCESS_POLICY
 from thesis_assets.errors import RegistryError
 from thesis_assets.errors import SampleContractError
 from thesis_assets.errors import SubmissionLockError
+from thesis_assets.figures import build_ecdf_lines_figure
 from thesis_assets.figures import build_metric_panel_ecdf_figure
 from thesis_assets.figures import build_sample_funnel_figure
 from thesis_assets.registry import loader
+from thesis_assets.renderers.table import write_latex_table
+from thesis_assets.renderers.table import write_markdown_table
 from thesis_assets.specs import BuildResult
 from thesis_assets.specs import BuildSessionResult
 from thesis_assets.submission_lock import DEFAULT_FINBERT_MODEL_NAME
@@ -70,6 +73,11 @@ def test_registry_loader_imports_expected_assets() -> None:
         "ch5_extension_c0_fit_summary",
         "ch5_extension_c0_fit_comparisons",
         "ch5_extension_fit_delta_path",
+        "ch5_visible_prefix_audit",
+        "ch5_visible_prefix_coefficient_sensitivity",
+        "ch5_visible_prefix_fit_sensitivity",
+        "ch5_visible_prefix_token_mass_by_scope",
+        "ch5_visible_prefix_fit_delta_comparison",
         "ch5_extension_c0_observed_scale_effects",
         "ch5_lm2011_table_vi_no_ownership_outcomes",
         "ch5_lm2011_table_vi_volatility_observed_scale",
@@ -100,6 +108,39 @@ def test_registry_loader_rejects_duplicate_asset_ids(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(loader, "REGISTRY_MODULES", ("chapter4_descriptives", "chapter4_descriptives"))
     with pytest.raises(RegistryError, match="Duplicate asset_id"):
         loader.load_registry()
+
+
+def test_table_renderers_use_readable_wrapped_publication_layout(tmp_path: Path) -> None:
+    df = pl.DataFrame(
+        {
+            "scope": ["Item 7 MD&A", "Item 1A risk factors"],
+            "text_scope": ["item_7_mda", "item_1a_risk_factors"],
+            "outcome_name": ["filing_period_excess_return", "filing_period_excess_return"],
+            "n_obs": [1234, 2345],
+            "variant_description": [
+                "A deliberately long robustness specification label that should wrap cleanly in previews.",
+                "A second deliberately long robustness specification label that should wrap cleanly in previews.",
+            ],
+        }
+    )
+    markdown_path = tmp_path / "table.md"
+    latex_path = tmp_path / "table.tex"
+
+    write_markdown_table(df, markdown_path, notes="Rows report a compact preview.")
+    markdown_text = markdown_path.read_text(encoding="utf-8")
+    assert "| Scope | N | Variant |" in markdown_text
+    assert "text_scope" not in markdown_text
+    assert "Item 7 MD&A" not in markdown_text
+    assert "Item 7" in markdown_text
+    assert "<br>" in markdown_text
+    assert "Outcome=Filing return" in markdown_text
+
+    write_latex_table(df, latex_path, caption="Layout test", notes="Rows report a compact preview.")
+    latex_text = latex_path.read_text(encoding="utf-8")
+    assert r"\setlength{\tabcolsep}" in latex_text
+    assert r"\arraybackslash" in latex_text
+    assert r"\textit{Notes:}" in latex_text
+    assert "Rendered-layout note" in latex_text
 
 
 def test_sample_contract_helpers_apply_expected_selection() -> None:
@@ -811,6 +852,107 @@ def test_chapter5_extension_fit_delta_path_asset_filters_to_c0_replication(tmp_p
     assert 999 not in figure_df.get_column("n_obs").to_list()
 
 
+def test_chapter5_visible_prefix_audit_and_token_mass_assets(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    visible_root = repo_root / "inputs" / "lm2011_extension_finbert_visible_prefix"
+    visible_root.mkdir(parents=True)
+    _write_visible_prefix_audit_parquet(
+        visible_root / "lm2011_extension_finbert_visible_prefix_audit.parquet"
+    )
+
+    audit_result = build_single_asset(
+        asset_id="ch5_visible_prefix_audit",
+        run_id="unit_visible_prefix_audit",
+        repo_root=repo_root,
+        lm2011_extension_finbert_visible_prefix_dir=visible_root,
+    ).asset_results["ch5_visible_prefix_audit"]
+    assert audit_result.status == "completed"
+    assert audit_result.row_counts == {"table_rows": 3}
+    audit_df = pl.read_csv(audit_result.output_paths["csv"])
+    item7 = audit_df.filter(pl.col("text_scope") == "item_7_mda")
+    assert item7.select("true_over_512_sentence_share").item() == pytest.approx(0.25)
+    assert item7.select("visible_lm_token_retention").item() == pytest.approx(0.875)
+    assert item7.select("visible_prefix_policy_ids").item() == (
+        "bert_fast_offset_prefix_v1 | uncapped_sentence_text_v1"
+    )
+
+    figure_result = build_single_asset(
+        asset_id="ch5_visible_prefix_token_mass_by_scope",
+        run_id="unit_visible_prefix_token_mass",
+        repo_root=repo_root,
+        lm2011_extension_finbert_visible_prefix_dir=visible_root,
+    ).asset_results["ch5_visible_prefix_token_mass_by_scope"]
+    assert figure_result.status == "completed"
+    assert figure_result.row_counts == {"scope_rows": 3}
+    assert Path(figure_result.output_paths["png"]).exists()
+
+
+def test_chapter5_visible_prefix_coefficient_sensitivity_asset(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    canonical_root = repo_root / "inputs" / "lm2011_extension"
+    visible_root = repo_root / "inputs" / "lm2011_extension_finbert_visible_prefix"
+    canonical_root.mkdir(parents=True)
+    visible_root.mkdir(parents=True)
+    _write_extension_results_parquet(canonical_root / "lm2011_extension_results.parquet")
+    _write_visible_prefix_extension_results_parquet(visible_root / "lm2011_extension_results.parquet")
+
+    result = build_single_asset(
+        asset_id="ch5_visible_prefix_coefficient_sensitivity",
+        run_id="unit_visible_prefix_coefficients",
+        repo_root=repo_root,
+        lm2011_extension_dir=canonical_root,
+        lm2011_extension_finbert_visible_prefix_dir=visible_root,
+    )
+
+    asset_result = result.asset_results["ch5_visible_prefix_coefficient_sensitivity"]
+    assert asset_result.status == "completed"
+    table_df = pl.read_csv(asset_result.output_paths["csv"])
+    assert table_df.height == 8
+    item7_lm = table_df.filter(
+        (pl.col("text_scope") == "item_7_mda")
+        & (pl.col("specification_name") == "dictionary_only")
+        & (pl.col("coefficient_name") == "lm_negative_tfidf")
+    )
+    assert item7_lm.select("estimate_delta").item() == pytest.approx(0.001)
+
+
+def test_chapter5_visible_prefix_fit_sensitivity_assets(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    canonical_root = repo_root / "inputs" / "lm2011_extension"
+    visible_root = repo_root / "inputs" / "lm2011_extension_finbert_visible_prefix"
+    canonical_root.mkdir(parents=True)
+    visible_root.mkdir(parents=True)
+    _write_extension_fit_summary_parquet(canonical_root / "lm2011_extension_fit_summary.parquet")
+    _write_extension_fit_comparisons_parquet(canonical_root / "lm2011_extension_fit_comparisons.parquet")
+    _write_visible_prefix_fit_summary_parquet(visible_root / "lm2011_extension_fit_summary.parquet")
+    _write_visible_prefix_fit_comparisons_parquet(visible_root / "lm2011_extension_fit_comparisons.parquet")
+
+    table_result = build_single_asset(
+        asset_id="ch5_visible_prefix_fit_sensitivity",
+        run_id="unit_visible_prefix_fit",
+        repo_root=repo_root,
+        lm2011_extension_dir=canonical_root,
+        lm2011_extension_finbert_visible_prefix_dir=visible_root,
+    ).asset_results["ch5_visible_prefix_fit_sensitivity"]
+    assert table_result.status == "completed"
+    table_df = pl.read_csv(table_result.output_paths["csv"])
+    assert {"fit_summary", "fit_comparison"} == set(table_df.get_column("section").unique().to_list())
+    assert table_df.filter(pl.col("section") == "fit_summary").select("delta_weighted").max().item() == pytest.approx(
+        0.001
+    )
+
+    figure_result = build_single_asset(
+        asset_id="ch5_visible_prefix_fit_delta_comparison",
+        run_id="unit_visible_prefix_fit_delta",
+        repo_root=repo_root,
+        lm2011_extension_dir=canonical_root,
+        lm2011_extension_finbert_visible_prefix_dir=visible_root,
+    ).asset_results["ch5_visible_prefix_fit_delta_comparison"]
+    assert figure_result.status == "completed"
+    assert figure_result.row_counts == {"figure_rows": 24}
+    assert Path(figure_result.output_paths["png"]).exists()
+
+
 def test_chapter5_extension_c0_observed_scale_effects_excludes_skipped_quarter(tmp_path: Path) -> None:
     repo_root = tmp_path / "repo"
     extension_root = repo_root / "inputs" / "lm2011_extension"
@@ -1337,6 +1479,34 @@ def test_lm_negative_doc_score_ecdf_uses_separate_metric_panels(tmp_path: Path) 
         plt.close(figure)
 
 
+def test_ecdf_line_figure_uses_compact_external_legend() -> None:
+    ecdf_df = pl.DataFrame(
+        {
+            "series_label": [
+                "FinBERT negative probability - Item 1A risk factors",
+                "FinBERT negative probability - Item 7 MD&A",
+                "FinBERT net negative - Item 1A risk factors",
+                "FinBERT net negative - Item 7 MD&A",
+            ],
+            "score": [0.1, 0.2, 0.3, 0.4],
+            "ecdf": [0.5, 0.5, 0.5, 0.5],
+        }
+    )
+
+    figure = build_ecdf_lines_figure(ecdf_df, x_col="score", x_label="Document score")
+    try:
+        assert figure.axes[0].get_legend() is None
+        assert len(figure.legends) == 1
+        assert [text.get_text() for text in figure.legends[0].get_texts()] == [
+            "Neg. prob. - Item 1A",
+            "Neg. prob. - Item 7",
+            "Net neg. - Item 1A",
+            "Net neg. - Item 7",
+        ]
+    finally:
+        plt.close(figure)
+
+
 def test_lm_sentence_negative_share_scoring() -> None:
     negative_words = frozenset({"bad", "loss"})
     assert _lm_negative_sentence_share("Bad loss was offset by growth.", negative_words) == pytest.approx(2 / 6)
@@ -1452,6 +1622,7 @@ def test_usage_run_paths_prefer_unified_runner_layout(tmp_path: Path) -> None:
     )
     (unified_root / "lm2011_post_refinitiv").mkdir(parents=True)
     (unified_root / "lm2011_extension").mkdir(parents=True)
+    (unified_root / "lm2011_extension_finbert_visible_prefix").mkdir(parents=True)
     finbert_run = unified_root / "finbert_item_analysis" / "run_a"
     finbert_run.mkdir(parents=True)
     (finbert_run / "run_manifest.json").write_text("{}", encoding="utf-8")
@@ -1459,9 +1630,11 @@ def test_usage_run_paths_prefer_unified_runner_layout(tmp_path: Path) -> None:
 
     fallback_post = repo_root / "full_data_run" / "lm2011_post_refinitiv"
     fallback_ext = repo_root / "full_data_run" / "lm2011_extension"
+    fallback_visible = repo_root / "full_data_run" / "lm2011_extension_finbert_visible_prefix"
     sensitivity_root = repo_root / "full_data_run" / "lm2011_nw_lag_sensitivity_local_monitored"
     fallback_post.mkdir(parents=True)
     fallback_ext.mkdir(parents=True)
+    fallback_visible.mkdir(parents=True)
     sensitivity_root.mkdir(parents=True)
     (sensitivity_root / "core_tables_nw_lag_sensitivity.parquet").touch()
     (sensitivity_root / "extension_results_nw_lag_sensitivity.parquet").touch()
@@ -1474,6 +1647,9 @@ def test_usage_run_paths_prefer_unified_runner_layout(tmp_path: Path) -> None:
 
     assert resolved["lm2011_post_refinitiv_dir"] == (unified_root / "lm2011_post_refinitiv").resolve()
     assert resolved["lm2011_extension_dir"] == (unified_root / "lm2011_extension").resolve()
+    assert resolved["lm2011_extension_finbert_visible_prefix_dir"] == (
+        unified_root / "lm2011_extension_finbert_visible_prefix"
+    ).resolve()
     assert resolved["lm2011_nw_lag_sensitivity_dir"] == sensitivity_root.resolve()
     assert resolved["finbert_run_dir"] == finbert_run.resolve()
 
@@ -1483,8 +1659,14 @@ def test_usage_run_paths_support_versioned_snapshot_and_drive_layouts(tmp_path: 
     full_data_root = repo_root / "full_data_run"
     versioned_post = full_data_root / "lm2011_post_refinitiv-20260421T173344Z-3-001" / "lm2011_post_refinitiv"
     versioned_ext = full_data_root / "lm2011_extension-20260421T114544Z-3-001" / "lm2011_extension"
+    versioned_visible = (
+        full_data_root
+        / "lm2011_extension_finbert_visible_prefix-20260421T114544Z-3-001"
+        / "lm2011_extension_finbert_visible_prefix"
+    )
     versioned_post.mkdir(parents=True)
     versioned_ext.mkdir(parents=True)
+    versioned_visible.mkdir(parents=True)
 
     local_resolved = resolve_usage_run_paths(
         repo_root=repo_root,
@@ -1492,11 +1674,13 @@ def test_usage_run_paths_support_versioned_snapshot_and_drive_layouts(tmp_path: 
     )
     assert local_resolved["lm2011_post_refinitiv_dir"] == versioned_post.resolve()
     assert local_resolved["lm2011_extension_dir"] == versioned_ext.resolve()
+    assert local_resolved["lm2011_extension_finbert_visible_prefix_dir"] == versioned_visible.resolve()
 
     drive_data_root = tmp_path / "content" / "drive" / "MyDrive" / "Data_LM"
     unified_drive_root = drive_data_root / "results" / "sec_ccm_unified_runner"
     (unified_drive_root / "lm2011_post_refinitiv").mkdir(parents=True)
     (unified_drive_root / "lm2011_extension").mkdir(parents=True)
+    (unified_drive_root / "lm2011_extension_finbert_visible_prefix").mkdir(parents=True)
     drive_finbert_run = unified_drive_root / "finbert_item_analysis" / "finbert_item_analysis_2026-04-20T105101+0000"
     drive_finbert_run.mkdir(parents=True)
     (drive_finbert_run / "run_manifest.json").write_text("{}", encoding="utf-8")
@@ -1509,6 +1693,9 @@ def test_usage_run_paths_support_versioned_snapshot_and_drive_layouts(tmp_path: 
     )
     assert colab_resolved["lm2011_post_refinitiv_dir"] == (unified_drive_root / "lm2011_post_refinitiv").resolve()
     assert colab_resolved["lm2011_extension_dir"] == (unified_drive_root / "lm2011_extension").resolve()
+    assert colab_resolved["lm2011_extension_finbert_visible_prefix_dir"] == (
+        unified_drive_root / "lm2011_extension_finbert_visible_prefix"
+    ).resolve()
     assert colab_resolved["finbert_run_dir"] == drive_finbert_run.resolve()
 
 
@@ -1530,6 +1717,9 @@ def test_tools_entrypoint_build_asset_emits_json_and_allows_failures(
     resolved_paths = {
         "lm2011_post_refinitiv_dir": tmp_path / "inputs" / "lm2011_post_refinitiv",
         "lm2011_extension_dir": tmp_path / "inputs" / "lm2011_extension",
+        "lm2011_extension_finbert_visible_prefix_dir": (
+            tmp_path / "inputs" / "lm2011_extension_finbert_visible_prefix"
+        ),
         "lm2011_nw_lag_sensitivity_dir": tmp_path / "inputs" / "lm2011_nw_lag_sensitivity",
         "finbert_run_dir": tmp_path / "inputs" / "finbert_item_analysis",
         "finbert_robustness_dir": tmp_path / "inputs" / "finbert_robustness",
@@ -1581,6 +1771,10 @@ def test_tools_entrypoint_build_asset_emits_json_and_allows_failures(
     assert captured_kwargs["repo_root"] == repo_root.resolve()
     assert captured_kwargs["output_root"] == output_root.resolve()
     assert captured_kwargs["run_id"] == "tool_run"
+    assert (
+        captured_kwargs["lm2011_extension_finbert_visible_prefix_dir"]
+        == resolved_paths["lm2011_extension_finbert_visible_prefix_dir"]
+    )
 
     payload = json.loads(capsys.readouterr().out)
     assert payload["command"] == "build-asset"
@@ -1716,11 +1910,13 @@ def test_tools_entrypoint_build_asset_uses_submission_lock_without_auto_resoluti
     assert exit_code == 0
     assert captured_kwargs["submission_lock_path"] == lock_path
     assert captured_kwargs["lm2011_post_refinitiv_dir"] is None
+    assert captured_kwargs["lm2011_extension_finbert_visible_prefix_dir"] is None
     assert captured_kwargs["finbert_run_dir"] is None
 
     payload = json.loads(capsys.readouterr().out)
     assert payload["submission_lock"] == str(lock_path.resolve())
     assert payload["resolved_paths"]["lm2011_post_refinitiv_dir"] == str(run_root.resolve())
+    assert payload["resolved_paths"]["lm2011_extension_finbert_visible_prefix_dir"] is None
     assert payload["resolved_paths"]["finbert_run_dir"] is None
 
 
@@ -1976,6 +2172,27 @@ def _write_extension_fit_comparisons_parquet(path: Path) -> None:
     pl.DataFrame(rows).write_parquet(path)
 
 
+def _write_visible_prefix_fit_summary_parquet(path: Path) -> None:
+    _write_extension_fit_summary_parquet(path)
+    df = pl.read_parquet(path).with_columns(
+        (pl.col("weighted_avg_adj_r2") + 0.001).alias("weighted_avg_adj_r2"),
+        (pl.col("equal_quarter_avg_adj_r2") + 0.001).alias("equal_quarter_avg_adj_r2"),
+        (pl.col("total_n_obs") - 10).alias("total_n_obs"),
+    )
+    df.write_parquet(path)
+
+
+def _write_visible_prefix_fit_comparisons_parquet(path: Path) -> None:
+    _write_extension_fit_comparisons_parquet(path)
+    df = pl.read_parquet(path).with_columns(
+        (pl.col("weighted_avg_delta_adj_r2") + 0.0005).alias("weighted_avg_delta_adj_r2"),
+        (pl.col("equal_quarter_avg_delta_adj_r2") + 0.0005).alias("equal_quarter_avg_delta_adj_r2"),
+        (pl.col("nw_t_stat_delta_adj_r2") + 0.1).alias("nw_t_stat_delta_adj_r2"),
+        (pl.col("total_n_obs") - 10).alias("total_n_obs"),
+    )
+    df.write_parquet(path)
+
+
 def _write_extension_results_parquet(path: Path) -> None:
     rows = []
     specs = (
@@ -2027,6 +2244,56 @@ def _write_extension_results_parquet(path: Path) -> None:
                     "dictionary_family_source": "replication",
                 }
             )
+    pl.DataFrame(rows).write_parquet(path)
+
+
+def _write_visible_prefix_extension_results_parquet(path: Path) -> None:
+    _write_extension_results_parquet(path)
+    df = pl.read_parquet(path).with_columns(
+        pl.when(pl.col("coefficient_name") == "lm_negative_tfidf")
+        .then(pl.col("estimate") + 0.001)
+        .otherwise(pl.col("estimate") + 0.002)
+        .alias("estimate"),
+        (pl.col("t_stat") + 0.5).alias("t_stat"),
+        (pl.col("n_obs") - 5).alias("n_obs"),
+    )
+    df.write_parquet(path)
+
+
+def _write_visible_prefix_audit_parquet(path: Path) -> None:
+    rows = []
+    for text_scope, sentence_rows, at_512_rows, truly_over, original_tokens, visible_tokens in (
+        ("item_7_mda", 100, 30, 25, 800, 700),
+        ("item_1a_risk_factors", 80, 20, 12, 600, 540),
+        ("items_1a_7_combined", 180, 50, 37, 1400, 1240),
+    ):
+        rows.append(
+            {
+                "text_scope": text_scope,
+                "sentence_rows": sentence_rows,
+                "at_512_rows": at_512_rows,
+                "truly_over_512_rows": truly_over,
+                "affected_doc_scope_count": at_512_rows // 2,
+                "original_char_mass": original_tokens * 5,
+                "visible_prefix_char_mass": visible_tokens * 5,
+                "original_lm_token_mass": original_tokens,
+                "visible_prefix_lm_token_mass": visible_tokens,
+                "retained_finbert_token_count_512_mass": sentence_rows * 100,
+                "finbert_untruncated_token_count_mass": sentence_rows * 110,
+                "visible_prefix_policy_ids": (
+                    "bert_fast_offset_prefix_v1|uncapped_sentence_text_v1|"
+                    "bert_fast_offset_prefix_v1|uncapped_sentence_text_v1"
+                ),
+                "visible_prefix_fallback_rows": 0,
+                "model_name": "yiyanghkust/finbert-tone",
+                "model_revision": "model-rev",
+                "tokenizer_revision": "tokenizer-rev",
+                "model_name_source": "explicit_override",
+                "model_revision_source": "explicit_override",
+                "tokenizer_revision_source": "explicit_override",
+                "sensitivity_assumptions": "[]",
+            }
+        )
     pl.DataFrame(rows).write_parquet(path)
 
 

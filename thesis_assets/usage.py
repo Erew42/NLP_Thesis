@@ -34,6 +34,7 @@ def resolve_usage_run_paths(
     drive_data_root: Path | None = None,
     lm2011_post_refinitiv_dir: Path | None = None,
     lm2011_extension_dir: Path | None = None,
+    lm2011_extension_finbert_visible_prefix_dir: Path | None = None,
     lm2011_nw_lag_sensitivity_dir: Path | None = None,
     finbert_run_dir: Path | None = None,
     finbert_robustness_dir: Path | None = None,
@@ -42,6 +43,9 @@ def resolve_usage_run_paths(
         return {
             "lm2011_post_refinitiv_dir": _resolve_optional_path(lm2011_post_refinitiv_dir),
             "lm2011_extension_dir": _resolve_optional_path(lm2011_extension_dir),
+            "lm2011_extension_finbert_visible_prefix_dir": _resolve_optional_path(
+                lm2011_extension_finbert_visible_prefix_dir
+            ),
             "lm2011_nw_lag_sensitivity_dir": _resolve_optional_path(lm2011_nw_lag_sensitivity_dir),
             "finbert_run_dir": _resolve_optional_path(finbert_run_dir),
             "finbert_robustness_dir": _resolve_optional_path(finbert_robustness_dir),
@@ -64,6 +68,10 @@ def resolve_usage_run_paths(
         or defaults["lm2011_post_refinitiv_dir"],
         "lm2011_extension_dir": _resolve_optional_path(lm2011_extension_dir)
         or defaults["lm2011_extension_dir"],
+        "lm2011_extension_finbert_visible_prefix_dir": _resolve_optional_path(
+            lm2011_extension_finbert_visible_prefix_dir
+        )
+        or defaults["lm2011_extension_finbert_visible_prefix_dir"],
         "lm2011_nw_lag_sensitivity_dir": _resolve_optional_path(lm2011_nw_lag_sensitivity_dir)
         or defaults["lm2011_nw_lag_sensitivity_dir"],
         "finbert_run_dir": _resolve_optional_path(finbert_run_dir)
@@ -92,6 +100,12 @@ def resolve_local_profile_paths(repo_root: Path) -> dict[str, Path | None]:
                 _resolve_direct_or_snapshot_dir(full_data_root, "lm2011_extension"),
             )
         ),
+        "lm2011_extension_finbert_visible_prefix_dir": _first_existing_path(
+            (
+                unified_root / "lm2011_extension_finbert_visible_prefix",
+                _resolve_direct_or_snapshot_dir(full_data_root, "lm2011_extension_finbert_visible_prefix"),
+            )
+        ),
         "lm2011_nw_lag_sensitivity_dir": _resolve_latest_nw_lag_sensitivity_run(full_data_root),
         "finbert_run_dir": _first_existing_path(
             (
@@ -115,6 +129,9 @@ def resolve_colab_profile_paths(drive_data_root: Path) -> dict[str, Path | None]
             )
         ),
         "lm2011_extension_dir": _first_existing_path((unified_root / "lm2011_extension",)),
+        "lm2011_extension_finbert_visible_prefix_dir": _first_existing_path(
+            (unified_root / "lm2011_extension_finbert_visible_prefix",)
+        ),
         "lm2011_nw_lag_sensitivity_dir": _first_existing_path(
             (
                 results_root / "lm2011_nw_lag_sensitivity",

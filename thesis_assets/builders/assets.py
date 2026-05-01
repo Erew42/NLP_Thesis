@@ -25,11 +25,13 @@ from thesis_assets.errors import AssetBuildError
 from thesis_assets.figures import build_concordance_figure
 from thesis_assets.figures import build_concordance_by_scope_figure
 from thesis_assets.figures import build_ecdf_lines_figure
+from thesis_assets.figures import build_grouped_bar_figure
 from thesis_assets.figures import build_metric_panel_ecdf_figure
 from thesis_assets.figures import build_multi_series_line_figure
 from thesis_assets.figures import build_sample_attrition_figure
 from thesis_assets.figures import build_sample_bridge_figure
 from thesis_assets.figures import build_sample_funnel_figure
+from thesis_assets.figures import build_visible_prefix_token_mass_figure
 from thesis_assets.renderers import write_csv_table
 from thesis_assets.renderers import write_figure_bundle
 from thesis_assets.renderers import write_latex_table
@@ -78,6 +80,11 @@ EXTENSION_OBSERVED_SCALE_SPECS = (
     "dictionary_only",
     "finbert_only",
     "dictionary_finbert_joint",
+)
+VISIBLE_PREFIX_SENSITIVITY_TEXT_SCOPES = (
+    "item_7_mda",
+    "item_1a_risk_factors",
+    "items_1a_7_combined",
 )
 PORTFOLIO_SOURCE_SPREAD_DEFINITION = "Q5 - Q1; Q5 = most negative filings; Q1 = least negative filings"
 PORTFOLIO_SPREAD_DEFINITION = "Q1 - Q5; Q1 = least negative filings; Q5 = most negative filings"
@@ -153,6 +160,16 @@ def build_asset(context: BuildContext, spec: AssetSpec) -> BuildResult:
             return _build_chapter5_extension_c0_fit_comparisons(context, spec, artifact_map)
         if spec.builder_id == "chapter5_extension_fit_delta_path":
             return _build_chapter5_extension_fit_delta_path(context, spec, artifact_map)
+        if spec.builder_id == "chapter5_visible_prefix_audit":
+            return _build_chapter5_visible_prefix_audit(context, spec, artifact_map)
+        if spec.builder_id == "chapter5_visible_prefix_coefficient_sensitivity":
+            return _build_chapter5_visible_prefix_coefficient_sensitivity(context, spec, artifact_map)
+        if spec.builder_id == "chapter5_visible_prefix_fit_sensitivity":
+            return _build_chapter5_visible_prefix_fit_sensitivity(context, spec, artifact_map)
+        if spec.builder_id == "chapter5_visible_prefix_token_mass_by_scope":
+            return _build_chapter5_visible_prefix_token_mass_by_scope(context, spec, artifact_map)
+        if spec.builder_id == "chapter5_visible_prefix_fit_delta_comparison":
+            return _build_chapter5_visible_prefix_fit_delta_comparison(context, spec, artifact_map)
         if spec.builder_id == "chapter5_lm2011_table_vi_no_ownership":
             return _build_chapter5_lm2011_table_vi_no_ownership(context, spec, artifact_map)
         if spec.builder_id == "chapter5_lm2011_table_vi_volatility_observed_scale":
@@ -1720,6 +1737,302 @@ def _build_chapter5_extension_fit_delta_path(
         resolved_inputs={"extension_fit_difference_quarterly": str(source_artifact.path)},
         output_paths=output_paths,
         row_counts={"quarterly_rows": selected.height},
+    )
+
+
+def _build_chapter5_visible_prefix_audit(
+    context: BuildContext,
+    spec: AssetSpec,
+    artifacts: dict[str, ResolvedArtifact],
+) -> BuildResult:
+    source_artifact = artifacts["visible_prefix_audit"]
+    selected = _visible_prefix_audit_lf(scan_parquet_artifact(source_artifact)).drop("_scope_order").collect()
+    if selected.is_empty():
+        raise AssetBuildError("Visible-prefix audit artifact returned zero scope rows.")
+
+    output_paths = _write_table_outputs(context, spec, selected)
+    return BuildResult(
+        asset_id=spec.asset_id,
+        chapter=spec.chapter,
+        asset_kind=spec.asset_kind,
+        sample_contract_id=spec.sample_contract_id,
+        status="completed",
+        resolved_inputs={"visible_prefix_audit": str(source_artifact.path)},
+        output_paths=output_paths,
+        row_counts={"table_rows": selected.height},
+    )
+
+
+def _build_chapter5_visible_prefix_coefficient_sensitivity(
+    context: BuildContext,
+    spec: AssetSpec,
+    artifacts: dict[str, ResolvedArtifact],
+) -> BuildResult:
+    canonical_artifact = artifacts["canonical_extension_results"]
+    visible_artifact = artifacts["visible_prefix_extension_results"]
+    join_keys = (
+        "dictionary_family_source",
+        "text_scope",
+        "outcome_name",
+        "feature_family",
+        "control_set_id",
+        "specification_name",
+        "coefficient_name",
+        "signal_name",
+        "weighting_rule",
+    )
+    canonical_lf = _visible_prefix_regression_result_lf(scan_parquet_artifact(canonical_artifact))
+    visible_lf = _visible_prefix_regression_result_lf(scan_parquet_artifact(visible_artifact))
+    _assert_unique_lazy_keys(canonical_lf, join_keys, "canonical visible-prefix coefficient surface")
+    _assert_unique_lazy_keys(visible_lf, join_keys, "FinBERT-visible coefficient surface")
+    warnings = _visible_prefix_unmatched_warnings(
+        canonical_lf,
+        visible_lf,
+        join_keys,
+        left_label="canonical coefficient rows",
+        right_label="visible-prefix coefficient rows",
+    )
+
+    selected = (
+        canonical_lf.join(visible_lf, on=list(join_keys), how="inner", suffix="_visible")
+        .with_columns(
+            _scope_label_expr().alias("scope"),
+            _scope_order_expr().alias("_scope_order"),
+            _dictionary_family_label_expr().alias("dictionary_family"),
+            _dictionary_family_order_expr().alias("_dictionary_family_order"),
+            _specification_label_expr().alias("specification"),
+            _specification_order_expr().alias("_specification_order"),
+            _coefficient_label_expr("coefficient_name").alias("coefficient"),
+            (pl.col("estimate_visible") - pl.col("estimate")).alias("estimate_delta"),
+            (pl.col("standard_error_visible") - pl.col("standard_error")).alias("standard_error_delta"),
+            (pl.col("t_stat_visible") - pl.col("t_stat")).alias("t_stat_delta"),
+            (pl.col("p_value_visible") - pl.col("p_value")).alias("p_value_delta"),
+        )
+        .sort(
+            "_scope_order",
+            "_dictionary_family_order",
+            "_specification_order",
+            "coefficient",
+            "signal_name",
+        )
+        .select(
+            "scope",
+            "text_scope",
+            "dictionary_family",
+            "dictionary_family_source",
+            "outcome_name",
+            "feature_family",
+            "control_set_id",
+            "specification",
+            "specification_name",
+            "coefficient",
+            "coefficient_name",
+            "signal_name",
+            "weighting_rule",
+            pl.col("estimate").alias("canonical_estimate"),
+            pl.col("estimate_visible").alias("visible_prefix_estimate"),
+            "estimate_delta",
+            pl.col("standard_error").alias("canonical_standard_error"),
+            pl.col("standard_error_visible").alias("visible_prefix_standard_error"),
+            "standard_error_delta",
+            pl.col("t_stat").alias("canonical_t_stat"),
+            pl.col("t_stat_visible").alias("visible_prefix_t_stat"),
+            "t_stat_delta",
+            pl.col("p_value").alias("canonical_p_value"),
+            pl.col("p_value_visible").alias("visible_prefix_p_value"),
+            "p_value_delta",
+            pl.col("n_obs").alias("canonical_n_obs"),
+            pl.col("n_obs_visible").alias("visible_prefix_n_obs"),
+            pl.col("n_quarters").alias("canonical_n_quarters"),
+            pl.col("n_quarters_visible").alias("visible_prefix_n_quarters"),
+            pl.col("mean_quarter_n").alias("canonical_mean_quarter_n"),
+            pl.col("mean_quarter_n_visible").alias("visible_prefix_mean_quarter_n"),
+            pl.col("estimator_status").alias("canonical_estimator_status"),
+            pl.col("estimator_status_visible").alias("visible_prefix_estimator_status"),
+        )
+        .collect()
+    )
+    if selected.is_empty():
+        raise AssetBuildError("Visible-prefix coefficient sensitivity has zero matched estimated rows.")
+
+    output_paths = _write_table_outputs(context, spec, selected)
+    return BuildResult(
+        asset_id=spec.asset_id,
+        chapter=spec.chapter,
+        asset_kind=spec.asset_kind,
+        sample_contract_id=spec.sample_contract_id,
+        status="completed",
+        resolved_inputs={
+            "canonical_extension_results": str(canonical_artifact.path),
+            "visible_prefix_extension_results": str(visible_artifact.path),
+        },
+        output_paths=output_paths,
+        row_counts={"table_rows": selected.height},
+        warnings=tuple(warnings),
+    )
+
+
+def _build_chapter5_visible_prefix_fit_sensitivity(
+    context: BuildContext,
+    spec: AssetSpec,
+    artifacts: dict[str, ResolvedArtifact],
+) -> BuildResult:
+    canonical_summary_artifact = artifacts["canonical_extension_fit_summary"]
+    visible_summary_artifact = artifacts["visible_prefix_extension_fit_summary"]
+    canonical_comparison_artifact = artifacts["canonical_extension_fit_comparisons"]
+    visible_comparison_artifact = artifacts["visible_prefix_extension_fit_comparisons"]
+
+    summary_lf, summary_warnings = _visible_prefix_fit_summary_joined_lf(
+        scan_parquet_artifact(canonical_summary_artifact),
+        scan_parquet_artifact(visible_summary_artifact),
+    )
+    comparison_lf, comparison_warnings = _visible_prefix_fit_comparison_joined_lf(
+        scan_parquet_artifact(canonical_comparison_artifact),
+        scan_parquet_artifact(visible_comparison_artifact),
+        text_scopes=VISIBLE_PREFIX_SENSITIVITY_TEXT_SCOPES,
+    )
+    selected = pl.concat([summary_lf, comparison_lf], how="diagonal_relaxed").collect()
+    if selected.is_empty():
+        raise AssetBuildError("Visible-prefix fit sensitivity has zero matched rows.")
+    selected = selected.drop(
+        [
+            column
+            for column in ("_scope_order", "_dictionary_family_order", "_model_order", "_comparison_order")
+            if column in selected.columns
+        ]
+    )
+
+    output_paths = _write_table_outputs(context, spec, selected)
+    return BuildResult(
+        asset_id=spec.asset_id,
+        chapter=spec.chapter,
+        asset_kind=spec.asset_kind,
+        sample_contract_id=spec.sample_contract_id,
+        status="completed",
+        resolved_inputs={
+            "canonical_extension_fit_summary": str(canonical_summary_artifact.path),
+            "visible_prefix_extension_fit_summary": str(visible_summary_artifact.path),
+            "canonical_extension_fit_comparisons": str(canonical_comparison_artifact.path),
+            "visible_prefix_extension_fit_comparisons": str(visible_comparison_artifact.path),
+        },
+        output_paths=output_paths,
+        row_counts={"table_rows": selected.height},
+        warnings=tuple([*summary_warnings, *comparison_warnings]),
+    )
+
+
+def _build_chapter5_visible_prefix_token_mass_by_scope(
+    context: BuildContext,
+    spec: AssetSpec,
+    artifacts: dict[str, ResolvedArtifact],
+) -> BuildResult:
+    source_artifact = artifacts["visible_prefix_audit"]
+    selected = _visible_prefix_audit_lf(scan_parquet_artifact(source_artifact)).select(
+        "scope",
+        "text_scope",
+        "_scope_order",
+        "sentence_rows",
+        "at_512_rows",
+        "truly_over_512_rows",
+        "true_over_512_sentence_share",
+        "original_lm_token_mass",
+        "visible_prefix_lm_token_mass",
+        "visible_lm_token_retention",
+    ).collect()
+    if selected.is_empty():
+        raise AssetBuildError("Visible-prefix token-mass figure has zero audit rows.")
+
+    figure = build_visible_prefix_token_mass_figure(selected.sort("_scope_order"))
+    output_paths = _write_figure_outputs(context, spec, selected.drop("_scope_order"), figure)
+    return BuildResult(
+        asset_id=spec.asset_id,
+        chapter=spec.chapter,
+        asset_kind=spec.asset_kind,
+        sample_contract_id=spec.sample_contract_id,
+        status="completed",
+        resolved_inputs={"visible_prefix_audit": str(source_artifact.path)},
+        output_paths=output_paths,
+        row_counts={"scope_rows": selected.height},
+    )
+
+
+def _build_chapter5_visible_prefix_fit_delta_comparison(
+    context: BuildContext,
+    spec: AssetSpec,
+    artifacts: dict[str, ResolvedArtifact],
+) -> BuildResult:
+    canonical_artifact = artifacts["canonical_extension_fit_comparisons"]
+    visible_artifact = artifacts["visible_prefix_extension_fit_comparisons"]
+    joined_lf, warnings = _visible_prefix_fit_comparison_joined_lf(
+        scan_parquet_artifact(canonical_artifact),
+        scan_parquet_artifact(visible_artifact),
+        text_scopes=TARGET_TEXT_SCOPES,
+    )
+    canonical_surface = joined_lf.select(
+        "scope",
+        "text_scope",
+        "_scope_order",
+        "dictionary_family",
+        "dictionary_family_source",
+        "_dictionary_family_order",
+        "comparison",
+        "comparison_name",
+        "_comparison_order",
+        "comparison_panel",
+        pl.lit("Canonical cleaned scope").alias("source_surface"),
+        pl.col("canonical_weighted").alias("delta_adj_r2_weighted"),
+        pl.col("canonical_equal_quarter").alias("delta_adj_r2_equal_quarter"),
+    )
+    visible_surface = joined_lf.select(
+        "scope",
+        "text_scope",
+        "_scope_order",
+        "dictionary_family",
+        "dictionary_family_source",
+        "_dictionary_family_order",
+        "comparison",
+        "comparison_name",
+        "_comparison_order",
+        "comparison_panel",
+        pl.lit("FinBERT-visible LM2011").alias("source_surface"),
+        pl.col("visible_prefix_weighted").alias("delta_adj_r2_weighted"),
+        pl.col("visible_prefix_equal_quarter").alias("delta_adj_r2_equal_quarter"),
+    )
+    selected = (
+        pl.concat([canonical_surface, visible_surface], how="vertical_relaxed")
+        .sort("_scope_order", "_dictionary_family_order", "_comparison_order", "source_surface")
+        .collect()
+    )
+    if selected.is_empty():
+        raise AssetBuildError("Visible-prefix fit-delta comparison figure has zero matched rows.")
+
+    figure = build_grouped_bar_figure(
+        selected,
+        category_col="comparison_panel",
+        value_col="delta_adj_r2_weighted",
+        series_col="source_surface",
+        x_label="Scope and comparison",
+        y_label="C0 adjusted-R2 delta",
+    )
+    output_paths = _write_figure_outputs(
+        context,
+        spec,
+        selected.drop("_scope_order", "_dictionary_family_order", "_comparison_order"),
+        figure,
+    )
+    return BuildResult(
+        asset_id=spec.asset_id,
+        chapter=spec.chapter,
+        asset_kind=spec.asset_kind,
+        sample_contract_id=spec.sample_contract_id,
+        status="completed",
+        resolved_inputs={
+            "canonical_extension_fit_comparisons": str(canonical_artifact.path),
+            "visible_prefix_extension_fit_comparisons": str(visible_artifact.path),
+        },
+        output_paths=output_paths,
+        row_counts={"figure_rows": selected.height},
+        warnings=tuple(warnings),
     )
 
 
@@ -3850,6 +4163,8 @@ def _scope_label_expr() -> pl.Expr:
         .then(pl.lit("Item 7 MD&A"))
         .when(pl.col("text_scope") == "item_1a_risk_factors")
         .then(pl.lit("Item 1A risk factors"))
+        .when(pl.col("text_scope") == "items_1a_7_combined")
+        .then(pl.lit("Items 1A + 7 combined"))
         .otherwise(pl.col("text_scope"))
     )
 
@@ -3860,6 +4175,8 @@ def _scope_order_expr() -> pl.Expr:
         .then(pl.lit(1))
         .when(pl.col("text_scope") == "item_1a_risk_factors")
         .then(pl.lit(2))
+        .when(pl.col("text_scope") == "items_1a_7_combined")
+        .then(pl.lit(3))
         .otherwise(pl.lit(99))
     )
 
@@ -3974,6 +4291,409 @@ def _comparison_order_expr() -> pl.Expr:
         .when(pl.col("comparison_name") == "joint_minus_finbert")
         .then(pl.lit(3))
         .otherwise(pl.lit(99))
+    )
+
+
+def _visible_prefix_audit_lf(lf: pl.LazyFrame) -> pl.LazyFrame:
+    return (
+        lf.with_columns(
+            pl.col("sentence_rows").cast(pl.Float64, strict=False).alias("_sentence_rows_f"),
+            pl.col("at_512_rows").cast(pl.Float64, strict=False).alias("_at_512_rows_f"),
+            pl.col("truly_over_512_rows").cast(pl.Float64, strict=False).alias("_truly_over_512_rows_f"),
+            pl.col("original_char_mass").cast(pl.Float64, strict=False).alias("_original_char_mass_f"),
+            pl.col("visible_prefix_char_mass").cast(pl.Float64, strict=False).alias("_visible_prefix_char_mass_f"),
+            pl.col("original_lm_token_mass").cast(pl.Float64, strict=False).alias("_original_lm_token_mass_f"),
+            pl.col("visible_prefix_lm_token_mass").cast(pl.Float64, strict=False).alias(
+                "_visible_prefix_lm_token_mass_f"
+            ),
+            _scope_label_expr().alias("scope"),
+            _scope_order_expr().alias("_scope_order"),
+        )
+        .with_columns(
+            _dedupe_pipe_joined_string_expr("visible_prefix_policy_ids").alias("visible_prefix_policy_ids"),
+            _safe_ratio_expr(pl.col("_at_512_rows_f"), pl.col("_sentence_rows_f")).alias(
+                "at_512_sentence_share"
+            ),
+            _safe_ratio_expr(pl.col("_truly_over_512_rows_f"), pl.col("_sentence_rows_f")).alias(
+                "true_over_512_sentence_share"
+            ),
+            _safe_ratio_expr(pl.col("_visible_prefix_char_mass_f"), pl.col("_original_char_mass_f")).alias(
+                "visible_char_retention"
+            ),
+            _safe_ratio_expr(
+                pl.col("_visible_prefix_lm_token_mass_f"),
+                pl.col("_original_lm_token_mass_f"),
+            ).alias("visible_lm_token_retention"),
+        )
+        .sort("_scope_order")
+        .select(
+            "scope",
+            "text_scope",
+            "_scope_order",
+            "sentence_rows",
+            "at_512_rows",
+            "truly_over_512_rows",
+            "affected_doc_scope_count",
+            "at_512_sentence_share",
+            "true_over_512_sentence_share",
+            "original_char_mass",
+            "visible_prefix_char_mass",
+            "visible_char_retention",
+            "original_lm_token_mass",
+            "visible_prefix_lm_token_mass",
+            "visible_lm_token_retention",
+            "retained_finbert_token_count_512_mass",
+            "finbert_untruncated_token_count_mass",
+            "visible_prefix_policy_ids",
+            "visible_prefix_fallback_rows",
+            "model_name",
+            "model_revision",
+            "tokenizer_revision",
+            "model_name_source",
+            "model_revision_source",
+            "tokenizer_revision_source",
+            "sensitivity_assumptions",
+        )
+    )
+
+
+def _dedupe_pipe_joined_string_expr(column: str) -> pl.Expr:
+    return (
+        pl.when(pl.col(column).is_null())
+        .then(pl.lit(None, dtype=pl.Utf8))
+        .otherwise(
+            pl.col(column)
+            .cast(pl.Utf8, strict=False)
+            .str.split("|")
+            .list.eval(pl.element().str.strip_chars())
+            .list.unique()
+            .list.sort()
+            .list.join(" | ")
+        )
+    )
+
+
+def _visible_prefix_regression_result_lf(lf: pl.LazyFrame) -> pl.LazyFrame:
+    return (
+        _ensure_dictionary_family_source(lf)
+        .filter(
+            (pl.col("text_scope").is_in(VISIBLE_PREFIX_SENSITIVITY_TEXT_SCOPES))
+            & (pl.col("outcome_name") == pl.lit("filing_period_excess_return"))
+            & (pl.col("control_set_id") == pl.lit("C0"))
+            & (pl.col("dictionary_family_source").is_in(("replication", "extended")))
+            & (pl.col("specification_name").is_in(EXTENSION_OBSERVED_SCALE_SPECS))
+            & (pl.col("coefficient_name").is_in(EXTENSION_OBSERVED_SCALE_COEFFICIENTS))
+            & (pl.col("estimator_status") == pl.lit("estimated"))
+        )
+        .select(
+            "dictionary_family_source",
+            "text_scope",
+            "outcome_name",
+            "feature_family",
+            "control_set_id",
+            "specification_name",
+            "coefficient_name",
+            "signal_name",
+            "weighting_rule",
+            "estimate",
+            "standard_error",
+            "t_stat",
+            "p_value",
+            "n_obs",
+            "n_quarters",
+            "mean_quarter_n",
+            "estimator_status",
+        )
+    )
+
+
+def _visible_prefix_fit_summary_joined_lf(
+    canonical_lf: pl.LazyFrame,
+    visible_lf: pl.LazyFrame,
+) -> tuple[pl.LazyFrame, tuple[str, ...]]:
+    join_keys = (
+        "dictionary_family_source",
+        "text_scope",
+        "outcome_name",
+        "feature_family",
+        "control_set_id",
+        "specification_name",
+        "signal_name",
+        "weighting_rule",
+        "common_success_policy",
+    )
+    canonical_selected = _visible_prefix_fit_summary_selection_lf(canonical_lf)
+    visible_selected = _visible_prefix_fit_summary_selection_lf(visible_lf)
+    _assert_unique_lazy_keys(canonical_selected, join_keys, "canonical visible-prefix fit-summary surface")
+    _assert_unique_lazy_keys(visible_selected, join_keys, "FinBERT-visible fit-summary surface")
+    warnings = _visible_prefix_unmatched_warnings(
+        canonical_selected,
+        visible_selected,
+        join_keys,
+        left_label="canonical fit-summary rows",
+        right_label="visible-prefix fit-summary rows",
+    )
+    joined = (
+        canonical_selected.join(visible_selected, on=list(join_keys), how="inner", suffix="_visible")
+        .with_columns(
+            _scope_label_expr().alias("scope"),
+            _scope_order_expr().alias("_scope_order"),
+            _dictionary_family_label_expr().alias("dictionary_family"),
+            _dictionary_family_order_expr().alias("_dictionary_family_order"),
+            _specification_label_expr().alias("model_or_comparison"),
+            _specification_order_expr().alias("_model_order"),
+            (pl.col("weighted_avg_adj_r2_visible") - pl.col("weighted_avg_adj_r2")).alias(
+                "delta_weighted"
+            ),
+            (
+                pl.col("equal_quarter_avg_adj_r2_visible") - pl.col("equal_quarter_avg_adj_r2")
+            ).alias("delta_equal_quarter"),
+        )
+        .sort("_scope_order", "_dictionary_family_order", "_model_order")
+        .select(
+            pl.lit("fit_summary").alias("section"),
+            "scope",
+            "text_scope",
+            "dictionary_family",
+            "dictionary_family_source",
+            "outcome_name",
+            "control_set_id",
+            "feature_family",
+            "specification_name",
+            "signal_name",
+            "model_or_comparison",
+            "weighting_rule",
+            pl.col("weighted_avg_adj_r2").alias("canonical_weighted"),
+            pl.col("weighted_avg_adj_r2_visible").alias("visible_prefix_weighted"),
+            "delta_weighted",
+            pl.col("equal_quarter_avg_adj_r2").alias("canonical_equal_quarter"),
+            pl.col("equal_quarter_avg_adj_r2_visible").alias("visible_prefix_equal_quarter"),
+            "delta_equal_quarter",
+            pl.col("n_quarters").alias("canonical_n_quarters"),
+            pl.col("n_quarters_visible").alias("visible_prefix_n_quarters"),
+            pl.col("total_n_obs").alias("canonical_total_n_obs"),
+            pl.col("total_n_obs_visible").alias("visible_prefix_total_n_obs"),
+            pl.lit(None, dtype=pl.Float64).alias("canonical_nw_t_stat"),
+            pl.lit(None, dtype=pl.Float64).alias("visible_prefix_nw_t_stat"),
+            pl.lit(None, dtype=pl.Float64).alias("canonical_nw_p_value"),
+            pl.lit(None, dtype=pl.Float64).alias("visible_prefix_nw_p_value"),
+        )
+    )
+    return joined, tuple(warnings)
+
+
+def _visible_prefix_fit_comparison_joined_lf(
+    canonical_lf: pl.LazyFrame,
+    visible_lf: pl.LazyFrame,
+    *,
+    text_scopes: tuple[str, ...],
+) -> tuple[pl.LazyFrame, tuple[str, ...]]:
+    join_keys = (
+        "dictionary_family_source",
+        "text_scope",
+        "outcome_name",
+        "control_set_id",
+        "comparison_name",
+        "weighting_rule",
+        "common_success_policy",
+    )
+    canonical_selected = _visible_prefix_fit_comparison_selection_lf(canonical_lf, text_scopes=text_scopes)
+    visible_selected = _visible_prefix_fit_comparison_selection_lf(visible_lf, text_scopes=text_scopes)
+    _assert_unique_lazy_keys(canonical_selected, join_keys, "canonical visible-prefix fit-comparison surface")
+    _assert_unique_lazy_keys(visible_selected, join_keys, "FinBERT-visible fit-comparison surface")
+    warnings = _visible_prefix_unmatched_warnings(
+        canonical_selected,
+        visible_selected,
+        join_keys,
+        left_label="canonical fit-comparison rows",
+        right_label="visible-prefix fit-comparison rows",
+    )
+    joined = (
+        canonical_selected.join(visible_selected, on=list(join_keys), how="inner", suffix="_visible")
+        .with_columns(
+            _scope_label_expr().alias("scope"),
+            _scope_order_expr().alias("_scope_order"),
+            _dictionary_family_label_expr().alias("dictionary_family"),
+            _dictionary_family_order_expr().alias("_dictionary_family_order"),
+            _comparison_label_expr().alias("model_or_comparison"),
+            _comparison_label_expr().alias("comparison"),
+            _comparison_order_expr().alias("_comparison_order"),
+            (pl.col("weighted_avg_delta_adj_r2_visible") - pl.col("weighted_avg_delta_adj_r2")).alias(
+                "delta_weighted"
+            ),
+            (
+                pl.col("equal_quarter_avg_delta_adj_r2_visible")
+                - pl.col("equal_quarter_avg_delta_adj_r2")
+            ).alias("delta_equal_quarter"),
+        )
+        .with_columns(
+            pl.concat_str(
+                [
+                    pl.col("scope"),
+                    pl.lit(" | "),
+                    pl.col("dictionary_family"),
+                    pl.lit(" | "),
+                    pl.col("comparison"),
+                ]
+            ).alias("comparison_panel")
+        )
+        .sort("_scope_order", "_dictionary_family_order", "_comparison_order")
+        .select(
+            pl.lit("fit_comparison").alias("section"),
+            "scope",
+            "text_scope",
+            "_scope_order",
+            "dictionary_family",
+            "dictionary_family_source",
+            "_dictionary_family_order",
+            "outcome_name",
+            "control_set_id",
+            pl.lit(None, dtype=pl.Utf8).alias("feature_family"),
+            pl.lit(None, dtype=pl.Utf8).alias("specification_name"),
+            pl.lit(None, dtype=pl.Utf8).alias("signal_name"),
+            "comparison_name",
+            "comparison",
+            "_comparison_order",
+            "comparison_panel",
+            "model_or_comparison",
+            "weighting_rule",
+            pl.col("weighted_avg_delta_adj_r2").alias("canonical_weighted"),
+            pl.col("weighted_avg_delta_adj_r2_visible").alias("visible_prefix_weighted"),
+            "delta_weighted",
+            pl.col("equal_quarter_avg_delta_adj_r2").alias("canonical_equal_quarter"),
+            pl.col("equal_quarter_avg_delta_adj_r2_visible").alias("visible_prefix_equal_quarter"),
+            "delta_equal_quarter",
+            pl.col("n_quarters").alias("canonical_n_quarters"),
+            pl.col("n_quarters_visible").alias("visible_prefix_n_quarters"),
+            pl.col("total_n_obs").alias("canonical_total_n_obs"),
+            pl.col("total_n_obs_visible").alias("visible_prefix_total_n_obs"),
+            pl.col("nw_t_stat_delta_adj_r2").alias("canonical_nw_t_stat"),
+            pl.col("nw_t_stat_delta_adj_r2_visible").alias("visible_prefix_nw_t_stat"),
+            pl.col("nw_p_value_delta_adj_r2").alias("canonical_nw_p_value"),
+            pl.col("nw_p_value_delta_adj_r2_visible").alias("visible_prefix_nw_p_value"),
+        )
+    )
+    return joined, tuple(warnings)
+
+
+def _visible_prefix_fit_summary_selection_lf(lf: pl.LazyFrame) -> pl.LazyFrame:
+    return common_success_comparison(
+        _ensure_dictionary_family_source(lf),
+        expected_policy=DEFAULT_COMMON_SUCCESS_POLICY,
+        filters=(
+            pl.col("text_scope").is_in(VISIBLE_PREFIX_SENSITIVITY_TEXT_SCOPES),
+            pl.col("outcome_name") == pl.lit("filing_period_excess_return"),
+            pl.col("control_set_id") == pl.lit("C0"),
+            pl.col("dictionary_family_source").is_in(("replication", "extended")),
+            pl.col("specification_name").is_in(EXTENSION_OBSERVED_SCALE_SPECS),
+            pl.col("estimator_status") == pl.lit("estimated"),
+        ),
+    ).select(
+        "dictionary_family_source",
+        "text_scope",
+        "outcome_name",
+        "feature_family",
+        "control_set_id",
+        "specification_name",
+        "signal_name",
+        "weighting_rule",
+        "common_success_policy",
+        "weighted_avg_adj_r2",
+        "equal_quarter_avg_adj_r2",
+        "n_quarters",
+        "total_n_obs",
+    )
+
+
+def _visible_prefix_fit_comparison_selection_lf(
+    lf: pl.LazyFrame,
+    *,
+    text_scopes: tuple[str, ...],
+) -> pl.LazyFrame:
+    return common_success_comparison(
+        _ensure_dictionary_family_source(lf),
+        expected_policy=DEFAULT_COMMON_SUCCESS_POLICY,
+        filters=(
+            pl.col("text_scope").is_in(text_scopes),
+            pl.col("outcome_name") == pl.lit("filing_period_excess_return"),
+            pl.col("control_set_id") == pl.lit("C0"),
+            pl.col("dictionary_family_source").is_in(("replication", "extended")),
+            pl.col("comparison_name").is_in(
+                ("finbert_minus_dictionary", "joint_minus_dictionary", "joint_minus_finbert")
+            ),
+            pl.col("estimator_status") == pl.lit("estimated"),
+        ),
+    ).select(
+        "dictionary_family_source",
+        "text_scope",
+        "outcome_name",
+        "control_set_id",
+        "comparison_name",
+        "weighting_rule",
+        "common_success_policy",
+        "weighted_avg_delta_adj_r2",
+        "equal_quarter_avg_delta_adj_r2",
+        "nw_t_stat_delta_adj_r2",
+        "nw_p_value_delta_adj_r2",
+        "n_quarters",
+        "total_n_obs",
+    )
+
+
+def _safe_ratio_expr(numerator: pl.Expr, denominator: pl.Expr) -> pl.Expr:
+    return pl.when(denominator > 0).then(numerator / denominator).otherwise(pl.lit(None, dtype=pl.Float64))
+
+
+def _coefficient_label_expr(column: str) -> pl.Expr:
+    return (
+        pl.when(pl.col(column) == "lm_negative_tfidf")
+        .then(pl.lit("LM negative tf-idf"))
+        .when(pl.col(column) == "finbert_neg_prob_lenw_mean")
+        .then(pl.lit("FinBERT negative probability"))
+        .otherwise(pl.col(column))
+    )
+
+
+def _assert_unique_lazy_keys(lf: pl.LazyFrame, keys: tuple[str, ...], label: str) -> None:
+    duplicate_rows = lf.group_by(list(keys)).len().filter(pl.col("len") > 1).limit(8).collect()
+    if duplicate_rows.height:
+        preview = _key_preview(duplicate_rows, keys)
+        raise AssetBuildError(f"{label} contains duplicate comparison keys: {preview}")
+
+
+def _visible_prefix_unmatched_warnings(
+    left_lf: pl.LazyFrame,
+    right_lf: pl.LazyFrame,
+    keys: tuple[str, ...],
+    *,
+    left_label: str,
+    right_label: str,
+) -> list[str]:
+    left_count = _lazy_count(left_lf)
+    right_count = _lazy_count(right_lf)
+    matched_left = _lazy_count(left_lf.join(right_lf.select(list(keys)).unique(), on=list(keys), how="inner"))
+    matched_right = _lazy_count(right_lf.join(left_lf.select(list(keys)).unique(), on=list(keys), how="inner"))
+    warnings: list[str] = []
+    if left_count - matched_left:
+        warnings.append(
+            f"Visible-prefix comparison left {left_label} unmatched: {left_count - matched_left} of {left_count}."
+        )
+    if right_count - matched_right:
+        warnings.append(
+            f"Visible-prefix comparison right {right_label} unmatched: {right_count - matched_right} of {right_count}."
+        )
+    return warnings
+
+
+def _lazy_count(lf: pl.LazyFrame) -> int:
+    return int(lf.select(pl.len()).collect().item())
+
+
+def _key_preview(df: pl.DataFrame, keys: tuple[str, ...]) -> str:
+    rows = df.select(list(keys)).head(8).to_dicts()
+    return "; ".join(
+        ",".join(f"{key}={row.get(key)}" for key in keys)
+        for row in rows
     )
 
 
@@ -4545,7 +5265,7 @@ def _write_table_outputs(
     markdown_path = context.output_dirs["tables"] / f"{spec.output_stem}.md"
     write_csv_table(df, csv_path)
     write_latex_table(df, tex_path, caption=spec.caption_stub, notes=spec.notes_stub)
-    write_markdown_table(df, markdown_path)
+    write_markdown_table(df, markdown_path, notes=spec.notes_stub)
     return {
         "csv": str(csv_path),
         "tex": str(tex_path),

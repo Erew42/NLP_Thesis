@@ -467,10 +467,21 @@ def test_lm2011_spec_pins_trading_strategy_direction_and_split_outputs() -> None
         "r2",
     ]
     assert strategy_contract["formation_month"] == "June"
-    assert "Use the prior year's accepted 10-K signal to assign annual June sorts." in strategy_contract["portfolio_assignment_rule"]
-    assert "Long portfolio = lowest-negative quintile (Q1)." in strategy_contract["portfolio_assignment_rule"]
-    assert "Short portfolio = highest-negative quintile (Q5)." in strategy_contract["portfolio_assignment_rule"]
-    assert "long_short_return = return(Q1) - return(Q5)." in strategy_contract["portfolio_assignment_rule"]
+    assert (
+        "Map filings dated July through December to the following sort year, keep January through June filings "
+        "in the current sort year, and retain the latest eligible filing per KYPERMNO and sort year."
+        in strategy_contract["portfolio_assignment_rule"]
+    )
+    assert (
+        "Source artifacts store the high-minus-low spread: Q5 is the highest-negative quintile and Q1 is the "
+        "lowest-negative quintile."
+        in strategy_contract["portfolio_assignment_rule"]
+    )
+    assert "long_short_return = return(Q5) - return(Q1)." in strategy_contract["portfolio_assignment_rule"]
+    assert (
+        "Thesis asset tables and figures apply a presentation-only sign flip to report return(Q1) - return(Q5)."
+        in strategy_contract["portfolio_assignment_rule"]
+    )
 
 
 def test_lm2011_spec_activates_common_equity_market_cap_exchange_and_mda_filters() -> None:

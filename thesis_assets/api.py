@@ -11,6 +11,7 @@ from thesis_assets.config import MANIFEST_FILENAME
 from thesis_assets.config import RUN_FAMILY_FINBERT_ROBUSTNESS
 from thesis_assets.config import RUN_FAMILY_FINBERT_RUN
 from thesis_assets.config import RUN_FAMILY_LM2011_EXTENSION
+from thesis_assets.config import RUN_FAMILY_LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX
 from thesis_assets.config import RUN_FAMILY_LM2011_NW_LAG_SENSITIVITY
 from thesis_assets.config import RUN_FAMILY_LM2011_POST_REFINITIV
 from thesis_assets.config import build_output_root
@@ -35,6 +36,7 @@ def build_all_assets(
     output_root: Path | None = None,
     lm2011_post_refinitiv_dir: Path | None = None,
     lm2011_extension_dir: Path | None = None,
+    lm2011_extension_finbert_visible_prefix_dir: Path | None = None,
     lm2011_nw_lag_sensitivity_dir: Path | None = None,
     finbert_run_dir: Path | None = None,
     finbert_robustness_dir: Path | None = None,
@@ -47,6 +49,7 @@ def build_all_assets(
         output_root=output_root,
         lm2011_post_refinitiv_dir=lm2011_post_refinitiv_dir,
         lm2011_extension_dir=lm2011_extension_dir,
+        lm2011_extension_finbert_visible_prefix_dir=lm2011_extension_finbert_visible_prefix_dir,
         lm2011_nw_lag_sensitivity_dir=lm2011_nw_lag_sensitivity_dir,
         finbert_run_dir=finbert_run_dir,
         finbert_robustness_dir=finbert_robustness_dir,
@@ -62,6 +65,7 @@ def build_chapter_assets(
     output_root: Path | None = None,
     lm2011_post_refinitiv_dir: Path | None = None,
     lm2011_extension_dir: Path | None = None,
+    lm2011_extension_finbert_visible_prefix_dir: Path | None = None,
     lm2011_nw_lag_sensitivity_dir: Path | None = None,
     finbert_run_dir: Path | None = None,
     finbert_robustness_dir: Path | None = None,
@@ -74,6 +78,7 @@ def build_chapter_assets(
         output_root=output_root,
         lm2011_post_refinitiv_dir=lm2011_post_refinitiv_dir,
         lm2011_extension_dir=lm2011_extension_dir,
+        lm2011_extension_finbert_visible_prefix_dir=lm2011_extension_finbert_visible_prefix_dir,
         lm2011_nw_lag_sensitivity_dir=lm2011_nw_lag_sensitivity_dir,
         finbert_run_dir=finbert_run_dir,
         finbert_robustness_dir=finbert_robustness_dir,
@@ -89,6 +94,7 @@ def build_single_asset(
     output_root: Path | None = None,
     lm2011_post_refinitiv_dir: Path | None = None,
     lm2011_extension_dir: Path | None = None,
+    lm2011_extension_finbert_visible_prefix_dir: Path | None = None,
     lm2011_nw_lag_sensitivity_dir: Path | None = None,
     finbert_run_dir: Path | None = None,
     finbert_robustness_dir: Path | None = None,
@@ -101,6 +107,7 @@ def build_single_asset(
         output_root=output_root,
         lm2011_post_refinitiv_dir=lm2011_post_refinitiv_dir,
         lm2011_extension_dir=lm2011_extension_dir,
+        lm2011_extension_finbert_visible_prefix_dir=lm2011_extension_finbert_visible_prefix_dir,
         lm2011_nw_lag_sensitivity_dir=lm2011_nw_lag_sensitivity_dir,
         finbert_run_dir=finbert_run_dir,
         finbert_robustness_dir=finbert_robustness_dir,
@@ -116,6 +123,7 @@ def _build_assets(
     output_root: Path | None,
     lm2011_post_refinitiv_dir: Path | None,
     lm2011_extension_dir: Path | None,
+    lm2011_extension_finbert_visible_prefix_dir: Path | None,
     lm2011_nw_lag_sensitivity_dir: Path | None,
     finbert_run_dir: Path | None,
     finbert_robustness_dir: Path | None,
@@ -133,6 +141,7 @@ def _build_assets(
     explicit_args = {
         RUN_FAMILY_LM2011_POST_REFINITIV: lm2011_post_refinitiv_dir,
         RUN_FAMILY_LM2011_EXTENSION: lm2011_extension_dir,
+        RUN_FAMILY_LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX: lm2011_extension_finbert_visible_prefix_dir,
         RUN_FAMILY_LM2011_NW_LAG_SENSITIVITY: lm2011_nw_lag_sensitivity_dir,
         RUN_FAMILY_FINBERT_RUN: finbert_run_dir,
         RUN_FAMILY_FINBERT_ROBUSTNESS: finbert_robustness_dir,

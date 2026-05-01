@@ -10,6 +10,7 @@ from thesis_assets.figures.plots import build_percentile_band_figure
 from thesis_assets.figures.plots import build_sample_attrition_figure
 from thesis_assets.figures.plots import build_sample_bridge_figure
 from thesis_assets.figures.plots import build_sample_funnel_figure
+from thesis_assets.figures.plots import build_visible_prefix_token_mass_figure
 
 __all__ = [
     "build_concordance_figure",
@@ -22,4 +23,5 @@ __all__ = [
     "build_sample_attrition_figure",
     "build_sample_bridge_figure",
     "build_sample_funnel_figure",
+    "build_visible_prefix_token_mass_figure",
 ]

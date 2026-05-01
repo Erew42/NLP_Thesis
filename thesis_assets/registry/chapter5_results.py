@@ -8,6 +8,7 @@ from thesis_assets.config.constants import ARTIFACT_KEY_EXTENSION_FIT_SUMMARY
 from thesis_assets.config.constants import ARTIFACT_KEY_EXTENSION_FIT_COMPARISONS
 from thesis_assets.config.constants import ARTIFACT_KEY_EXTENSION_FIT_DIFFERENCE_QUARTERLY
 from thesis_assets.config.constants import ARTIFACT_KEY_EXTENSION_FIT_SKIPPED_QUARTERS
+from thesis_assets.config.constants import ARTIFACT_KEY_EXTENSION_FINBERT_VISIBLE_PREFIX_AUDIT
 from thesis_assets.config.constants import ARTIFACT_KEY_FINBERT_SENTENCE_SCORES_DIR
 from thesis_assets.config.constants import ARTIFACT_KEY_FINBERT_ROBUSTNESS_EXISTING_SCALE_COEFFICIENTS
 from thesis_assets.config.constants import ARTIFACT_KEY_FINBERT_ROBUSTNESS_EXISTING_SCALE_FIT_COMPARISONS
@@ -32,6 +33,7 @@ from thesis_assets.config.constants import ARTIFACT_KEY_TRADING_STRATEGY_MONTHLY
 from thesis_assets.config.constants import RUN_FAMILY_FINBERT_ROBUSTNESS
 from thesis_assets.config.constants import RUN_FAMILY_FINBERT_RUN
 from thesis_assets.config.constants import RUN_FAMILY_LM2011_EXTENSION
+from thesis_assets.config.constants import RUN_FAMILY_LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX
 from thesis_assets.config.constants import RUN_FAMILY_LM2011_NW_LAG_SENSITIVITY
 from thesis_assets.config.constants import RUN_FAMILY_LM2011_POST_REFINITIV
 from thesis_assets.specs import ArtifactRequirement
@@ -252,6 +254,303 @@ ASSETS: tuple[AssetSpec, ...] = (
                     "n_obs",
                     "delta_adj_r2",
                     "common_success_policy",
+                ),
+            ),
+        ),
+    ),
+    AssetSpec(
+        asset_id="ch5_visible_prefix_audit",
+        chapter="chapter5",
+        asset_kind="table",
+        output_stem="ch5_visible_prefix_audit",
+        caption_stub="FinBERT-visible LM2011 source audit by item scope.",
+        notes_stub=(
+            "Rows summarize the FinBERT-visible-prefix source used for the LM2011 extension "
+            "sensitivity, including capped-sentence counts, true over-512 counts, token mass, "
+            "prefix policy, and authority sources."
+        ),
+        sample_contract_id="finbert_visible_prefix_audit",
+        builder_id="chapter5_visible_prefix_audit",
+        required_artifacts=(
+            ArtifactRequirement(
+                logical_name="visible_prefix_audit",
+                run_family=RUN_FAMILY_LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX,
+                artifact_key=ARTIFACT_KEY_EXTENSION_FINBERT_VISIBLE_PREFIX_AUDIT,
+                required_columns=(
+                    "text_scope",
+                    "sentence_rows",
+                    "at_512_rows",
+                    "truly_over_512_rows",
+                    "affected_doc_scope_count",
+                    "original_char_mass",
+                    "visible_prefix_char_mass",
+                    "original_lm_token_mass",
+                    "visible_prefix_lm_token_mass",
+                    "retained_finbert_token_count_512_mass",
+                    "finbert_untruncated_token_count_mass",
+                    "visible_prefix_policy_ids",
+                    "visible_prefix_fallback_rows",
+                    "model_name",
+                    "model_revision",
+                    "tokenizer_revision",
+                    "model_name_source",
+                    "model_revision_source",
+                    "tokenizer_revision_source",
+                    "sensitivity_assumptions",
+                ),
+            ),
+        ),
+    ),
+    AssetSpec(
+        asset_id="ch5_visible_prefix_coefficient_sensitivity",
+        chapter="chapter5",
+        asset_kind="table",
+        output_stem="ch5_visible_prefix_coefficient_sensitivity",
+        caption_stub="Canonical versus FinBERT-visible LM2011 extension coefficient sensitivity.",
+        notes_stub=(
+            "Rows join canonical cleaned-scope extension estimates to the FinBERT-visible-prefix "
+            "sensitivity on dictionary family, scope, outcome, controls, specification, coefficient, "
+            "signal, and weighting rule."
+        ),
+        sample_contract_id="visible_prefix_coefficient_sensitivity",
+        builder_id="chapter5_visible_prefix_coefficient_sensitivity",
+        required_artifacts=(
+            ArtifactRequirement(
+                logical_name="canonical_extension_results",
+                run_family=RUN_FAMILY_LM2011_EXTENSION,
+                artifact_key=ARTIFACT_KEY_EXTENSION_RESULTS,
+                required_columns=(
+                    "text_scope",
+                    "outcome_name",
+                    "feature_family",
+                    "control_set_id",
+                    "specification_name",
+                    "coefficient_name",
+                    "signal_name",
+                    "estimate",
+                    "standard_error",
+                    "t_stat",
+                    "p_value",
+                    "n_obs",
+                    "n_quarters",
+                    "mean_quarter_n",
+                    "weighting_rule",
+                    "estimator_status",
+                ),
+            ),
+            ArtifactRequirement(
+                logical_name="visible_prefix_extension_results",
+                run_family=RUN_FAMILY_LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX,
+                artifact_key=ARTIFACT_KEY_EXTENSION_RESULTS,
+                required_columns=(
+                    "text_scope",
+                    "outcome_name",
+                    "feature_family",
+                    "control_set_id",
+                    "specification_name",
+                    "coefficient_name",
+                    "signal_name",
+                    "estimate",
+                    "standard_error",
+                    "t_stat",
+                    "p_value",
+                    "n_obs",
+                    "n_quarters",
+                    "mean_quarter_n",
+                    "weighting_rule",
+                    "estimator_status",
+                ),
+            ),
+        ),
+    ),
+    AssetSpec(
+        asset_id="ch5_visible_prefix_fit_sensitivity",
+        chapter="chapter5",
+        asset_kind="table",
+        output_stem="ch5_visible_prefix_fit_sensitivity",
+        caption_stub="Canonical versus FinBERT-visible LM2011 fit sensitivity.",
+        notes_stub=(
+            "Rows compare C0 adjusted-R2 summaries and C0 adjusted-R2 fit-comparison deltas "
+            "between the canonical cleaned-scope extension and the FinBERT-visible-prefix sensitivity."
+        ),
+        sample_contract_id="visible_prefix_fit_sensitivity",
+        builder_id="chapter5_visible_prefix_fit_sensitivity",
+        required_artifacts=(
+            ArtifactRequirement(
+                logical_name="canonical_extension_fit_summary",
+                run_family=RUN_FAMILY_LM2011_EXTENSION,
+                artifact_key=ARTIFACT_KEY_EXTENSION_FIT_SUMMARY,
+                required_columns=(
+                    "text_scope",
+                    "outcome_name",
+                    "feature_family",
+                    "control_set_id",
+                    "specification_name",
+                    "signal_name",
+                    "weighted_avg_adj_r2",
+                    "equal_quarter_avg_adj_r2",
+                    "n_quarters",
+                    "total_n_obs",
+                    "weighting_rule",
+                    "common_success_policy",
+                    "estimator_status",
+                ),
+            ),
+            ArtifactRequirement(
+                logical_name="visible_prefix_extension_fit_summary",
+                run_family=RUN_FAMILY_LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX,
+                artifact_key=ARTIFACT_KEY_EXTENSION_FIT_SUMMARY,
+                required_columns=(
+                    "text_scope",
+                    "outcome_name",
+                    "feature_family",
+                    "control_set_id",
+                    "specification_name",
+                    "signal_name",
+                    "weighted_avg_adj_r2",
+                    "equal_quarter_avg_adj_r2",
+                    "n_quarters",
+                    "total_n_obs",
+                    "weighting_rule",
+                    "common_success_policy",
+                    "estimator_status",
+                ),
+            ),
+            ArtifactRequirement(
+                logical_name="canonical_extension_fit_comparisons",
+                run_family=RUN_FAMILY_LM2011_EXTENSION,
+                artifact_key=ARTIFACT_KEY_EXTENSION_FIT_COMPARISONS,
+                required_columns=(
+                    "text_scope",
+                    "outcome_name",
+                    "control_set_id",
+                    "comparison_name",
+                    "weighted_avg_delta_adj_r2",
+                    "equal_quarter_avg_delta_adj_r2",
+                    "nw_t_stat_delta_adj_r2",
+                    "nw_p_value_delta_adj_r2",
+                    "n_quarters",
+                    "total_n_obs",
+                    "weighting_rule",
+                    "common_success_policy",
+                    "estimator_status",
+                ),
+            ),
+            ArtifactRequirement(
+                logical_name="visible_prefix_extension_fit_comparisons",
+                run_family=RUN_FAMILY_LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX,
+                artifact_key=ARTIFACT_KEY_EXTENSION_FIT_COMPARISONS,
+                required_columns=(
+                    "text_scope",
+                    "outcome_name",
+                    "control_set_id",
+                    "comparison_name",
+                    "weighted_avg_delta_adj_r2",
+                    "equal_quarter_avg_delta_adj_r2",
+                    "nw_t_stat_delta_adj_r2",
+                    "nw_p_value_delta_adj_r2",
+                    "n_quarters",
+                    "total_n_obs",
+                    "weighting_rule",
+                    "common_success_policy",
+                    "estimator_status",
+                ),
+            ),
+        ),
+    ),
+    AssetSpec(
+        asset_id="ch5_visible_prefix_token_mass_by_scope",
+        chapter="chapter5",
+        asset_kind="figure",
+        output_stem="ch5_visible_prefix_token_mass_by_scope",
+        caption_stub="Original and FinBERT-visible LM2011 token mass by item scope.",
+        notes_stub=(
+            "Bars show original and FinBERT-visible LM2011 token mass by scope; the line shows the "
+            "share of retained sentence rows with untruncated tokenizer length above 512."
+        ),
+        sample_contract_id="finbert_visible_prefix_audit",
+        builder_id="chapter5_visible_prefix_token_mass_by_scope",
+        required_artifacts=(
+            ArtifactRequirement(
+                logical_name="visible_prefix_audit",
+                run_family=RUN_FAMILY_LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX,
+                artifact_key=ARTIFACT_KEY_EXTENSION_FINBERT_VISIBLE_PREFIX_AUDIT,
+                required_columns=(
+                    "text_scope",
+                    "sentence_rows",
+                    "at_512_rows",
+                    "truly_over_512_rows",
+                    "original_lm_token_mass",
+                    "visible_prefix_lm_token_mass",
+                    "original_char_mass",
+                    "visible_prefix_char_mass",
+                    "affected_doc_scope_count",
+                    "visible_prefix_policy_ids",
+                    "visible_prefix_fallback_rows",
+                    "model_name",
+                    "model_revision",
+                    "tokenizer_revision",
+                    "model_name_source",
+                    "model_revision_source",
+                    "tokenizer_revision_source",
+                    "retained_finbert_token_count_512_mass",
+                    "finbert_untruncated_token_count_mass",
+                    "sensitivity_assumptions",
+                ),
+            ),
+        ),
+    ),
+    AssetSpec(
+        asset_id="ch5_visible_prefix_fit_delta_comparison",
+        chapter="chapter5",
+        asset_kind="figure",
+        output_stem="ch5_visible_prefix_fit_delta_comparison",
+        caption_stub="Canonical versus FinBERT-visible C0 adjusted-R2 deltas.",
+        notes_stub=(
+            "Grouped bars compare canonical cleaned-scope and FinBERT-visible-prefix C0 adjusted-R2 "
+            "fit-comparison deltas for Item 1A and Item 7."
+        ),
+        sample_contract_id="visible_prefix_fit_sensitivity",
+        builder_id="chapter5_visible_prefix_fit_delta_comparison",
+        required_artifacts=(
+            ArtifactRequirement(
+                logical_name="canonical_extension_fit_comparisons",
+                run_family=RUN_FAMILY_LM2011_EXTENSION,
+                artifact_key=ARTIFACT_KEY_EXTENSION_FIT_COMPARISONS,
+                required_columns=(
+                    "text_scope",
+                    "outcome_name",
+                    "control_set_id",
+                    "comparison_name",
+                    "weighted_avg_delta_adj_r2",
+                    "equal_quarter_avg_delta_adj_r2",
+                    "nw_t_stat_delta_adj_r2",
+                    "nw_p_value_delta_adj_r2",
+                    "n_quarters",
+                    "total_n_obs",
+                    "weighting_rule",
+                    "common_success_policy",
+                    "estimator_status",
+                ),
+            ),
+            ArtifactRequirement(
+                logical_name="visible_prefix_extension_fit_comparisons",
+                run_family=RUN_FAMILY_LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX,
+                artifact_key=ARTIFACT_KEY_EXTENSION_FIT_COMPARISONS,
+                required_columns=(
+                    "text_scope",
+                    "outcome_name",
+                    "control_set_id",
+                    "comparison_name",
+                    "weighted_avg_delta_adj_r2",
+                    "equal_quarter_avg_delta_adj_r2",
+                    "nw_t_stat_delta_adj_r2",
+                    "nw_p_value_delta_adj_r2",
+                    "n_quarters",
+                    "total_n_obs",
+                    "weighting_rule",
+                    "common_success_policy",
+                    "estimator_status",
                 ),
             ),
         ),

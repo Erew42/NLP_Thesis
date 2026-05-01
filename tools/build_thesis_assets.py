@@ -45,6 +45,7 @@ from thesis_assets import resolve_usage_run_paths
 from thesis_assets.config.constants import RUN_FAMILY_FINBERT_ROBUSTNESS
 from thesis_assets.config.constants import RUN_FAMILY_FINBERT_RUN
 from thesis_assets.config.constants import RUN_FAMILY_LM2011_EXTENSION
+from thesis_assets.config.constants import RUN_FAMILY_LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX
 from thesis_assets.config.constants import RUN_FAMILY_LM2011_NW_LAG_SENSITIVITY
 from thesis_assets.config.constants import RUN_FAMILY_LM2011_POST_REFINITIV
 from thesis_assets.submission_lock import DEFAULT_FINBERT_MODEL_NAME
@@ -124,6 +125,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             drive_data_root=args.drive_data_root,
             lm2011_post_refinitiv_dir=args.lm2011_post_refinitiv_dir,
             lm2011_extension_dir=args.lm2011_extension_dir,
+            lm2011_extension_finbert_visible_prefix_dir=args.lm2011_extension_finbert_visible_prefix_dir,
             lm2011_nw_lag_sensitivity_dir=args.lm2011_nw_lag_sensitivity_dir,
             finbert_run_dir=args.finbert_run_dir,
             finbert_robustness_dir=args.finbert_robustness_dir,
@@ -138,6 +140,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         ),
         "lm2011_extension_dir": (
             None if args.submission_lock is not None else resolved_paths["lm2011_extension_dir"]
+        ),
+        "lm2011_extension_finbert_visible_prefix_dir": (
+            None
+            if args.submission_lock is not None
+            else resolved_paths["lm2011_extension_finbert_visible_prefix_dir"]
         ),
         "lm2011_nw_lag_sensitivity_dir": (
             None if args.submission_lock is not None else resolved_paths["lm2011_nw_lag_sensitivity_dir"]
@@ -208,6 +215,7 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--lm2011-post-refinitiv-dir", type=Path, default=None)
     parser.add_argument("--lm2011-extension-dir", type=Path, default=None)
+    parser.add_argument("--lm2011-extension-finbert-visible-prefix-dir", type=Path, default=None)
     parser.add_argument("--lm2011-nw-lag-sensitivity-dir", type=Path, default=None)
     parser.add_argument("--finbert-run-dir", type=Path, default=None)
     parser.add_argument("--finbert-robustness-dir", type=Path, default=None)
@@ -227,6 +235,7 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
 def _add_lock_root_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--lm2011-post-refinitiv-dir", type=Path, default=None)
     parser.add_argument("--lm2011-extension-dir", type=Path, default=None)
+    parser.add_argument("--lm2011-extension-finbert-visible-prefix-dir", type=Path, default=None)
     parser.add_argument("--lm2011-nw-lag-sensitivity-dir", type=Path, default=None)
     parser.add_argument("--finbert-run-dir", type=Path, default=None)
     parser.add_argument("--finbert-robustness-dir", type=Path, default=None)
@@ -306,6 +315,9 @@ def _run_root_args(args: argparse.Namespace) -> dict[str, Path | None]:
     return {
         RUN_FAMILY_LM2011_POST_REFINITIV: args.lm2011_post_refinitiv_dir,
         RUN_FAMILY_LM2011_EXTENSION: args.lm2011_extension_dir,
+        RUN_FAMILY_LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX: (
+            args.lm2011_extension_finbert_visible_prefix_dir
+        ),
         RUN_FAMILY_LM2011_NW_LAG_SENSITIVITY: args.lm2011_nw_lag_sensitivity_dir,
         RUN_FAMILY_FINBERT_RUN: args.finbert_run_dir,
         RUN_FAMILY_FINBERT_ROBUSTNESS: args.finbert_robustness_dir,
@@ -333,6 +345,11 @@ def _resolved_paths_from_lock(lock: SubmissionLock) -> dict[str, Path | None]:
         "lm2011_extension_dir": lock.run_roots.get(RUN_FAMILY_LM2011_EXTENSION).path
         if RUN_FAMILY_LM2011_EXTENSION in lock.run_roots
         else None,
+        "lm2011_extension_finbert_visible_prefix_dir": (
+            lock.run_roots.get(RUN_FAMILY_LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX).path
+            if RUN_FAMILY_LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX in lock.run_roots
+            else None
+        ),
         "lm2011_nw_lag_sensitivity_dir": lock.run_roots.get(RUN_FAMILY_LM2011_NW_LAG_SENSITIVITY).path
         if RUN_FAMILY_LM2011_NW_LAG_SENSITIVITY in lock.run_roots
         else None,
@@ -352,6 +369,7 @@ def _resolve_run_paths(
     drive_data_root: Path,
     lm2011_post_refinitiv_dir: Path | None,
     lm2011_extension_dir: Path | None,
+    lm2011_extension_finbert_visible_prefix_dir: Path | None,
     lm2011_nw_lag_sensitivity_dir: Path | None,
     finbert_run_dir: Path | None,
     finbert_robustness_dir: Path | None,
@@ -362,6 +380,7 @@ def _resolve_run_paths(
         drive_data_root=drive_data_root.resolve(),
         lm2011_post_refinitiv_dir=lm2011_post_refinitiv_dir,
         lm2011_extension_dir=lm2011_extension_dir,
+        lm2011_extension_finbert_visible_prefix_dir=lm2011_extension_finbert_visible_prefix_dir,
         lm2011_nw_lag_sensitivity_dir=lm2011_nw_lag_sensitivity_dir,
         finbert_run_dir=finbert_run_dir,
         finbert_robustness_dir=finbert_robustness_dir,

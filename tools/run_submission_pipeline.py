@@ -33,6 +33,7 @@ for candidate in (ROOT, SRC):
 from thesis_assets.config.constants import RUN_FAMILY_FINBERT_ROBUSTNESS
 from thesis_assets.config.constants import RUN_FAMILY_FINBERT_RUN
 from thesis_assets.config.constants import RUN_FAMILY_LM2011_EXTENSION
+from thesis_assets.config.constants import RUN_FAMILY_LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX
 from thesis_assets.config.constants import RUN_FAMILY_LM2011_NW_LAG_SENSITIVITY
 from thesis_assets.config.constants import RUN_FAMILY_LM2011_POST_REFINITIV
 from thesis_assets.submission_lock import DEFAULT_FINBERT_MODEL_NAME
@@ -53,6 +54,7 @@ STAGE_NW_SENSITIVITY = "nw-sensitivity"
 STAGE_FINBERT_PREPROCESS = "finbert-preprocess"
 STAGE_FINBERT_ANALYSIS = "finbert-analysis"
 STAGE_EXTENSION = "extension"
+STAGE_VISIBLE_PREFIX_EXTENSION = "visible-prefix-extension"
 STAGE_FINBERT_ROBUSTNESS = "finbert-robustness"
 STAGE_THESIS_ASSETS = "thesis-assets"
 STAGE_ALL = "all"
@@ -63,6 +65,7 @@ ORDERED_STAGES: tuple[str, ...] = (
     STAGE_FINBERT_PREPROCESS,
     STAGE_FINBERT_ANALYSIS,
     STAGE_EXTENSION,
+    STAGE_VISIBLE_PREFIX_EXTENSION,
     STAGE_FINBERT_ROBUSTNESS,
     STAGE_THESIS_ASSETS,
 )
@@ -100,6 +103,31 @@ MASTER_DICTIONARY_CANDIDATES: tuple[str, ...] = (
     "Loughran-McDonald_MasterDictionary_1993-2024.csv",
 )
 EXTENDED_MASTER_DICTIONARY_FILENAME = "Loughran-McDonald_MasterDictionary_1993-2024.csv"
+PACKAGE_MANIFEST_FILENAME = "submission_package_manifest.json"
+PACKAGE_MANIFEST_SCHEMA_VERSION = 1
+PACKAGE_MANIFEST_PATH_SEMANTICS = "relative_to_submission_root"
+PACKAGE_MANIFEST_REQUIRED_GROUPS: tuple[str, ...] = (
+    "sec_year_merged",
+    "sec_items_analysis",
+    "sec_ccm_matched_clean",
+    "ccm_crsp_compustat",
+    "refinitiv_finalized",
+    "lm2011_additional_data",
+)
+ITEMS_ANALYSIS_REQUIRED_COLUMNS: tuple[str, ...] = (
+    "doc_id",
+    "item_id",
+    "full_text",
+    "item_status",
+    "exists_by_regime",
+    "boundary_authority_status",
+)
+ITEMS_ANALYSIS_REQUIRED_COLUMN_GROUPS: Mapping[str, tuple[str, ...]] = {
+    "cik": ("cik_10", "cik"),
+    "accession": ("accession_nodash", "accession_number"),
+    "filing_date": ("filing_date", "file_date_filename"),
+    "document_type": ("document_type_filename", "document_type"),
+}
 
 
 class SubmissionPipelineError(RuntimeError):
@@ -213,6 +241,10 @@ class SubmissionProfile:
         return self.analysis_outputs_root / "lm2011_extension"
 
     @property
+    def visible_prefix_extension_output_dir(self) -> Path:
+        return self.analysis_outputs_root / "lm2011_extension_finbert_visible_prefix"
+
+    @property
     def finbert_robustness_output_dir(self) -> Path:
         return self.analysis_outputs_root / "finbert_robustness"
 
@@ -227,6 +259,10 @@ class SubmissionProfile:
     @property
     def pipeline_manifest_path(self) -> Path:
         return self.submission_root / "submission_pipeline_manifest.json"
+
+    @property
+    def package_manifest_path(self) -> Path:
+        return self.submission_root / PACKAGE_MANIFEST_FILENAME
 
     @property
     def submission_lock_path(self) -> Path:
@@ -402,6 +438,21 @@ def run_stage(profile: SubmissionProfile, stage: str, *, force: bool, dry_run: b
         _promote_nw_sensitivity_pack(profile, require_core=True, require_extension=len(profile.config.nw_lags) > 1)
         _record_pipeline_stage(profile, stage, "completed", {"extension_output_dir": _rel(profile.extension_output_dir, profile)})
         return 0
+    if stage == STAGE_VISIBLE_PREFIX_EXTENSION:
+        validate_submission_profile(profile, outputs_required=False)
+        _run_visible_prefix_extension_stage(profile, force=force)
+        _record_pipeline_stage(
+            profile,
+            stage,
+            "completed",
+            {
+                "visible_prefix_extension_output_dir": _rel(
+                    profile.visible_prefix_extension_output_dir,
+                    profile,
+                )
+            },
+        )
+        return 0
     if stage == STAGE_FINBERT_ROBUSTNESS:
         return _run_command_stage(profile, stage, build_finbert_robustness_command(profile, force=force))
     if stage == STAGE_THESIS_ASSETS:
@@ -433,6 +484,11 @@ def stage_plan(
             details = {"command": _display_command(build_finbert_analysis_command(profile, force=force))}
         elif stage_name == STAGE_EXTENSION:
             details = {"action": "run LM2011 extension dictionary-family comparison", "output_dir": _rel(profile.extension_output_dir, profile)}
+        elif stage_name == STAGE_VISIBLE_PREFIX_EXTENSION:
+            details = {
+                "action": "run FinBERT-visible LM2011 extension sensitivity",
+                "output_dir": _rel(profile.visible_prefix_extension_output_dir, profile),
+            }
         elif stage_name == STAGE_FINBERT_ROBUSTNESS:
             details = {"command": _display_command(build_finbert_robustness_command(profile, force=force))}
         elif stage_name == STAGE_THESIS_ASSETS:
@@ -542,6 +598,7 @@ def build_thesis_assets_command(profile: SubmissionProfile) -> list[str]:
 
 def validate_submission_profile(profile: SubmissionProfile, *, outputs_required: bool = False) -> None:
     _assert_profile_paths_inside_submission_root(profile)
+    _validate_submission_package_manifest(profile)
     _require_dir_with_parquet(profile.year_merged_dir, "data/sec/year_merged")
     _require_dir_with_parquet(profile.items_analysis_dir, "data/sec/items_analysis")
     _require_file(profile.matched_clean_path, "SEC/CCM matched-clean parquet")
@@ -564,7 +621,7 @@ def validate_submission_profile(profile: SubmissionProfile, *, outputs_required:
         )
 
     _validate_parquet_columns(_first_parquet(profile.year_merged_dir), ("doc_id",), "year_merged shard")
-    _validate_parquet_columns(_first_parquet(profile.items_analysis_dir), ("doc_id",), "items_analysis shard")
+    _validate_items_analysis_shards(profile.items_analysis_dir)
     _validate_parquet_columns(profile.matched_clean_path, ("doc_id",), "sec_ccm_matched_clean")
     _validate_parquet_columns(profile.doc_ownership_path, ("doc_id",), "refinitiv_lm2011_doc_ownership")
     _validate_parquet_columns(profile.doc_analyst_selected_path, ("doc_id",), "refinitiv_doc_analyst_selected")
@@ -576,6 +633,7 @@ def validate_submission_profile(profile: SubmissionProfile, *, outputs_required:
         profile.nw_sensitivity_dir,
         profile.finbert_output_dir,
         profile.extension_output_dir,
+        profile.visible_prefix_extension_output_dir,
         profile.finbert_robustness_output_dir,
         profile.thesis_assets_output_root,
     ):
@@ -628,12 +686,70 @@ def _run_extension_stage(profile: SubmissionProfile, *, force: bool) -> None:
     run_lm2011_extension_dictionary_family_comparison_pipeline(cfg)
 
 
+def _run_visible_prefix_extension_stage(profile: SubmissionProfile, *, force: bool) -> None:
+    from thesis_pkg.notebooks_and_scripts.lm2011_sample_post_refinitiv_runner import (
+        DEFAULT_FINBERT_VISIBLE_PREFIX_SENTENCE_BATCH_SIZE,
+    )
+    from thesis_pkg.notebooks_and_scripts.lm2011_sample_post_refinitiv_runner import (
+        DEFAULT_LM2011_FULL_10K_CLEANING_CONTRACT,
+    )
+    from thesis_pkg.notebooks_and_scripts.lm2011_sample_post_refinitiv_runner import (
+        DEFAULT_LM2011_FULL_10K_TEXT_FEATURE_BATCH_SIZE,
+    )
+    from thesis_pkg.notebooks_and_scripts.lm2011_sample_post_refinitiv_runner import (
+        DEFAULT_RAM_LOG_INTERVAL_BATCHES,
+    )
+    from thesis_pkg.notebooks_and_scripts.lm2011_sample_post_refinitiv_runner import (
+        EXTENSION_DICTIONARY_SOURCE_FINBERT_VISIBLE_PREFIX,
+    )
+    from thesis_pkg.notebooks_and_scripts.lm2011_sample_post_refinitiv_runner import (
+        LM2011ExtensionRunConfig,
+    )
+    from thesis_pkg.notebooks_and_scripts.lm2011_sample_post_refinitiv_runner import (
+        run_lm2011_extension_dictionary_family_comparison_pipeline,
+    )
+
+    cfg = LM2011ExtensionRunConfig(
+        output_dir=profile.visible_prefix_extension_output_dir,
+        additional_data_dir=profile.additional_data_dir,
+        items_analysis_dir=profile.items_analysis_dir,
+        company_history_path=profile.ccm_dir / "companyhistory.parquet",
+        company_description_path=profile.ccm_dir / "companydescription.parquet",
+        ff48_siccodes_path=profile.additional_data_dir / "FF_Siccodes_48_Industries.txt",
+        event_panel_path=profile.lm2011_output_dir / "lm2011_event_panel.parquet",
+        year_merged_dir=profile.year_merged_dir,
+        local_work_root=profile.local_work_root / "lm2011_extension_finbert_visible_prefix",
+        full_10k_cleaning_contract=DEFAULT_LM2011_FULL_10K_CLEANING_CONTRACT,
+        full_10k_text_feature_batch_size=DEFAULT_LM2011_FULL_10K_TEXT_FEATURE_BATCH_SIZE,
+        recompute_extension_text_features_full_10k=force,
+        finbert_analysis_run_dir=profile.finbert_analysis_run_dir,
+        finbert_analysis_manifest_path=profile.finbert_analysis_run_dir / "run_manifest.json",
+        finbert_preprocessing_run_dir=profile.finbert_preprocessing_run_dir,
+        finbert_preprocessing_manifest_path=profile.finbert_preprocessing_run_dir / "run_manifest.json",
+        finbert_item_features_long_path=profile.finbert_analysis_run_dir / "item_features_long.parquet",
+        finbert_cleaned_item_scopes_dir=profile.finbert_preprocessing_run_dir / "cleaned_item_scopes" / "by_year",
+        finbert_sentence_scores_dir=profile.finbert_analysis_run_dir / "sentence_scores" / "by_year",
+        finbert_visible_prefix_model_name=profile.config.finbert.model_name,
+        finbert_visible_prefix_model_revision=profile.config.finbert.model_revision,
+        finbert_visible_prefix_tokenizer_revision=profile.config.finbert.tokenizer_revision,
+        finbert_visible_prefix_sentence_batch_size=DEFAULT_FINBERT_VISIBLE_PREFIX_SENTENCE_BATCH_SIZE,
+        dictionary_source_mode=EXTENSION_DICTIONARY_SOURCE_FINBERT_VISIBLE_PREFIX,
+        text_scopes=("item_1a_risk_factors", "item_7_mda", "items_1a_7_combined"),
+        run_id=profile.config.run_id,
+        note="submission pipeline FinBERT-visible LM2011 extension sensitivity",
+        ram_log_interval_batches=DEFAULT_RAM_LOG_INTERVAL_BATCHES,
+        nw_lags=profile.config.nw_lags,
+    )
+    run_lm2011_extension_dictionary_family_comparison_pipeline(cfg)
+
+
 def _write_submission_lock(profile: SubmissionProfile) -> Path:
     run_roots = {
         RUN_FAMILY_LM2011_POST_REFINITIV: profile.lm2011_output_dir,
         RUN_FAMILY_LM2011_NW_LAG_SENSITIVITY: profile.nw_sensitivity_dir,
         RUN_FAMILY_FINBERT_RUN: profile.finbert_analysis_run_dir,
         RUN_FAMILY_LM2011_EXTENSION: profile.extension_output_dir,
+        RUN_FAMILY_LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX: profile.visible_prefix_extension_output_dir,
         RUN_FAMILY_FINBERT_ROBUSTNESS: profile.finbert_robustness_output_dir,
     }
     overrides = [
@@ -842,9 +958,11 @@ def _assert_profile_paths_inside_submission_root(profile: SubmissionProfile) -> 
         profile.finbert_preprocessing_run_dir,
         profile.finbert_analysis_run_dir,
         profile.extension_output_dir,
+        profile.visible_prefix_extension_output_dir,
         profile.finbert_robustness_output_dir,
         profile.thesis_assets_output_root,
         profile.pipeline_manifest_path,
+        profile.package_manifest_path,
         profile.submission_lock_path,
     ):
         _assert_inside_submission_root(path, profile.submission_root)
@@ -944,11 +1062,100 @@ def _first_parquet(path: Path) -> Path:
     return paths[0]
 
 
+def _parquet_paths(path: Path) -> list[Path]:
+    paths = sorted(path.glob("*.parquet"))
+    if not paths:
+        raise SubmissionPipelineError(f"No parquet files found in {path}")
+    return paths
+
+
 def _validate_parquet_columns(path: Path, required_columns: Sequence[str], label: str) -> None:
     schema = pl.scan_parquet(path).collect_schema()
     missing = [column for column in required_columns if column not in schema]
     if missing:
         raise SubmissionPipelineError(f"{label} is missing required columns {missing}: {path}")
+
+
+def _validate_items_analysis_shards(items_analysis_dir: Path) -> None:
+    for path in _parquet_paths(items_analysis_dir):
+        schema_names = set(pl.scan_parquet(path).collect_schema().names())
+        missing_columns = [column for column in ITEMS_ANALYSIS_REQUIRED_COLUMNS if column not in schema_names]
+        missing_groups = [
+            label
+            for label, candidates in ITEMS_ANALYSIS_REQUIRED_COLUMN_GROUPS.items()
+            if not any(candidate in schema_names for candidate in candidates)
+        ]
+        if missing_columns or missing_groups:
+            raise SubmissionPipelineError(
+                "items_analysis shard schema is invalid. "
+                f"Missing columns={missing_columns}; missing column groups={missing_groups}; path={path}"
+            )
+
+
+def _validate_submission_package_manifest(profile: SubmissionProfile) -> None:
+    _require_file(profile.package_manifest_path, "submission package manifest")
+    try:
+        payload = json.loads(profile.package_manifest_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise SubmissionPipelineError(f"submission package manifest is not valid JSON: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise SubmissionPipelineError("submission package manifest must be a JSON object.")
+    if payload.get("schema_version") != PACKAGE_MANIFEST_SCHEMA_VERSION:
+        raise SubmissionPipelineError(
+            "submission package manifest schema_version must be "
+            f"{PACKAGE_MANIFEST_SCHEMA_VERSION}."
+        )
+    if payload.get("profile") != SUBMISSION_PROFILE:
+        raise SubmissionPipelineError(f"submission package manifest profile must be {SUBMISSION_PROFILE!r}.")
+    if payload.get("path_semantics") != PACKAGE_MANIFEST_PATH_SEMANTICS:
+        raise SubmissionPipelineError(
+            "submission package manifest path_semantics must be "
+            f"{PACKAGE_MANIFEST_PATH_SEMANTICS!r}."
+        )
+    if "code_version" not in payload:
+        raise SubmissionPipelineError("submission package manifest must include code_version.")
+    artifact_groups = payload.get("artifact_groups")
+    if not isinstance(artifact_groups, dict):
+        raise SubmissionPipelineError("submission package manifest artifact_groups must be a JSON object.")
+    missing_groups = [group for group in PACKAGE_MANIFEST_REQUIRED_GROUPS if group not in artifact_groups]
+    if missing_groups:
+        raise SubmissionPipelineError(f"submission package manifest is missing artifact groups: {missing_groups}")
+    for group_name in PACKAGE_MANIFEST_REQUIRED_GROUPS:
+        group_payload = artifact_groups[group_name]
+        if not isinstance(group_payload, dict):
+            raise SubmissionPipelineError(
+                f"submission package manifest artifact_groups.{group_name} must be a JSON object."
+            )
+        paths = group_payload.get("paths")
+        if not isinstance(paths, list) or not paths:
+            raise SubmissionPipelineError(
+                f"submission package manifest artifact_groups.{group_name}.paths must be a non-empty list."
+            )
+        for index, raw_path in enumerate(paths):
+            if not isinstance(raw_path, str) or not raw_path.strip():
+                raise SubmissionPipelineError(
+                    f"submission package manifest artifact_groups.{group_name}.paths[{index}] "
+                    "must be a non-empty relative path string."
+                )
+            value = Path(raw_path)
+            if value.is_absolute():
+                raise SubmissionPipelineError(
+                    f"submission package manifest path must be relative to submission_root: {raw_path}"
+                )
+            resolved = (profile.submission_root / value).resolve()
+            if not resolved.is_relative_to(profile.submission_root):
+                raise SubmissionPipelineError(
+                    f"submission package manifest path escapes submission_root: {raw_path}"
+                )
+            if not resolved.exists():
+                raise SubmissionPipelineError(
+                    f"submission package manifest references a missing path: {raw_path}"
+                )
+        schema_summary = group_payload.get("schema_summary")
+        if schema_summary is not None and not isinstance(schema_summary, dict):
+            raise SubmissionPipelineError(
+                f"submission package manifest artifact_groups.{group_name}.schema_summary must be a JSON object."
+            )
 
 
 def _validate_daily_panel_schema(path: Path) -> None:

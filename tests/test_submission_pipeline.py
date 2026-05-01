@@ -36,9 +36,82 @@ def _write_text(path: Path, text: str = "x\n") -> None:
     path.write_text(text, encoding="utf-8")
 
 
-def _write_minimal_submission_inputs(root: Path) -> None:
+def _write_minimal_package_manifest(root: Path) -> None:
+    payload = {
+        "schema_version": 1,
+        "profile": "SUBMISSION",
+        "path_semantics": "relative_to_submission_root",
+        "code_version": {
+            "git_commit": "unit-test",
+            "dirty": True,
+        },
+        "artifact_groups": {
+            "sec_year_merged": {
+                "paths": ["data/sec/year_merged/1994.parquet"],
+                "schema_summary": {"required_columns": ["doc_id"]},
+            },
+            "sec_items_analysis": {
+                "paths": ["data/sec/items_analysis/2009.parquet"],
+                "schema_summary": {
+                    "required_columns": [
+                        "doc_id",
+                        "item_id",
+                        "full_text",
+                        "item_status",
+                        "exists_by_regime",
+                        "boundary_authority_status",
+                    ],
+                },
+            },
+            "sec_ccm_matched_clean": {
+                "paths": ["data/sec/sec_ccm_matched_clean.parquet"],
+                "schema_summary": {"required_columns": ["doc_id"]},
+            },
+            "ccm_crsp_compustat": {
+                "paths": [
+                    "data/ccm_crsp_compustat/final_flagged_data_compdesc_added.parquet",
+                    "data/ccm_crsp_compustat/sfz_mth.parquet",
+                ],
+                "schema_summary": {"key_columns": ["KYPERMNO", "CALDT"]},
+            },
+            "refinitiv_finalized": {
+                "paths": [
+                    "data/refinitiv_finalized/refinitiv_lm2011_doc_ownership.parquet",
+                    "data/refinitiv_finalized/refinitiv_doc_analyst_selected.parquet",
+                ],
+                "schema_summary": {"required_columns": ["doc_id"]},
+            },
+            "lm2011_additional_data": {
+                "paths": [
+                    "data/LM2011_additional_data/LM2011_MasterDictionary.txt",
+                    "data/LM2011_additional_data/Loughran-McDonald_MasterDictionary_1993-2024.csv",
+                ],
+                "schema_summary": {"dictionary_family_inputs": ["replication", "extended"]},
+            },
+        },
+    }
+    _write_text(root / "submission_package_manifest.json", json.dumps(payload, indent=2, sort_keys=True))
+
+
+def _write_minimal_submission_inputs(root: Path, *, write_package_manifest: bool = True) -> None:
     _write_parquet(root / "data" / "sec" / "year_merged" / "1994.parquet", pl.DataFrame({"doc_id": ["d1"]}))
-    _write_parquet(root / "data" / "sec" / "items_analysis" / "2009.parquet", pl.DataFrame({"doc_id": ["d1"]}))
+    _write_parquet(
+        root / "data" / "sec" / "items_analysis" / "2009.parquet",
+        pl.DataFrame(
+            {
+                "doc_id": ["d1"],
+                "cik_10": ["0000000001"],
+                "accession_nodash": ["000000000123000001"],
+                "filing_date": ["2009-03-01"],
+                "document_type_filename": ["10-K"],
+                "item_id": ["7"],
+                "full_text": ["Management discussion text."],
+                "item_status": ["active"],
+                "exists_by_regime": [True],
+                "boundary_authority_status": ["accepted"],
+            }
+        ),
+    )
     _write_parquet(root / "data" / "sec" / "sec_ccm_matched_clean.parquet", pl.DataFrame({"doc_id": ["d1"]}))
     _write_parquet(
         root / "data" / "refinitiv_finalized" / "refinitiv_lm2011_doc_ownership.parquet",
@@ -98,6 +171,8 @@ def _write_minimal_submission_inputs(root: Path) -> None:
         additional / "Loughran-McDonald_MasterDictionary_1993-2024.csv",
         "Word,Negative,Positive,Uncertainty,Litigious,Strong_Modal,Weak_Modal\nLOSS,2009,0,0,0,0,0\n",
     )
+    if write_package_manifest:
+        _write_minimal_package_manifest(root)
 
 
 def test_submission_profile_default_layout_validates(tmp_path: Path) -> None:
@@ -112,6 +187,41 @@ def test_submission_profile_default_layout_validates(tmp_path: Path) -> None:
     assert profile.doc_ownership_path == (
         root / "data" / "refinitiv_finalized" / "refinitiv_lm2011_doc_ownership.parquet"
     ).resolve()
+
+
+def test_submission_profile_requires_package_manifest(tmp_path: Path) -> None:
+    tool = _load_submission_tool()
+    root = tmp_path / "submission"
+    _write_minimal_submission_inputs(root, write_package_manifest=False)
+
+    profile = tool.resolve_submission_profile(submission_root=root)
+    with pytest.raises(tool.SubmissionPipelineError, match="submission package manifest"):
+        tool.validate_submission_profile(profile)
+
+
+def test_submission_profile_validates_every_items_analysis_shard(tmp_path: Path) -> None:
+    tool = _load_submission_tool()
+    root = tmp_path / "submission"
+    _write_minimal_submission_inputs(root)
+    _write_parquet(root / "data" / "sec" / "items_analysis" / "2010.parquet", pl.DataFrame({"doc_id": ["d2"]}))
+
+    profile = tool.resolve_submission_profile(submission_root=root)
+    with pytest.raises(tool.SubmissionPipelineError, match="items_analysis shard schema is invalid"):
+        tool.validate_submission_profile(profile)
+
+
+def test_submission_package_manifest_rejects_escaped_paths(tmp_path: Path) -> None:
+    tool = _load_submission_tool()
+    root = tmp_path / "submission"
+    _write_minimal_submission_inputs(root)
+    manifest_path = root / "submission_package_manifest.json"
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload["artifact_groups"]["sec_year_merged"]["paths"] = ["../outside.parquet"]
+    manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    profile = tool.resolve_submission_profile(submission_root=root)
+    with pytest.raises(tool.SubmissionPipelineError, match="escapes submission_root"):
+        tool.validate_submission_profile(profile)
 
 
 def test_submission_config_rejects_escaped_artifact_override(tmp_path: Path) -> None:
@@ -211,6 +321,36 @@ def test_finbert_commands_pin_revision_and_analysis_requires_checkpoint(tmp_path
         tool.run_stage(profile, "finbert-analysis", force=False, dry_run=False)
 
 
+def test_visible_prefix_extension_stage_builds_separate_sensitivity_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tool = _load_submission_tool()
+    root = tmp_path / "submission"
+    root.mkdir()
+    profile = tool.resolve_submission_profile(submission_root=root)
+
+    from thesis_pkg.notebooks_and_scripts import lm2011_sample_post_refinitiv_runner as lm_runner
+
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        lm_runner,
+        "run_lm2011_extension_dictionary_family_comparison_pipeline",
+        lambda cfg: captured.update({"cfg": cfg}),
+    )
+
+    tool._run_visible_prefix_extension_stage(profile, force=False)
+
+    cfg = captured["cfg"]
+    assert cfg.output_dir == profile.visible_prefix_extension_output_dir
+    assert cfg.local_work_root == profile.local_work_root / "lm2011_extension_finbert_visible_prefix"
+    assert cfg.dictionary_source_mode == lm_runner.EXTENSION_DICTIONARY_SOURCE_FINBERT_VISIBLE_PREFIX
+    assert cfg.text_scopes == ("item_1a_risk_factors", "item_7_mda", "items_1a_7_combined")
+    assert cfg.finbert_sentence_scores_dir == profile.finbert_analysis_run_dir / "sentence_scores" / "by_year"
+    assert cfg.finbert_visible_prefix_model_revision == profile.config.finbert.model_revision
+    assert "full_10k" not in cfg.text_scopes
+
+
 def test_nw_sensitivity_promotion_writes_manifest(tmp_path: Path) -> None:
     tool = _load_submission_tool()
     root = tmp_path / "submission"
@@ -243,6 +383,16 @@ def test_thesis_asset_stage_creates_lock_and_uses_submission_lock(tmp_path: Path
     _write_parquet(profile.extension_output_dir / "lm2011_extension_fit_summary.parquet")
     _write_parquet(profile.extension_output_dir / "lm2011_extension_fit_comparisons.parquet")
     (profile.extension_output_dir / "lm2011_extension_run_manifest.json").write_text("{}", encoding="utf-8")
+    _write_parquet(profile.visible_prefix_extension_output_dir / "lm2011_extension_fit_summary.parquet")
+    _write_parquet(profile.visible_prefix_extension_output_dir / "lm2011_extension_fit_comparisons.parquet")
+    _write_parquet(
+        profile.visible_prefix_extension_output_dir
+        / "lm2011_extension_finbert_visible_prefix_audit.parquet"
+    )
+    (profile.visible_prefix_extension_output_dir / "lm2011_extension_run_manifest.json").write_text(
+        "{}",
+        encoding="utf-8",
+    )
     (profile.finbert_analysis_run_dir / "run_manifest.json").parent.mkdir(parents=True, exist_ok=True)
     (profile.finbert_analysis_run_dir / "run_manifest.json").write_text(
         json.dumps(
@@ -285,6 +435,7 @@ def test_thesis_asset_stage_creates_lock_and_uses_submission_lock(tmp_path: Path
         "finbert_robustness",
         "finbert_run",
         "lm2011_extension",
+        "lm2011_extension_finbert_visible_prefix",
         "lm2011_nw_lag_sensitivity",
         "lm2011_post_refinitiv",
     ]

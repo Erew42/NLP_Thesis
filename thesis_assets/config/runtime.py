@@ -10,6 +10,7 @@ from thesis_assets.config.constants import ARTIFACT_KEY_NW_LAG_EXTENSION_RESULTS
 from thesis_assets.config.constants import RUN_FAMILY_FINBERT_ROBUSTNESS
 from thesis_assets.config.constants import RUN_FAMILY_FINBERT_RUN
 from thesis_assets.config.constants import RUN_FAMILY_LM2011_EXTENSION
+from thesis_assets.config.constants import RUN_FAMILY_LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX
 from thesis_assets.config.constants import RUN_FAMILY_LM2011_NW_LAG_SENSITIVITY
 from thesis_assets.config.constants import RUN_FAMILY_LM2011_POST_REFINITIV
 
@@ -51,6 +52,20 @@ def candidate_run_roots(repo_root: Path, run_family: str) -> tuple[Path, ...]:
             *[path / "lm2011_extension" for path in globbed],
             Path("/content/drive/MyDrive/Data_LM/results/sec_ccm_unified_runner/lm2011_extension"),
             Path("/content/drive/My Drive/Data_LM/results/sec_ccm_unified_runner/lm2011_extension"),
+        ]
+    elif run_family == RUN_FAMILY_LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX:
+        globbed = sorted((full_data_run).glob("lm2011_extension_finbert_visible_prefix-*"))
+        candidates = [
+            full_data_run / "lm2011_extension_finbert_visible_prefix",
+            *[path / "lm2011_extension_finbert_visible_prefix" for path in globbed],
+            (
+                Path("/content/drive/MyDrive/Data_LM/results/sec_ccm_unified_runner")
+                / "lm2011_extension_finbert_visible_prefix"
+            ),
+            (
+                Path("/content/drive/My Drive/Data_LM/results/sec_ccm_unified_runner")
+                / "lm2011_extension_finbert_visible_prefix"
+            ),
         ]
     elif run_family == RUN_FAMILY_FINBERT_RUN:
         finbert_local = sample_results / "finbert_item_analysis_runner"

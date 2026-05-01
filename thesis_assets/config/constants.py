@@ -3,6 +3,7 @@ from __future__ import annotations
 
 RUN_FAMILY_LM2011_POST_REFINITIV = "lm2011_post_refinitiv"
 RUN_FAMILY_LM2011_EXTENSION = "lm2011_extension"
+RUN_FAMILY_LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX = "lm2011_extension_finbert_visible_prefix"
 RUN_FAMILY_LM2011_NW_LAG_SENSITIVITY = "lm2011_nw_lag_sensitivity"
 RUN_FAMILY_FINBERT_RUN = "finbert_run"
 RUN_FAMILY_FINBERT_ROBUSTNESS = "finbert_robustness"
@@ -30,6 +31,8 @@ ARTIFACT_KEY_EXTENSION_SAMPLE_LOSS = "lm2011_extension_sample_loss"
 ARTIFACT_KEY_EXTENSION_CONTROL_LADDER = "lm2011_extension_control_ladder"
 ARTIFACT_KEY_EXTENSION_DICTIONARY_SURFACE = "lm2011_extension_dictionary_surface"
 ARTIFACT_KEY_EXTENSION_FINBERT_SURFACE = "lm2011_extension_finbert_surface"
+ARTIFACT_KEY_EXTENSION_FINBERT_VISIBLE_PREFIX_SOURCE = "lm2011_extension_finbert_visible_prefix_source"
+ARTIFACT_KEY_EXTENSION_FINBERT_VISIBLE_PREFIX_AUDIT = "lm2011_extension_finbert_visible_prefix_audit"
 ARTIFACT_KEY_FINBERT_ITEM_FEATURES_LONG = "finbert_item_features_long"
 ARTIFACT_KEY_FINBERT_MODEL_INFERENCE_YEARLY_SUMMARY = "finbert_model_inference_yearly_summary"
 ARTIFACT_KEY_FINBERT_COVERAGE_REPORT = "finbert_coverage_report"
@@ -70,6 +73,12 @@ ARTIFACT_FILENAMES: dict[str, str] = {
     ARTIFACT_KEY_EXTENSION_CONTROL_LADDER: "lm2011_extension_control_ladder.parquet",
     ARTIFACT_KEY_EXTENSION_DICTIONARY_SURFACE: "lm2011_extension_dictionary_surface.parquet",
     ARTIFACT_KEY_EXTENSION_FINBERT_SURFACE: "lm2011_extension_finbert_surface.parquet",
+    ARTIFACT_KEY_EXTENSION_FINBERT_VISIBLE_PREFIX_SOURCE: (
+        "lm2011_extension_finbert_visible_prefix_source.parquet"
+    ),
+    ARTIFACT_KEY_EXTENSION_FINBERT_VISIBLE_PREFIX_AUDIT: (
+        "lm2011_extension_finbert_visible_prefix_audit.parquet"
+    ),
     ARTIFACT_KEY_FINBERT_ITEM_FEATURES_LONG: "item_features_long.parquet",
     ARTIFACT_KEY_FINBERT_MODEL_INFERENCE_YEARLY_SUMMARY: "model_inference_yearly_summary.parquet",
     ARTIFACT_KEY_FINBERT_COVERAGE_REPORT: "coverage_report.parquet",
@@ -118,6 +127,8 @@ ARTIFACT_MANIFEST_KEYS: dict[str, tuple[str, ...]] = {
     ARTIFACT_KEY_EXTENSION_CONTROL_LADDER: ("extension_control_ladder",),
     ARTIFACT_KEY_EXTENSION_DICTIONARY_SURFACE: ("extension_dictionary_surface",),
     ARTIFACT_KEY_EXTENSION_FINBERT_SURFACE: ("extension_finbert_surface",),
+    ARTIFACT_KEY_EXTENSION_FINBERT_VISIBLE_PREFIX_SOURCE: ("extension_finbert_visible_prefix_source",),
+    ARTIFACT_KEY_EXTENSION_FINBERT_VISIBLE_PREFIX_AUDIT: ("extension_finbert_visible_prefix_audit",),
     ARTIFACT_KEY_FINBERT_ITEM_FEATURES_LONG: ("item_features_long_path", "item_features_long"),
     ARTIFACT_KEY_FINBERT_MODEL_INFERENCE_YEARLY_SUMMARY: ("model_inference_yearly_summary",),
     ARTIFACT_KEY_FINBERT_COVERAGE_REPORT: ("coverage_report",),
@@ -133,6 +144,10 @@ ARTIFACT_MANIFEST_KEYS: dict[str, tuple[str, ...]] = {
 RUN_MANIFEST_FILENAMES: dict[str, tuple[str, ...]] = {
     RUN_FAMILY_LM2011_POST_REFINITIV: ("lm2011_sample_run_manifest.json", "run_manifest.json"),
     RUN_FAMILY_LM2011_EXTENSION: ("lm2011_extension_run_manifest.json", "run_manifest.json"),
+    RUN_FAMILY_LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX: (
+        "lm2011_extension_run_manifest.json",
+        "run_manifest.json",
+    ),
     RUN_FAMILY_LM2011_NW_LAG_SENSITIVITY: ("lm2011_nw_lag_sensitivity_run_manifest.json", "run_manifest.json"),
     RUN_FAMILY_FINBERT_RUN: ("run_manifest.json",),
     RUN_FAMILY_FINBERT_ROBUSTNESS: ("finbert_robustness_run_manifest.json",),
@@ -143,6 +158,11 @@ RUN_FAMILY_SENTINEL_ARTIFACTS: dict[str, tuple[str, ...]] = {
     RUN_FAMILY_LM2011_EXTENSION: (
         ARTIFACT_KEY_EXTENSION_FIT_SUMMARY,
         ARTIFACT_KEY_EXTENSION_FIT_COMPARISONS,
+    ),
+    RUN_FAMILY_LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX: (
+        ARTIFACT_KEY_EXTENSION_FIT_SUMMARY,
+        ARTIFACT_KEY_EXTENSION_FIT_COMPARISONS,
+        ARTIFACT_KEY_EXTENSION_FINBERT_VISIBLE_PREFIX_AUDIT,
     ),
     RUN_FAMILY_LM2011_NW_LAG_SENSITIVITY: (
         ARTIFACT_KEY_NW_LAG_CORE_TABLES,
