@@ -800,6 +800,225 @@ def test_extension_finbert_surface_builds_combined_item_scope_with_weighted_aggr
     assert doc1["finbert_neg_dominant_share"] == pytest.approx((0.67 * 3 + 0.5 * 2) / 5)
 
 
+class _WhitespaceFastVisiblePrefixTokenizer:
+    is_fast = True
+
+    def __call__(self, text, **kwargs):
+        raw_text = str(text)
+        spans: list[tuple[int, int]] = []
+        cursor = 0
+        for token in raw_text.split():
+            start = raw_text.find(token, cursor)
+            end = start + len(token)
+            spans.append((start, end))
+            cursor = end
+        if kwargs.get("truncation") and kwargs.get("max_length") is not None:
+            spans = spans[: int(kwargs["max_length"]) - 2]
+        input_ids = [101, *range(1, len(spans) + 1), 102]
+        payload = {"input_ids": input_ids}
+        if kwargs.get("return_offsets_mapping"):
+            payload["offset_mapping"] = [(0, 0), *spans, (0, 0)]
+        if kwargs.get("return_special_tokens_mask"):
+            payload["special_tokens_mask"] = [1, *([0] * len(spans)), 1]
+        return payload
+
+
+def test_finbert_visible_prefix_source_groups_sentences_and_builds_combined_scope(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from thesis_pkg.benchmarking.finbert_visible_prefix import (
+        add_finbert_visible_sentence_prefixes as _real_add_visible_prefixes,
+    )
+
+    sentence_scores_dir = tmp_path / "sentence_scores" / "by_year"
+    long_over_text = " ".join(f"risk{i}" for i in range(515))
+    exactly_at_cap_text = " ".join(f"mda{i}" for i in range(510))
+    _write_parquet(
+        sentence_scores_dir / "2009.parquet",
+        pl.DataFrame(
+            {
+                "doc_id": ["doc1", "doc1", "doc1", "doc2"],
+                "cik_10": ["0000000001", "0000000001", "0000000001", "0000000002"],
+                "filing_date": [
+                    dt.date(2009, 3, 2),
+                    dt.date(2009, 3, 2),
+                    dt.date(2009, 3, 2),
+                    dt.date(2009, 5, 15),
+                ],
+                "document_type_raw": ["10-K", "10-K", "10-K", "10-K"],
+                "text_scope": [
+                    "item_7_mda",
+                    "item_7_mda",
+                    "item_1a_risk_factors",
+                    "item_7_mda",
+                ],
+                "cleaning_policy_id": [
+                    "item_text_clean_v2",
+                    "item_text_clean_v2",
+                    "item_text_clean_v2",
+                    "item_text_clean_v2",
+                ],
+                "sentence_index": [1, 0, 0, 0],
+                "benchmark_sentence_id": ["doc1-7-1", "doc1-7-0", "doc1-1a-0", "doc2-7-0"],
+                "sentence_text": [
+                    "second gain",
+                    "first loss",
+                    long_over_text,
+                    exactly_at_cap_text,
+                ],
+                "finbert_token_count_512": [4, 4, 512, 512],
+            }
+        ),
+    )
+    authority = runner.FinbertAuthoritySpec(
+        model_name="yiyanghkust/finbert-tone",
+        model_revision="model-rev",
+        tokenizer_revision="tokenizer-rev",
+    )
+    monkeypatch.setattr(
+        runner,
+        "add_finbert_visible_sentence_prefixes",
+        lambda df, authority: _real_add_visible_prefixes(
+            df,
+            authority,
+            tokenizer=_WhitespaceFastVisiblePrefixTokenizer(),
+        ),
+    )
+
+    source_df, audit_df = runner._build_finbert_visible_prefix_source_and_audit_frames(
+        sentence_scores_dir=sentence_scores_dir,
+        event_doc_ids_lf=pl.DataFrame({"doc_id": ["doc1", "doc2"]}).lazy(),
+        text_scopes=("item_7_mda", "items_1a_7_combined"),
+        authority=authority,
+        authority_sources={
+            "model_name": "explicit_override",
+            "model_revision": "explicit_override",
+            "tokenizer_revision": "explicit_override",
+        },
+        sensitivity_assumptions=["revision overrides supplied for sensitivity"],
+        batch_size=1,
+    )
+
+    doc1_item7 = source_df.filter(
+        (pl.col("doc_id") == "doc1") & (pl.col("text_scope") == "item_7_mda")
+    ).row(0, named=True)
+    assert doc1_item7["cleaned_text"] == "first loss\n\nsecond gain"
+
+    doc1_item1a = source_df.filter(
+        (pl.col("doc_id") == "doc1") & (pl.col("text_scope") == "item_1a_risk_factors")
+    ).row(0, named=True)
+    assert doc1_item1a["cleaned_text"] == " ".join(f"risk{i}" for i in range(510))
+
+    combined = source_df.filter(
+        (pl.col("doc_id") == "doc1") & (pl.col("text_scope") == "items_1a_7_combined")
+    ).row(0, named=True)
+    assert combined["cleaned_text"] == f"{doc1_item1a['cleaned_text']}\n\nfirst loss\n\nsecond gain"
+    assert combined["at_512_sentence_count"] == 1
+    assert combined["true_over_512_sentence_count"] == 1
+
+    audit = {row["text_scope"]: row for row in audit_df.to_dicts()}
+    assert audit["item_1a_risk_factors"]["at_512_rows"] == 1
+    assert audit["item_1a_risk_factors"]["truly_over_512_rows"] == 1
+    assert audit["item_7_mda"]["at_512_rows"] == 1
+    assert audit["item_7_mda"]["truly_over_512_rows"] == 0
+    assert audit["items_1a_7_combined"]["affected_doc_scope_count"] == 1
+    assert audit["items_1a_7_combined"]["model_revision_source"] == "explicit_override"
+
+
+def test_visible_prefix_mode_fails_closed_without_sentence_scores(tmp_path: Path) -> None:
+    _, _, additional_data_dir, _ = _build_temp_layout(tmp_path)
+    extension_inputs = _build_extension_inputs(tmp_path, additional_data_dir)
+    _write_text(
+        extension_inputs["finbert_analysis_run_dir"] / "run_manifest.json",
+        json.dumps(
+            {
+                "authority": {
+                    "model_name": "yiyanghkust/finbert-tone",
+                    "model_revision": "model-rev",
+                    "tokenizer_revision": "tokenizer-rev",
+                },
+                "artifacts": {"sentence_scores_dir": None},
+            }
+        ),
+    )
+
+    with pytest.raises(FileNotFoundError, match="requires retained FinBERT sentence_scores"):
+        runner._resolve_finbert_extension_inputs(
+            runner.LM2011ExtensionRunConfig(
+                output_dir=tmp_path / "visible_extension",
+                additional_data_dir=additional_data_dir,
+                items_analysis_dir=extension_inputs["items_analysis_dir"],
+                event_panel_path=extension_inputs["event_panel_path"],
+                company_history_path=extension_inputs["company_history_path"],
+                company_description_path=extension_inputs["company_description_path"],
+                ff48_siccodes_path=extension_inputs["ff48_siccodes_path"],
+                finbert_item_features_long_path=extension_inputs["item_features_long_path"],
+                finbert_analysis_run_dir=extension_inputs["finbert_analysis_run_dir"],
+                dictionary_source_mode=runner.EXTENSION_DICTIONARY_SOURCE_FINBERT_VISIBLE_PREFIX,
+                text_scopes=("item_7_mda",),
+            )
+        )
+
+
+def test_visible_prefix_mode_requires_explicit_revisions_when_manifest_revisions_are_null(
+    tmp_path: Path,
+) -> None:
+    _, _, additional_data_dir, _ = _build_temp_layout(tmp_path)
+    extension_inputs = _build_extension_inputs(tmp_path, additional_data_dir)
+    sentence_scores_dir = tmp_path / "sentence_scores" / "by_year"
+    _write_parquet(
+        sentence_scores_dir / "2009.parquet",
+        pl.DataFrame(
+            {
+                "doc_id": ["doc1"],
+                "sentence_text": ["loss"],
+                "finbert_token_count_512": [3],
+            }
+        ),
+    )
+    _write_text(
+        extension_inputs["finbert_analysis_run_dir"] / "run_manifest.json",
+        json.dumps(
+            {
+                "authority": {
+                    "model_name": "yiyanghkust/finbert-tone",
+                    "model_revision": None,
+                    "tokenizer_revision": None,
+                },
+                "artifacts": {"sentence_scores_dir": str(sentence_scores_dir)},
+            }
+        ),
+    )
+
+    base_cfg_kwargs = {
+        "output_dir": tmp_path / "visible_extension",
+        "additional_data_dir": additional_data_dir,
+        "items_analysis_dir": extension_inputs["items_analysis_dir"],
+        "event_panel_path": extension_inputs["event_panel_path"],
+        "company_history_path": extension_inputs["company_history_path"],
+        "company_description_path": extension_inputs["company_description_path"],
+        "ff48_siccodes_path": extension_inputs["ff48_siccodes_path"],
+        "finbert_item_features_long_path": extension_inputs["item_features_long_path"],
+        "finbert_analysis_run_dir": extension_inputs["finbert_analysis_run_dir"],
+        "dictionary_source_mode": runner.EXTENSION_DICTIONARY_SOURCE_FINBERT_VISIBLE_PREFIX,
+        "text_scopes": ("item_7_mda",),
+    }
+    with pytest.raises(ValueError, match="requires explicit revision overrides"):
+        runner._resolve_finbert_extension_inputs(runner.LM2011ExtensionRunConfig(**base_cfg_kwargs))
+
+    resolved = runner._resolve_finbert_extension_inputs(
+        runner.LM2011ExtensionRunConfig(
+            **base_cfg_kwargs,
+            finbert_visible_prefix_model_revision="model-rev",
+            finbert_visible_prefix_tokenizer_revision="tokenizer-rev",
+        )
+    )
+    assert resolved["visible_prefix_authority"].model_revision == "model-rev"
+    assert resolved["visible_prefix_authority_sources"]["model_revision"] == "explicit_override"
+    assert resolved["visible_prefix_sensitivity_assumptions"]
+
+
 def test_extension_full_10k_text_features_use_global_event_panel_idf(
     tmp_path: Path,
 ) -> None:

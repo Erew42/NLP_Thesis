@@ -556,6 +556,9 @@ from thesis_pkg.notebooks_and_scripts.lm2011_sample_post_refinitiv_runner import
     DEFAULT_LM2011_MDA_TEXT_FEATURE_BATCH_SIZE,
     DEFAULT_LM2011_NW_LAGS,
     DEFAULT_LM2011_TEXT_FEATURE_BATCH_SIZE,
+    DEFAULT_FINBERT_VISIBLE_PREFIX_SENTENCE_BATCH_SIZE,
+    EXTENSION_DICTIONARY_SOURCE_FINBERT_VISIBLE_PREFIX as LM2011_EXTENSION_DICTIONARY_SOURCE_FINBERT_VISIBLE_PREFIX,
+    EXTENSION_DICTIONARY_SOURCE_PREFER_CLEANED as LM2011_EXTENSION_DICTIONARY_SOURCE_PREFER_CLEANED,
     EXTENSION_MANIFEST_FILENAME as LM2011_EXTENSION_MANIFEST_FILENAME,
     EXTENSION_PRIMARY_TEXT_SCOPES as LM2011_EXTENSION_PRIMARY_TEXT_SCOPES,
     LM2011ExtensionRunConfig,
@@ -744,16 +747,24 @@ def _build_lm2011_extension_run_config(
     finbert_preprocessing_run_dir: Path | None,
     print_ram_stats: bool,
     ram_log_interval_batches: int,
+    dictionary_source_mode: str = LM2011_EXTENSION_DICTIONARY_SOURCE_PREFER_CLEANED,
+    finbert_sentence_scores_dir: Path | None = None,
+    finbert_visible_prefix_model_name: str | None = None,
+    finbert_visible_prefix_model_revision: str | None = None,
+    finbert_visible_prefix_tokenizer_revision: str | None = None,
+    finbert_visible_prefix_sentence_batch_size: int = DEFAULT_FINBERT_VISIBLE_PREFIX_SENTENCE_BATCH_SIZE,
     nw_lags: tuple[int, ...] = DEFAULT_LM2011_NW_LAGS,
     text_scopes: tuple[str, ...] = LM2011_EXTENSION_PRIMARY_TEXT_SCOPES,
     extension_text_features_full_10k_path: Path | None = None,
     recompute_extension_text_features_full_10k: bool = False,
+    local_work_subdir: str = "lm2011_extension",
     finbert_analysis_artifacts: object | None = None,
     finbert_preprocessing_artifacts: object | None = None,
 ) -> LM2011ExtensionRunConfig:
     same_run_analysis_run_dir = getattr(finbert_analysis_artifacts, "run_dir", None)
     same_run_analysis_manifest_path = getattr(finbert_analysis_artifacts, "run_manifest_path", None)
     same_run_item_features_long_path = getattr(finbert_analysis_artifacts, "item_features_long_path", None)
+    same_run_sentence_scores_dir = getattr(finbert_analysis_artifacts, "sentence_scores_dir", None)
     same_run_preprocessing_run_dir = getattr(finbert_preprocessing_artifacts, "run_dir", None)
     same_run_preprocessing_manifest_path = getattr(
         finbert_preprocessing_artifacts,
@@ -787,7 +798,7 @@ def _build_lm2011_extension_run_config(
         annual_period_descriptor_path=lm2011_paths.annual_period_descriptor_path,
         annual_fiscal_market_path=lm2011_paths.annual_fiscal_market_path,
         ff_daily_csv_path=lm2011_paths.ff_daily_csv_path,
-        local_work_root=lm2011_paths.local_work_root / "lm2011_extension",
+        local_work_root=lm2011_paths.local_work_root / local_work_subdir,
         full_10k_cleaning_contract=lm2011_paths.full_10k_cleaning_contract,
         full_10k_text_feature_batch_size=lm2011_paths.full_10k_text_feature_batch_size,
         event_window_doc_batch_size=lm2011_paths.event_window_doc_batch_size,
@@ -801,6 +812,15 @@ def _build_lm2011_extension_run_config(
             Path(same_run_item_features_long_path)
             if same_run_item_features_long_path is not None
             else None
+        ),
+        finbert_sentence_scores_dir=(
+            Path(finbert_sentence_scores_dir)
+            if finbert_sentence_scores_dir is not None
+            else (
+                Path(same_run_sentence_scores_dir)
+                if same_run_sentence_scores_dir is not None
+                else None
+            )
         ),
         finbert_analysis_run_dir=(
             Path(same_run_analysis_run_dir)
@@ -828,6 +848,11 @@ def _build_lm2011_extension_run_config(
             else None
         ),
         require_cleaned_scope_match=require_cleaned_scope_match,
+        dictionary_source_mode=dictionary_source_mode,
+        finbert_visible_prefix_model_name=finbert_visible_prefix_model_name,
+        finbert_visible_prefix_model_revision=finbert_visible_prefix_model_revision,
+        finbert_visible_prefix_tokenizer_revision=finbert_visible_prefix_tokenizer_revision,
+        finbert_visible_prefix_sentence_batch_size=finbert_visible_prefix_sentence_batch_size,
         text_scopes=text_scopes,
         extension_text_features_full_10k_path=extension_text_features_full_10k_path,
         recompute_extension_text_features_full_10k=recompute_extension_text_features_full_10k,
@@ -844,6 +869,15 @@ def _lm2011_extension_stage_paths(output_dir: Path) -> dict[str, Path]:
         ),
         "lm2011_extension_finbert_surface_parquet": (
             output_dir / "lm2011_extension_finbert_surface.parquet"
+        ),
+        "lm2011_extension_finbert_visible_prefix_source_parquet": (
+            output_dir / "lm2011_extension_finbert_visible_prefix_source.parquet"
+        ),
+        "lm2011_extension_finbert_visible_prefix_audit_parquet": (
+            output_dir / "lm2011_extension_finbert_visible_prefix_audit.parquet"
+        ),
+        "lm2011_extension_finbert_visible_prefix_audit_csv": (
+            output_dir / "lm2011_extension_finbert_visible_prefix_audit.csv"
         ),
         "lm2011_extension_analysis_panel_parquet": (
             output_dir / "lm2011_extension_analysis_panel.parquet"
@@ -1477,6 +1511,10 @@ def main() -> None:
         default_when_umbrella=True,
     )
     RUN_LM2011_EXTENSION = _env_bool("SEC_CCM_RUN_LM2011_EXTENSION", False)
+    RUN_LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX = _env_bool(
+        "SEC_CCM_RUN_LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX",
+        False,
+    )
 
     SEC_PARSE_MODE = _env_str("SEC_CCM_SEC_PARSE_MODE", "parsed")
     YEARS = _env_int_list("SEC_CCM_YEARS", available_years)
@@ -1534,9 +1572,22 @@ def main() -> None:
         "SEC_CCM_LM2011_OUTPUT_DIR",
         RUN_ROOT / "lm2011_post_refinitiv",
     )
+    LM2011_EXTENSION_DICTIONARY_SOURCE_MODE = _env_str(
+        "SEC_CCM_LM2011_EXTENSION_DICTIONARY_SOURCE_MODE",
+        LM2011_EXTENSION_DICTIONARY_SOURCE_PREFER_CLEANED,
+    )
+    default_lm2011_extension_dir = (
+        RUN_ROOT / "lm2011_extension_finbert_visible_prefix"
+        if LM2011_EXTENSION_DICTIONARY_SOURCE_MODE == LM2011_EXTENSION_DICTIONARY_SOURCE_FINBERT_VISIBLE_PREFIX
+        else RUN_ROOT / "lm2011_extension"
+    )
     LM2011_EXTENSION_OUTPUT_DIR = _env_path(
         "SEC_CCM_LM2011_EXTENSION_OUTPUT_DIR",
-        RUN_ROOT / "lm2011_extension",
+        default_lm2011_extension_dir,
+    )
+    LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX_OUTPUT_DIR = _env_path(
+        "SEC_CCM_LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX_OUTPUT_DIR",
+        RUN_ROOT / "lm2011_extension_finbert_visible_prefix",
     )
     LM2011_ADDITIONAL_DATA_DIR = _resolve_lm2011_additional_data_dir(WORK_ROOT)
     LM2011_SAMPLE_BACKBONE_PATH = _env_optional_path("SEC_CCM_LM2011_SAMPLE_BACKBONE_PATH")
@@ -1630,6 +1681,12 @@ def main() -> None:
             list(LM2011_EXTENSION_PRIMARY_TEXT_SCOPES),
         )
     )
+    LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX_TEXT_SCOPES = tuple(
+        _env_str_list(
+            "SEC_CCM_LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX_TEXT_SCOPES",
+            ["item_1a_risk_factors", "item_7_mda", "items_1a_7_combined"],
+        )
+    )
     LM2011_EXTENSION_TEXT_FEATURES_FULL_10K_PATH = _env_optional_path(
         "SEC_CCM_LM2011_EXTENSION_TEXT_FEATURES_FULL_10K_PATH"
     )
@@ -1651,6 +1708,25 @@ def main() -> None:
     LM2011_EXTENSION_FINBERT_PREPROCESS_RUN_DIR = _env_optional_path(
         "SEC_CCM_LM2011_EXTENSION_FINBERT_PREPROCESS_RUN_DIR"
     )
+    LM2011_EXTENSION_FINBERT_SENTENCE_SCORES_DIR = _env_optional_path(
+        "SEC_CCM_LM2011_EXTENSION_FINBERT_SENTENCE_SCORES_DIR"
+    )
+    LM2011_EXTENSION_FINBERT_MODEL_NAME = _env_optional_str(
+        "SEC_CCM_LM2011_EXTENSION_FINBERT_MODEL_NAME",
+        None,
+    )
+    LM2011_EXTENSION_FINBERT_MODEL_REVISION = _env_optional_str(
+        "SEC_CCM_LM2011_EXTENSION_FINBERT_MODEL_REVISION",
+        None,
+    )
+    LM2011_EXTENSION_FINBERT_TOKENIZER_REVISION = _env_optional_str(
+        "SEC_CCM_LM2011_EXTENSION_FINBERT_TOKENIZER_REVISION",
+        None,
+    )
+    LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX_BATCH_SIZE = _env_int(
+        "SEC_CCM_LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX_BATCH_SIZE",
+        DEFAULT_FINBERT_VISIBLE_PREFIX_SENTENCE_BATCH_SIZE,
+    )
     FINBERT_SOURCE_ITEMS_DIR = _env_optional_path("SEC_CCM_FINBERT_SOURCE_ITEMS_DIR")
     FINBERT_BACKBONE_PATH = _env_optional_path("SEC_CCM_FINBERT_BACKBONE_PATH")
     FINBERT_YEARS = _env_optional_int_list("SEC_CCM_FINBERT_YEARS")
@@ -1660,6 +1736,21 @@ def main() -> None:
         "SEC_CCM_FINBERT_WRITE_SENTENCE_SCORES",
         False,
     )
+    visible_prefix_extension_requested = (
+        RUN_LM2011_EXTENSION
+        and LM2011_EXTENSION_DICTIONARY_SOURCE_MODE == LM2011_EXTENSION_DICTIONARY_SOURCE_FINBERT_VISIBLE_PREFIX
+    ) or RUN_LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX
+    if (
+        visible_prefix_extension_requested
+        and RUN_FINBERT_ANALYSIS
+        and not FINBERT_WRITE_SENTENCE_SCORES
+        and LM2011_EXTENSION_FINBERT_SENTENCE_SCORES_DIR is None
+    ):
+        raise ValueError(
+            "FinBERT-visible LM2011 extension mode requires retained FinBERT sentence_scores. "
+            "Set SEC_CCM_FINBERT_WRITE_SENTENCE_SCORES=true for same-run analysis or provide "
+            "SEC_CCM_LM2011_EXTENSION_FINBERT_SENTENCE_SCORES_DIR."
+        )
     FINBERT_SENTENCE_POSTPROCESS_POLICY = _env_str(
         "SEC_CCM_FINBERT_SENTENCE_POSTPROCESS_POLICY",
         DEFAULT_RUNNER_SENTENCE_POSTPROCESS_POLICY,
@@ -1835,8 +1926,16 @@ def main() -> None:
             "LM2011_NW_LAGS": list(LM2011_NW_LAGS),
             "RUN_LM2011_EXTENSION": RUN_LM2011_EXTENSION,
             "LM2011_EXTENSION_OUTPUT_DIR": str(LM2011_EXTENSION_OUTPUT_DIR),
+            "RUN_LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX": RUN_LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX,
+            "LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX_OUTPUT_DIR": str(
+                LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX_OUTPUT_DIR
+            ),
+            "LM2011_EXTENSION_DICTIONARY_SOURCE_MODE": LM2011_EXTENSION_DICTIONARY_SOURCE_MODE,
             "LM2011_EXTENSION_REQUIRE_CLEANED_SCOPE_MATCH": LM2011_EXTENSION_REQUIRE_CLEANED_SCOPE_MATCH,
             "LM2011_EXTENSION_TEXT_SCOPES": list(LM2011_EXTENSION_TEXT_SCOPES),
+            "LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX_TEXT_SCOPES": list(
+                LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX_TEXT_SCOPES
+            ),
             "LM2011_EXTENSION_TEXT_FEATURES_FULL_10K_PATH": (
                 str(LM2011_EXTENSION_TEXT_FEATURES_FULL_10K_PATH)
                 if LM2011_EXTENSION_TEXT_FEATURES_FULL_10K_PATH is not None
@@ -1854,6 +1953,17 @@ def main() -> None:
                 str(LM2011_EXTENSION_FINBERT_PREPROCESS_RUN_DIR)
                 if LM2011_EXTENSION_FINBERT_PREPROCESS_RUN_DIR is not None
                 else None
+            ),
+            "LM2011_EXTENSION_FINBERT_SENTENCE_SCORES_DIR": (
+                str(LM2011_EXTENSION_FINBERT_SENTENCE_SCORES_DIR)
+                if LM2011_EXTENSION_FINBERT_SENTENCE_SCORES_DIR is not None
+                else None
+            ),
+            "LM2011_EXTENSION_FINBERT_MODEL_NAME": LM2011_EXTENSION_FINBERT_MODEL_NAME,
+            "LM2011_EXTENSION_FINBERT_MODEL_REVISION": LM2011_EXTENSION_FINBERT_MODEL_REVISION,
+            "LM2011_EXTENSION_FINBERT_TOKENIZER_REVISION": LM2011_EXTENSION_FINBERT_TOKENIZER_REVISION,
+            "LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX_BATCH_SIZE": (
+                LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX_BATCH_SIZE
             ),
             "LM2011_FULL_10K_CLEANING_CONTRACT": LM2011_FULL_10K_CLEANING_CONTRACT,
             "LM2011_FULL_10K_TEXT_FEATURE_BATCH_SIZE": LM2011_FULL_10K_TEXT_FEATURE_BATCH_SIZE,
@@ -3103,7 +3213,8 @@ def main() -> None:
             )
             print({"diagnostic_year_files": len(diagnostic_item_paths)})
 
-    if any(LM2011_STAGE_FLAGS.values()):
+    lm2011_stage_run_requested = any(LM2011_STAGE_FLAGS.values())
+    if lm2011_stage_run_requested or RUN_LM2011_EXTENSION or RUN_LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX:
         lm2011_ccm_base_dir = LM2011_CCM_BASE_DIR or CCM_BASE_DIR
         lm2011_year_merged_dir = LM2011_YEAR_MERGED_DIR or SEC_YEAR_MERGED_DIR
         lm2011_sample_backbone_path = LM2011_SAMPLE_BACKBONE_PATH
@@ -3371,40 +3482,41 @@ def main() -> None:
             ram_log_interval_batches=RAM_LOG_INTERVAL_BATCHES,
             nw_lags=LM2011_NW_LAGS,
         )
-        _print_ram_snapshot("sec_ccm_unified_runner_before_lm2011", enabled=PRINT_RAM_STATS)
-        gc.collect()
-        _print_ram_snapshot("sec_ccm_unified_runner_after_pre_lm2011_gc", enabled=PRINT_RAM_STATS)
-        run_lm2011_post_refinitiv_pipeline(
-            LM2011PostRefinitivRunConfig(
-                paths=lm2011_paths,
-                enabled_stages=tuple(
-                    stage_name
-                    for stage_name, enabled in LM2011_STAGE_FLAGS.items()
-                    if enabled
-                ),
-                fail_closed_for_enabled_stages=True,
+        if lm2011_stage_run_requested:
+            _print_ram_snapshot("sec_ccm_unified_runner_before_lm2011", enabled=PRINT_RAM_STATS)
+            gc.collect()
+            _print_ram_snapshot("sec_ccm_unified_runner_after_pre_lm2011_gc", enabled=PRINT_RAM_STATS)
+            run_lm2011_post_refinitiv_pipeline(
+                LM2011PostRefinitivRunConfig(
+                    paths=lm2011_paths,
+                    enabled_stages=tuple(
+                        stage_name
+                        for stage_name, enabled in LM2011_STAGE_FLAGS.items()
+                        if enabled
+                    ),
+                    fail_closed_for_enabled_stages=True,
+                )
             )
-        )
-        _print_ram_snapshot("sec_ccm_unified_runner_after_lm2011", enabled=PRINT_RAM_STATS)
-        _record_downstream_stage(
-            "lm2011_post_refinitiv",
-            {
-                "lm2011_post_refinitiv_output_dir": LM2011_POST_REFINITIV_DIR,
-                "lm2011_post_refinitiv_manifest_json": (
-                    LM2011_POST_REFINITIV_DIR / "lm2011_sample_run_manifest.json"
-                ),
-            },
-        )
-        print(
-            {
-                "lm2011_post_refinitiv_output_dir": str(LM2011_POST_REFINITIV_DIR),
-                "lm2011_enabled_stages": sorted(
-                    stage_name
-                    for stage_name, enabled in LM2011_STAGE_FLAGS.items()
-                    if enabled
-                ),
-            }
-        )
+            _print_ram_snapshot("sec_ccm_unified_runner_after_lm2011", enabled=PRINT_RAM_STATS)
+            _record_downstream_stage(
+                "lm2011_post_refinitiv",
+                {
+                    "lm2011_post_refinitiv_output_dir": LM2011_POST_REFINITIV_DIR,
+                    "lm2011_post_refinitiv_manifest_json": (
+                        LM2011_POST_REFINITIV_DIR / "lm2011_sample_run_manifest.json"
+                    ),
+                },
+            )
+            print(
+                {
+                    "lm2011_post_refinitiv_output_dir": str(LM2011_POST_REFINITIV_DIR),
+                    "lm2011_enabled_stages": sorted(
+                        stage_name
+                        for stage_name, enabled in LM2011_STAGE_FLAGS.items()
+                        if enabled
+                    ),
+                }
+            )
 
     if RUN_FINBERT_PREPROCESS or RUN_FINBERT_ANALYSIS:
         finbert_source_items_dir = FINBERT_SOURCE_ITEMS_DIR or SEC_ITEMS_ANALYSIS_DIR
@@ -3559,6 +3671,12 @@ def main() -> None:
             finbert_preprocessing_run_dir=LM2011_EXTENSION_FINBERT_PREPROCESS_RUN_DIR,
             print_ram_stats=PRINT_RAM_STATS,
             ram_log_interval_batches=RAM_LOG_INTERVAL_BATCHES,
+            dictionary_source_mode=LM2011_EXTENSION_DICTIONARY_SOURCE_MODE,
+            finbert_sentence_scores_dir=LM2011_EXTENSION_FINBERT_SENTENCE_SCORES_DIR,
+            finbert_visible_prefix_model_name=LM2011_EXTENSION_FINBERT_MODEL_NAME,
+            finbert_visible_prefix_model_revision=LM2011_EXTENSION_FINBERT_MODEL_REVISION,
+            finbert_visible_prefix_tokenizer_revision=LM2011_EXTENSION_FINBERT_TOKENIZER_REVISION,
+            finbert_visible_prefix_sentence_batch_size=LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX_BATCH_SIZE,
             nw_lags=LM2011_NW_LAGS,
             finbert_analysis_artifacts=finbert_analysis_artifacts,
             finbert_preprocessing_artifacts=finbert_preprocessing_artifacts,
@@ -3566,6 +3684,7 @@ def main() -> None:
         print(
             {
                 "lm2011_extension_output_dir": str(LM2011_EXTENSION_OUTPUT_DIR),
+                "lm2011_extension_dictionary_source_mode": LM2011_EXTENSION_DICTIONARY_SOURCE_MODE,
                 "lm2011_extension_require_cleaned_scope_match": LM2011_EXTENSION_REQUIRE_CLEANED_SCOPE_MATCH,
                 "lm2011_extension_text_scopes": list(LM2011_EXTENSION_TEXT_SCOPES),
                 "lm2011_extension_text_features_full_10k_path": (
@@ -3595,12 +3714,131 @@ def main() -> None:
                     if LM2011_EXTENSION_FINBERT_PREPROCESS_RUN_DIR is not None
                     else None
                 ),
+                "lm2011_extension_finbert_sentence_scores_dir": (
+                    str(LM2011_EXTENSION_FINBERT_SENTENCE_SCORES_DIR)
+                    if LM2011_EXTENSION_FINBERT_SENTENCE_SCORES_DIR is not None
+                    else None
+                ),
+                "lm2011_extension_finbert_model_name": LM2011_EXTENSION_FINBERT_MODEL_NAME,
+                "lm2011_extension_finbert_model_revision": LM2011_EXTENSION_FINBERT_MODEL_REVISION,
+                "lm2011_extension_finbert_tokenizer_revision": LM2011_EXTENSION_FINBERT_TOKENIZER_REVISION,
+                "lm2011_extension_finbert_visible_prefix_batch_size": (
+                    LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX_BATCH_SIZE
+                ),
             }
         )
         run_lm2011_extension_dictionary_family_comparison_pipeline(extension_cfg)
         _record_downstream_stage(
             "lm2011_extension",
             _lm2011_extension_stage_paths(LM2011_EXTENSION_OUTPUT_DIR),
+        )
+
+    if RUN_LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX:
+        if lm2011_paths is None:
+            raise RuntimeError(
+                "LM2011 FinBERT-visible extension requires LM2011 post-Refinitiv runner paths, "
+                "but the LM2011 block did not run."
+            )
+        _print_ram_snapshot(
+            "sec_ccm_unified_runner_before_visible_prefix_extension_gc",
+            enabled=PRINT_RAM_STATS,
+        )
+        gc.collect()
+        _print_ram_snapshot(
+            "sec_ccm_unified_runner_after_visible_prefix_extension_gc",
+            enabled=PRINT_RAM_STATS,
+        )
+        finbert_analysis_artifacts = (
+            finbert_artifacts.analysis_artifacts if finbert_artifacts is not None else None
+        )
+        finbert_preprocessing_artifacts = (
+            finbert_artifacts.preprocessing_artifacts if finbert_artifacts is not None else None
+        )
+        visible_prefix_extension_cfg = _build_lm2011_extension_run_config(
+            lm2011_paths=lm2011_paths,
+            lm2011_output_dir=LM2011_POST_REFINITIV_DIR,
+            output_dir=LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX_OUTPUT_DIR,
+            require_cleaned_scope_match=LM2011_EXTENSION_REQUIRE_CLEANED_SCOPE_MATCH,
+            text_scopes=LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX_TEXT_SCOPES,
+            extension_text_features_full_10k_path=None,
+            recompute_extension_text_features_full_10k=False,
+            recompute_text_features_full_10k=LM2011_RECOMPUTE_TEXT_FEATURES_FULL_10K,
+            recompute_text_features_mda=LM2011_RECOMPUTE_TEXT_FEATURES_MDA,
+            recompute_event_screen_surface=LM2011_RECOMPUTE_EVENT_SCREEN_SURFACE,
+            recompute_event_panel=LM2011_RECOMPUTE_EVENT_PANEL,
+            finbert_analysis_run_dir=LM2011_EXTENSION_FINBERT_ANALYSIS_RUN_DIR,
+            finbert_preprocessing_run_dir=LM2011_EXTENSION_FINBERT_PREPROCESS_RUN_DIR,
+            print_ram_stats=PRINT_RAM_STATS,
+            ram_log_interval_batches=RAM_LOG_INTERVAL_BATCHES,
+            dictionary_source_mode=LM2011_EXTENSION_DICTIONARY_SOURCE_FINBERT_VISIBLE_PREFIX,
+            finbert_sentence_scores_dir=LM2011_EXTENSION_FINBERT_SENTENCE_SCORES_DIR,
+            finbert_visible_prefix_model_name=LM2011_EXTENSION_FINBERT_MODEL_NAME,
+            finbert_visible_prefix_model_revision=LM2011_EXTENSION_FINBERT_MODEL_REVISION,
+            finbert_visible_prefix_tokenizer_revision=LM2011_EXTENSION_FINBERT_TOKENIZER_REVISION,
+            finbert_visible_prefix_sentence_batch_size=LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX_BATCH_SIZE,
+            nw_lags=LM2011_NW_LAGS,
+            local_work_subdir="lm2011_extension_finbert_visible_prefix",
+            finbert_analysis_artifacts=finbert_analysis_artifacts,
+            finbert_preprocessing_artifacts=finbert_preprocessing_artifacts,
+        )
+        print(
+            {
+                "lm2011_extension_finbert_visible_prefix_output_dir": str(
+                    LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX_OUTPUT_DIR
+                ),
+                "lm2011_extension_finbert_visible_prefix_dictionary_source_mode": (
+                    LM2011_EXTENSION_DICTIONARY_SOURCE_FINBERT_VISIBLE_PREFIX
+                ),
+                "lm2011_extension_finbert_visible_prefix_require_cleaned_scope_match": (
+                    LM2011_EXTENSION_REQUIRE_CLEANED_SCOPE_MATCH
+                ),
+                "lm2011_extension_finbert_visible_prefix_text_scopes": list(
+                    LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX_TEXT_SCOPES
+                ),
+                "lm2011_extension_finbert_visible_prefix_recompute_text_features_full_10k": (
+                    LM2011_RECOMPUTE_TEXT_FEATURES_FULL_10K
+                ),
+                "lm2011_extension_finbert_visible_prefix_recompute_text_features_mda": (
+                    LM2011_RECOMPUTE_TEXT_FEATURES_MDA
+                ),
+                "lm2011_extension_finbert_visible_prefix_recompute_event_screen_surface": (
+                    LM2011_RECOMPUTE_EVENT_SCREEN_SURFACE
+                ),
+                "lm2011_extension_finbert_visible_prefix_recompute_event_panel": (
+                    LM2011_RECOMPUTE_EVENT_PANEL
+                ),
+                "lm2011_extension_finbert_visible_prefix_nw_lags": list(LM2011_NW_LAGS),
+                "lm2011_extension_finbert_visible_prefix_analysis_run_dir": (
+                    str(LM2011_EXTENSION_FINBERT_ANALYSIS_RUN_DIR)
+                    if LM2011_EXTENSION_FINBERT_ANALYSIS_RUN_DIR is not None
+                    else None
+                ),
+                "lm2011_extension_finbert_visible_prefix_preprocess_run_dir": (
+                    str(LM2011_EXTENSION_FINBERT_PREPROCESS_RUN_DIR)
+                    if LM2011_EXTENSION_FINBERT_PREPROCESS_RUN_DIR is not None
+                    else None
+                ),
+                "lm2011_extension_finbert_visible_prefix_sentence_scores_dir": (
+                    str(LM2011_EXTENSION_FINBERT_SENTENCE_SCORES_DIR)
+                    if LM2011_EXTENSION_FINBERT_SENTENCE_SCORES_DIR is not None
+                    else None
+                ),
+                "lm2011_extension_finbert_visible_prefix_model_name": LM2011_EXTENSION_FINBERT_MODEL_NAME,
+                "lm2011_extension_finbert_visible_prefix_model_revision": (
+                    LM2011_EXTENSION_FINBERT_MODEL_REVISION
+                ),
+                "lm2011_extension_finbert_visible_prefix_tokenizer_revision": (
+                    LM2011_EXTENSION_FINBERT_TOKENIZER_REVISION
+                ),
+                "lm2011_extension_finbert_visible_prefix_batch_size": (
+                    LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX_BATCH_SIZE
+                ),
+            }
+        )
+        run_lm2011_extension_dictionary_family_comparison_pipeline(visible_prefix_extension_cfg)
+        _record_downstream_stage(
+            "lm2011_extension_finbert_visible_prefix",
+            _lm2011_extension_stage_paths(LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX_OUTPUT_DIR),
         )
 
     # ## 7) No-item diagnostics + boundary diagnostics

@@ -214,6 +214,39 @@ def test_add_within_cell_quantile_variants_lf_respects_grouping_ties_and_missing
     assert missing_rows.get_column("missing_signal__q5_top_bottom").null_count() == missing_rows.height
 
 
+def test_quantile_fit_comparison_insufficient_sample_rows_include_nw_lags() -> None:
+    sparse_panel = pl.DataFrame(
+        {
+            "text_scope": [runner.PRIMARY_TEXT_SCOPES[0]],
+            "filing_date": [dt.date(2009, 3, 1)],
+            "ff48_industry_id": [1],
+            "filing_period_excess_return": [0.01],
+            "log_size": [4.0],
+            "log_book_to_market": [0.4],
+            "log_share_turnover": [-3.0],
+            "pre_ffalpha": [0.0],
+            "nasdaq_dummy": [0],
+            "lm_negative_tfidf": [0.2],
+            "finbert_neg_prob_lenw_mean": [0.7],
+        }
+    )
+
+    outputs = runner._run_quantile_fit_comparisons_for_variant(
+        sparse_panel.lazy(),
+        variant=runner.QUANTILE_VARIANTS[0],
+        suite_name="unit_quantile",
+        nw_lags=4,
+    )
+    comparisons = outputs["fit_comparisons"]
+
+    assert comparisons.height > 0
+    assert set(comparisons.get_column("estimator_status").unique().to_list()) <= {
+        "failed",
+        "insufficient_sample",
+    }
+    assert comparisons.get_column("nw_lags").drop_nulls().unique().to_list() == [4]
+
+
 def test_parse_args_rejects_removed_finbert_item_features_override() -> None:
     with pytest.raises(SystemExit):
         runner.parse_args(
@@ -322,7 +355,9 @@ def test_lm2011_finbert_robustness_runner_emits_variant_tagged_outputs(tmp_path:
         if variant.variant_id in set(quantile_coefficients.get_column("coefficient_name").drop_nulls().to_list())
     } == {variant.variant_id for variant in runner.QUANTILE_VARIANTS}
     assert tail_doc_surface.height == extension_panel.height
-    assert set(tail_doc_surface.get_column("text_scope").unique().to_list()) == set(runner.PRIMARY_TEXT_SCOPES)
+    assert set(tail_doc_surface.get_column("text_scope").unique().to_list()) == set(
+        extension_panel.get_column("text_scope").unique().to_list()
+    )
     assert candidate_summary.height > 0
     assert set(candidate_summary.get_column("variant_family").unique().to_list()) == {
         runner.EXISTING_SCALE_FAMILY,

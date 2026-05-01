@@ -6,6 +6,7 @@ import gc
 import json
 import os
 import sys
+import tempfile
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from dataclasses import replace
@@ -57,6 +58,23 @@ if str(SRC) not in sys.path:
 
 import polars as pl
 
+from thesis_pkg.benchmarking.contracts import FinbertAuthoritySpec
+from thesis_pkg.benchmarking.finbert_visible_prefix import (
+    ORIGINAL_SENTENCE_CHAR_COUNT_COLUMN,
+    ORIGINAL_SENTENCE_LM_TOKEN_COUNT_COLUMN,
+    VISIBLE_PREFIX_DECODE_POLICY_ID,
+    VISIBLE_PREFIX_FAST_OFFSET_POLICY_ID,
+    VISIBLE_PREFIX_FALLBACK_REASON_COLUMN,
+    VISIBLE_PREFIX_POLICY_COLUMN,
+    VISIBLE_PREFIX_TEXT_COLUMN,
+    VISIBLE_PREFIX_TRUE_OVER_512_COLUMN,
+    VISIBLE_PREFIX_UNCAPPED_POLICY_ID,
+    VISIBLE_PREFIX_UNTRUNCATED_TOKEN_COUNT_COLUMN,
+    VISIBLE_SENTENCE_CHAR_COUNT_COLUMN,
+    VISIBLE_SENTENCE_LM_TOKEN_COUNT_COLUMN,
+    add_finbert_visible_sentence_prefixes,
+)
+from thesis_pkg.benchmarking.token_lengths import FINBERT_TOKEN_COUNT_COLUMN
 from thesis_pkg.benchmarking.manifest_contracts import stable_string_fingerprint
 from thesis_pkg.core.ccm.lm2011 import (
     build_annual_accounting_panel,
@@ -79,6 +97,7 @@ from thesis_pkg.core.sec.lm2011_text import (
     build_lm2011_text_features_full_10k,
     build_lm2011_text_features_mda,
     normalize_lm2011_dictionary_lists,
+    tokenize_lm2011_text,
     write_lm2011_text_features_full_10k_parquet,
     write_lm2011_text_features_mda_parquet,
 )
@@ -352,16 +371,22 @@ STAGE_STATUS_REUSED_EXISTING_ARTIFACT = "reused_existing_artifact"
 EXTENSION_MANIFEST_FILENAME = "lm2011_extension_run_manifest.json"
 EXTENSION_DICTIONARY_SOURCE_PREFER_CLEANED = "prefer_cleaned_scopes"
 EXTENSION_DICTIONARY_SOURCE_RAW = "raw_item_text"
+EXTENSION_DICTIONARY_SOURCE_FINBERT_VISIBLE_PREFIX = "finbert_visible_sentence_prefix"
 EXTENSION_ALLOWED_DICTIONARY_SOURCE_MODES = (
     EXTENSION_DICTIONARY_SOURCE_PREFER_CLEANED,
     EXTENSION_DICTIONARY_SOURCE_RAW,
+    EXTENSION_DICTIONARY_SOURCE_FINBERT_VISIBLE_PREFIX,
 )
+DEFAULT_FINBERT_VISIBLE_PREFIX_SENTENCE_BATCH_SIZE = 5000
+FINBERT_VISIBLE_PREFIX_SOURCE_ROW_GROUP_SIZE = 128
 EXTENSION_DICTIONARY_FAMILY_COMPARISON_FAMILY_NAMES: tuple[str, ...] = (
     REPLICATION_DICTIONARY_FAMILY_NAME,
     EXTENDED_DICTIONARY_FAMILY_NAME,
 )
 EXTENSION_STAGE_ARTIFACT_FILENAMES: dict[str, str] = {
     "extension_text_features_full_10k": "lm2011_extension_text_features_full_10k.parquet",
+    "extension_finbert_visible_prefix_source": "lm2011_extension_finbert_visible_prefix_source.parquet",
+    "extension_finbert_visible_prefix_audit": "lm2011_extension_finbert_visible_prefix_audit.parquet",
     "extension_dictionary_surface": "lm2011_extension_dictionary_surface.parquet",
     "extension_finbert_surface": "lm2011_extension_finbert_surface.parquet",
     "extension_control_ladder": "lm2011_extension_control_ladder.parquet",
@@ -569,11 +594,18 @@ class LM2011ExtensionRunConfig:
     recompute_event_screen_surface: bool = False
     recompute_event_panel: bool = False
     finbert_item_features_long_path: Path | None = None
+    finbert_sentence_scores_dir: Path | None = None
     finbert_analysis_run_dir: Path | None = None
     finbert_analysis_manifest_path: Path | None = None
     finbert_cleaned_item_scopes_dir: Path | None = None
     finbert_preprocessing_run_dir: Path | None = None
     finbert_preprocessing_manifest_path: Path | None = None
+    finbert_visible_prefix_model_name: str | None = None
+    finbert_visible_prefix_model_revision: str | None = None
+    finbert_visible_prefix_tokenizer_revision: str | None = None
+    finbert_visible_prefix_sentence_batch_size: int = DEFAULT_FINBERT_VISIBLE_PREFIX_SENTENCE_BATCH_SIZE
+    finbert_visible_prefix_source_path: Path | None = None
+    finbert_visible_prefix_audit_path: Path | None = None
     require_cleaned_scope_match: bool = True
     dictionary_source_mode: str = EXTENSION_DICTIONARY_SOURCE_PREFER_CLEANED
     dictionary_family_label: str = EXTENSION_DICTIONARY_FAMILY_LM2011
@@ -630,6 +662,8 @@ class LM2011ExtensionRunConfig:
             )
         if self.ram_log_interval_batches < 1:
             raise ValueError("LM2011 extension ram_log_interval_batches must be >= 1.")
+        if self.finbert_visible_prefix_sentence_batch_size < 1:
+            raise ValueError("LM2011 extension finbert_visible_prefix_sentence_batch_size must be >= 1.")
 
 
 @dataclass(frozen=True)
@@ -1135,6 +1169,97 @@ def _resolve_manifest_path_value(
     return candidate.resolve()
 
 
+def _clean_optional_manifest_str(value: object) -> str | None:
+    if value is None:
+        return None
+    stripped = str(value).strip()
+    if stripped.lower() in {"", "none", "null"}:
+        return None
+    return stripped
+
+
+def _normalize_sentence_scores_dir(path: Path) -> Path:
+    candidate = Path(path).expanduser().resolve()
+    if _parquet_glob_exists(candidate, "*.parquet"):
+        return candidate
+    by_year = candidate / "by_year"
+    if _parquet_glob_exists(by_year, "*.parquet"):
+        return by_year.resolve()
+    return candidate
+
+
+def _resolve_visible_prefix_authority(
+    run_cfg: LM2011ExtensionRunConfig,
+    *,
+    analysis_manifest: dict[str, Any] | None,
+) -> tuple[FinbertAuthoritySpec | None, dict[str, str | None], list[str]]:
+    if run_cfg.dictionary_source_mode != EXTENSION_DICTIONARY_SOURCE_FINBERT_VISIBLE_PREFIX:
+        return None, {}, []
+
+    manifest_authority = (analysis_manifest or {}).get("authority") or {}
+    if not isinstance(manifest_authority, dict):
+        manifest_authority = {}
+
+    explicit_values = {
+        "model_name": _clean_optional_manifest_str(run_cfg.finbert_visible_prefix_model_name),
+        "model_revision": _clean_optional_manifest_str(run_cfg.finbert_visible_prefix_model_revision),
+        "tokenizer_revision": _clean_optional_manifest_str(run_cfg.finbert_visible_prefix_tokenizer_revision),
+    }
+    manifest_values = {
+        "model_name": _clean_optional_manifest_str(manifest_authority.get("model_name")),
+        "model_revision": _clean_optional_manifest_str(manifest_authority.get("model_revision")),
+        "tokenizer_revision": _clean_optional_manifest_str(manifest_authority.get("tokenizer_revision")),
+    }
+
+    resolved_values: dict[str, str | None] = {}
+    sources: dict[str, str | None] = {}
+    sensitivity_assumptions: list[str] = []
+    for field_name in ("model_name", "model_revision", "tokenizer_revision"):
+        explicit_value = explicit_values[field_name]
+        manifest_value = manifest_values[field_name]
+        if explicit_value is not None:
+            resolved_values[field_name] = explicit_value
+            sources[field_name] = "explicit_override"
+            if manifest_value is None:
+                sensitivity_assumptions.append(
+                    f"{field_name} supplied explicitly because retained FinBERT manifest had null {field_name}."
+                )
+            elif explicit_value != manifest_value:
+                sensitivity_assumptions.append(
+                    f"{field_name} explicit override replaced retained FinBERT manifest value {manifest_value!r}."
+                )
+        elif manifest_value is not None:
+            resolved_values[field_name] = manifest_value
+            sources[field_name] = "retained_finbert_manifest"
+        else:
+            resolved_values[field_name] = None
+            sources[field_name] = None
+
+    if resolved_values["model_name"] is None:
+        raise ValueError(
+            "finbert_visible_sentence_prefix mode requires a visible-prefix model_name "
+            "from SEC_CCM_LM2011_EXTENSION_FINBERT_MODEL_NAME or the retained FinBERT manifest."
+        )
+    missing_revision_overrides = [
+        field_name
+        for field_name in ("model_revision", "tokenizer_revision")
+        if manifest_values[field_name] is None and explicit_values[field_name] is None
+    ]
+    if missing_revision_overrides:
+        raise ValueError(
+            "finbert_visible_sentence_prefix mode requires explicit revision overrides "
+            "when the retained FinBERT manifest revisions are null. Missing: "
+            f"{missing_revision_overrides}"
+        )
+
+    authority = FinbertAuthoritySpec(
+        model_name=str(resolved_values["model_name"]),
+        model_revision=resolved_values["model_revision"],
+        tokenizer_revision=resolved_values["tokenizer_revision"],
+    )
+    return authority, sources, sensitivity_assumptions
+
+
 def _resolve_finbert_extension_inputs(
     run_cfg: LM2011ExtensionRunConfig,
 ) -> dict[str, Any]:
@@ -1180,6 +1305,42 @@ def _resolve_finbert_extension_inputs(
             "LM2011 extension requires FinBERT item_features_long.parquet, "
             f"but it was not resolved from {analysis_run_dir or run_cfg.finbert_item_features_long_path}."
         )
+
+    sentence_scores_dir = (
+        _normalize_sentence_scores_dir(Path(run_cfg.finbert_sentence_scores_dir))
+        if run_cfg.finbert_sentence_scores_dir is not None
+        else None
+    )
+    if sentence_scores_dir is None and analysis_manifest is not None:
+        resolved_sentence_scores_dir = _resolve_manifest_path_value(
+            manifest=analysis_manifest,
+            manifest_path=analysis_manifest_path,
+            value=((analysis_manifest.get("artifacts") or {}).get("sentence_scores_dir")),
+        )
+        if resolved_sentence_scores_dir is not None:
+            sentence_scores_dir = _normalize_sentence_scores_dir(resolved_sentence_scores_dir)
+    if sentence_scores_dir is None and analysis_run_dir is not None:
+        candidate = analysis_run_dir / "sentence_scores" / "by_year"
+        if _parquet_glob_exists(candidate, "*.parquet"):
+            sentence_scores_dir = candidate.resolve()
+    if (
+        run_cfg.dictionary_source_mode == EXTENSION_DICTIONARY_SOURCE_FINBERT_VISIBLE_PREFIX
+        and (sentence_scores_dir is None or not _parquet_glob_exists(sentence_scores_dir, "*.parquet"))
+    ):
+        raise FileNotFoundError(
+            "finbert_visible_sentence_prefix mode requires retained FinBERT sentence_scores parquet files. "
+            "Set SEC_CCM_LM2011_EXTENSION_FINBERT_SENTENCE_SCORES_DIR or provide an analysis manifest "
+            "with artifacts.sentence_scores_dir."
+        )
+
+    (
+        visible_prefix_authority,
+        visible_prefix_authority_sources,
+        visible_prefix_sensitivity_assumptions,
+    ) = _resolve_visible_prefix_authority(
+        run_cfg,
+        analysis_manifest=analysis_manifest,
+    )
 
     preprocessing_run_dir = (
         Path(run_cfg.finbert_preprocessing_run_dir).resolve()
@@ -1229,10 +1390,14 @@ def _resolve_finbert_extension_inputs(
         "analysis_manifest_path": analysis_manifest_path,
         "analysis_manifest": analysis_manifest,
         "item_features_long_path": item_features_long_path,
+        "sentence_scores_dir": sentence_scores_dir,
         "preprocessing_run_dir": preprocessing_run_dir,
         "preprocessing_manifest_path": preprocessing_manifest_path,
         "preprocessing_manifest": preprocessing_manifest,
         "cleaned_item_scopes_dir": cleaned_item_scopes_dir,
+        "visible_prefix_authority": visible_prefix_authority,
+        "visible_prefix_authority_sources": visible_prefix_authority_sources,
+        "visible_prefix_sensitivity_assumptions": visible_prefix_sensitivity_assumptions,
     }
 
 
@@ -1337,10 +1502,6 @@ def _build_or_reuse_extension_shared_prereqs(
     output_dir: Path,
     dictionary_inputs,
 ) -> _ExtensionSharedPrereqArtifacts | None:
-    resolved_inputs = _resolve_extension_shared_prereq_inputs(run_cfg, output_dir=output_dir)
-    if resolved_inputs is None:
-        return None
-
     artifact_paths = _extension_shared_prereq_paths(output_dir)
     rebuild_full_10k_token_counts = _extension_shared_prereq_recompute_enabled(
         run_cfg,
@@ -1375,6 +1536,10 @@ def _build_or_reuse_extension_shared_prereqs(
             event_panel_path=artifact_paths["event_panel"],
             row_counts=_extension_shared_prereq_row_counts(artifact_paths),
         )
+
+    resolved_inputs = _resolve_extension_shared_prereq_inputs(run_cfg, output_dir=output_dir)
+    if resolved_inputs is None:
+        return None
 
     local_work_root = resolved_inputs["local_work_root"]
     local_work_root.mkdir(parents=True, exist_ok=True)
@@ -1533,6 +1698,16 @@ def _build_extension_manifest(
             "dictionary_source_mode": run_cfg.dictionary_source_mode,
             "dictionary_family_label": run_cfg.dictionary_family_label,
             "text_scopes": list(_normalized_extension_text_scopes(run_cfg.text_scopes)),
+            "finbert_visible_prefix_model_name": run_cfg.finbert_visible_prefix_model_name,
+            "finbert_visible_prefix_model_revision": run_cfg.finbert_visible_prefix_model_revision,
+            "finbert_visible_prefix_tokenizer_revision": run_cfg.finbert_visible_prefix_tokenizer_revision,
+            "finbert_visible_prefix_sentence_batch_size": run_cfg.finbert_visible_prefix_sentence_batch_size,
+            "finbert_visible_prefix_source_path": _absolute_path_str(
+                run_cfg.finbert_visible_prefix_source_path
+            ),
+            "finbert_visible_prefix_audit_path": _absolute_path_str(
+                run_cfg.finbert_visible_prefix_audit_path
+            ),
             "full_10k_cleaning_contract": run_cfg.full_10k_cleaning_contract,
             "full_10k_text_feature_batch_size": run_cfg.full_10k_text_feature_batch_size,
             "event_window_doc_batch_size": run_cfg.event_window_doc_batch_size,
@@ -1573,6 +1748,9 @@ def _build_extension_manifest(
             "finbert_item_features_long_path": _absolute_path_str(
                 resolved_finbert_inputs["item_features_long_path"]
             ),
+            "finbert_sentence_scores_dir": _absolute_path_str(
+                resolved_finbert_inputs["sentence_scores_dir"]
+            ),
             "finbert_preprocessing_run_dir": _absolute_path_str(
                 resolved_finbert_inputs["preprocessing_run_dir"]
             ),
@@ -1583,6 +1761,18 @@ def _build_extension_manifest(
                 resolved_finbert_inputs["cleaned_item_scopes_dir"]
             ),
         },
+        "visible_prefix_authority": (
+            {
+                "model_name": resolved_finbert_inputs["visible_prefix_authority"].model_name,
+                "model_revision": resolved_finbert_inputs["visible_prefix_authority"].model_revision,
+                "tokenizer_revision": resolved_finbert_inputs["visible_prefix_authority"].tokenizer_revision,
+                "visible_prefix_policy_id": VISIBLE_PREFIX_FAST_OFFSET_POLICY_ID,
+                "authority_sources": resolved_finbert_inputs["visible_prefix_authority_sources"],
+                "sensitivity_assumptions": resolved_finbert_inputs["visible_prefix_sensitivity_assumptions"],
+            }
+            if resolved_finbert_inputs["visible_prefix_authority"] is not None
+            else None
+        ),
         "artifacts": {},
         "row_counts": {},
         "stages": {},
@@ -1629,9 +1819,16 @@ def _write_extension_stage(
     extra_artifacts: dict[str, Path] | None = None,
     warnings: Sequence[str] | None = None,
     metadata: Mapping[str, Any] | None = None,
+    parquet_row_group_size: int | None = None,
+    parquet_statistics: bool = True,
 ) -> pl.LazyFrame:
     artifact_path = _extension_artifact_output_path(output_dir, stage_name)
-    written_path, row_count = _write_frame_artifact(frame, artifact_path)
+    written_path, row_count = _write_frame_artifact(
+        frame,
+        artifact_path,
+        row_group_size=parquet_row_group_size,
+        statistics=parquet_statistics,
+    )
     _record_stage_success(
         manifest,
         stage_name=stage_name,
@@ -1866,6 +2063,585 @@ def _build_extension_finbert_surface_lf(
     return pl.concat(frames, how="vertical_relaxed").unique(subset=["doc_id", "text_scope"], keep="first")
 
 
+def _finbert_visible_prefix_source_schema() -> dict[str, pl.DataType]:
+    return {
+        "doc_id": pl.Utf8,
+        "cik_10": pl.Utf8,
+        "filing_date": pl.Date,
+        "document_type_raw": pl.Utf8,
+        "item_id": pl.Utf8,
+        "text_scope": pl.Utf8,
+        "cleaning_policy_id": pl.Utf8,
+        "cleaned_text": pl.Utf8,
+        "sentence_count": pl.Int64,
+        "at_512_sentence_count": pl.Int64,
+        "true_over_512_sentence_count": pl.Int64,
+        "original_char_count": pl.Int64,
+        "visible_prefix_char_count": pl.Int64,
+        "original_lm_token_count": pl.Int64,
+        "visible_prefix_lm_token_count": pl.Int64,
+        "retained_finbert_token_count_512_sum": pl.Int64,
+        "finbert_untruncated_token_count_sum": pl.Int64,
+        "visible_prefix_policy_ids": pl.Utf8,
+        "visible_prefix_fallback_count": pl.Int64,
+    }
+
+
+def _empty_finbert_visible_prefix_source_df() -> pl.DataFrame:
+    return pl.DataFrame(schema=_finbert_visible_prefix_source_schema())
+
+
+def _empty_finbert_visible_prefix_audit_df() -> pl.DataFrame:
+    return pl.DataFrame(
+        schema={
+            "text_scope": pl.Utf8,
+            "sentence_rows": pl.Int64,
+            "at_512_rows": pl.Int64,
+            "truly_over_512_rows": pl.Int64,
+            "affected_doc_scope_count": pl.Int64,
+            "original_char_mass": pl.Int64,
+            "visible_prefix_char_mass": pl.Int64,
+            "original_lm_token_mass": pl.Int64,
+            "visible_prefix_lm_token_mass": pl.Int64,
+            "retained_finbert_token_count_512_mass": pl.Int64,
+            "finbert_untruncated_token_count_mass": pl.Int64,
+            "visible_prefix_policy_ids": pl.Utf8,
+            "visible_prefix_fallback_rows": pl.Int64,
+            "model_name": pl.Utf8,
+            "model_revision": pl.Utf8,
+            "tokenizer_revision": pl.Utf8,
+            "model_name_source": pl.Utf8,
+            "model_revision_source": pl.Utf8,
+            "tokenizer_revision_source": pl.Utf8,
+            "sensitivity_assumptions": pl.Utf8,
+        }
+    )
+
+
+def _finbert_visible_prefix_item_id_expr(text_scope_expr: pl.Expr) -> pl.Expr:
+    return (
+        pl.when(text_scope_expr == pl.lit("item_1a_risk_factors"))
+        .then(pl.lit("1A", dtype=pl.Utf8))
+        .when(text_scope_expr == pl.lit("item_7_mda"))
+        .then(pl.lit("7", dtype=pl.Utf8))
+        .when(text_scope_expr == pl.lit("item_1_business"))
+        .then(pl.lit("1", dtype=pl.Utf8))
+        .otherwise(pl.lit(None, dtype=pl.Utf8))
+    )
+
+
+def _finbert_visible_prefix_component_scopes(text_scopes: Sequence[str]) -> tuple[str, ...]:
+    normalized_text_scopes = _normalized_extension_text_scopes(text_scopes)
+    scopes: list[str] = []
+    for scope in normalized_text_scopes:
+        if scope in {EXTENSION_FULL_10K_SCOPE, EXTENSION_COMBINED_ITEM_1A_7_SCOPE}:
+            continue
+        scopes.append(scope)
+    if EXTENSION_COMBINED_ITEM_1A_7_SCOPE in normalized_text_scopes:
+        scopes.extend(["item_1a_risk_factors", "item_7_mda"])
+    return tuple(dict.fromkeys(scopes))
+
+
+def _finbert_visible_prefix_sentence_score_paths(sentence_scores_dir: Path) -> tuple[Path, ...]:
+    normalized_dir = _normalize_sentence_scores_dir(sentence_scores_dir)
+    paths = tuple(sorted(path for path in normalized_dir.glob("*.parquet") if path.is_file()))
+    if not paths:
+        raise FileNotFoundError(f"FinBERT sentence_scores directory is empty: {normalized_dir}")
+    return paths
+
+
+def _select_finbert_visible_prefix_sentence_rows_lf(
+    sentence_scores_path: Path,
+    *,
+    event_doc_ids_lf: pl.LazyFrame,
+    needed_text_scopes: Sequence[str],
+) -> pl.LazyFrame:
+    sentence_lf = pl.scan_parquet(sentence_scores_path)
+    schema = sentence_lf.collect_schema()
+    missing = [
+        column
+        for column in (
+            "doc_id",
+            "cik_10",
+            "filing_date",
+            "cleaning_policy_id",
+            "sentence_index",
+            "sentence_text",
+            FINBERT_TOKEN_COUNT_COLUMN,
+        )
+        if column not in schema
+    ]
+    if missing:
+        raise ValueError(
+            f"FinBERT sentence_scores file {sentence_scores_path} missing required columns: {missing}"
+        )
+    if "text_scope" in schema:
+        raw_scope_expr = pl.col("text_scope")
+    elif "benchmark_item_code" in schema:
+        raw_scope_expr = pl.col("benchmark_item_code")
+    elif "item_id" in schema:
+        raw_scope_expr = pl.col("item_id")
+    else:
+        raise ValueError(
+            f"FinBERT sentence_scores file {sentence_scores_path} missing text_scope, benchmark_item_code, or item_id."
+        )
+    text_scope_expr = normalize_lm2011_extension_text_scope_expr(raw_scope_expr)
+    document_type_expr = _coalesce_existing_expr(
+        schema,
+        ("document_type_raw", "document_type", "document_type_normalized", "document_type_filename"),
+        dtype=pl.Utf8,
+    )
+    return (
+        sentence_lf.join(event_doc_ids_lf, on="doc_id", how="inner")
+        .select(
+            pl.col("doc_id").cast(pl.Utf8, strict=False),
+            pl.col("cik_10").cast(pl.Utf8, strict=False),
+            pl.col("filing_date").cast(pl.Date, strict=False),
+            document_type_expr.alias("document_type_raw"),
+            text_scope_expr.alias("text_scope"),
+            _finbert_visible_prefix_item_id_expr(text_scope_expr).alias("item_id"),
+            pl.col("cleaning_policy_id").cast(pl.Utf8, strict=False),
+            pl.col("sentence_index").cast(pl.Int64, strict=False),
+            (
+                pl.col("benchmark_sentence_id").cast(pl.Utf8, strict=False)
+                if "benchmark_sentence_id" in schema
+                else pl.lit(None, dtype=pl.Utf8)
+            ).alias("benchmark_sentence_id"),
+            pl.col("sentence_text").cast(pl.Utf8, strict=False).fill_null("").alias("sentence_text"),
+            pl.col(FINBERT_TOKEN_COUNT_COLUMN).cast(pl.Int32, strict=False),
+        )
+        .filter(pl.col("text_scope").is_in(list(needed_text_scopes)))
+    )
+
+
+def _add_uncapped_visible_prefix_columns_lf(selected_lf: pl.LazyFrame) -> pl.LazyFrame:
+    sentence_text_expr = pl.col("sentence_text").cast(pl.Utf8, strict=False).fill_null("")
+    token_count_expr = pl.col(FINBERT_TOKEN_COUNT_COLUMN).cast(pl.Int32, strict=False)
+    sentence_char_count_expr = sentence_text_expr.str.len_chars().cast(pl.Int32)
+    return selected_lf.with_columns(
+        sentence_text_expr.alias(VISIBLE_PREFIX_TEXT_COLUMN),
+        pl.lit(VISIBLE_PREFIX_UNCAPPED_POLICY_ID, dtype=pl.Utf8).alias(VISIBLE_PREFIX_POLICY_COLUMN),
+        pl.lit(None, dtype=pl.Utf8).alias(VISIBLE_PREFIX_FALLBACK_REASON_COLUMN),
+        token_count_expr.alias(VISIBLE_PREFIX_UNTRUNCATED_TOKEN_COUNT_COLUMN),
+        pl.when(token_count_expr.is_null())
+        .then(pl.lit(None, dtype=pl.Boolean))
+        .otherwise(pl.lit(False))
+        .alias(VISIBLE_PREFIX_TRUE_OVER_512_COLUMN),
+        sentence_char_count_expr.alias(ORIGINAL_SENTENCE_CHAR_COUNT_COLUMN),
+        sentence_char_count_expr.alias(VISIBLE_SENTENCE_CHAR_COUNT_COLUMN),
+        pl.lit(None, dtype=pl.Int32).alias(ORIGINAL_SENTENCE_LM_TOKEN_COUNT_COLUMN),
+        pl.lit(None, dtype=pl.Int32).alias(VISIBLE_SENTENCE_LM_TOKEN_COUNT_COLUMN),
+    )
+
+
+def _write_finbert_visible_prefix_sentence_batches(
+    *,
+    sentence_scores_dir: Path,
+    event_doc_ids_lf: pl.LazyFrame,
+    needed_text_scopes: Sequence[str],
+    authority: FinbertAuthoritySpec,
+    temp_dir: Path,
+    batch_size: int,
+) -> tuple[Path, ...]:
+    batch_paths: list[Path] = []
+    batch_index = 0
+    for sentence_scores_path in _finbert_visible_prefix_sentence_score_paths(sentence_scores_dir):
+        selected_lf = _select_finbert_visible_prefix_sentence_rows_lf(
+            sentence_scores_path,
+            event_doc_ids_lf=event_doc_ids_lf,
+            needed_text_scopes=needed_text_scopes,
+        )
+        shard_paths, batch_index = _write_finbert_visible_prefix_selected_sentence_batches(
+            selected_lf,
+            authority=authority,
+            temp_dir=temp_dir,
+            batch_size=batch_size,
+            batch_index=batch_index,
+        )
+        batch_paths.extend(shard_paths)
+    return tuple(batch_paths)
+
+
+def _write_finbert_visible_prefix_selected_sentence_batches(
+    selected_lf: pl.LazyFrame,
+    *,
+    authority: FinbertAuthoritySpec,
+    temp_dir: Path,
+    batch_size: int,
+    batch_index: int = 0,
+) -> tuple[tuple[Path, ...], int]:
+    if batch_size < 1:
+        raise ValueError("FinBERT visible-prefix sentence batch_size must be >= 1.")
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    batch_paths: list[Path] = []
+    uncapped_path = temp_dir / f"visible_prefix_sentences_{batch_index:06d}_uncapped.parquet"
+    _add_uncapped_visible_prefix_columns_lf(
+        selected_lf.filter(pl.col(FINBERT_TOKEN_COUNT_COLUMN).ne(512).fill_null(True))
+    ).sink_parquet(uncapped_path, compression=PARQUET_COMPRESSION)
+    batch_paths.append(uncapped_path)
+    batch_index += 1
+
+    at_cap_lf = selected_lf.filter(pl.col(FINBERT_TOKEN_COUNT_COLUMN).eq(512).fill_null(False))
+    for selected_batch in at_cap_lf.collect_batches(chunk_size=batch_size):
+        if selected_batch.is_empty():
+            continue
+        visible_batch = add_finbert_visible_sentence_prefixes(selected_batch, authority)
+        batch_path = temp_dir / f"visible_prefix_sentences_{batch_index:06d}.parquet"
+        visible_batch.write_parquet(batch_path, compression=PARQUET_COMPRESSION)
+        batch_paths.append(batch_path)
+        batch_index += 1
+    return tuple(batch_paths), batch_index
+
+
+def _write_finbert_visible_prefix_base_source_shards(
+    *,
+    sentence_scores_dir: Path,
+    event_doc_ids_lf: pl.LazyFrame,
+    needed_text_scopes: Sequence[str],
+    authority: FinbertAuthoritySpec,
+    temp_dir: Path,
+    batch_size: int,
+) -> tuple[Path, ...]:
+    source_paths: list[Path] = []
+    for shard_index, sentence_scores_path in enumerate(
+        _finbert_visible_prefix_sentence_score_paths(sentence_scores_dir)
+    ):
+        selected_lf = _select_finbert_visible_prefix_sentence_rows_lf(
+            sentence_scores_path,
+            event_doc_ids_lf=event_doc_ids_lf,
+            needed_text_scopes=needed_text_scopes,
+        )
+        sentence_temp_dir = temp_dir / f"sentence_rows_{shard_index:04d}_{sentence_scores_path.stem}"
+        sentence_batch_paths, _ = _write_finbert_visible_prefix_selected_sentence_batches(
+            selected_lf,
+            authority=authority,
+            temp_dir=sentence_temp_dir,
+            batch_size=batch_size,
+        )
+        if not sentence_batch_paths:
+            continue
+        source_path = temp_dir / f"visible_prefix_source_{shard_index:04d}_{sentence_scores_path.stem}.parquet"
+        _build_finbert_visible_prefix_base_source_lf(
+            pl.scan_parquet([str(path) for path in sentence_batch_paths])
+        ).sink_parquet(
+            source_path,
+            compression=PARQUET_COMPRESSION,
+            row_group_size=FINBERT_VISIBLE_PREFIX_SOURCE_ROW_GROUP_SIZE,
+            statistics=False,
+        )
+        source_paths.append(source_path)
+    return tuple(source_paths)
+
+
+def _lm2011_visible_prefix_token_count(text: str | None) -> int:
+    return len(tokenize_lm2011_text(text))
+
+
+def _build_finbert_visible_prefix_base_source_lf(sentences_lf: pl.LazyFrame) -> pl.LazyFrame:
+    separator_chars = (pl.col("sentence_count") - pl.lit(1, dtype=pl.Int64)) * pl.lit(2, dtype=pl.Int64)
+    return (
+        sentences_lf.sort(
+            [
+                "doc_id",
+                "text_scope",
+                "cleaning_policy_id",
+                "filing_date",
+                "sentence_index",
+                "benchmark_sentence_id",
+            ],
+            nulls_last=True,
+        )
+        .group_by(
+            [
+                "doc_id",
+                "cik_10",
+                "filing_date",
+                "document_type_raw",
+                "item_id",
+                "text_scope",
+                "cleaning_policy_id",
+            ],
+            maintain_order=True,
+        )
+        .agg(
+            pl.col("sentence_text").str.join("\n\n").alias("_original_cleaned_text"),
+            pl.col(VISIBLE_PREFIX_TEXT_COLUMN).str.join("\n\n").alias("cleaned_text"),
+            pl.len().cast(pl.Int64).alias("sentence_count"),
+            (pl.col(FINBERT_TOKEN_COUNT_COLUMN) == 512).sum().cast(pl.Int64).alias("at_512_sentence_count"),
+            pl.col(VISIBLE_PREFIX_TRUE_OVER_512_COLUMN)
+            .fill_null(False)
+            .sum()
+            .cast(pl.Int64)
+            .alias("true_over_512_sentence_count"),
+            pl.col("sentence_text").str.len_chars().sum().cast(pl.Int64).alias("original_char_count"),
+            pl.col(VISIBLE_PREFIX_TEXT_COLUMN)
+            .str.len_chars()
+            .sum()
+            .cast(pl.Int64)
+            .alias("visible_prefix_char_count"),
+            pl.col(FINBERT_TOKEN_COUNT_COLUMN)
+            .sum()
+            .cast(pl.Int64)
+            .alias("retained_finbert_token_count_512_sum"),
+            pl.col(VISIBLE_PREFIX_UNTRUNCATED_TOKEN_COUNT_COLUMN)
+            .sum()
+            .cast(pl.Int64)
+            .alias("finbert_untruncated_token_count_sum"),
+            pl.col(VISIBLE_PREFIX_POLICY_COLUMN).unique().sort().str.join("|").alias("visible_prefix_policy_ids"),
+            pl.col("visible_prefix_fallback_reason")
+            .is_not_null()
+            .sum()
+            .cast(pl.Int64)
+            .alias("visible_prefix_fallback_count"),
+        )
+        .with_columns(
+            (pl.col("original_char_count") + separator_chars).alias("original_char_count"),
+            (pl.col("visible_prefix_char_count") + separator_chars).alias("visible_prefix_char_count"),
+            pl.col("_original_cleaned_text")
+            .map_elements(_lm2011_visible_prefix_token_count, return_dtype=pl.Int64)
+            .alias("original_lm_token_count"),
+            pl.col("cleaned_text")
+            .map_elements(_lm2011_visible_prefix_token_count, return_dtype=pl.Int64)
+            .alias("visible_prefix_lm_token_count"),
+        )
+        .select(list(_finbert_visible_prefix_source_schema()))
+    )
+
+
+def _build_finbert_visible_prefix_base_source_df(sentences_df: pl.DataFrame) -> pl.DataFrame:
+    if sentences_df.is_empty():
+        return _empty_finbert_visible_prefix_source_df()
+    return _build_finbert_visible_prefix_base_source_lf(sentences_df.lazy()).collect()
+
+
+def _build_finbert_visible_prefix_combined_source_lf(base_source_lf: pl.LazyFrame) -> pl.LazyFrame:
+    item_1a_scope = "item_1a_risk_factors"
+    item_7_scope = "item_7_mda"
+    component_lf = base_source_lf.filter(pl.col("text_scope").is_in([item_1a_scope, item_7_scope]))
+
+    metadata_mismatch = (
+        component_lf
+        .group_by("doc_id")
+        .agg(
+            pl.col("text_scope").n_unique().alias("_scope_count"),
+            pl.col("cleaning_policy_id").n_unique().alias("_cleaning_policy_count"),
+            pl.col("filing_date").n_unique().alias("_filing_date_count"),
+            pl.col("document_type_raw").n_unique().alias("_raw_form_count"),
+        )
+        .filter(
+            (pl.col("_scope_count") >= 2)
+            & (
+                (pl.col("_cleaning_policy_count") > 1)
+                | (pl.col("_filing_date_count") > 1)
+                | (pl.col("_raw_form_count") > 1)
+            )
+        )
+        .limit(1)
+        .collect()
+    )
+    if metadata_mismatch.height:
+        raise ValueError(
+            "FinBERT-visible Item 1A+7 source construction requires matching filing_date, "
+            "document_type_raw, and cleaning_policy_id metadata within each doc_id."
+        )
+
+    return (
+        component_lf
+        .group_by("doc_id", maintain_order=True)
+        .agg(
+            pl.col("cik_10").drop_nulls().first().alias("cik_10"),
+            pl.col("filing_date").drop_nulls().first().alias("filing_date"),
+            pl.col("document_type_raw").drop_nulls().first().alias("document_type_raw"),
+            pl.col("cleaning_policy_id").drop_nulls().first().alias("cleaning_policy_id"),
+            pl.col("text_scope").n_unique().alias("_scope_count"),
+            pl.col("cleaned_text")
+            .filter(pl.col("text_scope") == pl.lit(item_1a_scope))
+            .drop_nulls()
+            .first()
+            .alias("_item_1a_text"),
+            pl.col("cleaned_text")
+            .filter(pl.col("text_scope") == pl.lit(item_7_scope))
+            .drop_nulls()
+            .first()
+            .alias("_item_7_text"),
+            *[
+                pl.col(column).sum().cast(pl.Int64).alias(column)
+                for column in (
+                    "sentence_count",
+                    "at_512_sentence_count",
+                    "true_over_512_sentence_count",
+                    "original_char_count",
+                    "visible_prefix_char_count",
+                    "original_lm_token_count",
+                    "visible_prefix_lm_token_count",
+                    "retained_finbert_token_count_512_sum",
+                    "finbert_untruncated_token_count_sum",
+                    "visible_prefix_fallback_count",
+                )
+            ],
+            pl.col("visible_prefix_policy_ids").str.join("|").alias("visible_prefix_policy_ids"),
+        )
+        .filter(
+            (pl.col("_scope_count") == 2)
+            & pl.col("_item_1a_text").is_not_null()
+            & pl.col("_item_7_text").is_not_null()
+        )
+        .with_columns(
+            pl.lit("1A+7", dtype=pl.Utf8).alias("item_id"),
+            pl.lit(EXTENSION_COMBINED_ITEM_1A_7_SCOPE, dtype=pl.Utf8).alias("text_scope"),
+            pl.concat_str([pl.col("_item_1a_text"), pl.lit("\n\n"), pl.col("_item_7_text")]).alias("cleaned_text"),
+        )
+        .with_columns(
+            (pl.col("original_char_count") + pl.lit(2, dtype=pl.Int64)).alias("original_char_count"),
+            (pl.col("visible_prefix_char_count") + pl.lit(2, dtype=pl.Int64)).alias("visible_prefix_char_count"),
+        )
+        .select(list(_finbert_visible_prefix_source_schema()))
+    )
+
+
+def _build_finbert_visible_prefix_combined_source_df(base_source_df: pl.DataFrame) -> pl.DataFrame:
+    if base_source_df.is_empty():
+        return _empty_finbert_visible_prefix_source_df()
+    return _build_finbert_visible_prefix_combined_source_lf(base_source_df.lazy()).collect()
+
+
+def _build_finbert_visible_prefix_audit_df(
+    source_frame: pl.LazyFrame | pl.DataFrame,
+    *,
+    authority: FinbertAuthoritySpec,
+    authority_sources: Mapping[str, str | None],
+    sensitivity_assumptions: Sequence[str],
+) -> pl.DataFrame:
+    source_lf = source_frame.lazy() if isinstance(source_frame, pl.DataFrame) else source_frame
+    if int(source_lf.select(pl.len()).collect().item()) == 0:
+        return _empty_finbert_visible_prefix_audit_df()
+    return (
+        source_lf
+        .group_by("text_scope", maintain_order=True)
+        .agg(
+            pl.col("sentence_count").sum().cast(pl.Int64).alias("sentence_rows"),
+            pl.col("at_512_sentence_count").sum().cast(pl.Int64).alias("at_512_rows"),
+            pl.col("true_over_512_sentence_count").sum().cast(pl.Int64).alias("truly_over_512_rows"),
+            pl.col("doc_id")
+            .filter(pl.col("at_512_sentence_count") > 0)
+            .n_unique()
+            .cast(pl.Int64)
+            .alias("affected_doc_scope_count"),
+            pl.col("original_char_count").sum().cast(pl.Int64).alias("original_char_mass"),
+            pl.col("visible_prefix_char_count").sum().cast(pl.Int64).alias("visible_prefix_char_mass"),
+            pl.col("original_lm_token_count").sum().cast(pl.Int64).alias("original_lm_token_mass"),
+            pl.col("visible_prefix_lm_token_count").sum().cast(pl.Int64).alias("visible_prefix_lm_token_mass"),
+            pl.col("retained_finbert_token_count_512_sum")
+            .sum()
+            .cast(pl.Int64)
+            .alias("retained_finbert_token_count_512_mass"),
+            pl.col("finbert_untruncated_token_count_sum")
+            .sum()
+            .cast(pl.Int64)
+            .alias("finbert_untruncated_token_count_mass"),
+            pl.col("visible_prefix_policy_ids").str.join("|").alias("visible_prefix_policy_ids"),
+            pl.col("visible_prefix_fallback_count").sum().cast(pl.Int64).alias("visible_prefix_fallback_rows"),
+        )
+        .with_columns(
+            pl.lit(authority.model_name, dtype=pl.Utf8).alias("model_name"),
+            pl.lit(authority.model_revision, dtype=pl.Utf8).alias("model_revision"),
+            pl.lit(authority.tokenizer_revision, dtype=pl.Utf8).alias("tokenizer_revision"),
+            pl.lit(authority_sources.get("model_name"), dtype=pl.Utf8).alias("model_name_source"),
+            pl.lit(authority_sources.get("model_revision"), dtype=pl.Utf8).alias("model_revision_source"),
+            pl.lit(authority_sources.get("tokenizer_revision"), dtype=pl.Utf8).alias("tokenizer_revision_source"),
+            pl.lit(" | ".join(sensitivity_assumptions), dtype=pl.Utf8).alias("sensitivity_assumptions"),
+        )
+        .select(list(_empty_finbert_visible_prefix_audit_df().schema))
+        .collect()
+    )
+
+
+def _finbert_visible_prefix_observed_policy_metadata(audit_df: pl.DataFrame) -> dict[str, Any]:
+    policy_ids: set[str] = set()
+    if "visible_prefix_policy_ids" in audit_df.columns:
+        for raw_value in audit_df.get_column("visible_prefix_policy_ids").to_list():
+            if raw_value is None:
+                continue
+            policy_ids.update(
+                policy_id
+                for policy_id in str(raw_value).split("|")
+                if policy_id
+            )
+    fallback_rows = (
+        int(audit_df.get_column("visible_prefix_fallback_rows").sum())
+        if "visible_prefix_fallback_rows" in audit_df.columns and audit_df.height
+        else 0
+    )
+    return {
+        "observed_policy_ids": sorted(policy_ids),
+        "fallback_policy_id": VISIBLE_PREFIX_DECODE_POLICY_ID,
+        "fallback_rows": fallback_rows,
+    }
+
+
+def _build_finbert_visible_prefix_source_lf(
+    *,
+    sentence_scores_dir: Path,
+    event_doc_ids_lf: pl.LazyFrame,
+    text_scopes: Sequence[str],
+    authority: FinbertAuthoritySpec,
+    temp_dir: Path,
+    batch_size: int,
+) -> pl.LazyFrame:
+    needed_text_scopes = _finbert_visible_prefix_component_scopes(text_scopes)
+    if not needed_text_scopes:
+        return _empty_finbert_visible_prefix_source_df().lazy()
+
+    base_source_paths = _write_finbert_visible_prefix_base_source_shards(
+        sentence_scores_dir=sentence_scores_dir,
+        event_doc_ids_lf=event_doc_ids_lf,
+        needed_text_scopes=needed_text_scopes,
+        authority=authority,
+        temp_dir=temp_dir,
+        batch_size=batch_size,
+    )
+    if not base_source_paths:
+        return _empty_finbert_visible_prefix_source_df().lazy()
+
+    base_source_lf = pl.scan_parquet([str(path) for path in base_source_paths])
+    source_frames: list[pl.LazyFrame] = [base_source_lf]
+    if EXTENSION_COMBINED_ITEM_1A_7_SCOPE in _normalized_extension_text_scopes(text_scopes):
+        source_frames.append(_build_finbert_visible_prefix_combined_source_lf(base_source_lf))
+    return pl.concat(source_frames, how="vertical_relaxed").select(
+        list(_finbert_visible_prefix_source_schema())
+    )
+
+
+def _build_finbert_visible_prefix_source_and_audit_frames(
+    *,
+    sentence_scores_dir: Path,
+    event_doc_ids_lf: pl.LazyFrame,
+    text_scopes: Sequence[str],
+    authority: FinbertAuthoritySpec,
+    authority_sources: Mapping[str, str | None],
+    sensitivity_assumptions: Sequence[str],
+    batch_size: int = DEFAULT_FINBERT_VISIBLE_PREFIX_SENTENCE_BATCH_SIZE,
+) -> tuple[pl.DataFrame, pl.DataFrame]:
+    with tempfile.TemporaryDirectory(prefix="finbert_visible_prefix_unit_") as temp_name:
+        source_lf = _build_finbert_visible_prefix_source_lf(
+            sentence_scores_dir=sentence_scores_dir,
+            event_doc_ids_lf=event_doc_ids_lf,
+            text_scopes=text_scopes,
+            authority=authority,
+            temp_dir=Path(temp_name),
+            batch_size=batch_size,
+        )
+        source_df = source_lf.collect()
+
+    audit_df = _build_finbert_visible_prefix_audit_df(
+        source_df,
+        authority=authority,
+        authority_sources=authority_sources,
+        sensitivity_assumptions=sensitivity_assumptions,
+    )
+    return source_df, audit_df
+
+
 def _build_extension_dictionary_surface_lf(
     run_cfg: LM2011ExtensionRunConfig,
     *,
@@ -1873,6 +2649,7 @@ def _build_extension_dictionary_surface_lf(
     event_doc_ids_lf: pl.LazyFrame,
     dictionary_inputs: Any,
     full_10k_features_lf: pl.LazyFrame | None = None,
+    finbert_visible_prefix_source_lf: pl.LazyFrame | None = None,
 ) -> pl.LazyFrame:
     normalized_text_scopes = _normalized_extension_text_scopes(run_cfg.text_scopes)
     frames: list[pl.LazyFrame] = []
@@ -1929,6 +2706,26 @@ def _build_extension_dictionary_surface_lf(
             )
         )
     item_text_scopes = tuple(scope for scope in normalized_text_scopes if scope != EXTENSION_FULL_10K_SCOPE)
+    if run_cfg.dictionary_source_mode == EXTENSION_DICTIONARY_SOURCE_FINBERT_VISIBLE_PREFIX:
+        if item_text_scopes:
+            if finbert_visible_prefix_source_lf is None:
+                raise FileNotFoundError(
+                    "finbert_visible_sentence_prefix mode requires a retained FinBERT sentence-score source; "
+                    "cleaned-scope and raw-item fallbacks are disabled."
+                )
+            item_features_lf = build_lm2011_extension_dictionary_features_from_cleaned_scopes(
+                finbert_visible_prefix_source_lf,
+                dictionary_lists=dictionary_inputs.dictionary_lists,
+                harvard_negative_word_list=dictionary_inputs.harvard_negative_word_list,
+                master_dictionary_words=dictionary_inputs.master_dictionary_words,
+                dictionary_family=run_cfg.dictionary_family_label,
+                text_scopes=item_text_scopes,
+            ).filter(pl.col("text_scope").is_in(list(item_text_scopes)))
+            frames.append(item_features_lf)
+        if not frames:
+            raise ValueError("LM2011 extension dictionary surface has no requested dictionary text scopes.")
+        return pl.concat(frames, how="vertical_relaxed")
+
     if run_cfg.dictionary_source_mode == EXTENSION_DICTIONARY_SOURCE_PREFER_CLEANED:
         if cleaned_item_scopes_dir is not None:
             cleaned_scopes_lf = _scan_year_sharded_parquet_dir(
@@ -3013,15 +3810,28 @@ def _collect_frame(frame: pl.LazyFrame | pl.DataFrame) -> pl.DataFrame:
 def _write_frame_artifact(
     frame: pl.LazyFrame | pl.DataFrame,
     output_path: Path,
+    *,
+    row_group_size: int | None = None,
+    statistics: bool = True,
 ) -> tuple[Path, int]:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     if isinstance(frame, pl.LazyFrame):
         if not hasattr(frame, "sink_parquet"):
             raise RuntimeError("Polars LazyFrame.sink_parquet is required for memory-safe stage writes.")
-        frame.sink_parquet(output_path, compression=PARQUET_COMPRESSION)
+        frame.sink_parquet(
+            output_path,
+            compression=PARQUET_COMPRESSION,
+            row_group_size=row_group_size,
+            statistics=statistics,
+        )
         row_count = pl.scan_parquet(output_path).select(pl.len()).collect().item()
         return output_path, int(row_count)
-    frame.write_parquet(output_path, compression=PARQUET_COMPRESSION)
+    frame.write_parquet(
+        output_path,
+        compression=PARQUET_COMPRESSION,
+        row_group_size=row_group_size,
+        statistics=statistics,
+    )
     return output_path, int(frame.height)
 
 
@@ -5584,6 +6394,118 @@ def run_lm2011_extension_pipeline(run_cfg: LM2011ExtensionRunConfig) -> int:
             else None
         )
 
+        finbert_visible_prefix_source_lf: pl.LazyFrame | None = None
+        if run_cfg.dictionary_source_mode == EXTENSION_DICTIONARY_SOURCE_FINBERT_VISIBLE_PREFIX:
+            current_stage_name = "extension_finbert_visible_prefix_source"
+            explicit_visible_source_path = (
+                Path(run_cfg.finbert_visible_prefix_source_path).resolve()
+                if run_cfg.finbert_visible_prefix_source_path is not None
+                else None
+            )
+            if explicit_visible_source_path is not None:
+                if not explicit_visible_source_path.exists():
+                    raise FileNotFoundError(
+                        f"FinBERT visible-prefix source path not found: {explicit_visible_source_path}"
+                    )
+                finbert_visible_prefix_source_lf = _write_extension_stage(
+                    manifest,
+                    manifest_path=manifest_path,
+                    output_dir=output_dir,
+                    stage_name="extension_finbert_visible_prefix_source",
+                    frame=pl.scan_parquet(explicit_visible_source_path),
+                    warnings=["Reused explicit FinBERT visible-prefix source artifact."],
+                    metadata={
+                        "dictionary_source_mode": run_cfg.dictionary_source_mode,
+                        "visible_prefix_policy_id": VISIBLE_PREFIX_FAST_OFFSET_POLICY_ID,
+                        "component_scopes": list(_finbert_visible_prefix_component_scopes(run_cfg.text_scopes)),
+                        "sentence_batch_size": run_cfg.finbert_visible_prefix_sentence_batch_size,
+                        "source_path": str(explicit_visible_source_path),
+                    },
+                    parquet_row_group_size=FINBERT_VISIBLE_PREFIX_SOURCE_ROW_GROUP_SIZE,
+                    parquet_statistics=False,
+                )
+            else:
+                visible_prefix_temp_parent = (
+                    Path(run_cfg.local_work_root).resolve() / "finbert_visible_prefix"
+                    if run_cfg.local_work_root is not None
+                    else output_dir / "_finbert_visible_prefix_work"
+                )
+                visible_prefix_temp_parent.mkdir(parents=True, exist_ok=True)
+                with tempfile.TemporaryDirectory(
+                    prefix="sentence_batches_",
+                    dir=str(visible_prefix_temp_parent),
+                ) as visible_prefix_temp_name:
+                    visible_prefix_source_lf = _build_finbert_visible_prefix_source_lf(
+                        sentence_scores_dir=resolved_finbert_inputs["sentence_scores_dir"],
+                        event_doc_ids_lf=event_doc_ids_lf,
+                        text_scopes=run_cfg.text_scopes,
+                        authority=resolved_finbert_inputs["visible_prefix_authority"],
+                        temp_dir=Path(visible_prefix_temp_name),
+                        batch_size=run_cfg.finbert_visible_prefix_sentence_batch_size,
+                    )
+                    finbert_visible_prefix_source_lf = _write_extension_stage(
+                        manifest,
+                        manifest_path=manifest_path,
+                        output_dir=output_dir,
+                        stage_name="extension_finbert_visible_prefix_source",
+                        frame=visible_prefix_source_lf,
+                        metadata={
+                            "dictionary_source_mode": run_cfg.dictionary_source_mode,
+                            "visible_prefix_policy_id": VISIBLE_PREFIX_FAST_OFFSET_POLICY_ID,
+                            "component_scopes": list(_finbert_visible_prefix_component_scopes(run_cfg.text_scopes)),
+                            "sentence_batch_size": run_cfg.finbert_visible_prefix_sentence_batch_size,
+                        },
+                        parquet_row_group_size=FINBERT_VISIBLE_PREFIX_SOURCE_ROW_GROUP_SIZE,
+                        parquet_statistics=False,
+                    )
+            current_stage_name = "extension_finbert_visible_prefix_audit"
+            explicit_visible_audit_path = (
+                Path(run_cfg.finbert_visible_prefix_audit_path).resolve()
+                if run_cfg.finbert_visible_prefix_audit_path is not None
+                else None
+            )
+            if explicit_visible_audit_path is not None:
+                if not explicit_visible_audit_path.exists():
+                    raise FileNotFoundError(
+                        f"FinBERT visible-prefix audit path not found: {explicit_visible_audit_path}"
+                    )
+                visible_prefix_audit_df = pl.scan_parquet(explicit_visible_audit_path).collect()
+                audit_warnings = ["Reused explicit FinBERT visible-prefix audit artifact."]
+                audit_metadata_extra = {"source_path": str(explicit_visible_audit_path)}
+            else:
+                visible_prefix_audit_df = _build_finbert_visible_prefix_audit_df(
+                    finbert_visible_prefix_source_lf,
+                    authority=resolved_finbert_inputs["visible_prefix_authority"],
+                    authority_sources=resolved_finbert_inputs["visible_prefix_authority_sources"],
+                    sensitivity_assumptions=resolved_finbert_inputs["visible_prefix_sensitivity_assumptions"],
+                )
+                audit_warnings = None
+                audit_metadata_extra = {}
+            if manifest.get("visible_prefix_authority") is not None:
+                manifest["visible_prefix_authority"].update(
+                    _finbert_visible_prefix_observed_policy_metadata(visible_prefix_audit_df)
+                )
+                _checkpoint_manifest(manifest, manifest_path)
+            visible_prefix_audit_csv_path = _extension_csv_companion_path(
+                output_dir,
+                "extension_finbert_visible_prefix_audit",
+            )
+            _write_extension_csv_companion(visible_prefix_audit_df, visible_prefix_audit_csv_path)
+            _write_extension_stage(
+                manifest,
+                manifest_path=manifest_path,
+                output_dir=output_dir,
+                stage_name="extension_finbert_visible_prefix_audit",
+                frame=visible_prefix_audit_df,
+                extra_artifacts={"csv": visible_prefix_audit_csv_path},
+                warnings=audit_warnings,
+                metadata={
+                    "dictionary_source_mode": run_cfg.dictionary_source_mode,
+                    "visible_prefix_policy_id": VISIBLE_PREFIX_FAST_OFFSET_POLICY_ID,
+                    **audit_metadata_extra,
+                },
+            )
+
         current_stage_name = "extension_dictionary_surface"
         dictionary_surface_lf = _write_extension_stage(
             manifest,
@@ -5596,6 +6518,7 @@ def run_lm2011_extension_pipeline(run_cfg: LM2011ExtensionRunConfig) -> int:
                 event_doc_ids_lf=event_doc_ids_lf,
                 dictionary_inputs=dictionary_inputs,
                 full_10k_features_lf=extension_full_10k_features_lf,
+                finbert_visible_prefix_source_lf=finbert_visible_prefix_source_lf,
             ),
         )
 
@@ -5860,6 +6783,12 @@ def _write_stacked_extension_family_stage(
     copy_from_family: str | None = None,
     write_csv_companion: bool = False,
 ) -> pl.LazyFrame:
+    parquet_row_group_size = (
+        FINBERT_VISIBLE_PREFIX_SOURCE_ROW_GROUP_SIZE
+        if stage_name == "extension_finbert_visible_prefix_source"
+        else None
+    )
+    parquet_statistics = stage_name != "extension_finbert_visible_prefix_source"
     if copy_from_family is not None:
         source_path = _extension_family_output_artifact_path(
             output_dir,
@@ -5875,6 +6804,8 @@ def _write_stacked_extension_family_stage(
             warnings=[
                 f"Copied invariant artifact from {copy_from_family} family run for root comparison output."
             ],
+            parquet_row_group_size=parquet_row_group_size,
+            parquet_statistics=parquet_statistics,
         )
     else:
         stacked_lf = pl.concat(
@@ -5896,6 +6827,8 @@ def _write_stacked_extension_family_stage(
             output_dir=output_dir,
             stage_name=stage_name,
             frame=stacked_lf,
+            parquet_row_group_size=parquet_row_group_size,
+            parquet_statistics=parquet_statistics,
         )
 
     if write_csv_companion:
@@ -5982,6 +6915,8 @@ def run_lm2011_extension_dictionary_family_comparison_pipeline(
         )
 
         family_runs: dict[str, Any] = {}
+        visible_prefix_source_reuse_path: Path | None = None
+        visible_prefix_audit_reuse_path: Path | None = None
         for family_name in EXTENSION_DICTIONARY_FAMILY_COMPARISON_FAMILY_NAMES:
             current_stage_name = f"family_run_{family_name}"
             family_definition = getattr(generated_dictionary_families, family_name)
@@ -6029,6 +6964,8 @@ def run_lm2011_extension_dictionary_family_comparison_pipeline(
                 full_10k_cleaning_contract=run_cfg.full_10k_cleaning_contract,
                 full_10k_text_feature_batch_size=run_cfg.full_10k_text_feature_batch_size,
                 event_window_doc_batch_size=None,
+                finbert_visible_prefix_source_path=visible_prefix_source_reuse_path,
+                finbert_visible_prefix_audit_path=visible_prefix_audit_reuse_path,
                 dictionary_family_label=family_name,
                 run_id=f"{run_cfg.run_id}_{family_name}",
                 note=(
@@ -6040,6 +6977,18 @@ def run_lm2011_extension_dictionary_family_comparison_pipeline(
             run_lm2011_extension_pipeline(child_cfg)
             child_manifest_path = family_output_dir / EXTENSION_MANIFEST_FILENAME
             child_manifest = _read_json_payload(child_manifest_path)
+            if (
+                run_cfg.dictionary_source_mode == EXTENSION_DICTIONARY_SOURCE_FINBERT_VISIBLE_PREFIX
+                and visible_prefix_source_reuse_path is None
+            ):
+                visible_prefix_source_reuse_path = _extension_artifact_output_path(
+                    family_output_dir,
+                    "extension_finbert_visible_prefix_source",
+                )
+                visible_prefix_audit_reuse_path = _extension_artifact_output_path(
+                    family_output_dir,
+                    "extension_finbert_visible_prefix_audit",
+                )
             family_runs[family_name] = {
                 "output_dir": str(family_output_dir.resolve()),
                 "manifest_path": str(child_manifest_path.resolve()),
@@ -6059,6 +7008,38 @@ def run_lm2011_extension_dictionary_family_comparison_pipeline(
                 stage_name="extension_text_features_full_10k",
                 family_names=EXTENSION_DICTIONARY_FAMILY_COMPARISON_FAMILY_NAMES,
             )
+
+        if run_cfg.dictionary_source_mode == EXTENSION_DICTIONARY_SOURCE_FINBERT_VISIBLE_PREFIX:
+            current_stage_name = "extension_finbert_visible_prefix_source"
+            _write_stacked_extension_family_stage(
+                manifest,
+                manifest_path=manifest_path,
+                output_dir=output_dir,
+                stage_name="extension_finbert_visible_prefix_source",
+                family_names=EXTENSION_DICTIONARY_FAMILY_COMPARISON_FAMILY_NAMES,
+                copy_from_family=REPLICATION_DICTIONARY_FAMILY_NAME,
+            )
+            current_stage_name = "extension_finbert_visible_prefix_audit"
+            _write_stacked_extension_family_stage(
+                manifest,
+                manifest_path=manifest_path,
+                output_dir=output_dir,
+                stage_name="extension_finbert_visible_prefix_audit",
+                family_names=EXTENSION_DICTIONARY_FAMILY_COMPARISON_FAMILY_NAMES,
+                copy_from_family=REPLICATION_DICTIONARY_FAMILY_NAME,
+                write_csv_companion=True,
+            )
+            if manifest.get("visible_prefix_authority") is not None:
+                visible_prefix_audit_path = _extension_artifact_output_path(
+                    output_dir,
+                    "extension_finbert_visible_prefix_audit",
+                )
+                manifest["visible_prefix_authority"].update(
+                    _finbert_visible_prefix_observed_policy_metadata(
+                        pl.read_parquet(visible_prefix_audit_path)
+                    )
+                )
+                _checkpoint_manifest(manifest, manifest_path)
 
         current_stage_name = "extension_dictionary_surface"
         _write_stacked_extension_family_stage(

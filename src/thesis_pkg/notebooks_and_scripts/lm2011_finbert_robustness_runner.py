@@ -828,6 +828,7 @@ def _run_quantile_fit_comparisons_for_variant(
                                 right_spec=comparison_spec_by_name[right_name],
                                 estimator_status="failed",
                                 failure_reason=failure_reason,
+                                nw_lags=nw_lags,
                             )
                         )
                     continue
@@ -1003,6 +1004,7 @@ def _run_quantile_fit_comparisons_for_variant(
                                 right_spec=comparison_spec_by_name[right_name],
                                 estimator_status="failed",
                                 failure_reason=n_obs_mismatch_reason,
+                                nw_lags=nw_lags,
                             )
                         )
                     continue
@@ -1049,6 +1051,7 @@ def _run_quantile_fit_comparisons_for_variant(
                                 right_spec=comparison_spec_by_name[right_name],
                                 estimator_status=pair_status,
                                 failure_reason=pair_failure_reason,
+                                nw_lags=nw_lags,
                             )
                         )
                     continue

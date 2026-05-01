@@ -283,13 +283,21 @@ def test_runner_exposes_lm2011_extension_env_flags_and_orders_stage_after_finber
     source = _runner_source()
 
     assert 'SEC_CCM_RUN_LM2011_EXTENSION' in source
+    assert 'SEC_CCM_RUN_LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX' in source
+    assert 'SEC_CCM_LM2011_EXTENSION_DICTIONARY_SOURCE_MODE' in source
+    assert 'SEC_CCM_LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX_OUTPUT_DIR' in source
+    assert 'SEC_CCM_LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX_TEXT_SCOPES' in source
     assert 'SEC_CCM_LM2011_EXTENSION_TEXT_SCOPES' in source
     assert 'LM2011_EXTENSION_TEXT_FEATURES_FULL_10K_PATH = _env_optional_path(' in source
     assert 'LM2011_EXTENSION_RECOMPUTE_TEXT_FEATURES_FULL_10K = _env_bool(' in source
     assert 'LM2011_EXTENSION_REQUIRE_CLEANED_SCOPE_MATCH = _env_bool(' in source
     assert 'LM2011_EXTENSION_FINBERT_ANALYSIS_RUN_DIR = _env_optional_path(' in source
     assert 'LM2011_EXTENSION_FINBERT_PREPROCESS_RUN_DIR = _env_optional_path(' in source
+    assert 'LM2011_EXTENSION_FINBERT_SENTENCE_SCORES_DIR = _env_optional_path(' in source
+    assert 'LM2011_EXTENSION_FINBERT_MODEL_REVISION = _env_optional_str(' in source
+    assert 'RUN_ROOT / "lm2011_extension_finbert_visible_prefix"' in source
     assert "run_lm2011_extension_dictionary_family_comparison_pipeline(extension_cfg)" in source
+    assert "run_lm2011_extension_dictionary_family_comparison_pipeline(visible_prefix_extension_cfg)" in source
 
     finbert_marker = "if RUN_FINBERT_PREPROCESS or RUN_FINBERT_ANALYSIS:"
     extension_marker = "if RUN_LM2011_EXTENSION:"
@@ -372,6 +380,7 @@ def test_build_lm2011_extension_run_config_prefers_same_run_finbert_artifacts() 
         run_dir=Path("same_run_finbert_analysis"),
         run_manifest_path=Path("same_run_finbert_analysis") / "run_manifest.json",
         item_features_long_path=Path("same_run_finbert_analysis") / "item_features_long.parquet",
+        sentence_scores_dir=Path("same_run_finbert_analysis") / "sentence_scores" / "by_year",
     )
     preprocessing_artifacts = SimpleNamespace(
         run_dir=Path("same_run_finbert_preprocess"),
@@ -401,6 +410,9 @@ def test_build_lm2011_extension_run_config_prefers_same_run_finbert_artifacts() 
     assert cfg.finbert_item_features_long_path == (
         Path("same_run_finbert_analysis") / "item_features_long.parquet"
     )
+    assert cfg.finbert_sentence_scores_dir == (
+        Path("same_run_finbert_analysis") / "sentence_scores" / "by_year"
+    )
     assert cfg.finbert_preprocessing_run_dir == Path("same_run_finbert_preprocess")
     assert cfg.finbert_preprocessing_manifest_path == (
         Path("same_run_finbert_preprocess") / "run_manifest.json"
@@ -425,6 +437,7 @@ def test_build_lm2011_extension_run_config_prefers_same_run_finbert_artifacts() 
     assert cfg.full_10k_text_feature_batch_size == 4
     assert cfg.event_window_doc_batch_size == 50
     assert cfg.text_scopes == tuple(runner.LM2011_EXTENSION_PRIMARY_TEXT_SCOPES)
+    assert cfg.dictionary_source_mode == runner.LM2011_EXTENSION_DICTIONARY_SOURCE_PREFER_CLEANED
     assert cfg.extension_text_features_full_10k_path is None
     assert cfg.recompute_extension_text_features_full_10k is False
     assert cfg.recompute_text_features_full_10k is True
@@ -1640,9 +1653,76 @@ def test_main_resolves_extension_finbert_dirs_from_finbert_run_name(
     kwargs = captured["kwargs"]
     assert kwargs["finbert_analysis_run_dir"] == analysis_run_dir.resolve()
     assert kwargs["finbert_preprocessing_run_dir"] == preprocess_run_dir.resolve()
+    assert kwargs["dictionary_source_mode"] == runner.LM2011_EXTENSION_DICTIONARY_SOURCE_PREFER_CLEANED
+    assert kwargs["finbert_sentence_scores_dir"] is None
     assert kwargs["text_scopes"] == ("full_10k", "item_7_mda")
     assert kwargs["extension_text_features_full_10k_path"] == explicit_extension_full_10k
     assert kwargs["recompute_extension_text_features_full_10k"] is False
+
+
+def test_main_wires_visible_prefix_extension_env_and_default_output_root(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    paths = _configure_minimal_main_env(monkeypatch, tmp_path)
+    items_analysis_dir = paths["run_root"] / "items_analysis"
+    items_analysis_dir.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame({"doc_id": ["0000000001:1995000001"]}).write_parquet(items_analysis_dir / "1995.parquet")
+    doc_ownership_dir = paths["run_root"] / "refinitiv_doc_ownership_lm2011"
+    doc_ownership_dir.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame({"doc_id": ["0000000001:1995000001"]}).write_parquet(
+        doc_ownership_dir / "refinitiv_lm2011_doc_ownership.parquet"
+    )
+    doc_analyst_dir = paths["run_root"] / "refinitiv_doc_analyst_lm2011"
+    doc_analyst_dir.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame({"doc_id": ["0000000001:1995000001"]}).write_parquet(
+        doc_analyst_dir / "refinitiv_doc_analyst_selected.parquet"
+    )
+    sentence_scores_dir = paths["run_root"] / "sentence_scores" / "by_year"
+    sentence_scores_dir.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setenv("SEC_CCM_RUN_LM2011_POST_REFINITIV", "true")
+    monkeypatch.setenv("SEC_CCM_RUN_FINBERT", "false")
+    monkeypatch.setenv("SEC_CCM_RUN_LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX", "true")
+    monkeypatch.setenv("SEC_CCM_LM2011_EXTENSION_FINBERT_SENTENCE_SCORES_DIR", str(sentence_scores_dir))
+    monkeypatch.setenv("SEC_CCM_LM2011_EXTENSION_FINBERT_MODEL_NAME", "yiyanghkust/finbert-tone")
+    monkeypatch.setenv("SEC_CCM_LM2011_EXTENSION_FINBERT_MODEL_REVISION", "model-rev")
+    monkeypatch.setenv("SEC_CCM_LM2011_EXTENSION_FINBERT_TOKENIZER_REVISION", "tokenizer-rev")
+
+    captured: dict[str, object] = {}
+
+    def _lm2011_stub(run_cfg):
+        run_cfg.paths.output_dir.mkdir(parents=True, exist_ok=True)
+        (run_cfg.paths.output_dir / "lm2011_sample_run_manifest.json").write_text(
+            "{}",
+            encoding="utf-8",
+        )
+        return 0
+
+    def _capture_extension_cfg(**kwargs):
+        captured["kwargs"] = kwargs
+        return SimpleNamespace()
+
+    monkeypatch.setattr(runner, "run_lm2011_post_refinitiv_pipeline", _lm2011_stub)
+    monkeypatch.setattr(runner, "_build_lm2011_extension_run_config", _capture_extension_cfg)
+    monkeypatch.setattr(
+        runner,
+        "run_lm2011_extension_dictionary_family_comparison_pipeline",
+        lambda _cfg: None,
+    )
+
+    runner.main()
+
+    kwargs = captured["kwargs"]
+    assert kwargs["output_dir"] == paths["run_root"] / "lm2011_extension_finbert_visible_prefix"
+    assert kwargs["dictionary_source_mode"] == runner.LM2011_EXTENSION_DICTIONARY_SOURCE_FINBERT_VISIBLE_PREFIX
+    assert kwargs["text_scopes"] == ("item_1a_risk_factors", "item_7_mda", "items_1a_7_combined")
+    assert kwargs["local_work_subdir"] == "lm2011_extension_finbert_visible_prefix"
+    assert kwargs["extension_text_features_full_10k_path"] is None
+    assert kwargs["finbert_sentence_scores_dir"] == sentence_scores_dir
+    assert kwargs["finbert_visible_prefix_model_name"] == "yiyanghkust/finbert-tone"
+    assert kwargs["finbert_visible_prefix_model_revision"] == "model-rev"
+    assert kwargs["finbert_visible_prefix_tokenizer_revision"] == "tokenizer-rev"
 
 
 def test_main_lm2011_defaults_daily_panel_to_ccm_daily_path(
