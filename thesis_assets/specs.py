@@ -31,6 +31,9 @@ class AssetSpec:
     sample_contract_id: str
     builder_id: str
     required_artifacts: tuple[ArtifactRequirement, ...]
+    table_display_columns: tuple[str, ...] = ()
+    write_full_appendix_table: bool = False
+    table_display_note: str | None = None
 
 
 @dataclass(frozen=True)

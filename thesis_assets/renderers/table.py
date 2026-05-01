@@ -39,6 +39,12 @@ _CONSTANT_CONTEXT_COLUMNS = (
     "weighting_rule",
 )
 
+_SUPPRESSED_CONSTANT_CONTEXT_COLUMNS = {
+    "canonical_estimator_status",
+    "estimator_status",
+    "visible_prefix_estimator_status",
+}
+
 _HEADER_LABELS = {
     "abnormal_volume": "Abn. volume",
     "activation_status": "Status",
@@ -189,7 +195,7 @@ def write_markdown_table(df: pl.DataFrame, path: Path, *, notes: str | None = No
     if notes:
         lines.extend(["", f"_Notes:_ {_markdown_text(notes)}"])
     if layout_notes:
-        lines.extend(["", f"_Rendered-layout note:_ {_markdown_text(_layout_note_text(layout_notes))}"])
+        lines.extend(["", f"_Table note:_ {_markdown_text(_layout_note_text(layout_notes))}"])
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return path
 
@@ -245,6 +251,8 @@ def _prepare_display_table(df: pl.DataFrame) -> tuple[pl.DataFrame, tuple[str, .
             series = df.get_column(column)
             if _is_constant(series):
                 drop_columns.add(column)
+                if column in _SUPPRESSED_CONSTANT_CONTEXT_COLUMNS:
+                    continue
                 layout_notes.append(
                     f"{_display_header(column)}={_constant_column_value(series)}"
                 )
@@ -394,14 +402,15 @@ def _is_numeric_dtype(dtype: pl.DataType) -> bool:
 def _combine_notes(notes: str, layout_notes: tuple[str, ...]) -> str:
     if not layout_notes:
         return notes
-    return f"{notes} Rendered-layout note: {_layout_note_text(layout_notes)}"
+    return f"{notes} {_layout_note_text(layout_notes)}"
 
 
 def _layout_note_text(layout_notes: tuple[str, ...]) -> str:
     shown = "; ".join(layout_notes[:8])
     if len(layout_notes) > 8:
         shown = f"{shown}; plus {len(layout_notes) - 8} additional constant columns"
-    return f"constant context columns omitted from the rendered preview: {shown}."
+    shown = shown.replace("=", " = ")
+    return f"Constant fields omitted from the displayed table: {shown}."
 
 
 def _display_header(column: str) -> str:

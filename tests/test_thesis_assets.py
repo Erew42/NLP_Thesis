@@ -46,6 +46,13 @@ from thesis_assets.submission_lock import write_submission_lock
 from thesis_assets.usage import resolve_usage_run_paths
 
 
+PLACEHOLDER_PUBLIC_PHRASES = (
+    "Notes stub",
+    "scaffold",
+    "Rendered-layout note",
+)
+
+
 def test_registry_loader_imports_expected_assets() -> None:
     assets = loader.load_registry()
     assert [asset.asset_id for asset in assets] == [
@@ -76,6 +83,7 @@ def test_registry_loader_imports_expected_assets() -> None:
         "ch5_visible_prefix_audit",
         "ch5_visible_prefix_coefficient_sensitivity",
         "ch5_visible_prefix_fit_sensitivity",
+        "ch5_visible_prefix_match_diagnostics",
         "ch5_visible_prefix_token_mass_by_scope",
         "ch5_visible_prefix_fit_delta_comparison",
         "ch5_extension_c0_observed_scale_effects",
@@ -133,14 +141,45 @@ def test_table_renderers_use_readable_wrapped_publication_layout(tmp_path: Path)
     assert "Item 7 MD&A" not in markdown_text
     assert "Item 7" in markdown_text
     assert "<br>" in markdown_text
-    assert "Outcome=Filing return" in markdown_text
+    assert "Outcome = Filing return" in markdown_text
+    assert "Rendered-layout note" not in markdown_text
 
     write_latex_table(df, latex_path, caption="Layout test", notes="Rows report a compact preview.")
     latex_text = latex_path.read_text(encoding="utf-8")
     assert r"\setlength{\tabcolsep}" in latex_text
     assert r"\arraybackslash" in latex_text
     assert r"\textit{Notes:}" in latex_text
-    assert "Rendered-layout note" in latex_text
+    assert "Constant fields omitted from the displayed table" in latex_text
+    assert "Rendered-layout note" not in latex_text
+
+
+def test_registry_public_text_avoids_placeholder_language() -> None:
+    for asset in loader.load_registry():
+        public_text = " ".join(
+            value
+            for value in (
+                asset.caption_stub,
+                asset.notes_stub,
+                asset.table_display_note,
+            )
+            if value
+        )
+        _assert_no_placeholder_public_phrases(public_text)
+
+    coefficient_spec = next(
+        asset
+        for asset in loader.load_registry()
+        if asset.asset_id == "ch5_visible_prefix_coefficient_sensitivity"
+    )
+    fit_spec = next(
+        asset
+        for asset in loader.load_registry()
+        if asset.asset_id == "ch5_visible_prefix_fit_sensitivity"
+    )
+    assert "matched-only" in coefficient_spec.notes_stub
+    assert "ch5_visible_prefix_match_diagnostics" in coefficient_spec.notes_stub
+    assert "matched-only" in fit_spec.notes_stub
+    assert "ch5_visible_prefix_match_diagnostics" in fit_spec.notes_stub
 
 
 def test_sample_contract_helpers_apply_expected_selection() -> None:
@@ -237,6 +276,11 @@ def test_manifest_writing_for_single_asset(tmp_path: Path) -> None:
     assert Path(asset_result.output_paths["table_preview"]).exists()
 
     manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
+    _assert_no_placeholder_public_phrases(result.manifest_path.read_text(encoding="utf-8"))
+    _assert_no_placeholder_public_phrases(Path(asset_result.output_paths["tex"]).read_text(encoding="utf-8"))
+    _assert_no_placeholder_public_phrases(
+        Path(asset_result.output_paths["table_preview"]).read_text(encoding="utf-8")
+    )
     assert manifest["asset_statuses"]["ch4_sample_attrition_lm2011_1994_2008"] == "completed"
     assert manifest["assets"]["ch4_sample_attrition_lm2011_1994_2008"]["sample_contract_id"] == "raw_available"
 
@@ -906,8 +950,20 @@ def test_chapter5_visible_prefix_coefficient_sensitivity_asset(tmp_path: Path) -
 
     asset_result = result.asset_results["ch5_visible_prefix_coefficient_sensitivity"]
     assert asset_result.status == "completed"
+    assert {"tex_full", "table_preview_full"}.issubset(asset_result.output_paths)
+    assert Path(asset_result.output_paths["tex_full"]).exists()
+    assert Path(asset_result.output_paths["table_preview_full"]).exists()
     table_df = pl.read_csv(asset_result.output_paths["csv"])
     assert table_df.height == 8
+    assert "canonical_standard_error" in table_df.columns
+    preview_header = Path(asset_result.output_paths["table_preview"]).read_text(encoding="utf-8").splitlines()[0]
+    full_preview_header = Path(asset_result.output_paths["table_preview_full"]).read_text(encoding="utf-8").splitlines()[
+        0
+    ]
+    preview_text = Path(asset_result.output_paths["table_preview"]).read_text(encoding="utf-8")
+    assert "ch5_visible_prefix_match_diagnostics" in preview_text
+    assert "Canon. SE" not in preview_header
+    assert "Canon. SE" in full_preview_header
     item7_lm = table_df.filter(
         (pl.col("text_scope") == "item_7_mda")
         & (pl.col("specification_name") == "dictionary_only")
@@ -935,8 +991,17 @@ def test_chapter5_visible_prefix_fit_sensitivity_assets(tmp_path: Path) -> None:
         lm2011_extension_finbert_visible_prefix_dir=visible_root,
     ).asset_results["ch5_visible_prefix_fit_sensitivity"]
     assert table_result.status == "completed"
+    assert {"tex_full", "table_preview_full"}.issubset(table_result.output_paths)
+    assert Path(table_result.output_paths["tex_full"]).exists()
+    assert Path(table_result.output_paths["table_preview_full"]).exists()
     table_df = pl.read_csv(table_result.output_paths["csv"])
     assert {"fit_summary", "fit_comparison"} == set(table_df.get_column("section").unique().to_list())
+    preview_text = Path(table_result.output_paths["table_preview"]).read_text(encoding="utf-8")
+    assert "ch5_visible_prefix_match_diagnostics" in preview_text
+    assert "Canon. total N" not in preview_text.splitlines()[0]
+    assert "Canon. total N" in Path(table_result.output_paths["table_preview_full"]).read_text(encoding="utf-8").splitlines()[
+        0
+    ]
     assert table_df.filter(pl.col("section") == "fit_summary").select("delta_weighted").max().item() == pytest.approx(
         0.001
     )
@@ -951,6 +1016,87 @@ def test_chapter5_visible_prefix_fit_sensitivity_assets(tmp_path: Path) -> None:
     assert figure_result.status == "completed"
     assert figure_result.row_counts == {"figure_rows": 24}
     assert Path(figure_result.output_paths["png"]).exists()
+
+
+def test_chapter5_visible_prefix_match_diagnostics_asset_reports_unmatched_surfaces(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    canonical_root = repo_root / "inputs" / "lm2011_extension"
+    visible_root = repo_root / "inputs" / "lm2011_extension_finbert_visible_prefix"
+    canonical_root.mkdir(parents=True)
+    visible_root.mkdir(parents=True)
+    canonical_results_path = canonical_root / "lm2011_extension_results.parquet"
+    visible_results_path = visible_root / "lm2011_extension_results.parquet"
+    canonical_summary_path = canonical_root / "lm2011_extension_fit_summary.parquet"
+    visible_summary_path = visible_root / "lm2011_extension_fit_summary.parquet"
+    canonical_comparison_path = canonical_root / "lm2011_extension_fit_comparisons.parquet"
+    visible_comparison_path = visible_root / "lm2011_extension_fit_comparisons.parquet"
+
+    _write_extension_results_parquet(canonical_results_path)
+    _write_visible_prefix_extension_results_parquet(visible_results_path)
+    _write_extension_fit_summary_parquet(canonical_summary_path)
+    _write_visible_prefix_fit_summary_parquet(visible_summary_path)
+    _write_extension_fit_comparisons_parquet(canonical_comparison_path)
+    _write_visible_prefix_fit_comparisons_parquet(visible_comparison_path)
+
+    _append_parquet_row(canonical_results_path, text_scope="items_1a_7_combined")
+    _append_parquet_row(visible_results_path, dictionary_family_source="extended")
+    _append_parquet_row(
+        canonical_summary_path,
+        text_scope="items_1a_7_combined",
+        specification_name="dictionary_only",
+        feature_family="lm2011_frozen",
+        signal_name="lm_negative_tfidf",
+        signal_inputs="lm_negative_tfidf",
+    )
+    _append_parquet_row(
+        visible_summary_path,
+        text_scope="items_1a_7_combined",
+        specification_name="finbert_only",
+        feature_family="finbert",
+        signal_name="finbert_neg_prob_lenw_mean",
+        signal_inputs="finbert_neg_prob_lenw_mean",
+    )
+    _append_parquet_row(canonical_comparison_path, text_scope="items_1a_7_combined")
+    _append_parquet_row(
+        visible_comparison_path,
+        text_scope="items_1a_7_combined",
+        comparison_name="joint_minus_dictionary",
+    )
+
+    asset_result = build_single_asset(
+        asset_id="ch5_visible_prefix_match_diagnostics",
+        run_id="unit_visible_prefix_match_diagnostics",
+        repo_root=repo_root,
+        lm2011_extension_dir=canonical_root,
+        lm2011_extension_finbert_visible_prefix_dir=visible_root,
+    ).asset_results["ch5_visible_prefix_match_diagnostics"]
+
+    assert asset_result.status == "completed"
+    assert asset_result.row_counts == {
+        "table_rows": 6,
+        "canonical_only_rows": 3,
+        "visible_only_rows": 3,
+    }
+    table_df = pl.read_csv(asset_result.output_paths["csv"])
+    assert set(table_df.get_column("match_status").unique().to_list()) == {
+        "canonical_only",
+        "visible_only",
+    }
+    counts = {
+        (row["surface"], row["match_status"]): row["len"]
+        for row in table_df.group_by("surface", "match_status").len().to_dicts()
+    }
+    assert counts == {
+        ("coefficient", "canonical_only"): 1,
+        ("coefficient", "visible_only"): 1,
+        ("fit_summary", "canonical_only"): 1,
+        ("fit_summary", "visible_only"): 1,
+        ("fit_comparison", "canonical_only"): 1,
+        ("fit_comparison", "visible_only"): 1,
+    }
+    assert {"surface", "match_status", "text_scope", "specification_name", "comparison_name"}.issubset(
+        set(table_df.columns)
+    )
 
 
 def test_chapter5_extension_c0_observed_scale_effects_excludes_skipped_quarter(tmp_path: Path) -> None:
@@ -1918,6 +2064,24 @@ def test_tools_entrypoint_build_asset_uses_submission_lock_without_auto_resoluti
     assert payload["resolved_paths"]["lm2011_post_refinitiv_dir"] == str(run_root.resolve())
     assert payload["resolved_paths"]["lm2011_extension_finbert_visible_prefix_dir"] is None
     assert payload["resolved_paths"]["finbert_run_dir"] is None
+
+
+def _assert_no_placeholder_public_phrases(text: str) -> None:
+    lower_text = text.lower()
+    for phrase in PLACEHOLDER_PUBLIC_PHRASES:
+        assert phrase.lower() not in lower_text
+
+
+def _append_parquet_row(path: Path, **updates: object) -> None:
+    df = pl.read_parquet(path)
+    row = df.head(1)
+    expressions = []
+    for column, value in updates.items():
+        assert column in df.columns
+        expressions.append(pl.lit(value, dtype=df.schema[column]).alias(column))
+    if expressions:
+        row = row.with_columns(expressions)
+    pl.concat([df, row], how="vertical_relaxed").write_parquet(path)
 
 
 def _write_sample_attrition_parquet(path: Path) -> None:

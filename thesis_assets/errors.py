@@ -2,7 +2,7 @@ from __future__ import annotations
 
 
 class ThesisAssetsError(Exception):
-    """Base error for thesis asset scaffold failures."""
+    """Base error for thesis asset build failures."""
 
 
 class RegistryError(ThesisAssetsError):

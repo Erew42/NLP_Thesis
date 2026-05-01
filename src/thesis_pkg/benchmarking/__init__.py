@@ -42,6 +42,30 @@ from thesis_pkg.benchmarking.finbert_sentence_examples import (
 from thesis_pkg.benchmarking.finbert_sentence_examples import (
     build_high_confidence_sentence_example_pack,
 )
+from thesis_pkg.benchmarking.finbert_sentence_confusion_review import (
+    FinbertSentenceConfusionReviewArtifacts,
+)
+from thesis_pkg.benchmarking.finbert_sentence_confusion_review import (
+    FinbertSentenceConfusionReviewConfig,
+)
+from thesis_pkg.benchmarking.finbert_sentence_confusion_review import (
+    FinbertSentenceConfusionSummaryArtifacts,
+)
+from thesis_pkg.benchmarking.finbert_sentence_confusion_review import (
+    THESIS_REVIEW_TEXT_SCOPES,
+)
+from thesis_pkg.benchmarking.finbert_sentence_confusion_review import (
+    add_probability_majority_bucket,
+)
+from thesis_pkg.benchmarking.finbert_sentence_confusion_review import (
+    build_finbert_sentence_confusion_review_pack,
+)
+from thesis_pkg.benchmarking.finbert_sentence_confusion_review import (
+    probability_majority_bucket_expr,
+)
+from thesis_pkg.benchmarking.finbert_sentence_confusion_review import (
+    summarize_finbert_sentence_confusion_review,
+)
 from thesis_pkg.benchmarking.item_text_cleaning import benchmark_item_code_to_text_scope
 from thesis_pkg.benchmarking.item_text_cleaning import build_segment_policy_id
 from thesis_pkg.benchmarking.item_text_cleaning import clean_item_scopes_with_audit
@@ -90,6 +114,9 @@ __all__ = [
     "HighConfidenceSentenceExampleArtifacts",
     "HighConfidenceSentenceExamplePack",
     "FinbertRuntimeConfig",
+    "FinbertSentenceConfusionReviewArtifacts",
+    "FinbertSentenceConfusionReviewConfig",
+    "FinbertSentenceConfusionSummaryArtifacts",
     "FinbertSentenceParquetInferenceRunArtifacts",
     "FinbertSentenceParquetInferenceRunConfig",
     "FinbertSentencePreprocessingRunArtifacts",
@@ -100,6 +127,8 @@ __all__ = [
     "ItemTextCleaningConfig",
     "SentenceDatasetConfig",
     "StageRunsConfig",
+    "THESIS_REVIEW_TEXT_SCOPES",
+    "add_probability_majority_bucket",
     "auto_bucket_lengths_for_edges",
     "annotate_finbert_token_lengths",
     "benchmark_full_pipeline",
@@ -107,6 +136,7 @@ __all__ = [
     "benchmark_sentence_splitting",
     "benchmark_tokenizer_only",
     "build_high_confidence_sentence_example_pack",
+    "build_finbert_sentence_confusion_review_pack",
     "build_finbert_benchmark_suite",
     "build_segment_policy_id",
     "compute_year_allocations",
@@ -120,6 +150,7 @@ __all__ = [
     "load_finbert_model",
     "load_finbert_tokenizer",
     "materialize_sentence_benchmark_dataset",
+    "probability_majority_bucket_expr",
     "resolve_finbert_label_mapping",
     "resolve_bucket_lengths_for_edges",
     "run_finbert_benchmark",
@@ -130,4 +161,5 @@ __all__ = [
     "run_finbert_tokenizer_profile",
     "section_universe_contract_payload",
     "select_ranked_section_sample",
+    "summarize_finbert_sentence_confusion_review",
 ]

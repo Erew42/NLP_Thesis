@@ -166,6 +166,8 @@ def build_asset(context: BuildContext, spec: AssetSpec) -> BuildResult:
             return _build_chapter5_visible_prefix_coefficient_sensitivity(context, spec, artifact_map)
         if spec.builder_id == "chapter5_visible_prefix_fit_sensitivity":
             return _build_chapter5_visible_prefix_fit_sensitivity(context, spec, artifact_map)
+        if spec.builder_id == "chapter5_visible_prefix_match_diagnostics":
+            return _build_chapter5_visible_prefix_match_diagnostics(context, spec, artifact_map)
         if spec.builder_id == "chapter5_visible_prefix_token_mass_by_scope":
             return _build_chapter5_visible_prefix_token_mass_by_scope(context, spec, artifact_map)
         if spec.builder_id == "chapter5_visible_prefix_fit_delta_comparison":
@@ -1918,6 +1920,121 @@ def _build_chapter5_visible_prefix_fit_sensitivity(
         output_paths=output_paths,
         row_counts={"table_rows": selected.height},
         warnings=tuple([*summary_warnings, *comparison_warnings]),
+    )
+
+
+def _build_chapter5_visible_prefix_match_diagnostics(
+    context: BuildContext,
+    spec: AssetSpec,
+    artifacts: dict[str, ResolvedArtifact],
+) -> BuildResult:
+    canonical_results_artifact = artifacts["canonical_extension_results"]
+    visible_results_artifact = artifacts["visible_prefix_extension_results"]
+    canonical_summary_artifact = artifacts["canonical_extension_fit_summary"]
+    visible_summary_artifact = artifacts["visible_prefix_extension_fit_summary"]
+    canonical_comparison_artifact = artifacts["canonical_extension_fit_comparisons"]
+    visible_comparison_artifact = artifacts["visible_prefix_extension_fit_comparisons"]
+
+    coefficient_keys = (
+        "dictionary_family_source",
+        "text_scope",
+        "outcome_name",
+        "feature_family",
+        "control_set_id",
+        "specification_name",
+        "coefficient_name",
+        "signal_name",
+        "weighting_rule",
+    )
+    fit_summary_keys = (
+        "dictionary_family_source",
+        "text_scope",
+        "outcome_name",
+        "feature_family",
+        "control_set_id",
+        "specification_name",
+        "signal_name",
+        "weighting_rule",
+        "common_success_policy",
+    )
+    fit_comparison_keys = (
+        "dictionary_family_source",
+        "text_scope",
+        "outcome_name",
+        "control_set_id",
+        "comparison_name",
+        "weighting_rule",
+        "common_success_policy",
+    )
+
+    canonical_coefficients = _visible_prefix_regression_result_lf(scan_parquet_artifact(canonical_results_artifact))
+    visible_coefficients = _visible_prefix_regression_result_lf(scan_parquet_artifact(visible_results_artifact))
+    canonical_summary = _visible_prefix_fit_summary_selection_lf(scan_parquet_artifact(canonical_summary_artifact))
+    visible_summary = _visible_prefix_fit_summary_selection_lf(scan_parquet_artifact(visible_summary_artifact))
+    canonical_comparison = _visible_prefix_fit_comparison_selection_lf(
+        scan_parquet_artifact(canonical_comparison_artifact),
+        text_scopes=VISIBLE_PREFIX_SENSITIVITY_TEXT_SCOPES,
+    )
+    visible_comparison = _visible_prefix_fit_comparison_selection_lf(
+        scan_parquet_artifact(visible_comparison_artifact),
+        text_scopes=VISIBLE_PREFIX_SENSITIVITY_TEXT_SCOPES,
+    )
+
+    diagnostics_lf = pl.concat(
+        [
+            _visible_prefix_unmatched_diagnostics_lf(
+                canonical_coefficients,
+                visible_coefficients,
+                coefficient_keys,
+                surface="coefficient",
+            ),
+            _visible_prefix_unmatched_diagnostics_lf(
+                canonical_summary,
+                visible_summary,
+                fit_summary_keys,
+                surface="fit_summary",
+            ),
+            _visible_prefix_unmatched_diagnostics_lf(
+                canonical_comparison,
+                visible_comparison,
+                fit_comparison_keys,
+                surface="fit_comparison",
+            ),
+        ],
+        how="diagonal_relaxed",
+    ).sort(
+        "surface",
+        "match_status",
+        "_scope_order",
+        "_dictionary_family_order",
+        "specification_name",
+        "comparison_name",
+        "coefficient_name",
+        "signal_name",
+    )
+    selected = diagnostics_lf.drop("_scope_order", "_dictionary_family_order").collect()
+
+    output_paths = _write_table_outputs(context, spec, selected)
+    return BuildResult(
+        asset_id=spec.asset_id,
+        chapter=spec.chapter,
+        asset_kind=spec.asset_kind,
+        sample_contract_id=spec.sample_contract_id,
+        status="completed",
+        resolved_inputs={
+            "canonical_extension_results": str(canonical_results_artifact.path),
+            "visible_prefix_extension_results": str(visible_results_artifact.path),
+            "canonical_extension_fit_summary": str(canonical_summary_artifact.path),
+            "visible_prefix_extension_fit_summary": str(visible_summary_artifact.path),
+            "canonical_extension_fit_comparisons": str(canonical_comparison_artifact.path),
+            "visible_prefix_extension_fit_comparisons": str(visible_comparison_artifact.path),
+        },
+        output_paths=output_paths,
+        row_counts={
+            "table_rows": selected.height,
+            "canonical_only_rows": selected.filter(pl.col("match_status") == "canonical_only").height,
+            "visible_only_rows": selected.filter(pl.col("match_status") == "visible_only").height,
+        },
     )
 
 
@@ -4685,6 +4802,64 @@ def _visible_prefix_unmatched_warnings(
     return warnings
 
 
+def _visible_prefix_unmatched_diagnostics_lf(
+    canonical_lf: pl.LazyFrame,
+    visible_lf: pl.LazyFrame,
+    keys: tuple[str, ...],
+    *,
+    surface: str,
+) -> pl.LazyFrame:
+    canonical_keys = canonical_lf.select(list(keys)).unique()
+    visible_keys = visible_lf.select(list(keys)).unique()
+    canonical_only = canonical_lf.join(visible_keys, on=list(keys), how="anti").with_columns(
+        pl.lit(surface).alias("surface"),
+        pl.lit("canonical_only").alias("match_status"),
+    )
+    visible_only = visible_lf.join(canonical_keys, on=list(keys), how="anti").with_columns(
+        pl.lit(surface).alias("surface"),
+        pl.lit("visible_only").alias("match_status"),
+    )
+    combined = pl.concat([canonical_only, visible_only], how="diagonal_relaxed").with_columns(
+        _scope_label_expr().alias("scope"),
+        _scope_order_expr().alias("_scope_order"),
+        _dictionary_family_label_expr().alias("dictionary_family"),
+        _dictionary_family_order_expr().alias("_dictionary_family_order"),
+    )
+    return combined.select(_visible_prefix_diagnostic_select_exprs(combined.collect_schema()))
+
+
+def _visible_prefix_diagnostic_select_exprs(schema: pl.Schema) -> list[pl.Expr]:
+    return [
+        pl.col("surface"),
+        pl.col("match_status"),
+        pl.col("scope"),
+        pl.col("text_scope"),
+        pl.col("_scope_order"),
+        pl.col("dictionary_family"),
+        pl.col("dictionary_family_source"),
+        pl.col("_dictionary_family_order"),
+        pl.col("outcome_name"),
+        pl.col("control_set_id"),
+        _optional_column_expr(schema, "feature_family", pl.Utf8),
+        _optional_column_expr(schema, "specification_name", pl.Utf8),
+        _optional_column_expr(schema, "comparison_name", pl.Utf8),
+        _optional_column_expr(schema, "coefficient_name", pl.Utf8),
+        _optional_column_expr(schema, "signal_name", pl.Utf8),
+        _optional_column_expr(schema, "weighting_rule", pl.Utf8),
+        _optional_column_expr(schema, "common_success_policy", pl.Utf8),
+        _optional_column_expr(schema, "n_obs", pl.Int64),
+        _optional_column_expr(schema, "total_n_obs", pl.Int64),
+        _optional_column_expr(schema, "n_quarters", pl.Int64),
+        _optional_column_expr(schema, "mean_quarter_n", pl.Float64),
+    ]
+
+
+def _optional_column_expr(schema: pl.Schema, column: str, dtype: pl.DataType) -> pl.Expr:
+    if column in schema:
+        return pl.col(column)
+    return pl.lit(None, dtype=dtype).alias(column)
+
+
 def _lazy_count(lf: pl.LazyFrame) -> int:
     return int(lf.select(pl.len()).collect().item())
 
@@ -5263,14 +5438,42 @@ def _write_table_outputs(
     csv_path = context.output_dirs["csv"] / f"{spec.output_stem}.csv"
     tex_path = context.output_dirs["tex"] / f"{spec.output_stem}.tex"
     markdown_path = context.output_dirs["tables"] / f"{spec.output_stem}.md"
+    display_df = _select_table_display_columns(df, spec.table_display_columns)
+    display_notes = _table_notes(spec)
     write_csv_table(df, csv_path)
-    write_latex_table(df, tex_path, caption=spec.caption_stub, notes=spec.notes_stub)
-    write_markdown_table(df, markdown_path, notes=spec.notes_stub)
-    return {
+    write_latex_table(display_df, tex_path, caption=spec.caption_stub, notes=display_notes)
+    write_markdown_table(display_df, markdown_path, notes=display_notes)
+    output_paths = {
         "csv": str(csv_path),
         "tex": str(tex_path),
         "table_preview": str(markdown_path),
     }
+    if spec.write_full_appendix_table:
+        full_tex_path = context.output_dirs["tex"] / f"{spec.output_stem}_full.tex"
+        full_markdown_path = context.output_dirs["tables"] / f"{spec.output_stem}_full.md"
+        full_notes = (
+            f"{spec.notes_stub} Full audit rendering; the primary table preview uses a compact column set."
+        )
+        write_latex_table(df, full_tex_path, caption=f"{spec.caption_stub} Full audit table.", notes=full_notes)
+        write_markdown_table(df, full_markdown_path, notes=full_notes)
+        output_paths["tex_full"] = str(full_tex_path)
+        output_paths["table_preview_full"] = str(full_markdown_path)
+    return output_paths
+
+
+def _select_table_display_columns(df: pl.DataFrame, columns: tuple[str, ...]) -> pl.DataFrame:
+    if not columns:
+        return df
+    missing = [column for column in columns if column not in df.columns]
+    if missing:
+        raise AssetBuildError(f"Configured table display columns are missing from output: {missing}")
+    return df.select(list(columns))
+
+
+def _table_notes(spec: AssetSpec) -> str:
+    if not spec.table_display_note:
+        return spec.notes_stub
+    return f"{spec.notes_stub} {spec.table_display_note}"
 
 
 def _write_figure_outputs(
