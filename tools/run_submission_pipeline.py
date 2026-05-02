@@ -48,6 +48,7 @@ SUBMISSION_PROFILE = "SUBMISSION"
 DEFAULT_RUN_ID = "submission_rerun"
 DEFAULT_FINBERT_RUN_NAME = "submission_finbert"
 DEFAULT_NW_LAGS: tuple[int, ...] = (1, 2, 3, 4)
+STAGE_PACKAGE_MANIFEST = "package-manifest"
 STAGE_VALIDATE = "validate"
 STAGE_LM2011 = "lm2011"
 STAGE_NW_SENSITIVITY = "nw-sensitivity"
@@ -57,8 +58,10 @@ STAGE_EXTENSION = "extension"
 STAGE_VISIBLE_PREFIX_EXTENSION = "visible-prefix-extension"
 STAGE_FINBERT_ROBUSTNESS = "finbert-robustness"
 STAGE_THESIS_ASSETS = "thesis-assets"
+STAGE_READINESS = "readiness"
 STAGE_ALL = "all"
 ORDERED_STAGES: tuple[str, ...] = (
+    STAGE_PACKAGE_MANIFEST,
     STAGE_VALIDATE,
     STAGE_LM2011,
     STAGE_NW_SENSITIVITY,
@@ -69,7 +72,16 @@ ORDERED_STAGES: tuple[str, ...] = (
     STAGE_FINBERT_ROBUSTNESS,
     STAGE_THESIS_ASSETS,
 )
-STAGE_CHOICES: tuple[str, ...] = (*ORDERED_STAGES, STAGE_ALL)
+READINESS_STAGES: tuple[str, ...] = (
+    STAGE_PACKAGE_MANIFEST,
+    STAGE_VALIDATE,
+    STAGE_THESIS_ASSETS,
+)
+AGGREGATE_STAGE_SEQUENCES: Mapping[str, tuple[str, ...]] = {
+    STAGE_READINESS: READINESS_STAGES,
+    STAGE_ALL: ORDERED_STAGES,
+}
+STAGE_CHOICES: tuple[str, ...] = (*ORDERED_STAGES, STAGE_READINESS, STAGE_ALL)
 
 REQUIRED_CCM_PARQUETS: tuple[str, ...] = (
     "filingdates.parquet",
@@ -271,10 +283,14 @@ class SubmissionProfile:
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Strict supervisor rerun entrypoint for submitted first-stage parquet packages."
+        description=(
+            "Supervisor entrypoint for submitted thesis packages. The default readiness mode "
+            "validates the zip layout and rebuilds thesis assets from retained outputs; "
+            "--stage all remains the explicit full rerun path."
+        )
     )
     parser.add_argument("--submission-root", type=Path, required=True)
-    parser.add_argument("--stage", choices=STAGE_CHOICES, default=STAGE_ALL)
+    parser.add_argument("--stage", choices=STAGE_CHOICES, default=STAGE_READINESS)
     parser.add_argument("--run-id", type=str, default=None)
     parser.add_argument("--config", type=Path, default=None)
     parser.add_argument("--force", action="store_true")
@@ -289,8 +305,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         config_path=args.config,
         run_id_override=args.run_id,
     )
-    if args.stage == STAGE_ALL:
-        return run_all_stages(profile, force=bool(args.force), dry_run=bool(args.dry_run), config_path=args.config)
+    if args.stage in AGGREGATE_STAGE_SEQUENCES:
+        return run_all_stages(
+            profile,
+            force=bool(args.force),
+            dry_run=bool(args.dry_run),
+            config_path=args.config,
+            aggregate_stage=args.stage,
+        )
     return run_stage(profile, args.stage, force=bool(args.force), dry_run=bool(args.dry_run))
 
 
@@ -381,7 +403,7 @@ def load_submission_pipeline_config(
             ),
         ),
         artifact_overrides=_normalize_artifact_overrides(
-            payload.get("artifact_overrides", ()),
+            payload.get("artifact_overrides", []),
             submission_root=submission_root,
         ),
     )
@@ -393,12 +415,25 @@ def run_all_stages(
     force: bool,
     dry_run: bool,
     config_path: Path | None,
+    aggregate_stage: str = STAGE_ALL,
 ) -> int:
-    plan = stage_plan(profile, STAGE_ALL, force=force, config_path=config_path)
+    stages = AGGREGATE_STAGE_SEQUENCES[aggregate_stage]
+    plan = stage_plan(profile, aggregate_stage, force=force, config_path=config_path)
     if dry_run:
-        print(json.dumps({"profile": SUBMISSION_PROFILE, "dry_run": True, "plan": plan}, indent=2, sort_keys=True))
+        print(
+            json.dumps(
+                {
+                    "profile": SUBMISSION_PROFILE,
+                    "stage": aggregate_stage,
+                    "dry_run": True,
+                    "plan": plan,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
         return 0
-    for stage in ORDERED_STAGES:
+    for stage in stages:
         command = _self_stage_command(profile, stage, force=force, config_path=config_path)
         completed = subprocess.run(command, cwd=str(ROOT), check=False)
         if completed.returncode != 0:
@@ -420,6 +455,15 @@ def run_stage(profile: SubmissionProfile, stage: str, *, force: bool, dry_run: b
     if stage == STAGE_VALIDATE:
         validate_submission_profile(profile)
         _record_pipeline_stage(profile, stage, "completed", {"validated": True})
+        return 0
+    if stage == STAGE_PACKAGE_MANIFEST:
+        manifest_path = _write_submission_package_manifest(profile)
+        _record_pipeline_stage(
+            profile,
+            stage,
+            "completed",
+            {"package_manifest_path": _rel(manifest_path, profile)},
+        )
         return 0
     if stage == STAGE_LM2011:
         return _run_command_stage(profile, stage, build_lm2011_command(profile, force=force))
@@ -469,10 +513,15 @@ def stage_plan(
     force: bool,
     config_path: Path | None = None,
 ) -> list[dict[str, Any]]:
-    stages = ORDERED_STAGES if stage == STAGE_ALL else (stage,)
+    stages = AGGREGATE_STAGE_SEQUENCES.get(stage, (stage,))
     plan: list[dict[str, Any]] = []
     for stage_name in stages:
-        if stage_name == STAGE_VALIDATE:
+        if stage_name == STAGE_PACKAGE_MANIFEST:
+            details = {
+                "action": "write submission package manifest",
+                "path": _rel(profile.package_manifest_path, profile),
+            }
+        elif stage_name == STAGE_VALIDATE:
             details = {"action": "validate strict SUBMISSION layout"}
         elif stage_name == STAGE_LM2011:
             details = {"command": _display_command(build_lm2011_command(profile, force=force))}
@@ -594,6 +643,191 @@ def build_thesis_assets_command(profile: SubmissionProfile) -> list[str]:
         "--submission-lock",
         str(profile.submission_lock_path),
     ]
+
+
+def _write_submission_package_manifest(profile: SubmissionProfile) -> Path:
+    payload = _build_submission_package_manifest(profile)
+    _write_json(profile.package_manifest_path, payload)
+    return profile.package_manifest_path
+
+
+def _build_submission_package_manifest(profile: SubmissionProfile) -> dict[str, Any]:
+    additional_data_paths = _additional_data_manifest_paths(profile)
+    artifact_groups: dict[str, dict[str, Any]] = {
+        "sec_year_merged": _manifest_group(
+            profile,
+            _parquet_shards_for_manifest(profile.year_merged_dir, "data/sec/year_merged"),
+            schema_summary={"required_columns": ["doc_id"]},
+        ),
+        "sec_items_analysis": _manifest_group(
+            profile,
+            _parquet_shards_for_manifest(profile.items_analysis_dir, "data/sec/items_analysis"),
+            schema_summary={
+                "required_columns": list(ITEMS_ANALYSIS_REQUIRED_COLUMNS),
+                "required_column_groups": {
+                    key: list(values)
+                    for key, values in ITEMS_ANALYSIS_REQUIRED_COLUMN_GROUPS.items()
+                },
+            },
+        ),
+        "sec_ccm_matched_clean": _manifest_group(
+            profile,
+            _required_existing_paths(
+                [profile.matched_clean_path],
+                "SEC/CCM matched-clean parquet",
+            ),
+            schema_summary={"required_columns": ["doc_id"]},
+        ),
+        "ccm_crsp_compustat": _manifest_group(
+            profile,
+            _required_existing_paths(
+                [profile.ccm_dir / filename for filename in REQUIRED_CCM_PARQUETS],
+                "CCM/CRSP/Compustat submission inputs",
+            ),
+            schema_summary={
+                "required_files": list(REQUIRED_CCM_PARQUETS),
+                "daily_panel_key_columns": ["KYPERMNO", "CALDT"],
+            },
+        ),
+        "refinitiv_finalized": _manifest_group(
+            profile,
+            _required_existing_paths(
+                [profile.doc_ownership_path, profile.doc_analyst_selected_path],
+                "finalized Refinitiv document-level inputs",
+            ),
+            schema_summary={"required_columns": ["doc_id"]},
+        ),
+        "lm2011_additional_data": _manifest_group(
+            profile,
+            additional_data_paths,
+            schema_summary={
+                "required_files": list(REQUIRED_ADDITIONAL_DATA_FILES),
+                "master_dictionary_candidates": list(MASTER_DICTIONARY_CANDIDATES),
+                "dictionary_family_inputs": ["replication", "extended"],
+            },
+        ),
+    }
+
+    retained_output_roots = _retained_output_roots_for_manifest(profile)
+    if retained_output_roots:
+        artifact_groups["retained_analysis_outputs"] = _manifest_group(
+            profile,
+            retained_output_roots,
+            schema_summary={
+                "purpose": (
+                    "Precomputed analysis outputs used by the default readiness "
+                    "stage to rebuild thesis assets without rerunning heavy audits."
+                ),
+                "run_families": [
+                    RUN_FAMILY_LM2011_POST_REFINITIV,
+                    RUN_FAMILY_LM2011_NW_LAG_SENSITIVITY,
+                    RUN_FAMILY_FINBERT_RUN,
+                    RUN_FAMILY_LM2011_EXTENSION,
+                    RUN_FAMILY_LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX,
+                    RUN_FAMILY_FINBERT_ROBUSTNESS,
+                ],
+            },
+        )
+
+    return {
+        "schema_version": PACKAGE_MANIFEST_SCHEMA_VERSION,
+        "profile": SUBMISSION_PROFILE,
+        "path_semantics": PACKAGE_MANIFEST_PATH_SEMANTICS,
+        "code_version": _code_version_payload(),
+        "artifact_groups": artifact_groups,
+    }
+
+
+def _manifest_group(
+    profile: SubmissionProfile,
+    paths: Sequence[Path],
+    *,
+    schema_summary: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        "paths": [_rel(path, profile) for path in paths],
+        "path_count": len(paths),
+        "schema_summary": dict(schema_summary),
+    }
+
+
+def _parquet_shards_for_manifest(path: Path, label: str) -> tuple[Path, ...]:
+    if not path.exists() or not path.is_dir():
+        raise SubmissionPipelineError(f"Required directory is missing: {label} ({path})")
+    paths = tuple(sorted(candidate.resolve() for candidate in path.glob("*.parquet") if candidate.is_file()))
+    if not paths:
+        raise SubmissionPipelineError(f"Required directory contains no parquet shards: {label} ({path})")
+    return paths
+
+
+def _required_existing_paths(paths: Sequence[Path], label: str) -> tuple[Path, ...]:
+    unique_paths = tuple(dict.fromkeys(Path(path).resolve() for path in paths))
+    missing = [str(path) for path in unique_paths if not path.exists()]
+    if missing:
+        raise SubmissionPipelineError(f"Missing required {label}: {missing}")
+    return unique_paths
+
+
+def _additional_data_manifest_paths(profile: SubmissionProfile) -> tuple[Path, ...]:
+    required_filenames = tuple(
+        dict.fromkeys((*REQUIRED_ADDITIONAL_DATA_FILES, EXTENDED_MASTER_DICTIONARY_FILENAME))
+    )
+    required_paths = _required_existing_paths(
+        [profile.additional_data_dir / filename for filename in required_filenames],
+        "LM2011 additional-data files",
+    )
+    master_dictionary_paths = tuple(
+        (profile.additional_data_dir / filename).resolve()
+        for filename in MASTER_DICTIONARY_CANDIDATES
+        if (profile.additional_data_dir / filename).exists()
+    )
+    if not master_dictionary_paths:
+        raise SubmissionPipelineError(
+            "LM2011 additional-data directory is missing a master dictionary candidate: "
+            + ", ".join(MASTER_DICTIONARY_CANDIDATES)
+        )
+    return tuple(dict.fromkeys((*required_paths, *master_dictionary_paths)))
+
+
+def _retained_output_roots_for_manifest(profile: SubmissionProfile) -> tuple[Path, ...]:
+    candidates = (
+        profile.lm2011_output_dir,
+        profile.nw_sensitivity_dir,
+        profile.finbert_analysis_run_dir,
+        profile.extension_output_dir,
+        profile.visible_prefix_extension_output_dir,
+        profile.finbert_robustness_output_dir,
+    )
+    return tuple(path.resolve() for path in candidates if path.exists())
+
+
+def _code_version_payload() -> dict[str, Any]:
+    git_root = _git_output("rev-parse", "--show-toplevel")
+    if git_root is None or Path(git_root).resolve() != ROOT.resolve():
+        return {"git_commit": None, "dirty": None, "source": "unavailable"}
+    commit = _git_output("rev-parse", "HEAD")
+    status = _git_output("status", "--short") if commit is not None else None
+    return {
+        "git_commit": commit,
+        "dirty": bool(status) if status is not None else None,
+        "source": "git" if commit is not None else "unavailable",
+    }
+
+
+def _git_output(*args: str) -> str | None:
+    try:
+        completed = subprocess.run(
+            ["git", *args],
+            cwd=str(ROOT),
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return None
+    if completed.returncode != 0:
+        return None
+    return completed.stdout.strip()
 
 
 def validate_submission_profile(profile: SubmissionProfile, *, outputs_required: bool = False) -> None:
@@ -978,7 +1212,7 @@ def _assert_inside_submission_root(path: Path, submission_root: Path) -> Path:
 
 
 def _normalize_artifact_overrides(raw_value: Any, *, submission_root: Path) -> tuple[ArtifactOverrideConfig, ...]:
-    if raw_value in (None, ""):
+    if raw_value in (None, "") or raw_value == ():
         return ()
     if not isinstance(raw_value, list):
         raise SubmissionPipelineError("artifact_overrides must be a list when provided.")

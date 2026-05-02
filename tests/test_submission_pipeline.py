@@ -248,6 +248,23 @@ def test_submission_config_rejects_escaped_artifact_override(tmp_path: Path) -> 
         tool.resolve_submission_profile(submission_root=root)
 
 
+def test_submission_config_allows_omitted_artifact_overrides(tmp_path: Path) -> None:
+    tool = _load_submission_tool()
+    root = tmp_path / "submission"
+    root.mkdir()
+    (root / "submission_pipeline_config.json").write_text(
+        json.dumps({"run_id": "unit_run", "years": [2007, 2008], "nw_lags": [1, 2]}),
+        encoding="utf-8",
+    )
+
+    profile = tool.resolve_submission_profile(submission_root=root)
+
+    assert profile.config.run_id == "unit_run"
+    assert profile.config.years == (2007, 2008)
+    assert profile.config.nw_lags == (1, 2)
+    assert profile.config.artifact_overrides == ()
+
+
 def test_dry_run_all_emits_deterministic_stage_order(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     tool = _load_submission_tool()
     root = tmp_path / "submission"
@@ -261,6 +278,22 @@ def test_dry_run_all_emits_deterministic_stage_order(tmp_path: Path, capsys: pyt
     rendered = json.dumps(payload)
     assert "LOCAL_REPO" not in rendered
     assert "COLAB_DRIVE" not in rendered
+
+
+def test_default_dry_run_uses_submission_readiness_stages(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    tool = _load_submission_tool()
+    root = tmp_path / "submission"
+    root.mkdir()
+
+    exit_code = tool.main(["--submission-root", str(root), "--dry-run"])
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["stage"] == tool.STAGE_READINESS
+    assert [row["stage"] for row in payload["plan"]] == list(tool.READINESS_STAGES)
 
 
 def test_all_spawns_child_stage_commands_in_order(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -280,6 +313,46 @@ def test_all_spawns_child_stage_commands_in_order(tmp_path: Path, monkeypatch: p
     assert exit_code == 0
     assert [command[command.index("--stage") + 1] for command in calls] == list(tool.ORDERED_STAGES)
     assert all("--run-id" in command and "unit_run" in command for command in calls)
+
+
+def test_default_readiness_spawns_only_readiness_child_stages(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tool = _load_submission_tool()
+    root = tmp_path / "submission"
+    root.mkdir()
+    calls: list[list[str]] = []
+
+    def _fake_run(command, cwd=None, check=False):
+        calls.append([str(part) for part in command])
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(tool.subprocess, "run", _fake_run)
+
+    exit_code = tool.main(["--submission-root", str(root), "--run-id", "unit_run"])
+
+    assert exit_code == 0
+    assert [command[command.index("--stage") + 1] for command in calls] == list(tool.READINESS_STAGES)
+    assert all("--run-id" in command and "unit_run" in command for command in calls)
+
+
+def test_package_manifest_stage_writes_current_submission_manifest(tmp_path: Path) -> None:
+    tool = _load_submission_tool()
+    root = tmp_path / "submission"
+    _write_minimal_submission_inputs(root, write_package_manifest=False)
+    profile = tool.resolve_submission_profile(submission_root=root)
+
+    exit_code = tool.run_stage(profile, "package-manifest", force=False, dry_run=False)
+
+    assert exit_code == 0
+    payload = json.loads(profile.package_manifest_path.read_text(encoding="utf-8"))
+    assert payload["profile"] == "SUBMISSION"
+    assert payload["path_semantics"] == "relative_to_submission_root"
+    assert set(tool.PACKAGE_MANIFEST_REQUIRED_GROUPS) <= set(payload["artifact_groups"])
+    assert payload["artifact_groups"]["sec_items_analysis"]["paths"] == [
+        "data/sec/items_analysis/2009.parquet"
+    ]
 
 
 def test_lm2011_command_uses_only_explicit_submission_paths(tmp_path: Path) -> None:

@@ -4,6 +4,30 @@ Python package for my NLP thesis (SEC filings, CRSP/Compustat, etc.).
 
 SEC and CCM use different raw naming conventions for filing forms. SEC text and filename metadata generally use hyphenated labels such as `10-K`, `10-Q`, and `10-K/A`, while CCM `filingdates.SRCTYPE` commonly uses compact labels such as `10K`, `10Q`, and `10K/A`. Any filter or join that crosses those sources should normalize form labels first rather than relying on raw string equality.
 
+## Submission Package
+
+For supervisor-facing zip submissions, include the retained `data/` and
+`analysis_outputs/` directories plus `src/`, `thesis_assets/`, and the two thin
+tools used by the submission entrypoint. Development folders such as `tests/`,
+`docs/`, `reports/`, and scratch/cache directories can be omitted.
+
+Default readiness check from the extracted zip root:
+
+```bash
+pip install -e .[benchmark]
+python tools/run_submission_pipeline.py --submission-root .
+```
+
+This lightweight default writes `submission_package_manifest.json`, validates
+the packaged layout, creates `submission_lock.json`, and rebuilds thesis assets
+from retained outputs. The full rerun path remains explicit:
+
+```bash
+python tools/run_submission_pipeline.py --submission-root . --stage all
+```
+
+See `SUBMISSION_README.md` for the exact expected zip layout.
+
 ## SEC-CCM Pre-Merge (Doc Grain)
 
 The repository includes a two-phase SEC-CCM pre-merge pipeline:
