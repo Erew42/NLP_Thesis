@@ -46,6 +46,7 @@ from thesis_assets.config.constants import RUN_FAMILY_FINBERT_ROBUSTNESS
 from thesis_assets.config.constants import RUN_FAMILY_FINBERT_RUN
 from thesis_assets.config.constants import RUN_FAMILY_LM2011_EXTENSION
 from thesis_assets.config.constants import RUN_FAMILY_LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX
+from thesis_assets.config.constants import RUN_FAMILY_LM2011_EVENT_WINDOW_SENSITIVITY
 from thesis_assets.config.constants import RUN_FAMILY_LM2011_NW_LAG_SENSITIVITY
 from thesis_assets.config.constants import RUN_FAMILY_LM2011_POST_REFINITIV
 from thesis_assets.submission_lock import DEFAULT_FINBERT_MODEL_NAME
@@ -127,6 +128,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             lm2011_extension_dir=args.lm2011_extension_dir,
             lm2011_extension_finbert_visible_prefix_dir=args.lm2011_extension_finbert_visible_prefix_dir,
             lm2011_nw_lag_sensitivity_dir=args.lm2011_nw_lag_sensitivity_dir,
+            lm2011_event_window_sensitivity_dir=args.lm2011_event_window_sensitivity_dir,
             finbert_run_dir=args.finbert_run_dir,
             finbert_robustness_dir=args.finbert_robustness_dir,
         )
@@ -148,6 +150,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         ),
         "lm2011_nw_lag_sensitivity_dir": (
             None if args.submission_lock is not None else resolved_paths["lm2011_nw_lag_sensitivity_dir"]
+        ),
+        "lm2011_event_window_sensitivity_dir": (
+            None if args.submission_lock is not None else resolved_paths["lm2011_event_window_sensitivity_dir"]
         ),
         "finbert_run_dir": (
             None if args.submission_lock is not None else resolved_paths["finbert_run_dir"]
@@ -217,6 +222,7 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--lm2011-extension-dir", type=Path, default=None)
     parser.add_argument("--lm2011-extension-finbert-visible-prefix-dir", type=Path, default=None)
     parser.add_argument("--lm2011-nw-lag-sensitivity-dir", type=Path, default=None)
+    parser.add_argument("--lm2011-event-window-sensitivity-dir", type=Path, default=None)
     parser.add_argument("--finbert-run-dir", type=Path, default=None)
     parser.add_argument("--finbert-robustness-dir", type=Path, default=None)
     parser.add_argument(
@@ -237,6 +243,7 @@ def _add_lock_root_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--lm2011-extension-dir", type=Path, default=None)
     parser.add_argument("--lm2011-extension-finbert-visible-prefix-dir", type=Path, default=None)
     parser.add_argument("--lm2011-nw-lag-sensitivity-dir", type=Path, default=None)
+    parser.add_argument("--lm2011-event-window-sensitivity-dir", type=Path, default=None)
     parser.add_argument("--finbert-run-dir", type=Path, default=None)
     parser.add_argument("--finbert-robustness-dir", type=Path, default=None)
 
@@ -319,6 +326,7 @@ def _run_root_args(args: argparse.Namespace) -> dict[str, Path | None]:
             args.lm2011_extension_finbert_visible_prefix_dir
         ),
         RUN_FAMILY_LM2011_NW_LAG_SENSITIVITY: args.lm2011_nw_lag_sensitivity_dir,
+        RUN_FAMILY_LM2011_EVENT_WINDOW_SENSITIVITY: args.lm2011_event_window_sensitivity_dir,
         RUN_FAMILY_FINBERT_RUN: args.finbert_run_dir,
         RUN_FAMILY_FINBERT_ROBUSTNESS: args.finbert_robustness_dir,
     }
@@ -353,6 +361,11 @@ def _resolved_paths_from_lock(lock: SubmissionLock) -> dict[str, Path | None]:
         "lm2011_nw_lag_sensitivity_dir": lock.run_roots.get(RUN_FAMILY_LM2011_NW_LAG_SENSITIVITY).path
         if RUN_FAMILY_LM2011_NW_LAG_SENSITIVITY in lock.run_roots
         else None,
+        "lm2011_event_window_sensitivity_dir": (
+            lock.run_roots.get(RUN_FAMILY_LM2011_EVENT_WINDOW_SENSITIVITY).path
+            if RUN_FAMILY_LM2011_EVENT_WINDOW_SENSITIVITY in lock.run_roots
+            else None
+        ),
         "finbert_run_dir": lock.run_roots.get(RUN_FAMILY_FINBERT_RUN).path
         if RUN_FAMILY_FINBERT_RUN in lock.run_roots
         else None,
@@ -371,6 +384,7 @@ def _resolve_run_paths(
     lm2011_extension_dir: Path | None,
     lm2011_extension_finbert_visible_prefix_dir: Path | None,
     lm2011_nw_lag_sensitivity_dir: Path | None,
+    lm2011_event_window_sensitivity_dir: Path | None,
     finbert_run_dir: Path | None,
     finbert_robustness_dir: Path | None,
 ) -> dict[str, Path | None]:
@@ -382,6 +396,7 @@ def _resolve_run_paths(
         lm2011_extension_dir=lm2011_extension_dir,
         lm2011_extension_finbert_visible_prefix_dir=lm2011_extension_finbert_visible_prefix_dir,
         lm2011_nw_lag_sensitivity_dir=lm2011_nw_lag_sensitivity_dir,
+        lm2011_event_window_sensitivity_dir=lm2011_event_window_sensitivity_dir,
         finbert_run_dir=finbert_run_dir,
         finbert_robustness_dir=finbert_robustness_dir,
     )

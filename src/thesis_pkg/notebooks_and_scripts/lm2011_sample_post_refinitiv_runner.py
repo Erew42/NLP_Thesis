@@ -132,6 +132,7 @@ from thesis_pkg.pipelines.lm2011_extension import (
 )
 from thesis_pkg.pipelines.lm2011_regressions import (
     _QuarterlyFamaMacbethBundle,
+    _RETURN_CONTROL_COLUMNS_NO_OWNERSHIP,
     _build_lm2011_table_ia_i_results_bundle,
     _build_lm2011_table_ia_i_results_no_ownership_bundle,
     _build_lm2011_table_iv_results_bundle,
@@ -142,6 +143,7 @@ from thesis_pkg.pipelines.lm2011_regressions import (
     _build_lm2011_table_vi_results_no_ownership_bundle,
     _build_lm2011_table_viii_results_bundle,
     _build_lm2011_table_viii_results_no_ownership_bundle,
+    _run_lm2011_table_signal_family,
     build_lm2011_return_regression_panel,
     build_lm2011_sue_regression_panel,
     build_lm2011_table_ia_ii_results,
@@ -298,6 +300,11 @@ DEFAULT_LM2011_TEXT_FEATURE_BATCH_SIZE = DEFAULT_LM2011_FULL_10K_TEXT_FEATURE_BA
 DEFAULT_LM2011_EVENT_WINDOW_DOC_BATCH_SIZE = 50
 DEFAULT_RAM_LOG_INTERVAL_BATCHES = 10
 DEFAULT_LM2011_NW_LAGS: tuple[int, ...] = (1,)
+DEFAULT_LM2011_EVENT_WINDOW_SENSITIVITY_DAYS: tuple[int, ...] = (6, 12, 18)
+EVENT_WINDOW_SENSITIVITY_OWNERSHIP_POLICY = "no_ownership"
+EVENT_WINDOW_SENSITIVITY_RETURN_ONLY_POLICY = "return_only"
+EVENT_WINDOW_SENSITIVITY_FULL_POLICY = "return_and_postevent_volatility"
+EVENT_WINDOW_SENSITIVITY_RETURN_ONLY_PANEL_POLICY = "canonical_return_regression_panel_replace_return"
 STRATEGY_TEXT_FEATURE_STAGE_NAME = "strategy_text_features_full_10k"
 CORE_NW_LAG_SENSITIVITY_STAGE_NAME = "core_tables_nw_lag_sensitivity"
 CORE_NW_LAG_SENSITIVITY_FILENAME = "core_tables_nw_lag_sensitivity.parquet"
@@ -307,6 +314,9 @@ EXTENSION_RESULTS_NW_LAG_SENSITIVITY_FILENAME = "extension_results_nw_lag_sensit
 EXTENSION_FIT_COMPARISONS_NW_LAG_SENSITIVITY_FILENAME = "extension_fit_comparisons_nw_lag_sensitivity.parquet"
 NW_LAG_SENSITIVITY_SUMMARY_CSV = "nw_lag_sensitivity_summary.csv"
 NW_LAG_SENSITIVITY_SUMMARY_MARKDOWN = "nw_lag_sensitivity_summary.md"
+EVENT_WINDOW_SENSITIVITY_MANIFEST_FILENAME = "lm2011_event_window_sensitivity_manifest.json"
+EVENT_WINDOW_SENSITIVITY_SAMPLE_COUNTS_FILENAME = "lm2011_event_window_sensitivity_sample_counts.parquet"
+EVENT_WINDOW_SENSITIVITY_RESULTS_FILENAME = "lm2011_event_window_sensitivity_results.parquet"
 
 STAGE_ARTIFACT_FILENAMES: dict[str, str] = {
     "sample_backbone": "lm2011_sample_backbone.parquet",
@@ -320,6 +330,7 @@ STAGE_ARTIFACT_FILENAMES: dict[str, str] = {
     "table_i_sample_creation": "lm2011_table_i_sample_creation.parquet",
     "table_i_sample_creation_1994_2024": "lm2011_table_i_sample_creation_1994_2024.parquet",
     "event_panel": "lm2011_event_panel.parquet",
+    "event_return_panel": "lm2011_event_return_panel.parquet",
     STRATEGY_TEXT_FEATURE_STAGE_NAME: "lm2011_strategy_text_features_full_10k.parquet",
     "sue_panel": "lm2011_sue_panel.parquet",
     "return_regression_panel_full_10k": "lm2011_return_regression_panel_full_10k.parquet",
@@ -356,8 +367,52 @@ FINAL_REGRESSION_TABLE_STAGE_NAMES: frozenset[str] = frozenset(
 QUARTERLY_REGRESSION_TABLE_STAGE_NAMES: frozenset[str] = frozenset(
     FINAL_REGRESSION_TABLE_STAGE_NAMES - {"table_ia_ii_results"}
 )
+EVENT_WINDOW_SENSITIVITY_STAGE_NAMES: tuple[str, ...] = (
+    "event_screen_surface",
+    "table_i_sample_creation",
+    "event_panel",
+    "sue_panel",
+    "return_regression_panel_full_10k",
+    "return_regression_panel_mda",
+    "sue_regression_panel",
+    "table_iv_results_no_ownership",
+    "table_v_results_no_ownership",
+    "table_vi_results_no_ownership",
+    "table_viii_results_no_ownership",
+    "table_ia_i_results_no_ownership",
+)
+EVENT_WINDOW_SENSITIVITY_RETURN_ONLY_STAGE_NAMES: tuple[str, ...] = (
+    "event_return_panel",
+    "return_regression_panel_full_10k",
+    "return_regression_panel_mda",
+    "table_iv_results_no_ownership",
+    "table_v_results_no_ownership",
+)
+EVENT_WINDOW_SENSITIVITY_PREREQ_STAGE_NAMES: tuple[str, ...] = (
+    "sample_backbone",
+    "annual_accounting_panel",
+    "quarterly_accounting_panel",
+    "ff_factors_daily_normalized",
+    "text_features_full_10k",
+    "text_features_mda",
+    "event_screen_surface",
+    "event_panel",
+)
+EVENT_WINDOW_SENSITIVITY_RETURN_ONLY_PREREQ_STAGE_NAMES: tuple[str, ...] = (
+    "sample_backbone",
+    "annual_accounting_panel",
+    "ff_factors_daily_normalized",
+    "text_features_full_10k",
+    "text_features_mda",
+    "event_screen_surface",
+    "event_panel",
+)
 MANIFEST_FILENAME = "lm2011_sample_run_manifest.json"
-LM2011_ALL_STAGE_NAMES: tuple[str, ...] = tuple(STAGE_ARTIFACT_FILENAMES)
+LM2011_ALL_STAGE_NAMES: tuple[str, ...] = tuple(
+    stage_name
+    for stage_name in STAGE_ARTIFACT_FILENAMES
+    if stage_name != "event_return_panel"
+)
 LM2011_OPTIONAL_STAGE_DEFAULTS_FALSE = frozenset(
     {
         "ff_factors_monthly_with_mom_normalized",
@@ -527,8 +582,16 @@ class LM2011PostRefinitivRunConfig:
     paths: RunnerPaths
     enabled_stages: tuple[str, ...] = LM2011_ALL_STAGE_NAMES
     fail_closed_for_enabled_stages: bool = False
+    event_window_sensitivity_days: tuple[int, ...] = ()
+    event_window_sensitivity_output_dir: Path | None = None
+    event_window_sensitivity_include_postevent_volatility: bool = False
 
     def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "event_window_sensitivity_days",
+            normalize_lm2011_event_window_sensitivity_days(self.event_window_sensitivity_days),
+        )
         unknown = sorted(set(self.enabled_stages) - set(LM2011_ALL_STAGE_NAMES))
         if unknown:
             raise ValueError(f"Unknown LM2011 stage names: {unknown}")
@@ -798,6 +861,33 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             "additive NW-lag sensitivity artifacts."
         ),
     )
+    parser.add_argument(
+        "--event-window-sensitivity-days",
+        type=int,
+        nargs="+",
+        default=None,
+        help=(
+            "Additive LM2011 event-window sensitivity reruns. For example: "
+            "--event-window-sensitivity-days 6 12 18."
+        ),
+    )
+    parser.add_argument(
+        "--event-window-sensitivity-include-postevent-volatility",
+        action="store_true",
+        help=(
+            "Run the slower event-window sensitivity path that also recomputes "
+            "post-event volatility and Table VI-style ancillary outcomes."
+        ),
+    )
+    parser.add_argument(
+        "--event-window-sensitivity-only",
+        action="store_true",
+        help=(
+            "Run only the cached return-window sensitivity stage from existing canonical "
+            "LM2011 post-Refinitiv artifacts. This mode does not recompute monthly "
+            "strategy or post-event volatility stages."
+        ),
+    )
     parser.add_argument("--items-analysis-dir", type=Path, default=None)
     parser.add_argument("--ccm-base-dir", type=Path, default=None)
     parser.add_argument(
@@ -874,6 +964,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     args = parser.parse_args(argv)
     try:
         args.nw_lags = normalize_lm2011_nw_lags(args.nw_lags)
+        args.event_window_sensitivity_days = normalize_lm2011_event_window_sensitivity_days(
+            args.event_window_sensitivity_days
+        )
     except ValueError as exc:
         parser.error(str(exc))
     return args
@@ -1138,6 +1231,50 @@ def normalize_lm2011_nw_lags(values: Sequence[int] | None) -> tuple[int, ...]:
     if not normalized:
         raise ValueError("LM2011 Newey-West lags must include at least one positive integer.")
     return tuple(normalized)
+
+
+def normalize_lm2011_event_window_sensitivity_days(values: Sequence[int] | None) -> tuple[int, ...]:
+    if values is None:
+        return ()
+    normalized: list[int] = []
+    seen: set[int] = set()
+    for raw_value in values:
+        value = int(raw_value)
+        if value < 1:
+            raise ValueError(f"LM2011 event-window sensitivity days must be positive integers; got {value}.")
+        if value in seen:
+            continue
+        normalized.append(value)
+        seen.add(value)
+    return tuple(normalized)
+
+
+def _event_window_metadata(event_window_days: int) -> dict[str, int]:
+    days = int(event_window_days)
+    if days < 1:
+        raise ValueError(f"LM2011 event-window days must be positive; got {days}.")
+    return {
+        "event_window_days": days,
+        "event_window_start_day": 0,
+        "event_window_end_day": days - 1,
+        "postevent_start_day": days + 2,
+    }
+
+
+def _event_window_sensitivity_mode(*, include_postevent_volatility: bool) -> str:
+    return (
+        EVENT_WINDOW_SENSITIVITY_FULL_POLICY
+        if include_postevent_volatility
+        else EVENT_WINDOW_SENSITIVITY_RETURN_ONLY_POLICY
+    )
+
+
+def _event_window_sensitivity_stage_names(*, include_postevent_volatility: bool) -> tuple[str, ...]:
+    return (
+        EVENT_WINDOW_SENSITIVITY_STAGE_NAMES
+        if include_postevent_volatility
+        else EVENT_WINDOW_SENSITIVITY_RETURN_ONLY_STAGE_NAMES
+    )
 
 
 def _extension_artifact_output_path(output_dir: Path, stage_name: str) -> Path:
@@ -3094,6 +3231,10 @@ def build_lm2011_post_refinitiv_run_config(
         paths=_resolve_paths(args),
         enabled_stages=resolved_enabled_stages,
         fail_closed_for_enabled_stages=fail_closed_for_enabled_stages,
+        event_window_sensitivity_days=tuple(args.event_window_sensitivity_days or ()),
+        event_window_sensitivity_include_postevent_volatility=bool(
+            args.event_window_sensitivity_include_postevent_volatility
+        ),
     )
 
 
@@ -4109,6 +4250,7 @@ def _build_manifest(paths: RunnerPaths) -> dict[str, Any]:
             "recompute_event_panel": paths.recompute_event_panel,
             "recompute_regression_tables": paths.recompute_regression_tables,
             "event_window_doc_batch_size": paths.event_window_doc_batch_size,
+            "canonical_event_window_days": 4,
             "print_ram_stats": paths.print_ram_stats,
             "ram_log_interval_batches": paths.ram_log_interval_batches,
             "nw_lags": list(paths.nw_lags),
@@ -4467,6 +4609,1175 @@ def _write_named_artifact_stage(
     if manifest_path is not None:
         _checkpoint_manifest(manifest, manifest_path)
     return pl.scan_parquet(written_path)
+
+
+def _event_window_sensitivity_output_dir(run_cfg: LM2011PostRefinitivRunConfig) -> Path:
+    if run_cfg.event_window_sensitivity_output_dir is not None:
+        return Path(run_cfg.event_window_sensitivity_output_dir).resolve()
+    return (run_cfg.paths.output_dir / "event_window_sensitivity").resolve()
+
+
+def _event_window_sensitivity_window_dir(output_dir: Path, event_window_days: int) -> Path:
+    return output_dir / f"window_{int(event_window_days)}d"
+
+
+def _event_window_sensitivity_cached_sue_panel_path(paths: RunnerPaths) -> Path:
+    return _artifact_output_path(paths.output_dir, "sue_panel")
+
+
+def _build_no_ownership_sue_panel_from_cached(
+    event_panel_lf: pl.LazyFrame,
+    cached_sue_panel_lf: pl.LazyFrame,
+) -> pl.LazyFrame:
+    event_schema = event_panel_lf.collect_schema()
+    cached_sue_schema = cached_sue_panel_lf.collect_schema()
+    required_event_columns = (
+        "doc_id",
+        "gvkey_int",
+        "KYPERMNO",
+        "filing_date",
+        "size_event",
+        "bm_event",
+        "share_turnover",
+        "pre_ffalpha",
+        "nasdaq_dummy",
+    )
+    required_cached_sue_columns = (
+        "doc_id",
+        "quarter_report_date",
+        "sue",
+        "analyst_dispersion",
+        "analyst_revisions",
+    )
+    missing_event_columns = [column for column in required_event_columns if column not in event_schema]
+    if missing_event_columns:
+        raise ValueError(f"event_panel missing columns required for cached SUE reuse: {missing_event_columns}")
+    missing_cached_sue_columns = [column for column in required_cached_sue_columns if column not in cached_sue_schema]
+    if missing_cached_sue_columns:
+        raise ValueError(f"cached sue_panel missing required columns: {missing_cached_sue_columns}")
+
+    event_base = event_panel_lf.select(
+        pl.col("doc_id").cast(pl.Utf8, strict=False),
+        pl.col("gvkey_int").cast(pl.Int32, strict=False),
+        pl.col("KYPERMNO").cast(pl.Int32, strict=False),
+        pl.col("filing_date").cast(pl.Date, strict=False),
+        pl.col("size_event").cast(pl.Float64, strict=False),
+        pl.col("bm_event").cast(pl.Float64, strict=False),
+        pl.col("share_turnover").cast(pl.Float64, strict=False),
+        pl.col("pre_ffalpha").cast(pl.Float64, strict=False),
+        (
+            pl.col("institutional_ownership").cast(pl.Float64, strict=False)
+            if "institutional_ownership" in event_schema
+            else pl.lit(None, dtype=pl.Float64)
+        ).alias("institutional_ownership"),
+        pl.col("nasdaq_dummy").cast(pl.Int8, strict=False),
+    )
+    cached_sue_metrics = cached_sue_panel_lf.select(
+        pl.col("doc_id").cast(pl.Utf8, strict=False),
+        pl.col("quarter_report_date").cast(pl.Date, strict=False),
+        pl.col("sue").cast(pl.Float64, strict=False),
+        pl.col("analyst_dispersion").cast(pl.Float64, strict=False),
+        pl.col("analyst_revisions").cast(pl.Float64, strict=False),
+    ).drop_nulls(subset=["doc_id"])
+    return event_base.join(cached_sue_metrics, on="doc_id", how="inner").select(
+        "doc_id",
+        "gvkey_int",
+        "KYPERMNO",
+        "filing_date",
+        "quarter_report_date",
+        "size_event",
+        "bm_event",
+        "share_turnover",
+        "sue",
+        "analyst_dispersion",
+        "analyst_revisions",
+        "pre_ffalpha",
+        "institutional_ownership",
+        "nasdaq_dummy",
+    )
+
+
+def _build_event_window_sensitivity_window_manifest(
+    paths: RunnerPaths,
+    *,
+    output_dir: Path,
+    event_window_days: int,
+    include_postevent_volatility: bool,
+) -> dict[str, Any]:
+    started_at_utc = _utc_timestamp()
+    metadata = _event_window_metadata(event_window_days)
+    sensitivity_mode = _event_window_sensitivity_mode(
+        include_postevent_volatility=include_postevent_volatility
+    )
+    return {
+        "runner_name": "lm2011_event_window_sensitivity_window",
+        "generated_at_utc": started_at_utc,
+        "started_at_utc": started_at_utc,
+        "completed_at_utc": None,
+        "elapsed_seconds": None,
+        "failed_stage": None,
+        "run_status": "running",
+        "event_window": metadata,
+        "roots": {
+            "canonical_output_dir": _absolute_path_str(paths.output_dir),
+            "output_dir": _absolute_path_str(output_dir),
+            "local_work_root": _absolute_path_str(paths.local_work_root),
+        },
+        "config": {
+            **metadata,
+            "sensitivity_mode": sensitivity_mode,
+            "include_postevent_volatility": include_postevent_volatility,
+            "return_only_panel_policy": (
+                EVENT_WINDOW_SENSITIVITY_RETURN_ONLY_PANEL_POLICY
+                if not include_postevent_volatility
+                else None
+            ),
+            "ownership_policy": EVENT_WINDOW_SENSITIVITY_OWNERSHIP_POLICY,
+            "requires_doc_ownership": False,
+            "event_window_doc_batch_size": paths.event_window_doc_batch_size,
+            "nw_lags": [paths.nw_lags[0]],
+            "excluded_stages": [
+                "table_iv_results",
+                "table_v_results",
+                "table_vi_results",
+                "table_viii_results",
+                "table_ia_i_results",
+                "trading_strategy_monthly_returns",
+                "table_ia_ii_results",
+                "lm2011_extension",
+            ],
+        },
+        "resolved_inputs": {
+            "year_merged_dir": _absolute_path_str(paths.year_merged_dir),
+            "daily_panel_path": _absolute_path_str(paths.daily_panel_path),
+            "matched_clean_path": _absolute_path_str(paths.matched_clean_path),
+            "filingdates_path": _absolute_path_str(paths.filingdates_path),
+            "doc_analyst_selected_path": _absolute_path_str(paths.doc_analyst_selected_path),
+            "cached_sue_panel_path": _absolute_path_str(_event_window_sensitivity_cached_sue_panel_path(paths)),
+            "company_history_path": _absolute_path_str(paths.company_history_path),
+            "company_description_path": _absolute_path_str(paths.company_description_path),
+            "ff48_siccodes_path": _absolute_path_str(paths.ff48_siccodes_path),
+        },
+        "artifacts": {},
+        "row_counts": {},
+        "stages": {},
+    }
+
+
+def _event_window_sensitivity_manifest_input_paths(
+    paths: RunnerPaths,
+    *,
+    include_postevent_volatility: bool,
+) -> dict[str, str | None]:
+    input_paths = {
+        "daily_panel_path": _absolute_path_str(paths.daily_panel_path),
+        "company_history_path": _absolute_path_str(paths.company_history_path),
+        "company_description_path": _absolute_path_str(paths.company_description_path),
+        "ff48_siccodes_path": _absolute_path_str(paths.ff48_siccodes_path),
+    }
+    if include_postevent_volatility:
+        input_paths.update(
+            {
+                "year_merged_dir": _absolute_path_str(paths.year_merged_dir),
+                "matched_clean_path": _absolute_path_str(paths.matched_clean_path),
+                "filingdates_path": _absolute_path_str(paths.filingdates_path),
+                "doc_analyst_selected_path": _absolute_path_str(paths.doc_analyst_selected_path),
+                "cached_sue_panel_path": _absolute_path_str(
+                    _event_window_sensitivity_cached_sue_panel_path(paths)
+                ),
+            }
+        )
+    return input_paths
+
+
+def _event_window_sensitivity_window_manifest_matches(
+    manifest_path: Path,
+    *,
+    event_window_days: int,
+    include_postevent_volatility: bool = False,
+    paths: RunnerPaths | None = None,
+) -> bool:
+    if not manifest_path.exists():
+        return False
+    try:
+        payload = _read_json_payload(manifest_path)
+    except Exception:
+        return False
+    if payload.get("run_status") != "completed":
+        return False
+    expected = _event_window_metadata(event_window_days)
+    raw_metadata = payload.get("event_window")
+    if not isinstance(raw_metadata, Mapping):
+        raw_metadata = payload.get("config")
+    if not isinstance(raw_metadata, Mapping):
+        return False
+    if not all(raw_metadata.get(key) == value for key, value in expected.items()):
+        return False
+    raw_config = payload.get("config")
+    if not isinstance(raw_config, Mapping):
+        return False
+    expected_mode = _event_window_sensitivity_mode(
+        include_postevent_volatility=include_postevent_volatility
+    )
+    if raw_config.get("ownership_policy") != EVENT_WINDOW_SENSITIVITY_OWNERSHIP_POLICY:
+        return False
+    if raw_config.get("sensitivity_mode") != expected_mode:
+        return False
+    if (
+        not include_postevent_volatility
+        and raw_config.get("return_only_panel_policy")
+        != EVENT_WINDOW_SENSITIVITY_RETURN_ONLY_PANEL_POLICY
+    ):
+        return False
+    if paths is None:
+        return True
+    raw_roots = payload.get("roots")
+    if not isinstance(raw_roots, Mapping):
+        return False
+    if raw_roots.get("canonical_output_dir") != _absolute_path_str(paths.output_dir):
+        return False
+    raw_inputs = payload.get("resolved_inputs")
+    if not isinstance(raw_inputs, Mapping):
+        return False
+    for key, expected_value in _event_window_sensitivity_manifest_input_paths(
+        paths,
+        include_postevent_volatility=include_postevent_volatility,
+    ).items():
+        if raw_inputs.get(key) != expected_value:
+            return False
+    return True
+
+
+def _event_window_sensitivity_window_artifacts_exist(
+    output_dir: Path,
+    *,
+    include_postevent_volatility: bool = False,
+) -> bool:
+    return all(
+        _artifact_output_path(output_dir, stage_name).exists()
+        for stage_name in _event_window_sensitivity_stage_names(
+            include_postevent_volatility=include_postevent_volatility
+        )
+    )
+
+
+def _event_window_sensitivity_window_reusable(
+    output_dir: Path,
+    *,
+    event_window_days: int,
+    include_postevent_volatility: bool = False,
+    paths: RunnerPaths | None = None,
+) -> bool:
+    return (
+        _event_window_sensitivity_window_manifest_matches(
+            output_dir / EVENT_WINDOW_SENSITIVITY_MANIFEST_FILENAME,
+            event_window_days=event_window_days,
+            include_postevent_volatility=include_postevent_volatility,
+            paths=paths,
+        )
+        and _event_window_sensitivity_window_artifacts_exist(
+            output_dir,
+            include_postevent_volatility=include_postevent_volatility,
+        )
+    )
+
+
+def _require_event_window_sensitivity_inputs(
+    paths: RunnerPaths,
+    *,
+    include_postevent_volatility: bool,
+    year_merged_lf: pl.LazyFrame | None,
+    sample_backbone_lf: pl.LazyFrame | None,
+    event_panel_lf: pl.LazyFrame | None = None,
+    annual_accounting_panel_lf: pl.LazyFrame | None,
+    quarterly_accounting_panel_lf: pl.LazyFrame | None,
+    ff_factors_daily_lf: pl.LazyFrame | None,
+    text_features_full_10k_lf: pl.LazyFrame | None,
+    text_features_mda_lf: pl.LazyFrame | None,
+) -> None:
+    missing: list[str] = []
+    if include_postevent_volatility and year_merged_lf is None:
+        missing.append("year_merged")
+    if include_postevent_volatility and sample_backbone_lf is None:
+        missing.append("sample_backbone")
+    if not include_postevent_volatility and event_panel_lf is None:
+        missing.append("event_panel")
+    if include_postevent_volatility and annual_accounting_panel_lf is None:
+        missing.append("annual_accounting_panel")
+    if include_postevent_volatility and quarterly_accounting_panel_lf is None:
+        missing.append("quarterly_accounting_panel")
+    if ff_factors_daily_lf is None:
+        missing.append("ff_factors_daily_normalized")
+    has_canonical_return_regression_panels = all(
+        _artifact_output_path(paths.output_dir, stage_name).exists()
+        for stage_name in ("return_regression_panel_full_10k", "return_regression_panel_mda")
+    )
+    if include_postevent_volatility or not has_canonical_return_regression_panels:
+        if text_features_full_10k_lf is None:
+            missing.append("text_features_full_10k")
+        if text_features_mda_lf is None:
+            missing.append("text_features_mda")
+    required_paths = {
+        "daily_panel_path": paths.daily_panel_path,
+        "company_history_path": paths.company_history_path,
+        "company_description_path": paths.company_description_path,
+        "ff48_siccodes_path": paths.ff48_siccodes_path,
+    }
+    if include_postevent_volatility:
+        required_paths.update(
+            {
+                "matched_clean_path": paths.matched_clean_path,
+                "filingdates_path": paths.filingdates_path,
+            }
+        )
+    missing.extend(name for name, path in required_paths.items() if path is None or not path.exists())
+    cached_sue_panel_path = _event_window_sensitivity_cached_sue_panel_path(paths)
+    if (
+        include_postevent_volatility
+        and not paths.doc_analyst_selected_path.exists()
+        and not cached_sue_panel_path.exists()
+    ):
+        missing.append("doc_analyst_selected_path_or_cached_sue_panel")
+    if missing:
+        raise RuntimeError(
+            "LM2011 event-window sensitivity requires canonical seeded inputs and reusable "
+            f"text/accounting/analyst artifacts. Missing: {', '.join(missing)}"
+        )
+
+
+def _with_event_window_metadata(
+    lf: pl.LazyFrame,
+    *,
+    event_window_days: int,
+    stage_name: str,
+) -> pl.LazyFrame:
+    if "stage_name" in lf.collect_schema().names():
+        lf = lf.drop("stage_name")
+    metadata = _event_window_metadata(event_window_days)
+    return lf.with_columns(
+        pl.lit(metadata["event_window_days"], dtype=pl.Int32).alias("event_window_days"),
+        pl.lit(metadata["event_window_start_day"], dtype=pl.Int32).alias("event_window_start_day"),
+        pl.lit(metadata["event_window_end_day"], dtype=pl.Int32).alias("event_window_end_day"),
+        pl.lit(metadata["postevent_start_day"], dtype=pl.Int32).alias("postevent_start_day"),
+        pl.lit(stage_name, dtype=pl.Utf8).alias("stage_name"),
+        pl.lit(stage_name, dtype=pl.Utf8).alias("source_stage_name"),
+    )
+
+
+def _stack_event_window_sensitivity_artifacts(
+    output_dir: Path,
+    *,
+    event_window_days_grid: Sequence[int],
+    stage_names: Sequence[str],
+    output_filename: str,
+) -> tuple[Path, int]:
+    frames: list[pl.LazyFrame] = []
+    for event_window_days in event_window_days_grid:
+        window_dir = _event_window_sensitivity_window_dir(output_dir, event_window_days)
+        for stage_name in stage_names:
+            artifact_path = _artifact_output_path(window_dir, stage_name)
+            if not artifact_path.exists():
+                continue
+            frames.append(
+                _with_event_window_metadata(
+                    pl.scan_parquet(artifact_path),
+                    event_window_days=event_window_days,
+                    stage_name=stage_name,
+                )
+            )
+    output_path = output_dir / output_filename
+    if frames:
+        stacked = pl.concat(frames, how="diagonal_relaxed")
+        return _write_frame_artifact(stacked, output_path)
+    empty = pl.DataFrame(
+        schema={
+            "event_window_days": pl.Int32,
+            "event_window_start_day": pl.Int32,
+            "event_window_end_day": pl.Int32,
+            "postevent_start_day": pl.Int32,
+            "stage_name": pl.Utf8,
+            "source_stage_name": pl.Utf8,
+        }
+    )
+    return _write_frame_artifact(empty, output_path)
+
+
+def _canonical_return_regression_panel_with_event_return(
+    canonical_panel_lf: pl.LazyFrame,
+    event_return_panel_lf: pl.LazyFrame,
+) -> pl.LazyFrame:
+    canonical_schema = canonical_panel_lf.collect_schema()
+    canonical_columns = canonical_schema.names()
+    missing = [
+        name
+        for name in ("doc_id", "filing_period_excess_return")
+        if name not in canonical_columns
+    ]
+    if missing:
+        raise ValueError(f"canonical return regression panel missing required columns: {missing}")
+    event_return_schema = event_return_panel_lf.collect_schema()
+    missing_event_columns = [
+        name
+        for name in ("doc_id", "filing_period_excess_return")
+        if name not in event_return_schema.names()
+    ]
+    if missing_event_columns:
+        raise ValueError(f"event return panel missing required columns: {missing_event_columns}")
+    return (
+        canonical_panel_lf.drop("filing_period_excess_return")
+        .join(
+            event_return_panel_lf.select("doc_id", "filing_period_excess_return"),
+            on="doc_id",
+            how="inner",
+        )
+        .select(canonical_columns)
+    )
+
+
+def _build_return_only_sensitivity_table_bundle_from_panel(
+    panel_lf: pl.LazyFrame,
+    *,
+    table_id: str,
+    text_scope: str,
+    nw_lags: int,
+    min_total_token_count_col: str | None = None,
+) -> _QuarterlyFamaMacbethBundle:
+    if min_total_token_count_col is not None:
+        panel_lf = panel_lf.filter(
+            pl.col(min_total_token_count_col).cast(pl.Float64, strict=False) >= 250.0
+        )
+    bundle = _run_lm2011_table_signal_family(
+        panel_lf,
+        table_id=table_id,
+        text_scope=text_scope,
+        dependent_variable="filing_period_excess_return",
+        signal_columns=("h4n_inf_prop", "lm_negative_prop", "h4n_inf_tfidf", "lm_negative_tfidf"),
+        control_columns=_RETURN_CONTROL_COLUMNS_NO_OWNERSHIP,
+        with_diagnostics=True,
+        nw_lags=nw_lags,
+    )
+    assert isinstance(bundle, _QuarterlyFamaMacbethBundle)
+    return bundle
+
+
+def _run_event_window_return_only_sensitivity_window(
+    run_cfg: LM2011PostRefinitivRunConfig,
+    *,
+    output_dir: Path,
+    event_window_days: int,
+    event_panel_lf: pl.LazyFrame,
+    ff_factors_daily_lf: pl.LazyFrame,
+    text_features_full_10k_lf: pl.LazyFrame | None,
+    text_features_mda_lf: pl.LazyFrame | None,
+) -> dict[str, Any]:
+    paths = run_cfg.paths
+    output_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = output_dir / EVENT_WINDOW_SENSITIVITY_MANIFEST_FILENAME
+    if _event_window_sensitivity_window_reusable(
+        output_dir,
+        event_window_days=event_window_days,
+        include_postevent_volatility=False,
+        paths=paths,
+    ):
+        return {
+            "event_window_days": event_window_days,
+            "status": STAGE_STATUS_REUSED_EXISTING_ARTIFACT,
+            "manifest_path": _absolute_path_str(manifest_path),
+            "output_dir": _absolute_path_str(output_dir),
+        }
+
+    manifest = _build_event_window_sensitivity_window_manifest(
+        paths,
+        output_dir=output_dir,
+        event_window_days=event_window_days,
+        include_postevent_volatility=False,
+    )
+    current_stage_name = "initialization"
+    _checkpoint_manifest(manifest, manifest_path)
+    try:
+        current_stage_name = "event_return_panel"
+        event_return_panel_lf = _write_event_return_panel_stage(
+            manifest,
+            manifest_path=manifest_path,
+            output_dir=output_dir,
+            canonical_event_panel_lf=event_panel_lf,
+            ff_factors_daily_lf=ff_factors_daily_lf,
+            daily_panel_path=paths.daily_panel_path,
+            event_window_doc_batch_size=paths.event_window_doc_batch_size,
+            event_window_days=event_window_days,
+            progress_callback=_make_event_screen_progress_logger(
+                f"event_window_sensitivity_{event_window_days}d_event_return_panel",
+                print_ram_stats=paths.print_ram_stats,
+                ram_log_interval_batches=paths.ram_log_interval_batches,
+            ),
+            print_ram_stats=paths.print_ram_stats,
+        )
+
+        canonical_return_regression_panel_full_10k_path = _artifact_output_path(
+            paths.output_dir,
+            "return_regression_panel_full_10k",
+        )
+        canonical_return_regression_panel_mda_path = _artifact_output_path(
+            paths.output_dir,
+            "return_regression_panel_mda",
+        )
+        use_canonical_return_regression_panels = (
+            canonical_return_regression_panel_full_10k_path.exists()
+            and canonical_return_regression_panel_mda_path.exists()
+        )
+        current_stage_name = "return_regression_panel_full_10k"
+        if use_canonical_return_regression_panels:
+            return_regression_panel_full_10k_frame = _canonical_return_regression_panel_with_event_return(
+                pl.scan_parquet(canonical_return_regression_panel_full_10k_path),
+                event_return_panel_lf,
+            )
+            return_regression_panel_full_10k_metadata = {
+                **_event_window_metadata(event_window_days),
+                "sensitivity_mode": EVENT_WINDOW_SENSITIVITY_RETURN_ONLY_POLICY,
+                "return_only_panel_policy": EVENT_WINDOW_SENSITIVITY_RETURN_ONLY_PANEL_POLICY,
+                "canonical_return_regression_panel_path": _absolute_path_str(
+                    canonical_return_regression_panel_full_10k_path
+                ),
+            }
+        else:
+            if text_features_full_10k_lf is None:
+                raise RuntimeError(
+                    "Return-only event-window sensitivity requires either canonical full-10-K "
+                    "return regression panel or text_features_full_10k."
+                )
+            return_regression_panel_full_10k_frame = build_lm2011_return_regression_panel(
+                event_return_panel_lf,
+                text_features_full_10k_lf,
+                pl.scan_parquet(paths.company_history_path),
+                pl.scan_parquet(paths.company_description_path),
+                ff48_siccodes_path=paths.ff48_siccodes_path,
+                text_scope="full_10k",
+            )
+            return_regression_panel_full_10k_metadata = {
+                **_event_window_metadata(event_window_days),
+                "sensitivity_mode": EVENT_WINDOW_SENSITIVITY_RETURN_ONLY_POLICY,
+                "return_only_panel_policy": "rebuilt_from_text_features",
+            }
+        return_regression_panel_full_10k_lf = _write_stage(
+            manifest,
+            manifest_path=manifest_path,
+            output_dir=output_dir,
+            stage_name="return_regression_panel_full_10k",
+            frame=return_regression_panel_full_10k_frame,
+            metadata=return_regression_panel_full_10k_metadata,
+        )
+
+        current_stage_name = "return_regression_panel_mda"
+        if use_canonical_return_regression_panels:
+            return_regression_panel_mda_frame = _canonical_return_regression_panel_with_event_return(
+                pl.scan_parquet(canonical_return_regression_panel_mda_path),
+                event_return_panel_lf,
+            )
+            return_regression_panel_mda_metadata = {
+                **_event_window_metadata(event_window_days),
+                "sensitivity_mode": EVENT_WINDOW_SENSITIVITY_RETURN_ONLY_POLICY,
+                "return_only_panel_policy": EVENT_WINDOW_SENSITIVITY_RETURN_ONLY_PANEL_POLICY,
+                "canonical_return_regression_panel_path": _absolute_path_str(
+                    canonical_return_regression_panel_mda_path
+                ),
+            }
+        else:
+            if text_features_mda_lf is None:
+                raise RuntimeError(
+                    "Return-only event-window sensitivity requires either canonical MD&A "
+                    "return regression panel or text_features_mda."
+                )
+            return_regression_panel_mda_frame = build_lm2011_return_regression_panel(
+                event_return_panel_lf,
+                text_features_mda_lf,
+                pl.scan_parquet(paths.company_history_path),
+                pl.scan_parquet(paths.company_description_path),
+                ff48_siccodes_path=paths.ff48_siccodes_path,
+                text_scope="mda_item_7",
+            )
+            return_regression_panel_mda_metadata = {
+                **_event_window_metadata(event_window_days),
+                "sensitivity_mode": EVENT_WINDOW_SENSITIVITY_RETURN_ONLY_POLICY,
+                "return_only_panel_policy": "rebuilt_from_text_features",
+            }
+        return_regression_panel_mda_lf = _write_stage(
+            manifest,
+            manifest_path=manifest_path,
+            output_dir=output_dir,
+            stage_name="return_regression_panel_mda",
+            frame=return_regression_panel_mda_frame,
+            metadata=return_regression_panel_mda_metadata,
+        )
+
+        primary_nw_lag = paths.nw_lags[0]
+        if use_canonical_return_regression_panels:
+            table_stage_specs = (
+                (
+                    "table_iv_results_no_ownership",
+                    lambda: _build_return_only_sensitivity_table_bundle_from_panel(
+                        return_regression_panel_full_10k_lf,
+                        table_id="table_iv_full_10k",
+                        text_scope="full_10k",
+                        nw_lags=primary_nw_lag,
+                    ),
+                ),
+                (
+                    "table_v_results_no_ownership",
+                    lambda: _build_return_only_sensitivity_table_bundle_from_panel(
+                        return_regression_panel_mda_lf,
+                        table_id="table_v_mda",
+                        text_scope="mda_item_7",
+                        min_total_token_count_col="total_token_count_mda",
+                        nw_lags=primary_nw_lag,
+                    ),
+                ),
+            )
+        else:
+            table_stage_specs = (
+                (
+                    "table_iv_results_no_ownership",
+                    lambda: _build_lm2011_table_iv_results_no_ownership_bundle(
+                        event_return_panel_lf,
+                        text_features_full_10k_lf,
+                        pl.scan_parquet(paths.company_history_path),
+                        pl.scan_parquet(paths.company_description_path),
+                        ff48_siccodes_path=paths.ff48_siccodes_path,
+                        nw_lags=primary_nw_lag,
+                    ),
+                ),
+                (
+                    "table_v_results_no_ownership",
+                    lambda: _build_lm2011_table_v_results_no_ownership_bundle(
+                        event_return_panel_lf,
+                        text_features_mda_lf,
+                        pl.scan_parquet(paths.company_history_path),
+                        pl.scan_parquet(paths.company_description_path),
+                        ff48_siccodes_path=paths.ff48_siccodes_path,
+                        nw_lags=primary_nw_lag,
+                    ),
+                ),
+            )
+        for stage_name, build_bundle in table_stage_specs:
+            current_stage_name = stage_name
+            _write_quarterly_regression_table_stage(
+                manifest,
+                manifest_path=manifest_path,
+                output_dir=output_dir,
+                stage_name=stage_name,
+                bundle=build_bundle(),
+            )
+
+        completed_at_utc = _utc_timestamp()
+        manifest["run_status"] = "completed"
+        manifest["completed_at_utc"] = completed_at_utc
+        manifest["elapsed_seconds"] = _elapsed_seconds(str(manifest["started_at_utc"]), completed_at_utc)
+        manifest["failed_stage"] = None
+        _checkpoint_manifest(manifest, manifest_path)
+        return {
+            "event_window_days": event_window_days,
+            "status": "generated",
+            "manifest_path": _absolute_path_str(manifest_path),
+            "output_dir": _absolute_path_str(output_dir),
+            "row_counts": dict(manifest.get("row_counts") or {}),
+        }
+    except Exception as exc:
+        _record_stage_failed(
+            manifest,
+            stage_name=current_stage_name,
+            exc=exc,
+            manifest_path=manifest_path,
+        )
+        completed_at_utc = _utc_timestamp()
+        manifest["run_status"] = "failed"
+        manifest["completed_at_utc"] = completed_at_utc
+        manifest["elapsed_seconds"] = _elapsed_seconds(str(manifest["started_at_utc"]), completed_at_utc)
+        manifest["failed_stage"] = current_stage_name
+        manifest["error"] = {
+            "stage": current_stage_name,
+            "type": type(exc).__name__,
+            "message": str(exc),
+        }
+        _checkpoint_manifest(manifest, manifest_path)
+        raise
+
+
+def _run_event_window_sensitivity_window(
+    run_cfg: LM2011PostRefinitivRunConfig,
+    *,
+    output_dir: Path,
+    event_window_days: int,
+    year_merged_lf: pl.LazyFrame | None,
+    sample_backbone_lf: pl.LazyFrame | None,
+    event_panel_lf: pl.LazyFrame | None,
+    annual_accounting_panel_lf: pl.LazyFrame | None,
+    quarterly_accounting_panel_lf: pl.LazyFrame | None,
+    ff_factors_daily_lf: pl.LazyFrame | None,
+    text_features_full_10k_lf: pl.LazyFrame | None,
+    text_features_mda_lf: pl.LazyFrame | None,
+) -> dict[str, Any]:
+    if not run_cfg.event_window_sensitivity_include_postevent_volatility:
+        if event_panel_lf is None:
+            raise RuntimeError("Return-only LM2011 event-window sensitivity requires canonical event_panel.")
+        return _run_event_window_return_only_sensitivity_window(
+            run_cfg,
+            output_dir=output_dir,
+            event_window_days=event_window_days,
+            event_panel_lf=event_panel_lf,
+            ff_factors_daily_lf=ff_factors_daily_lf,
+            text_features_full_10k_lf=text_features_full_10k_lf,
+            text_features_mda_lf=text_features_mda_lf,
+        )
+
+    paths = run_cfg.paths
+    output_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = output_dir / EVENT_WINDOW_SENSITIVITY_MANIFEST_FILENAME
+    if _event_window_sensitivity_window_reusable(
+        output_dir,
+        event_window_days=event_window_days,
+        include_postevent_volatility=True,
+        paths=paths,
+    ):
+        return {
+            "event_window_days": event_window_days,
+            "status": STAGE_STATUS_REUSED_EXISTING_ARTIFACT,
+            "manifest_path": _absolute_path_str(manifest_path),
+            "output_dir": _absolute_path_str(output_dir),
+        }
+
+    manifest = _build_event_window_sensitivity_window_manifest(
+        paths,
+        output_dir=output_dir,
+        event_window_days=event_window_days,
+        include_postevent_volatility=True,
+    )
+    current_stage_name = "initialization"
+    _checkpoint_manifest(manifest, manifest_path)
+    try:
+        current_stage_name = "event_screen_surface"
+        event_screen_surface_lf = _write_event_screen_surface_stage(
+            manifest,
+            manifest_path=manifest_path,
+            output_dir=output_dir,
+            sample_backbone_lf=sample_backbone_lf,
+            annual_accounting_panel_lf=annual_accounting_panel_lf,
+            ff_factors_daily_lf=ff_factors_daily_lf,
+            text_features_full_10k_lf=text_features_full_10k_lf,
+            daily_panel_path=paths.daily_panel_path,
+            event_window_doc_batch_size=paths.event_window_doc_batch_size,
+            event_window_days=event_window_days,
+            progress_callback=_make_event_screen_progress_logger(
+                f"event_window_sensitivity_{event_window_days}d_event_screen_surface",
+                print_ram_stats=paths.print_ram_stats,
+                ram_log_interval_batches=paths.ram_log_interval_batches,
+            ),
+            print_ram_stats=paths.print_ram_stats,
+        )
+
+        current_stage_name = "table_i_sample_creation"
+        table_i_df = build_lm2011_table_i_sample_creation(
+            year_merged_lf,
+            pl.scan_parquet(paths.matched_clean_path),
+            pl.scan_parquet(paths.daily_panel_path),
+            annual_accounting_panel_lf,
+            ff_factors_daily_lf,
+            text_features_full_10k_lf,
+            ccm_filingdates_lf=pl.scan_parquet(paths.filingdates_path),
+            mda_text_features_lf=text_features_mda_lf,
+            event_window_days=event_window_days,
+            event_window_doc_batch_size=paths.event_window_doc_batch_size,
+            _precomputed_event_screen_surface_lf=event_screen_surface_lf,
+        )
+        _write_table_i_stage(
+            manifest,
+            manifest_path=manifest_path,
+            output_dir=output_dir,
+            stage_name="table_i_sample_creation",
+            table_df=table_i_df,
+            sample_start=dt.date(1994, 1, 1),
+            sample_end=dt.date(2008, 12, 31),
+        )
+
+        current_stage_name = "event_panel"
+        event_panel_lf = _write_stage(
+            manifest,
+            manifest_path=manifest_path,
+            output_dir=output_dir,
+            stage_name="event_panel",
+            frame=build_lm2011_event_panel(
+                sample_backbone_lf=sample_backbone_lf,
+                daily_lf=pl.scan_parquet(paths.daily_panel_path),
+                annual_accounting_panel_lf=annual_accounting_panel_lf,
+                ff_factors_daily_lf=ff_factors_daily_lf,
+                ownership_lf=None,
+                full_10k_text_features_lf=text_features_full_10k_lf,
+                event_window_days=event_window_days,
+                event_window_doc_batch_size=paths.event_window_doc_batch_size,
+                require_ownership=False,
+                _precomputed_event_screen_surface_lf=event_screen_surface_lf,
+            ),
+            metadata={
+                **_event_window_metadata(event_window_days),
+                "ownership_policy": EVENT_WINDOW_SENSITIVITY_OWNERSHIP_POLICY,
+                "requires_doc_ownership": False,
+            },
+        )
+        event_screen_surface_lf = None
+        _gc_cleanup(f"event_window_sensitivity_{event_window_days}d_event_panel_post", enabled=paths.print_ram_stats)
+
+        current_stage_name = "sue_panel"
+        if paths.doc_analyst_selected_path.exists():
+            sue_panel_lf = _write_sue_panel_stage(
+                manifest,
+                manifest_path=manifest_path,
+                output_dir=output_dir,
+                event_panel_lf=event_panel_lf,
+                quarterly_accounting_panel_lf=quarterly_accounting_panel_lf,
+                ibes_unadjusted_earnings_lf=_prepare_doc_analyst_sue_input_lf(paths.doc_analyst_selected_path),
+                daily_lf=pl.scan_parquet(paths.daily_panel_path),
+                doc_batch_size=paths.event_window_doc_batch_size,
+                print_ram_stats=paths.print_ram_stats,
+            )
+        else:
+            cached_sue_panel_path = _event_window_sensitivity_cached_sue_panel_path(paths)
+            sue_panel_lf = _write_stage(
+                manifest,
+                manifest_path=manifest_path,
+                output_dir=output_dir,
+                stage_name="sue_panel",
+                frame=_build_no_ownership_sue_panel_from_cached(
+                    event_panel_lf,
+                    pl.scan_parquet(cached_sue_panel_path),
+                ),
+                source_path=cached_sue_panel_path,
+                warnings=[
+                    "Reused cached canonical SUE metrics because doc_analyst_selected_path was unavailable; "
+                    "event controls and institutional_ownership come from the no-ownership sensitivity event panel."
+                ],
+                metadata={
+                    **_event_window_metadata(event_window_days),
+                    "ownership_policy": EVENT_WINDOW_SENSITIVITY_OWNERSHIP_POLICY,
+                    "requires_doc_ownership": False,
+                    "sue_metric_source": "cached_canonical_sue_panel",
+                },
+            )
+
+        current_stage_name = "return_regression_panel_full_10k"
+        return_regression_panel_full_10k_lf = _write_stage(
+            manifest,
+            manifest_path=manifest_path,
+            output_dir=output_dir,
+            stage_name="return_regression_panel_full_10k",
+            frame=build_lm2011_return_regression_panel(
+                event_panel_lf,
+                text_features_full_10k_lf,
+                pl.scan_parquet(paths.company_history_path),
+                pl.scan_parquet(paths.company_description_path),
+                ff48_siccodes_path=paths.ff48_siccodes_path,
+                text_scope="full_10k",
+            ),
+        )
+
+        current_stage_name = "return_regression_panel_mda"
+        return_regression_panel_mda_lf = _write_stage(
+            manifest,
+            manifest_path=manifest_path,
+            output_dir=output_dir,
+            stage_name="return_regression_panel_mda",
+            frame=build_lm2011_return_regression_panel(
+                event_panel_lf,
+                text_features_mda_lf,
+                pl.scan_parquet(paths.company_history_path),
+                pl.scan_parquet(paths.company_description_path),
+                ff48_siccodes_path=paths.ff48_siccodes_path,
+                text_scope="mda_item_7",
+            ),
+        )
+
+        current_stage_name = "sue_regression_panel"
+        sue_regression_panel_lf = _write_stage(
+            manifest,
+            manifest_path=manifest_path,
+            output_dir=output_dir,
+            stage_name="sue_regression_panel",
+            frame=build_lm2011_sue_regression_panel(
+                sue_panel_lf,
+                text_features_full_10k_lf,
+                pl.scan_parquet(paths.company_history_path),
+                pl.scan_parquet(paths.company_description_path),
+                ff48_siccodes_path=paths.ff48_siccodes_path,
+            ),
+        )
+
+        primary_nw_lag = paths.nw_lags[0]
+        table_stage_specs = (
+            (
+                "table_iv_results_no_ownership",
+                lambda: _build_lm2011_table_iv_results_no_ownership_bundle(
+                    event_panel_lf,
+                    text_features_full_10k_lf,
+                    pl.scan_parquet(paths.company_history_path),
+                    pl.scan_parquet(paths.company_description_path),
+                    ff48_siccodes_path=paths.ff48_siccodes_path,
+                    nw_lags=primary_nw_lag,
+                ),
+            ),
+            (
+                "table_v_results_no_ownership",
+                lambda: _build_lm2011_table_v_results_no_ownership_bundle(
+                    event_panel_lf,
+                    text_features_mda_lf,
+                    pl.scan_parquet(paths.company_history_path),
+                    pl.scan_parquet(paths.company_description_path),
+                    ff48_siccodes_path=paths.ff48_siccodes_path,
+                    nw_lags=primary_nw_lag,
+                ),
+            ),
+            (
+                "table_vi_results_no_ownership",
+                lambda: _build_lm2011_table_vi_results_no_ownership_bundle(
+                    event_panel_lf,
+                    text_features_full_10k_lf,
+                    pl.scan_parquet(paths.company_history_path),
+                    pl.scan_parquet(paths.company_description_path),
+                    ff48_siccodes_path=paths.ff48_siccodes_path,
+                    nw_lags=primary_nw_lag,
+                ),
+            ),
+            (
+                "table_viii_results_no_ownership",
+                lambda: _build_lm2011_table_viii_results_no_ownership_bundle(
+                    sue_panel_lf,
+                    text_features_full_10k_lf,
+                    pl.scan_parquet(paths.company_history_path),
+                    pl.scan_parquet(paths.company_description_path),
+                    ff48_siccodes_path=paths.ff48_siccodes_path,
+                    nw_lags=primary_nw_lag,
+                ),
+            ),
+            (
+                "table_ia_i_results_no_ownership",
+                lambda: _build_lm2011_table_ia_i_results_no_ownership_bundle(
+                    event_panel_lf,
+                    text_features_full_10k_lf,
+                    pl.scan_parquet(paths.company_history_path),
+                    pl.scan_parquet(paths.company_description_path),
+                    ff48_siccodes_path=paths.ff48_siccodes_path,
+                    nw_lags=primary_nw_lag,
+                ),
+            ),
+        )
+        for stage_name, build_bundle in table_stage_specs:
+            current_stage_name = stage_name
+            _write_quarterly_regression_table_stage(
+                manifest,
+                manifest_path=manifest_path,
+                output_dir=output_dir,
+                stage_name=stage_name,
+                bundle=build_bundle(),
+            )
+
+        completed_at_utc = _utc_timestamp()
+        manifest["run_status"] = "completed"
+        manifest["completed_at_utc"] = completed_at_utc
+        manifest["elapsed_seconds"] = _elapsed_seconds(str(manifest["started_at_utc"]), completed_at_utc)
+        manifest["failed_stage"] = None
+        _checkpoint_manifest(manifest, manifest_path)
+        return {
+            "event_window_days": event_window_days,
+            "status": "generated",
+            "manifest_path": _absolute_path_str(manifest_path),
+            "output_dir": _absolute_path_str(output_dir),
+            "row_counts": dict(manifest.get("row_counts") or {}),
+        }
+    except Exception as exc:
+        _record_stage_failed(
+            manifest,
+            stage_name=current_stage_name,
+            exc=exc,
+            manifest_path=manifest_path,
+        )
+        completed_at_utc = _utc_timestamp()
+        manifest["run_status"] = "failed"
+        manifest["completed_at_utc"] = completed_at_utc
+        manifest["elapsed_seconds"] = _elapsed_seconds(str(manifest["started_at_utc"]), completed_at_utc)
+        manifest["failed_stage"] = current_stage_name
+        manifest["error"] = {
+            "stage": current_stage_name,
+            "type": type(exc).__name__,
+            "message": str(exc),
+        }
+        _checkpoint_manifest(manifest, manifest_path)
+        raise
+
+
+def run_lm2011_event_window_sensitivity_pipeline(
+    run_cfg: LM2011PostRefinitivRunConfig,
+    *,
+    year_merged_lf: pl.LazyFrame | None,
+    sample_backbone_lf: pl.LazyFrame | None,
+    event_panel_lf: pl.LazyFrame | None,
+    annual_accounting_panel_lf: pl.LazyFrame | None,
+    quarterly_accounting_panel_lf: pl.LazyFrame | None,
+    ff_factors_daily_lf: pl.LazyFrame | None,
+    text_features_full_10k_lf: pl.LazyFrame | None,
+    text_features_mda_lf: pl.LazyFrame | None,
+) -> dict[str, Any]:
+    event_window_days_grid = run_cfg.event_window_sensitivity_days
+    if not event_window_days_grid:
+        return {}
+    paths = run_cfg.paths
+    output_dir = _event_window_sensitivity_output_dir(run_cfg)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    root_manifest_path = output_dir / EVENT_WINDOW_SENSITIVITY_MANIFEST_FILENAME
+    started_at_utc = _utc_timestamp()
+    include_postevent_volatility = run_cfg.event_window_sensitivity_include_postevent_volatility
+    sensitivity_mode = _event_window_sensitivity_mode(
+        include_postevent_volatility=include_postevent_volatility
+    )
+    root_manifest: dict[str, Any] = {
+        "runner_name": "lm2011_event_window_sensitivity",
+        "generated_at_utc": started_at_utc,
+        "started_at_utc": started_at_utc,
+        "completed_at_utc": None,
+        "elapsed_seconds": None,
+        "run_status": "running",
+        "roots": {
+            "canonical_output_dir": _absolute_path_str(paths.output_dir),
+            "output_dir": _absolute_path_str(output_dir),
+        },
+        "config": {
+            "event_window_sensitivity_days": list(event_window_days_grid),
+            "canonical_event_window_days": 4,
+            "sensitivity_mode": sensitivity_mode,
+            "include_postevent_volatility": include_postevent_volatility,
+            "ownership_policy": EVENT_WINDOW_SENSITIVITY_OWNERSHIP_POLICY,
+            "requires_doc_ownership": False,
+            "event_window_doc_batch_size": paths.event_window_doc_batch_size,
+            "primary_nw_lag": paths.nw_lags[0],
+            "excluded_stages": [
+                "table_iv_results",
+                "table_v_results",
+                "table_vi_results",
+                "table_viii_results",
+                "table_ia_i_results",
+                "trading_strategy_monthly_returns",
+                "table_ia_ii_results",
+                "lm2011_extension",
+            ],
+        },
+        "windows": [],
+        "artifacts": {},
+        "row_counts": {},
+    }
+    _checkpoint_manifest(root_manifest, root_manifest_path)
+    _require_event_window_sensitivity_inputs(
+        paths,
+        include_postevent_volatility=include_postevent_volatility,
+        year_merged_lf=year_merged_lf,
+        sample_backbone_lf=sample_backbone_lf,
+        event_panel_lf=event_panel_lf,
+        annual_accounting_panel_lf=annual_accounting_panel_lf,
+        quarterly_accounting_panel_lf=quarterly_accounting_panel_lf,
+        ff_factors_daily_lf=ff_factors_daily_lf,
+        text_features_full_10k_lf=text_features_full_10k_lf,
+        text_features_mda_lf=text_features_mda_lf,
+    )
+    for event_window_days in event_window_days_grid:
+        window_dir = _event_window_sensitivity_window_dir(output_dir, event_window_days)
+        window_summary = _run_event_window_sensitivity_window(
+            run_cfg,
+            output_dir=window_dir,
+            event_window_days=event_window_days,
+            year_merged_lf=year_merged_lf,
+            sample_backbone_lf=sample_backbone_lf,
+            event_panel_lf=event_panel_lf,
+            annual_accounting_panel_lf=annual_accounting_panel_lf,
+            quarterly_accounting_panel_lf=quarterly_accounting_panel_lf,
+            ff_factors_daily_lf=ff_factors_daily_lf,
+            text_features_full_10k_lf=text_features_full_10k_lf,
+            text_features_mda_lf=text_features_mda_lf,
+        )
+        root_manifest["windows"].append({**_event_window_metadata(event_window_days), **window_summary})
+        _checkpoint_manifest(root_manifest, root_manifest_path)
+
+    sample_counts_path, sample_counts_rows = _stack_event_window_sensitivity_artifacts(
+        output_dir,
+        event_window_days_grid=event_window_days_grid,
+        stage_names=("table_i_sample_creation",),
+        output_filename=EVENT_WINDOW_SENSITIVITY_SAMPLE_COUNTS_FILENAME,
+    )
+    result_stage_names = (
+        tuple(stage for stage in EVENT_WINDOW_SENSITIVITY_STAGE_NAMES if stage in QUARTERLY_REGRESSION_TABLE_STAGE_NAMES)
+        if include_postevent_volatility
+        else ("table_iv_results_no_ownership", "table_v_results_no_ownership")
+    )
+    results_path, results_rows = _stack_event_window_sensitivity_artifacts(
+        output_dir,
+        event_window_days_grid=event_window_days_grid,
+        stage_names=result_stage_names,
+        output_filename=EVENT_WINDOW_SENSITIVITY_RESULTS_FILENAME,
+    )
+    root_manifest["artifacts"] = {
+        "sample_counts": _absolute_path_str(sample_counts_path),
+        "results": _absolute_path_str(results_path),
+    }
+    root_manifest["row_counts"] = {
+        "sample_counts": sample_counts_rows,
+        "results": results_rows,
+    }
+    completed_at_utc = _utc_timestamp()
+    root_manifest["run_status"] = "completed"
+    root_manifest["completed_at_utc"] = completed_at_utc
+    root_manifest["elapsed_seconds"] = _elapsed_seconds(str(root_manifest["started_at_utc"]), completed_at_utc)
+    _checkpoint_manifest(root_manifest, root_manifest_path)
+    return root_manifest
+
+
+def run_lm2011_event_window_sensitivity_only(
+    run_cfg: LM2011PostRefinitivRunConfig,
+) -> dict[str, Any]:
+    if not run_cfg.event_window_sensitivity_days:
+        raise ValueError("--event-window-sensitivity-only requires --event-window-sensitivity-days.")
+    if run_cfg.event_window_sensitivity_include_postevent_volatility:
+        raise ValueError(
+            "--event-window-sensitivity-only supports the return-only sensitivity path. "
+            "Omit --event-window-sensitivity-only for full post-event volatility reruns."
+        )
+
+    paths = run_cfg.paths
+    required_artifacts = {
+        "event_panel": _artifact_output_path(paths.output_dir, "event_panel"),
+        "ff_factors_daily_normalized": _artifact_output_path(
+            paths.output_dir,
+            "ff_factors_daily_normalized",
+        ),
+        "return_regression_panel_full_10k": _artifact_output_path(
+            paths.output_dir,
+            "return_regression_panel_full_10k",
+        ),
+        "return_regression_panel_mda": _artifact_output_path(
+            paths.output_dir,
+            "return_regression_panel_mda",
+        ),
+    }
+    missing = [name for name, path in required_artifacts.items() if not path.exists()]
+    if missing:
+        raise FileNotFoundError(
+            "Cached LM2011 event-window sensitivity-only mode requires existing canonical "
+            f"artifacts in {paths.output_dir}: {', '.join(missing)}"
+        )
+
+    return run_lm2011_event_window_sensitivity_pipeline(
+        run_cfg,
+        year_merged_lf=None,
+        sample_backbone_lf=None,
+        event_panel_lf=pl.scan_parquet(required_artifacts["event_panel"]),
+        annual_accounting_panel_lf=None,
+        quarterly_accounting_panel_lf=None,
+        ff_factors_daily_lf=pl.scan_parquet(required_artifacts["ff_factors_daily_normalized"]),
+        text_features_full_10k_lf=None,
+        text_features_mda_lf=None,
+    )
 
 
 def _concat_relaxed_or_empty(frames: Sequence[pl.DataFrame]) -> pl.DataFrame:
@@ -5046,10 +6357,12 @@ def _write_event_screen_surface_stage(
     text_features_full_10k_lf: pl.LazyFrame,
     daily_panel_path: Path,
     event_window_doc_batch_size: int,
+    event_window_days: int = 4,
     progress_callback: Callable[[dict[str, int]], None] | None = None,
     print_ram_stats: bool = False,
 ) -> pl.LazyFrame:
     artifact_path = _artifact_output_path(output_dir, "event_screen_surface")
+    metadata = _event_window_metadata(event_window_days)
     _print_ram_snapshot("event_screen_surface_start", enabled=print_ram_stats)
     try:
         lm2011_pipeline.write_lm2011_event_screen_surface_parquet(
@@ -5059,6 +6372,7 @@ def _write_event_screen_surface_stage(
             ff_factors_daily_lf,
             text_features_full_10k_lf,
             output_path=artifact_path,
+            event_window_days=event_window_days,
             event_window_doc_batch_size=event_window_doc_batch_size,
             progress_callback=progress_callback,
         )
@@ -5071,6 +6385,51 @@ def _write_event_screen_surface_stage(
         manifest_path=manifest_path,
         stage_name="event_screen_surface",
         artifact_path=artifact_path,
+        metadata=metadata,
+    )
+
+
+def _write_event_return_panel_stage(
+    manifest: dict[str, Any],
+    *,
+    manifest_path: Path | None,
+    output_dir: Path,
+    canonical_event_panel_lf: pl.LazyFrame,
+    ff_factors_daily_lf: pl.LazyFrame,
+    daily_panel_path: Path,
+    event_window_doc_batch_size: int,
+    event_window_days: int,
+    progress_callback: Callable[[dict[str, int]], None] | None = None,
+    print_ram_stats: bool = False,
+) -> pl.LazyFrame:
+    artifact_path = _artifact_output_path(output_dir, "event_return_panel")
+    metadata = {
+        **_event_window_metadata(event_window_days),
+        "sensitivity_mode": EVENT_WINDOW_SENSITIVITY_RETURN_ONLY_POLICY,
+        "postevent_volatility_policy": "reused_canonical_not_recomputed",
+        "sample_policy": "canonical_event_panel_with_complete_alternative_return_window",
+    }
+    _print_ram_snapshot("event_return_panel_start", enabled=print_ram_stats)
+    try:
+        lm2011_pipeline.write_lm2011_event_window_return_panel_parquet(
+            canonical_event_panel_lf,
+            pl.scan_parquet(daily_panel_path),
+            ff_factors_daily_lf,
+            output_path=artifact_path,
+            event_window_days=event_window_days,
+            event_window_doc_batch_size=event_window_doc_batch_size,
+            progress_callback=progress_callback,
+        )
+    except Exception:
+        _print_ram_snapshot("event_return_panel_failed", enabled=print_ram_stats)
+        raise
+    _print_ram_snapshot("event_return_panel_end", enabled=print_ram_stats)
+    return _record_existing_stage_artifact(
+        manifest,
+        manifest_path=manifest_path,
+        stage_name="event_return_panel",
+        artifact_path=artifact_path,
+        metadata=metadata,
     )
 
 
@@ -5172,6 +6531,13 @@ def run_lm2011_post_refinitiv_pipeline(run_cfg: LM2011PostRefinitivRunConfig) ->
         else None
     )
     manifest = _build_manifest(paths)
+    manifest["config"]["event_window_sensitivity_days"] = list(run_cfg.event_window_sensitivity_days)
+    manifest["config"]["event_window_sensitivity_output_dir"] = _absolute_path_str(
+        _event_window_sensitivity_output_dir(run_cfg) if run_cfg.event_window_sensitivity_days else None
+    )
+    manifest["config"]["event_window_sensitivity_mode"] = _event_window_sensitivity_mode(
+        include_postevent_volatility=run_cfg.event_window_sensitivity_include_postevent_volatility
+    )
     current_stage_name = "initialization"
     _checkpoint_manifest(manifest, manifest_path)
     _print_ram_snapshot("lm2011_post_refinitiv_pipeline_start", enabled=paths.print_ram_stats)
@@ -6186,6 +7552,33 @@ def run_lm2011_post_refinitiv_pipeline(run_cfg: LM2011PostRefinitivRunConfig) ->
                 metadata={"nw_lags": list(paths.nw_lags)},
             )
 
+        if run_cfg.event_window_sensitivity_days:
+            current_stage_name = "event_window_sensitivity"
+            event_window_sensitivity_manifest = run_lm2011_event_window_sensitivity_pipeline(
+                run_cfg,
+                year_merged_lf=year_merged_lf,
+                sample_backbone_lf=sample_backbone_lf,
+                event_panel_lf=event_panel_lf,
+                annual_accounting_panel_lf=annual_accounting_panel_lf,
+                quarterly_accounting_panel_lf=quarterly_accounting_panel_lf,
+                ff_factors_daily_lf=ff_factors_daily_lf,
+                text_features_full_10k_lf=text_features_full_10k_lf,
+                text_features_mda_lf=text_features_mda_lf,
+            )
+            manifest["event_window_sensitivity"] = {
+                "manifest_path": _absolute_path_str(
+                    _event_window_sensitivity_output_dir(run_cfg) / EVENT_WINDOW_SENSITIVITY_MANIFEST_FILENAME
+                ),
+                "output_dir": _absolute_path_str(_event_window_sensitivity_output_dir(run_cfg)),
+                "event_window_days": list(run_cfg.event_window_sensitivity_days),
+                "sensitivity_mode": _event_window_sensitivity_mode(
+                    include_postevent_volatility=run_cfg.event_window_sensitivity_include_postevent_volatility
+                ),
+                "row_counts": event_window_sensitivity_manifest.get("row_counts", {}),
+                "artifacts": event_window_sensitivity_manifest.get("artifacts", {}),
+            }
+            _checkpoint_manifest(manifest, manifest_path)
+
         current_stage_name = "trading_strategy_monthly_returns"
         if _stage_disabled(
             run_cfg,
@@ -7179,9 +8572,11 @@ def run_lm2011_extension_dictionary_family_comparison_pipeline(
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
-    return run_lm2011_post_refinitiv_pipeline(
-        build_lm2011_post_refinitiv_run_config(args)
-    )
+    run_cfg = build_lm2011_post_refinitiv_run_config(args)
+    if bool(args.event_window_sensitivity_only):
+        run_lm2011_event_window_sensitivity_only(run_cfg)
+        return 0
+    return run_lm2011_post_refinitiv_pipeline(run_cfg)
 
 
 if __name__ == "__main__":

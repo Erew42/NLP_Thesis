@@ -5,6 +5,7 @@ RUN_FAMILY_LM2011_POST_REFINITIV = "lm2011_post_refinitiv"
 RUN_FAMILY_LM2011_EXTENSION = "lm2011_extension"
 RUN_FAMILY_LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX = "lm2011_extension_finbert_visible_prefix"
 RUN_FAMILY_LM2011_NW_LAG_SENSITIVITY = "lm2011_nw_lag_sensitivity"
+RUN_FAMILY_LM2011_EVENT_WINDOW_SENSITIVITY = "lm2011_event_window_sensitivity"
 RUN_FAMILY_FINBERT_RUN = "finbert_run"
 RUN_FAMILY_FINBERT_ROBUSTNESS = "finbert_robustness"
 
@@ -27,6 +28,8 @@ ARTIFACT_KEY_EXTENSION_FIT_SKIPPED_QUARTERS = "lm2011_extension_fit_skipped_quar
 ARTIFACT_KEY_NW_LAG_CORE_TABLES = "core_tables_nw_lag_sensitivity"
 ARTIFACT_KEY_NW_LAG_EXTENSION_RESULTS = "extension_results_nw_lag_sensitivity"
 ARTIFACT_KEY_NW_LAG_EXTENSION_FIT_COMPARISONS = "extension_fit_comparisons_nw_lag_sensitivity"
+ARTIFACT_KEY_EVENT_WINDOW_SENSITIVITY_RESULTS = "lm2011_event_window_sensitivity_results"
+ARTIFACT_KEY_EVENT_WINDOW_SENSITIVITY_SAMPLE_COUNTS = "lm2011_event_window_sensitivity_sample_counts"
 ARTIFACT_KEY_EXTENSION_SAMPLE_LOSS = "lm2011_extension_sample_loss"
 ARTIFACT_KEY_EXTENSION_CONTROL_LADDER = "lm2011_extension_control_ladder"
 ARTIFACT_KEY_EXTENSION_DICTIONARY_SURFACE = "lm2011_extension_dictionary_surface"
@@ -69,6 +72,8 @@ ARTIFACT_FILENAMES: dict[str, str] = {
     ARTIFACT_KEY_NW_LAG_CORE_TABLES: "core_tables_nw_lag_sensitivity.parquet",
     ARTIFACT_KEY_NW_LAG_EXTENSION_RESULTS: "extension_results_nw_lag_sensitivity.parquet",
     ARTIFACT_KEY_NW_LAG_EXTENSION_FIT_COMPARISONS: "extension_fit_comparisons_nw_lag_sensitivity.parquet",
+    ARTIFACT_KEY_EVENT_WINDOW_SENSITIVITY_RESULTS: "lm2011_event_window_sensitivity_results.parquet",
+    ARTIFACT_KEY_EVENT_WINDOW_SENSITIVITY_SAMPLE_COUNTS: "lm2011_event_window_sensitivity_sample_counts.parquet",
     ARTIFACT_KEY_EXTENSION_SAMPLE_LOSS: "lm2011_extension_sample_loss.parquet",
     ARTIFACT_KEY_EXTENSION_CONTROL_LADDER: "lm2011_extension_control_ladder.parquet",
     ARTIFACT_KEY_EXTENSION_DICTIONARY_SURFACE: "lm2011_extension_dictionary_surface.parquet",
@@ -123,6 +128,8 @@ ARTIFACT_MANIFEST_KEYS: dict[str, tuple[str, ...]] = {
     ARTIFACT_KEY_NW_LAG_CORE_TABLES: ("core_tables_nw_lag_sensitivity",),
     ARTIFACT_KEY_NW_LAG_EXTENSION_RESULTS: ("extension_results_nw_lag_sensitivity",),
     ARTIFACT_KEY_NW_LAG_EXTENSION_FIT_COMPARISONS: ("extension_fit_comparisons_nw_lag_sensitivity",),
+    ARTIFACT_KEY_EVENT_WINDOW_SENSITIVITY_RESULTS: ("results", "lm2011_event_window_sensitivity_results"),
+    ARTIFACT_KEY_EVENT_WINDOW_SENSITIVITY_SAMPLE_COUNTS: ("sample_counts", "lm2011_event_window_sensitivity_sample_counts"),
     ARTIFACT_KEY_EXTENSION_SAMPLE_LOSS: ("extension_sample_loss",),
     ARTIFACT_KEY_EXTENSION_CONTROL_LADDER: ("extension_control_ladder",),
     ARTIFACT_KEY_EXTENSION_DICTIONARY_SURFACE: ("extension_dictionary_surface",),
@@ -149,6 +156,10 @@ RUN_MANIFEST_FILENAMES: dict[str, tuple[str, ...]] = {
         "run_manifest.json",
     ),
     RUN_FAMILY_LM2011_NW_LAG_SENSITIVITY: ("lm2011_nw_lag_sensitivity_run_manifest.json", "run_manifest.json"),
+    RUN_FAMILY_LM2011_EVENT_WINDOW_SENSITIVITY: (
+        "lm2011_event_window_sensitivity_manifest.json",
+        "run_manifest.json",
+    ),
     RUN_FAMILY_FINBERT_RUN: ("run_manifest.json",),
     RUN_FAMILY_FINBERT_ROBUSTNESS: ("finbert_robustness_run_manifest.json",),
 }
@@ -168,6 +179,9 @@ RUN_FAMILY_SENTINEL_ARTIFACTS: dict[str, tuple[str, ...]] = {
         ARTIFACT_KEY_NW_LAG_CORE_TABLES,
         ARTIFACT_KEY_NW_LAG_EXTENSION_RESULTS,
         ARTIFACT_KEY_NW_LAG_EXTENSION_FIT_COMPARISONS,
+    ),
+    RUN_FAMILY_LM2011_EVENT_WINDOW_SENSITIVITY: (
+        ARTIFACT_KEY_EVENT_WINDOW_SENSITIVITY_RESULTS,
     ),
     RUN_FAMILY_FINBERT_RUN: (ARTIFACT_KEY_FINBERT_ITEM_FEATURES_LONG,),
     RUN_FAMILY_FINBERT_ROBUSTNESS: (

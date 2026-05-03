@@ -90,6 +90,7 @@ def test_registry_loader_imports_expected_assets() -> None:
         "ch5_lm2011_table_vi_no_ownership_outcomes",
         "ch5_lm2011_table_vi_volatility_observed_scale",
         "ch5_nw_lag_baseline_reconciliation",
+        "ch5_event_window_sensitivity_robustness",
         "ch5_nw_lag_core_no_ownership_appendix",
         "ch5_nw_lag_extension_coefficients_appendix",
         "ch5_nw_lag_extension_fit_comparisons_appendix",
@@ -1180,6 +1181,76 @@ def test_chapter5_nw_lag_core_no_ownership_appendix_asset(tmp_path: Path) -> Non
     assert abnormal_volume.select("reported_scale").item() == "raw"
 
 
+def test_chapter5_event_window_sensitivity_robustness_asset(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    sensitivity_root = repo_root / "inputs" / "lm2011_event_window_sensitivity"
+    _write_event_window_sensitivity_results_parquet(
+        sensitivity_root / "lm2011_event_window_sensitivity_results.parquet"
+    )
+
+    result = build_single_asset(
+        asset_id="ch5_event_window_sensitivity_robustness",
+        run_id="unit_event_window_sensitivity",
+        repo_root=repo_root,
+        lm2011_event_window_sensitivity_dir=sensitivity_root,
+    )
+
+    asset_result = result.asset_results["ch5_event_window_sensitivity_robustness"]
+    assert asset_result.status == "completed"
+    table_df = pl.read_csv(asset_result.output_paths["csv"])
+    assert table_df.height == 12
+    assert set(table_df.get_column("event_window").to_list()) == {"Day 0-5", "Day 0-11", "Day 0-17"}
+    assert "postevent_start_day" not in table_df.columns
+    full_10k_tfidf = table_df.filter(
+        (pl.col("event_window") == "Day 0-5")
+        & (pl.col("table_or_surface") == "Table IV full 10-K returns")
+        & (pl.col("coefficient") == "LM negative tf-idf")
+    )
+    assert full_10k_tfidf.select("estimate_x100").item() == pytest.approx(-1.2)
+
+
+def test_chapter5_event_window_sensitivity_robustness_asset_allows_empty_results(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    sensitivity_root = repo_root / "inputs" / "lm2011_event_window_sensitivity"
+    sensitivity_root.mkdir(parents=True)
+    pl.DataFrame(
+        schema={
+            "table_id": pl.Utf8,
+            "specification_id": pl.Utf8,
+            "text_scope": pl.Utf8,
+            "signal_name": pl.Utf8,
+            "dependent_variable": pl.Utf8,
+            "coefficient_name": pl.Utf8,
+            "estimate": pl.Float64,
+            "standard_error": pl.Float64,
+            "t_stat": pl.Float64,
+            "n_quarters": pl.Int64,
+            "mean_quarter_n": pl.Float64,
+            "weighting_rule": pl.Utf8,
+            "nw_lags": pl.Int64,
+            "event_window_days": pl.Int32,
+            "event_window_start_day": pl.Int32,
+            "event_window_end_day": pl.Int32,
+            "postevent_start_day": pl.Int32,
+            "stage_name": pl.Utf8,
+            "source_stage_name": pl.Utf8,
+        }
+    ).write_parquet(sensitivity_root / "lm2011_event_window_sensitivity_results.parquet")
+
+    result = build_single_asset(
+        asset_id="ch5_event_window_sensitivity_robustness",
+        run_id="unit_event_window_sensitivity_empty",
+        repo_root=repo_root,
+        lm2011_event_window_sensitivity_dir=sensitivity_root,
+    )
+
+    asset_result = result.asset_results["ch5_event_window_sensitivity_robustness"]
+    assert asset_result.status == "completed"
+    assert asset_result.row_counts["table_rows"] == 0
+    assert asset_result.warnings == ("Event-window sensitivity robustness selection returned zero rows.",)
+    assert pl.read_csv(asset_result.output_paths["csv"]).height == 0
+
+
 def test_chapter5_nw_lag_extension_appendix_assets(tmp_path: Path) -> None:
     repo_root = tmp_path / "repo"
     sensitivity_root = repo_root / "inputs" / "lm2011_nw_lag_sensitivity"
@@ -1778,13 +1849,20 @@ def test_usage_run_paths_prefer_unified_runner_layout(tmp_path: Path) -> None:
     fallback_ext = repo_root / "full_data_run" / "lm2011_extension"
     fallback_visible = repo_root / "full_data_run" / "lm2011_extension_finbert_visible_prefix"
     sensitivity_root = repo_root / "full_data_run" / "lm2011_nw_lag_sensitivity_local_monitored"
+    event_window_sensitivity_root = (
+        unified_root / "lm2011_post_refinitiv" / "event_window_sensitivity"
+    )
     fallback_post.mkdir(parents=True)
     fallback_ext.mkdir(parents=True)
     fallback_visible.mkdir(parents=True)
     sensitivity_root.mkdir(parents=True)
+    event_window_sensitivity_root.mkdir(parents=True)
     (sensitivity_root / "core_tables_nw_lag_sensitivity.parquet").touch()
     (sensitivity_root / "extension_results_nw_lag_sensitivity.parquet").touch()
     (sensitivity_root / "extension_fit_comparisons_nw_lag_sensitivity.parquet").touch()
+    _write_event_window_sensitivity_results_parquet(
+        event_window_sensitivity_root / "lm2011_event_window_sensitivity_results.parquet"
+    )
 
     resolved = resolve_usage_run_paths(
         repo_root=repo_root,
@@ -1797,6 +1875,7 @@ def test_usage_run_paths_prefer_unified_runner_layout(tmp_path: Path) -> None:
         unified_root / "lm2011_extension_finbert_visible_prefix"
     ).resolve()
     assert resolved["lm2011_nw_lag_sensitivity_dir"] == sensitivity_root.resolve()
+    assert resolved["lm2011_event_window_sensitivity_dir"] == event_window_sensitivity_root.resolve()
     assert resolved["finbert_run_dir"] == finbert_run.resolve()
 
 
@@ -1867,6 +1946,7 @@ def test_tools_entrypoint_build_asset_emits_json_and_allows_failures(
             tmp_path / "inputs" / "lm2011_extension_finbert_visible_prefix"
         ),
         "lm2011_nw_lag_sensitivity_dir": tmp_path / "inputs" / "lm2011_nw_lag_sensitivity",
+        "lm2011_event_window_sensitivity_dir": tmp_path / "inputs" / "lm2011_event_window_sensitivity",
         "finbert_run_dir": tmp_path / "inputs" / "finbert_item_analysis",
         "finbert_robustness_dir": tmp_path / "inputs" / "finbert_robustness",
     }
@@ -2594,6 +2674,44 @@ def _write_nw_core_sensitivity_parquet(path: Path) -> None:
                     "nw_lags": lag,
                 }
             )
+    pl.DataFrame(rows).write_parquet(path)
+
+
+def _write_event_window_sensitivity_results_parquet(path: Path) -> None:
+    rows = []
+    for event_window_days in (6, 12, 18):
+        for stage_name, text_scope in (
+            ("table_iv_results_no_ownership", "full_10k"),
+            ("table_v_results_no_ownership", "mda_item_7"),
+        ):
+            for signal_name, estimate, t_stat in (
+                ("lm_negative_prop", -0.001 * event_window_days, -2.1),
+                ("lm_negative_tfidf", -0.002 * event_window_days, -2.8),
+            ):
+                rows.append(
+                    {
+                        "event_window_days": event_window_days,
+                        "event_window_start_day": 0,
+                        "event_window_end_day": event_window_days - 1,
+                        "postevent_start_day": event_window_days + 2,
+                        "stage_name": stage_name,
+                        "source_stage_name": stage_name,
+                        "table_id": stage_name,
+                        "specification_id": signal_name,
+                        "text_scope": text_scope,
+                        "signal_name": signal_name,
+                        "dependent_variable": "filing_period_excess_return",
+                        "coefficient_name": signal_name,
+                        "estimate": estimate,
+                        "standard_error": abs(estimate / t_stat),
+                        "t_stat": t_stat,
+                        "n_quarters": 60,
+                        "mean_quarter_n": 100.0,
+                        "weighting_rule": "quarter_observation_count",
+                        "nw_lags": 1,
+                    }
+                )
+    path.parent.mkdir(parents=True, exist_ok=True)
     pl.DataFrame(rows).write_parquet(path)
 
 

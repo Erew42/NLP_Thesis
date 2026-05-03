@@ -551,6 +551,7 @@ from thesis_pkg.notebooks_and_scripts.finbert_item_analysis_runner import (
 )
 from thesis_pkg.notebooks_and_scripts.lm2011_sample_post_refinitiv_runner import (
     DEFAULT_LM2011_EVENT_WINDOW_DOC_BATCH_SIZE,
+    DEFAULT_LM2011_EVENT_WINDOW_SENSITIVITY_DAYS,
     DEFAULT_LM2011_FULL_10K_CLEANING_CONTRACT,
     DEFAULT_LM2011_FULL_10K_TEXT_FEATURE_BATCH_SIZE,
     DEFAULT_LM2011_MDA_TEXT_FEATURE_BATCH_SIZE,
@@ -563,11 +564,14 @@ from thesis_pkg.notebooks_and_scripts.lm2011_sample_post_refinitiv_runner import
     EXTENSION_PRIMARY_TEXT_SCOPES as LM2011_EXTENSION_PRIMARY_TEXT_SCOPES,
     LM2011ExtensionRunConfig,
     LM2011_ALL_STAGE_NAMES,
+    EVENT_WINDOW_SENSITIVITY_PREREQ_STAGE_NAMES as LM2011_EVENT_WINDOW_SENSITIVITY_PREREQ_STAGE_NAMES,
+    EVENT_WINDOW_SENSITIVITY_RETURN_ONLY_PREREQ_STAGE_NAMES as LM2011_EVENT_WINDOW_SENSITIVITY_RETURN_ONLY_PREREQ_STAGE_NAMES,
     LM2011_OPTIONAL_STAGE_DEFAULTS_FALSE,
     LM2011PostRefinitivRunConfig,
     MONTHLY_STOCK_CANDIDATES,
     RunnerPaths as LM2011RunnerPaths,
     STAGE_ARTIFACT_FILENAMES as LM2011_STAGE_ARTIFACT_FILENAMES,
+    normalize_lm2011_event_window_sensitivity_days,
     normalize_lm2011_nw_lags,
     run_lm2011_extension_dictionary_family_comparison_pipeline,
     run_lm2011_post_refinitiv_pipeline,
@@ -1515,6 +1519,14 @@ def main() -> None:
         "SEC_CCM_RUN_LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX",
         False,
     )
+    RUN_LM2011_EVENT_WINDOW_SENSITIVITY = _env_bool(
+        "SEC_CCM_RUN_LM2011_EVENT_WINDOW_SENSITIVITY",
+        False,
+    )
+    LM2011_EVENT_WINDOW_SENSITIVITY_INCLUDE_POSTEVENT_VOLATILITY = _env_bool(
+        "SEC_CCM_LM2011_EVENT_WINDOW_SENSITIVITY_INCLUDE_POSTEVENT_VOLATILITY",
+        False,
+    )
 
     SEC_PARSE_MODE = _env_str("SEC_CCM_SEC_PARSE_MODE", "parsed")
     YEARS = _env_int_list("SEC_CCM_YEARS", available_years)
@@ -1571,6 +1583,10 @@ def main() -> None:
     LM2011_POST_REFINITIV_DIR = _env_path(
         "SEC_CCM_LM2011_OUTPUT_DIR",
         RUN_ROOT / "lm2011_post_refinitiv",
+    )
+    LM2011_EVENT_WINDOW_SENSITIVITY_OUTPUT_DIR = _env_path(
+        "SEC_CCM_LM2011_EVENT_WINDOW_SENSITIVITY_OUTPUT_DIR",
+        LM2011_POST_REFINITIV_DIR / "event_window_sensitivity",
     )
     LM2011_EXTENSION_DICTIONARY_SOURCE_MODE = _env_str(
         "SEC_CCM_LM2011_EXTENSION_DICTIONARY_SOURCE_MODE",
@@ -1661,6 +1677,16 @@ def main() -> None:
     )
     LM2011_NW_LAGS = normalize_lm2011_nw_lags(
         _env_int_list("SEC_CCM_LM2011_NW_LAGS", list(DEFAULT_LM2011_NW_LAGS))
+    )
+    LM2011_EVENT_WINDOW_SENSITIVITY_DAYS = normalize_lm2011_event_window_sensitivity_days(
+        (
+            _env_int_list(
+                "SEC_CCM_LM2011_EVENT_WINDOW_SENSITIVITY_DAYS",
+                list(DEFAULT_LM2011_EVENT_WINDOW_SENSITIVITY_DAYS),
+            )
+            if RUN_LM2011_EVENT_WINDOW_SENSITIVITY
+            else []
+        )
     )
     PRINT_RAM_STATS = _env_bool("SEC_CCM_PRINT_RAM_STATS", False)
     RAM_LOG_INTERVAL_BATCHES = _env_int(
@@ -1924,6 +1950,12 @@ def main() -> None:
             "LM2011_ENABLED_STAGE_COUNT": sum(1 for enabled in LM2011_STAGE_FLAGS.values() if enabled),
             "LM2011_POST_REFINITIV_DIR": str(LM2011_POST_REFINITIV_DIR),
             "LM2011_NW_LAGS": list(LM2011_NW_LAGS),
+            "RUN_LM2011_EVENT_WINDOW_SENSITIVITY": RUN_LM2011_EVENT_WINDOW_SENSITIVITY,
+            "LM2011_EVENT_WINDOW_SENSITIVITY_DAYS": list(LM2011_EVENT_WINDOW_SENSITIVITY_DAYS),
+            "LM2011_EVENT_WINDOW_SENSITIVITY_OUTPUT_DIR": str(LM2011_EVENT_WINDOW_SENSITIVITY_OUTPUT_DIR),
+            "LM2011_EVENT_WINDOW_SENSITIVITY_INCLUDE_POSTEVENT_VOLATILITY": (
+                LM2011_EVENT_WINDOW_SENSITIVITY_INCLUDE_POSTEVENT_VOLATILITY
+            ),
             "RUN_LM2011_EXTENSION": RUN_LM2011_EXTENSION,
             "LM2011_EXTENSION_OUTPUT_DIR": str(LM2011_EXTENSION_OUTPUT_DIR),
             "RUN_LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX": RUN_LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX,
@@ -3213,7 +3245,7 @@ def main() -> None:
             )
             print({"diagnostic_year_files": len(diagnostic_item_paths)})
 
-    lm2011_stage_run_requested = any(LM2011_STAGE_FLAGS.values())
+    lm2011_stage_run_requested = any(LM2011_STAGE_FLAGS.values()) or RUN_LM2011_EVENT_WINDOW_SENSITIVITY
     if lm2011_stage_run_requested or RUN_LM2011_EXTENSION or RUN_LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX:
         lm2011_ccm_base_dir = LM2011_CCM_BASE_DIR or CCM_BASE_DIR
         lm2011_year_merged_dir = LM2011_YEAR_MERGED_DIR or SEC_YEAR_MERGED_DIR
@@ -3305,6 +3337,16 @@ def main() -> None:
             for stage_name, enabled in LM2011_STAGE_FLAGS.items()
             if enabled
         )
+        if RUN_LM2011_EVENT_WINDOW_SENSITIVITY:
+            sensitivity_prereq_stage_names = (
+                LM2011_EVENT_WINDOW_SENSITIVITY_PREREQ_STAGE_NAMES
+                if LM2011_EVENT_WINDOW_SENSITIVITY_INCLUDE_POSTEVENT_VOLATILITY
+                else LM2011_EVENT_WINDOW_SENSITIVITY_RETURN_ONLY_PREREQ_STAGE_NAMES
+            )
+            lm2011_enabled_stage_names = sorted(
+                set(lm2011_enabled_stage_names)
+                | set(sensitivity_prereq_stage_names)
+            )
         lm2011_items_year_paths = _existing_year_parquet_paths(lm2011_items_analysis_dir, YEARS)
         lm2011_items_can_be_built_here = (
             RUN_GATED_ITEM_EXTRACTION
@@ -3359,6 +3401,11 @@ def main() -> None:
                 "lm2011_recompute_event_panel": LM2011_RECOMPUTE_EVENT_PANEL,
                 "lm2011_recompute_regression_tables": LM2011_RECOMPUTE_REGRESSION_TABLES,
                 "lm2011_nw_lags": list(LM2011_NW_LAGS),
+                "lm2011_event_window_sensitivity_days": list(LM2011_EVENT_WINDOW_SENSITIVITY_DAYS),
+                "lm2011_event_window_sensitivity_output_dir": str(LM2011_EVENT_WINDOW_SENSITIVITY_OUTPUT_DIR),
+                "lm2011_event_window_sensitivity_include_postevent_volatility": (
+                    LM2011_EVENT_WINDOW_SENSITIVITY_INCLUDE_POSTEVENT_VOLATILITY
+                ),
                 "lm2011_items_analysis_dir": str(lm2011_items_analysis_dir),
                 "lm2011_items_analysis_year_files": len(lm2011_items_year_paths),
                 "lm2011_items_can_be_built_here": lm2011_items_can_be_built_here,
@@ -3489,12 +3536,13 @@ def main() -> None:
             run_lm2011_post_refinitiv_pipeline(
                 LM2011PostRefinitivRunConfig(
                     paths=lm2011_paths,
-                    enabled_stages=tuple(
-                        stage_name
-                        for stage_name, enabled in LM2011_STAGE_FLAGS.items()
-                        if enabled
-                    ),
+                    enabled_stages=tuple(lm2011_enabled_stage_names),
                     fail_closed_for_enabled_stages=True,
+                    event_window_sensitivity_days=LM2011_EVENT_WINDOW_SENSITIVITY_DAYS,
+                    event_window_sensitivity_output_dir=LM2011_EVENT_WINDOW_SENSITIVITY_OUTPUT_DIR,
+                    event_window_sensitivity_include_postevent_volatility=(
+                        LM2011_EVENT_WINDOW_SENSITIVITY_INCLUDE_POSTEVENT_VOLATILITY
+                    ),
                 )
             )
             _print_ram_snapshot("sec_ccm_unified_runner_after_lm2011", enabled=PRINT_RAM_STATS)
@@ -3511,9 +3559,11 @@ def main() -> None:
                 {
                     "lm2011_post_refinitiv_output_dir": str(LM2011_POST_REFINITIV_DIR),
                     "lm2011_enabled_stages": sorted(
-                        stage_name
-                        for stage_name, enabled in LM2011_STAGE_FLAGS.items()
-                        if enabled
+                        lm2011_enabled_stage_names
+                    ),
+                    "lm2011_event_window_sensitivity_days": list(LM2011_EVENT_WINDOW_SENSITIVITY_DAYS),
+                    "lm2011_event_window_sensitivity_include_postevent_volatility": (
+                        LM2011_EVENT_WINDOW_SENSITIVITY_INCLUDE_POSTEVENT_VOLATILITY
                     ),
                 }
             )

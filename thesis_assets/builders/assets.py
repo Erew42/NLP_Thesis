@@ -180,6 +180,8 @@ def build_asset(context: BuildContext, spec: AssetSpec) -> BuildResult:
             return _build_chapter5_extension_c0_observed_scale_effects(context, spec, artifact_map)
         if spec.builder_id == "chapter5_nw_lag_baseline_reconciliation":
             return _build_chapter5_nw_lag_baseline_reconciliation(context, spec, artifact_map)
+        if spec.builder_id == "chapter5_event_window_sensitivity_robustness":
+            return _build_chapter5_event_window_sensitivity_robustness(context, spec, artifact_map)
         if spec.builder_id == "chapter5_nw_lag_core_no_ownership_appendix":
             return _build_chapter5_nw_lag_core_no_ownership_appendix(context, spec, artifact_map)
         if spec.builder_id == "chapter5_nw_lag_extension_coefficients_appendix":
@@ -2512,6 +2514,76 @@ def _build_chapter5_nw_lag_baseline_reconciliation(
         output_paths=output_paths,
         row_counts={"table_rows": selected.height},
         warnings=table_vi_warnings,
+    )
+
+
+def _build_chapter5_event_window_sensitivity_robustness(
+    context: BuildContext,
+    spec: AssetSpec,
+    artifacts: dict[str, ResolvedArtifact],
+) -> BuildResult:
+    source_artifact = artifacts["event_window_sensitivity_results"]
+    target_stages = ("table_iv_results_no_ownership", "table_v_results_no_ownership")
+    selected = (
+        scan_parquet_artifact(source_artifact)
+        .filter(
+            pl.col("stage_name").is_in(target_stages)
+            & (pl.col("dependent_variable") == pl.lit("filing_period_excess_return"))
+            & (pl.col("coefficient_name") == pl.col("signal_name"))
+            & pl.col("signal_name").is_in(("lm_negative_prop", "lm_negative_tfidf"))
+        )
+        .with_columns(
+            pl.concat_str(
+                [
+                    pl.lit("Day 0-"),
+                    pl.col("event_window_end_day").cast(pl.Int32, strict=False).cast(pl.Utf8),
+                ]
+            ).alias("event_window"),
+            _nw_core_table_label_expr().alias("table_or_surface"),
+            _nw_scope_label_expr("text_scope").alias("scope"),
+            _nw_coefficient_label_expr().alias("coefficient"),
+            _table_vi_weighting_label_expr().alias("weighting"),
+            _nw_core_stage_order_expr().alias("_stage_order"),
+            _nw_scope_order_expr("text_scope").alias("_scope_order"),
+            _nw_coefficient_order_expr().alias("_coefficient_order"),
+            (pl.col("estimate").cast(pl.Float64, strict=False) * 100.0).alias("estimate_x100"),
+            (pl.col("standard_error").cast(pl.Float64, strict=False) * 100.0).alias("std_error_x100"),
+            pl.col("t_stat").cast(pl.Float64, strict=False).alias("t_stat"),
+            pl.col("n_quarters").cast(pl.Int64, strict=False).alias("n_quarters"),
+            pl.col("mean_quarter_n").cast(pl.Float64, strict=False).alias("mean_quarter_n"),
+            pl.col("event_window_days").cast(pl.Int32, strict=False).alias("event_window_days"),
+        )
+        .sort("event_window_days", "_stage_order", "_scope_order", "_coefficient_order")
+        .select(
+            "event_window_days",
+            "event_window",
+            "table_or_surface",
+            "scope",
+            "coefficient",
+            "weighting",
+            "estimate_x100",
+            "std_error_x100",
+            "t_stat",
+            "n_quarters",
+            "mean_quarter_n",
+        )
+        .collect()
+    )
+
+    output_paths = _write_table_outputs(context, spec, selected)
+    warnings = ()
+    if selected.is_empty():
+        warnings = ("Event-window sensitivity robustness selection returned zero rows.",)
+    return BuildResult(
+        asset_id=spec.asset_id,
+        chapter=spec.chapter,
+        asset_kind=spec.asset_kind,
+        sample_contract_id=spec.sample_contract_id,
+        status="completed",
+        resolved_inputs={"event_window_sensitivity_results": str(source_artifact.path)},
+        output_paths=output_paths,
+        row_counts={"table_rows": selected.height},
+        warnings=warnings,
     )
 
 

@@ -22,6 +22,7 @@ from thesis_assets.config.constants import ARTIFACT_KEY_FINBERT_ROBUSTNESS_TAIL_
 from thesis_assets.config.constants import ARTIFACT_KEY_NW_LAG_CORE_TABLES
 from thesis_assets.config.constants import ARTIFACT_KEY_NW_LAG_EXTENSION_FIT_COMPARISONS
 from thesis_assets.config.constants import ARTIFACT_KEY_NW_LAG_EXTENSION_RESULTS
+from thesis_assets.config.constants import ARTIFACT_KEY_EVENT_WINDOW_SENSITIVITY_RESULTS
 from thesis_assets.config.constants import ARTIFACT_KEY_RETURN_REGRESSION_PANEL_FULL_10K
 from thesis_assets.config.constants import ARTIFACT_KEY_TABLE_IA_II_RESULTS
 from thesis_assets.config.constants import ARTIFACT_KEY_TABLE_IV_RESULTS_NO_OWNERSHIP
@@ -34,6 +35,7 @@ from thesis_assets.config.constants import RUN_FAMILY_FINBERT_ROBUSTNESS
 from thesis_assets.config.constants import RUN_FAMILY_FINBERT_RUN
 from thesis_assets.config.constants import RUN_FAMILY_LM2011_EXTENSION
 from thesis_assets.config.constants import RUN_FAMILY_LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX
+from thesis_assets.config.constants import RUN_FAMILY_LM2011_EVENT_WINDOW_SENSITIVITY
 from thesis_assets.config.constants import RUN_FAMILY_LM2011_NW_LAG_SENSITIVITY
 from thesis_assets.config.constants import RUN_FAMILY_LM2011_POST_REFINITIV
 from thesis_assets.specs import ArtifactRequirement
@@ -1029,6 +1031,55 @@ ASSETS: tuple[AssetSpec, ...] = (
                     "estimator_status",
                 ),
             ),
+        ),
+    ),
+    AssetSpec(
+        asset_id="ch5_event_window_sensitivity_robustness",
+        chapter="chapter5",
+        asset_kind="table",
+        output_stem="ch5_event_window_sensitivity_robustness",
+        caption_stub="LM2011 filing-period event-window robustness for no-ownership return coefficients.",
+        notes_stub=(
+            "Rows report no-ownership full-10-K and MD&A return coefficients when the filing-period "
+            "event window is widened from the canonical four trading days. Return coefficients and "
+            "standard errors are multiplied by 100."
+        ),
+        sample_contract_id="lm2011_event_window_sensitivity",
+        builder_id="chapter5_event_window_sensitivity_robustness",
+        required_artifacts=(
+            ArtifactRequirement(
+                logical_name="event_window_sensitivity_results",
+                run_family=RUN_FAMILY_LM2011_EVENT_WINDOW_SENSITIVITY,
+                artifact_key=ARTIFACT_KEY_EVENT_WINDOW_SENSITIVITY_RESULTS,
+                required_columns=(
+                    "event_window_days",
+                    "event_window_start_day",
+                    "event_window_end_day",
+                    "postevent_start_day",
+                    "stage_name",
+                    "text_scope",
+                    "dependent_variable",
+                    "signal_name",
+                    "coefficient_name",
+                    "estimate",
+                    "standard_error",
+                    "t_stat",
+                    "n_quarters",
+                    "mean_quarter_n",
+                ),
+            ),
+        ),
+        table_display_columns=(
+            "event_window",
+            "table_or_surface",
+            "scope",
+            "coefficient",
+            "weighting",
+            "estimate_x100",
+            "std_error_x100",
+            "t_stat",
+            "n_quarters",
+            "mean_quarter_n",
         ),
     ),
     AssetSpec(

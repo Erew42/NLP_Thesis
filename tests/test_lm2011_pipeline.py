@@ -37,6 +37,7 @@ from thesis_pkg.pipelines.lm2011_pipeline import (
     _ensure_factor_scale,
     _ols_alpha_and_rmse,
     _ols_coefficients_and_r2,
+    write_lm2011_event_window_return_panel_parquet,
     write_lm2011_event_screen_surface_parquet,
     write_lm2011_sue_panel_parquet,
 )
@@ -1584,6 +1585,33 @@ def test_build_lm2011_event_panel_requires_filing_day_shares_for_share_turnover(
     assert panel.row(0, named=True)["share_turnover"] is None
 
 
+def test_build_lm2011_event_panel_derives_shares_from_tcap_and_price_when_shrout_missing() -> None:
+    inputs = _base_event_inputs()
+    expected_panel = build_lm2011_event_panel(
+        inputs["sample_backbone"].lazy(),
+        inputs["daily"].lazy(),
+        inputs["annual_panel"].lazy(),
+        inputs["ff"].lazy(),
+        inputs["ownership"].lazy(),
+        inputs["text_features"].lazy(),
+    ).collect()
+    daily_without_shrout = inputs["daily"].drop("SHROUT")
+
+    derived_panel = build_lm2011_event_panel(
+        inputs["sample_backbone"].lazy(),
+        daily_without_shrout.lazy(),
+        inputs["annual_panel"].lazy(),
+        inputs["ff"].lazy(),
+        inputs["ownership"].lazy(),
+        inputs["text_features"].lazy(),
+    ).collect()
+
+    assert derived_panel.height == expected_panel.height == 1
+    assert derived_panel.item(0, "share_turnover") == pytest.approx(
+        expected_panel.item(0, "share_turnover")
+    )
+
+
 def test_regression_transforms_log_share_turnover_without_mutating_event_panel_contract() -> None:
     transformed = _apply_lm2011_regression_transforms(
         pl.DataFrame(
@@ -1771,6 +1799,166 @@ def test_build_lm2011_event_panel_postevent_volatility_excludes_days_four_and_fi
     assert day6_vol > base_vol
 
 
+def test_default_lm2011_event_window_remains_four_trading_days() -> None:
+    inputs = _base_event_inputs()
+    widened_inputs = _base_event_inputs()
+    widened_inputs["daily"] = _mutate_relative_day_rows(
+        widened_inputs["daily"],
+        event_day_index=260,
+        relative_days={4, 5},
+        updates={"FINAL_RET": 0.35, "RET": 0.35},
+    )
+
+    def _collect_panel(current_inputs: dict[str, pl.DataFrame]) -> pl.DataFrame:
+        return build_lm2011_event_panel(
+            current_inputs["sample_backbone"].lazy(),
+            current_inputs["daily"].lazy(),
+            current_inputs["annual_panel"].lazy(),
+            current_inputs["ff"].lazy(),
+            current_inputs["ownership"].lazy(),
+            current_inputs["text_features"].lazy(),
+        ).collect()
+
+    base_panel = _collect_panel(inputs)
+    widened_panel = _collect_panel(widened_inputs)
+
+    assert base_panel.height == 1
+    assert widened_panel.height == 1
+    assert widened_panel.item(0, "filing_period_excess_return") == pytest.approx(
+        base_panel.item(0, "filing_period_excess_return")
+    )
+
+
+def test_six_day_lm2011_event_window_includes_days_four_and_five() -> None:
+    base_inputs = _base_event_inputs()
+    day45_inputs = _base_event_inputs()
+    day45_inputs["daily"] = _mutate_relative_day_rows(
+        day45_inputs["daily"],
+        event_day_index=260,
+        relative_days={4, 5},
+        updates={"FINAL_RET": 0.35, "RET": 0.35},
+    )
+
+    def _collect_six_day_panel(current_inputs: dict[str, pl.DataFrame]) -> pl.DataFrame:
+        return build_lm2011_event_panel(
+            current_inputs["sample_backbone"].lazy(),
+            current_inputs["daily"].lazy(),
+            current_inputs["annual_panel"].lazy(),
+            current_inputs["ff"].lazy(),
+            current_inputs["ownership"].lazy(),
+            current_inputs["text_features"].lazy(),
+            event_window_days=6,
+        ).collect()
+
+    base_panel = _collect_six_day_panel(base_inputs)
+    day45_panel = _collect_six_day_panel(day45_inputs)
+
+    assert base_panel.height == 1
+    assert day45_panel.height == 1
+    assert day45_panel.item(0, "filing_period_excess_return") > base_panel.item(
+        0,
+        "filing_period_excess_return",
+    )
+
+
+def test_event_window_return_panel_reuses_canonical_controls_and_recomputes_return(tmp_path: Path) -> None:
+    base_inputs = _base_event_inputs()
+    day45_inputs = _base_event_inputs()
+    day45_inputs["daily"] = _mutate_relative_day_rows(
+        day45_inputs["daily"],
+        event_day_index=260,
+        relative_days={4, 5},
+        updates={"FINAL_RET": 0.35, "RET": 0.35},
+    )
+    canonical_panel = build_lm2011_event_panel(
+        base_inputs["sample_backbone"].lazy(),
+        base_inputs["daily"].lazy(),
+        base_inputs["annual_panel"].lazy(),
+        base_inputs["ff"].lazy(),
+        base_inputs["ownership"].lazy(),
+        base_inputs["text_features"].lazy(),
+    ).collect()
+    output_path = tmp_path / "event_return_panel.parquet"
+
+    row_count = write_lm2011_event_window_return_panel_parquet(
+        canonical_panel.lazy(),
+        day45_inputs["daily"].lazy(),
+        day45_inputs["ff"].lazy(),
+        output_path=output_path,
+        event_window_days=6,
+        event_window_doc_batch_size=1,
+    )
+    return_panel = pl.read_parquet(output_path)
+
+    assert row_count == 1
+    assert return_panel.item(0, "filing_period_excess_return") > canonical_panel.item(
+        0,
+        "filing_period_excess_return",
+    )
+    assert return_panel.item(0, "pre_ffalpha") == pytest.approx(canonical_panel.item(0, "pre_ffalpha"))
+    assert return_panel.item(0, "postevent_return_volatility") == pytest.approx(
+        canonical_panel.item(0, "postevent_return_volatility")
+    )
+
+
+def test_twelve_day_lm2011_event_window_table_i_requires_all_return_and_volume_days() -> None:
+    inputs = _base_event_inputs()
+    inputs["daily"] = _mutate_relative_day_rows(
+        inputs["daily"],
+        event_day_index=260,
+        relative_days={10},
+        updates={"FINAL_RET": None, "RET": None, "VOL": None},
+    )
+
+    stage_frames = _build_lm2011_table_i_market_stage_frames(
+        inputs["sample_backbone"].lazy(),
+        inputs["daily"].lazy(),
+        inputs["annual_panel"].lazy(),
+        inputs["ff"].lazy(),
+        inputs["text_features"].lazy(),
+        event_window_days=12,
+    )
+
+    event_stage = dict(stage_frames)["event_window_returns_and_volume"]
+    assert event_stage.height == 0
+
+
+def test_six_day_lm2011_event_window_postevent_volatility_starts_on_day_eight() -> None:
+    base_inputs = _base_event_inputs()
+    day67_inputs = _base_event_inputs()
+    day8_inputs = _base_event_inputs()
+    day67_inputs["daily"] = _mutate_relative_day_rows(
+        day67_inputs["daily"],
+        event_day_index=260,
+        relative_days={6, 7},
+        updates={"FINAL_RET": 0.35, "RET": 0.35},
+    )
+    day8_inputs["daily"] = _mutate_relative_day_rows(
+        day8_inputs["daily"],
+        event_day_index=260,
+        relative_days={8},
+        updates={"FINAL_RET": 0.35, "RET": 0.35},
+    )
+
+    def _collect_six_day_panel(current_inputs: dict[str, pl.DataFrame]) -> pl.DataFrame:
+        return build_lm2011_event_panel(
+            current_inputs["sample_backbone"].lazy(),
+            current_inputs["daily"].lazy(),
+            current_inputs["annual_panel"].lazy(),
+            current_inputs["ff"].lazy(),
+            current_inputs["ownership"].lazy(),
+            current_inputs["text_features"].lazy(),
+            event_window_days=6,
+        ).collect()
+
+    base_vol = _collect_six_day_panel(base_inputs).item(0, "postevent_return_volatility")
+    day67_vol = _collect_six_day_panel(day67_inputs).item(0, "postevent_return_volatility")
+    day8_vol = _collect_six_day_panel(day8_inputs).item(0, "postevent_return_volatility")
+
+    assert day67_vol == pytest.approx(base_vol)
+    assert day8_vol > base_vol
+
+
 def test_build_lm2011_event_panel_rejects_non_unique_ownership_input() -> None:
     inputs = _base_event_inputs()
     duplicate_ownership = pl.DataFrame(
@@ -1788,6 +1976,33 @@ def test_build_lm2011_event_panel_rejects_non_unique_ownership_input() -> None:
             duplicate_ownership.lazy(),
             inputs["text_features"].lazy(),
         ).collect()
+
+
+def test_build_lm2011_event_panel_can_skip_ownership_input_for_no_ownership_specs() -> None:
+    inputs = _base_event_inputs()
+
+    no_ownership_panel = build_lm2011_event_panel(
+        inputs["sample_backbone"].lazy(),
+        inputs["daily"].lazy(),
+        inputs["annual_panel"].lazy(),
+        inputs["ff"].lazy(),
+        None,
+        inputs["text_features"].lazy(),
+        require_ownership=False,
+    ).collect()
+
+    assert no_ownership_panel.height == 1
+    assert no_ownership_panel.get_column("institutional_ownership").null_count() == 1
+
+    with pytest.raises(ValueError, match="ownership_lf is required"):
+        build_lm2011_event_panel(
+            inputs["sample_backbone"].lazy(),
+            inputs["daily"].lazy(),
+            inputs["annual_panel"].lazy(),
+            inputs["ff"].lazy(),
+            None,
+            inputs["text_features"].lazy(),
+        )
 
 
 def test_build_lm2011_table_i_market_stage_frames_report_expected_attrition() -> None:

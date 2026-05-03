@@ -1949,6 +1949,8 @@ def test_parse_args_uses_memory_hardened_defaults() -> None:
     assert args.print_ram_stats is False
     assert args.ram_log_interval_batches == runner.DEFAULT_RAM_LOG_INTERVAL_BATCHES
     assert args.nw_lags == runner.DEFAULT_LM2011_NW_LAGS
+    assert args.event_window_sensitivity_days == ()
+    assert args.event_window_sensitivity_include_postevent_volatility is False
 
 
 def test_parse_args_normalizes_nw_lag_grid() -> None:
@@ -1960,6 +1962,523 @@ def test_parse_args_normalizes_nw_lag_grid() -> None:
 def test_parse_args_rejects_invalid_nw_lags() -> None:
     with pytest.raises(SystemExit):
         runner.parse_args(["--nw-lags", "-1"])
+
+
+def test_parse_args_normalizes_event_window_sensitivity_days() -> None:
+    args = runner.parse_args(["--event-window-sensitivity-days", "6", "12", "12", "18"])
+
+    assert args.event_window_sensitivity_days == (6, 12, 18)
+
+
+def test_parse_args_rejects_invalid_event_window_sensitivity_days() -> None:
+    with pytest.raises(SystemExit):
+        runner.parse_args(["--event-window-sensitivity-days", "0"])
+
+
+def test_parse_args_accepts_event_window_sensitivity_postevent_toggle() -> None:
+    args = runner.parse_args(
+        [
+            "--event-window-sensitivity-days",
+            "6",
+            "--event-window-sensitivity-include-postevent-volatility",
+        ]
+    )
+
+    assert args.event_window_sensitivity_include_postevent_volatility is True
+
+
+def test_parse_args_accepts_event_window_sensitivity_only_toggle() -> None:
+    args = runner.parse_args(
+        [
+            "--event-window-sensitivity-days",
+            "6",
+            "--event-window-sensitivity-only",
+        ]
+    )
+
+    assert args.event_window_sensitivity_days == (6,)
+    assert args.event_window_sensitivity_only is True
+
+
+def test_event_window_sensitivity_reuse_guard_requires_matching_window_metadata(tmp_path: Path) -> None:
+    window_dir = tmp_path / "window_6d"
+    window_dir.mkdir()
+    manifest_path = window_dir / runner.EVENT_WINDOW_SENSITIVITY_MANIFEST_FILENAME
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "run_status": "completed",
+                "event_window": {
+                    "event_window_days": 6,
+                    "event_window_start_day": 0,
+                    "event_window_end_day": 5,
+                    "postevent_start_day": 8,
+                },
+                "config": {
+                    "ownership_policy": runner.EVENT_WINDOW_SENSITIVITY_OWNERSHIP_POLICY,
+                    "sensitivity_mode": runner.EVENT_WINDOW_SENSITIVITY_RETURN_ONLY_POLICY,
+                    "return_only_panel_policy": runner.EVENT_WINDOW_SENSITIVITY_RETURN_ONLY_PANEL_POLICY,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    for stage_name in runner.EVENT_WINDOW_SENSITIVITY_RETURN_ONLY_STAGE_NAMES:
+        _write_parquet(runner._artifact_output_path(window_dir, stage_name))
+
+    assert runner._event_window_sensitivity_window_reusable(window_dir, event_window_days=6)
+    assert not runner._event_window_sensitivity_window_reusable(window_dir, event_window_days=12)
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "run_status": "completed",
+                "event_window": {
+                    "event_window_days": 6,
+                    "event_window_start_day": 0,
+                    "event_window_end_day": 5,
+                    "postevent_start_day": 8,
+                },
+                "config": {
+                    "ownership_policy": "with_refinitiv_ownership",
+                    "sensitivity_mode": runner.EVENT_WINDOW_SENSITIVITY_RETURN_ONLY_POLICY,
+                    "return_only_panel_policy": runner.EVENT_WINDOW_SENSITIVITY_RETURN_ONLY_PANEL_POLICY,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert not runner._event_window_sensitivity_window_reusable(window_dir, event_window_days=6)
+
+
+def test_event_window_sensitivity_reuse_guard_checks_resolved_input_paths(tmp_path: Path) -> None:
+    sample_root, upstream_run_root, additional_data_dir, canonical_output_dir = _build_temp_layout(tmp_path)
+    paths = runner._resolve_paths(
+        runner.parse_args(
+            [
+                "--sample-root",
+                str(sample_root),
+                "--upstream-run-root",
+                str(upstream_run_root),
+                "--additional-data-dir",
+                str(additional_data_dir),
+                "--output-dir",
+                str(canonical_output_dir),
+            ]
+        )
+    )
+    window_dir = tmp_path / "window_6d"
+    manifest = runner._build_event_window_sensitivity_window_manifest(
+        paths,
+        output_dir=window_dir,
+        event_window_days=6,
+        include_postevent_volatility=False,
+    )
+    manifest["run_status"] = "completed"
+    _write_text(window_dir / runner.EVENT_WINDOW_SENSITIVITY_MANIFEST_FILENAME, json.dumps(manifest))
+    for stage_name in runner.EVENT_WINDOW_SENSITIVITY_RETURN_ONLY_STAGE_NAMES:
+        _write_parquet(runner._artifact_output_path(window_dir, stage_name))
+
+    assert runner._event_window_sensitivity_window_reusable(
+        window_dir,
+        event_window_days=6,
+        include_postevent_volatility=False,
+        paths=paths,
+    )
+
+    alternate_daily_path = tmp_path / "alternate_daily.parquet"
+    _write_parquet(alternate_daily_path)
+    alternate_paths = runner.RunnerPaths(
+        **{
+            **paths.__dict__,
+            "daily_panel_path": alternate_daily_path,
+        }
+    )
+
+    assert not runner._event_window_sensitivity_window_reusable(
+        window_dir,
+        event_window_days=6,
+        include_postevent_volatility=False,
+        paths=alternate_paths,
+    )
+
+
+def test_event_window_sensitivity_stack_adds_window_metadata(tmp_path: Path) -> None:
+    for event_window_days in (6, 12):
+        window_dir = runner._event_window_sensitivity_window_dir(tmp_path, event_window_days)
+        _write_parquet(
+            runner._artifact_output_path(window_dir, "table_iv_results_no_ownership"),
+            pl.DataFrame(
+                {
+                    "table_id": ["table_iv"],
+                    "signal_name": ["negative"],
+                    "estimate": [float(event_window_days)],
+                }
+            ),
+        )
+
+    output_path, row_count = runner._stack_event_window_sensitivity_artifacts(
+        tmp_path,
+        event_window_days_grid=(6, 12),
+        stage_names=("table_iv_results_no_ownership",),
+        output_filename=runner.EVENT_WINDOW_SENSITIVITY_RESULTS_FILENAME,
+    )
+    stacked = pl.read_parquet(output_path).sort("event_window_days")
+
+    assert row_count == 2
+    assert stacked.get_column("event_window_days").to_list() == [6, 12]
+    assert stacked.get_column("event_window_end_day").to_list() == [5, 11]
+    assert stacked.get_column("postevent_start_day").to_list() == [8, 14]
+    assert stacked.get_column("stage_name").to_list() == [
+        "table_iv_results_no_ownership",
+        "table_iv_results_no_ownership",
+    ]
+
+
+def test_event_window_sensitivity_inputs_do_not_require_doc_ownership(tmp_path: Path) -> None:
+    sample_root, upstream_run_root, additional_data_dir, canonical_output_dir = _build_temp_layout(tmp_path)
+    paths = runner._resolve_paths(
+        runner.parse_args(
+            [
+                "--sample-root",
+                str(sample_root),
+                "--upstream-run-root",
+                str(upstream_run_root),
+                "--additional-data-dir",
+                str(additional_data_dir),
+                "--output-dir",
+                str(canonical_output_dir),
+            ]
+        )
+    )
+    paths.doc_ownership_path.unlink()
+    dummy_lf = pl.DataFrame({"doc_id": ["d1"]}).lazy()
+
+    runner._require_event_window_sensitivity_inputs(
+        paths,
+        include_postevent_volatility=False,
+        year_merged_lf=dummy_lf,
+        sample_backbone_lf=dummy_lf,
+        event_panel_lf=dummy_lf,
+        annual_accounting_panel_lf=dummy_lf,
+        quarterly_accounting_panel_lf=dummy_lf,
+        ff_factors_daily_lf=dummy_lf,
+        text_features_full_10k_lf=dummy_lf,
+        text_features_mda_lf=dummy_lf,
+    )
+
+
+def test_event_window_sensitivity_inputs_accept_cached_sue_without_analyst_input(tmp_path: Path) -> None:
+    sample_root, upstream_run_root, additional_data_dir, canonical_output_dir = _build_temp_layout(tmp_path)
+    paths = runner._resolve_paths(
+        runner.parse_args(
+            [
+                "--sample-root",
+                str(sample_root),
+                "--upstream-run-root",
+                str(upstream_run_root),
+                "--additional-data-dir",
+                str(additional_data_dir),
+                "--output-dir",
+                str(canonical_output_dir),
+            ]
+        )
+    )
+    paths.doc_analyst_selected_path.unlink()
+    _write_parquet(
+        runner._artifact_output_path(paths.output_dir, "sue_panel"),
+        pl.DataFrame(
+            {
+                "doc_id": ["d1"],
+                "quarter_report_date": [dt.date(1995, 3, 31)],
+                "sue": [0.1],
+                "analyst_dispersion": [0.2],
+                "analyst_revisions": [0.3],
+            }
+        ),
+    )
+    dummy_lf = pl.DataFrame({"doc_id": ["d1"]}).lazy()
+
+    runner._require_event_window_sensitivity_inputs(
+        paths,
+        include_postevent_volatility=True,
+        year_merged_lf=dummy_lf,
+        sample_backbone_lf=dummy_lf,
+        event_panel_lf=None,
+        annual_accounting_panel_lf=dummy_lf,
+        quarterly_accounting_panel_lf=dummy_lf,
+        ff_factors_daily_lf=dummy_lf,
+        text_features_full_10k_lf=dummy_lf,
+        text_features_mda_lf=dummy_lf,
+    )
+
+
+def test_event_window_sensitivity_only_uses_cached_canonical_artifacts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sample_root, upstream_run_root, additional_data_dir, output_dir = _build_temp_layout(tmp_path)
+    for stage_name in (
+        "event_panel",
+        "ff_factors_daily_normalized",
+        "return_regression_panel_full_10k",
+        "return_regression_panel_mda",
+    ):
+        _write_parquet(output_dir / runner.STAGE_ARTIFACT_FILENAMES[stage_name])
+
+    args = runner.parse_args(
+        [
+            "--sample-root",
+            str(sample_root),
+            "--upstream-run-root",
+            str(upstream_run_root),
+            "--additional-data-dir",
+            str(additional_data_dir),
+            "--output-dir",
+            str(output_dir),
+            "--event-window-sensitivity-days",
+            "6",
+            "--event-window-sensitivity-only",
+        ]
+    )
+    run_cfg = runner.build_lm2011_post_refinitiv_run_config(args)
+    captured: dict[str, object] = {}
+
+    def _capture_sensitivity_call(
+        _run_cfg: runner.LM2011PostRefinitivRunConfig,
+        **kwargs: object,
+    ) -> dict[str, object]:
+        captured.update(kwargs)
+        return {"row_counts": {}, "artifacts": {}}
+
+    monkeypatch.setattr(
+        runner,
+        "run_lm2011_event_window_sensitivity_pipeline",
+        _capture_sensitivity_call,
+    )
+
+    result = runner.run_lm2011_event_window_sensitivity_only(run_cfg)
+
+    assert result == {"row_counts": {}, "artifacts": {}}
+    assert captured["event_panel_lf"] is not None
+    assert captured["ff_factors_daily_lf"] is not None
+    assert captured["text_features_full_10k_lf"] is None
+    assert captured["text_features_mda_lf"] is None
+    assert captured["sample_backbone_lf"] is None
+    assert captured["annual_accounting_panel_lf"] is None
+    assert captured["quarterly_accounting_panel_lf"] is None
+
+
+def test_build_no_ownership_sue_panel_from_cached_uses_event_panel_controls() -> None:
+    event_panel = pl.DataFrame(
+        {
+            "doc_id": ["d1"],
+            "gvkey_int": [1],
+            "KYPERMNO": [10],
+            "filing_date": [dt.date(1995, 1, 10)],
+            "size_event": [100.0],
+            "bm_event": [0.5],
+            "share_turnover": [0.01],
+            "pre_ffalpha": [0.02],
+            "institutional_ownership": [None],
+            "nasdaq_dummy": [1],
+        }
+    )
+    cached_sue = pl.DataFrame(
+        {
+            "doc_id": ["d1"],
+            "quarter_report_date": [dt.date(1995, 3, 31)],
+            "sue": [0.1],
+            "analyst_dispersion": [0.2],
+            "analyst_revisions": [0.3],
+            "institutional_ownership": [55.0],
+        }
+    )
+
+    out = runner._build_no_ownership_sue_panel_from_cached(event_panel.lazy(), cached_sue.lazy()).collect()
+
+    assert out.height == 1
+    assert out.item(0, "size_event") == 100.0
+    assert out.item(0, "sue") == 0.1
+    assert out.item(0, "institutional_ownership") is None
+
+
+def test_event_window_sensitivity_pipeline_writes_per_window_dirs_without_canonical_overwrite(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sample_root, upstream_run_root, additional_data_dir, canonical_output_dir = _build_temp_layout(tmp_path)
+    paths = runner._resolve_paths(
+        runner.parse_args(
+            [
+                "--sample-root",
+                str(sample_root),
+                "--upstream-run-root",
+                str(upstream_run_root),
+                "--additional-data-dir",
+                str(additional_data_dir),
+                "--output-dir",
+                str(canonical_output_dir),
+            ]
+        )
+    )
+    run_cfg = runner.LM2011PostRefinitivRunConfig(
+        paths=paths,
+        event_window_sensitivity_days=(6, 12),
+    )
+    sensitivity_root = runner._event_window_sensitivity_output_dir(run_cfg)
+    calls: list[tuple[int, Path]] = []
+
+    monkeypatch.setattr(runner, "_require_event_window_sensitivity_inputs", lambda *args, **kwargs: None)
+
+    def _run_window_stub(
+        _run_cfg: runner.LM2011PostRefinitivRunConfig,
+        *,
+        output_dir: Path,
+        event_window_days: int,
+        **_: object,
+    ) -> dict[str, object]:
+        expected_dir = runner._event_window_sensitivity_window_dir(sensitivity_root, event_window_days)
+        assert output_dir == expected_dir
+        assert output_dir != paths.output_dir
+        calls.append((event_window_days, output_dir))
+        _write_parquet(
+            runner._artifact_output_path(output_dir, "table_i_sample_creation"),
+            _stub_table_i_sample_creation_df(),
+        )
+        _write_parquet(
+            runner._artifact_output_path(output_dir, "table_iv_results_no_ownership"),
+            pl.DataFrame(
+                {
+                    "table_id": ["table_iv"],
+                    "signal_name": ["negative"],
+                    "estimate": [float(event_window_days)],
+                }
+            ),
+        )
+        return {"status": "generated", "output_dir": str(output_dir)}
+
+    monkeypatch.setattr(runner, "_run_event_window_sensitivity_window", _run_window_stub)
+
+    manifest = runner.run_lm2011_event_window_sensitivity_pipeline(
+        run_cfg,
+        year_merged_lf=pl.DataFrame({"doc_id": ["d1"]}).lazy(),
+        sample_backbone_lf=pl.DataFrame({"doc_id": ["d1"]}).lazy(),
+        event_panel_lf=pl.DataFrame({"doc_id": ["d1"]}).lazy(),
+        annual_accounting_panel_lf=pl.DataFrame({"doc_id": ["d1"]}).lazy(),
+        quarterly_accounting_panel_lf=pl.DataFrame({"doc_id": ["d1"]}).lazy(),
+        ff_factors_daily_lf=pl.DataFrame({"doc_id": ["d1"]}).lazy(),
+        text_features_full_10k_lf=pl.DataFrame({"doc_id": ["d1"]}).lazy(),
+        text_features_mda_lf=pl.DataFrame({"doc_id": ["d1"]}).lazy(),
+    )
+
+    assert calls == [
+        (6, sensitivity_root / "window_6d"),
+        (12, sensitivity_root / "window_12d"),
+    ]
+    assert not runner._artifact_output_path(paths.output_dir, "table_i_sample_creation").exists()
+    assert Path(manifest["artifacts"]["sample_counts"]) == sensitivity_root / runner.EVENT_WINDOW_SENSITIVITY_SAMPLE_COUNTS_FILENAME
+    assert Path(manifest["artifacts"]["results"]) == sensitivity_root / runner.EVENT_WINDOW_SENSITIVITY_RESULTS_FILENAME
+    assert pl.read_parquet(manifest["artifacts"]["results"]).get_column("event_window_days").to_list() == [6, 12]
+
+
+def test_event_window_sensitivity_window_passes_event_window_days_to_builders(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sample_root, upstream_run_root, additional_data_dir, canonical_output_dir = _build_temp_layout(tmp_path)
+    paths = runner._resolve_paths(
+        runner.parse_args(
+            [
+                "--sample-root",
+                str(sample_root),
+                "--upstream-run-root",
+                str(upstream_run_root),
+                "--additional-data-dir",
+                str(additional_data_dir),
+                "--output-dir",
+                str(canonical_output_dir),
+            ]
+        )
+    )
+    run_cfg = runner.LM2011PostRefinitivRunConfig(
+        paths=paths,
+        event_window_sensitivity_include_postevent_volatility=True,
+    )
+    output_dir = tmp_path / "event_window_sensitivity" / "window_18d"
+    captured: list[tuple[str, int]] = []
+
+    def _event_surface_stub(
+        _manifest: dict[str, object],
+        *,
+        output_dir: Path,
+        event_window_days: int,
+        **_: object,
+    ) -> pl.LazyFrame:
+        captured.append(("event_screen_surface", event_window_days))
+        output_path = runner._artifact_output_path(output_dir, "event_screen_surface")
+        _write_parquet(output_path, pl.DataFrame({"doc_id": ["d1"]}))
+        return pl.scan_parquet(output_path)
+
+    def _table_i_stub(*_: object, event_window_days: int, **__: object) -> pl.DataFrame:
+        captured.append(("table_i_sample_creation", event_window_days))
+        return _stub_table_i_sample_creation_df()
+
+    def _event_panel_stub(
+        *_: object,
+        event_window_days: int,
+        require_ownership: bool,
+        ownership_lf: pl.LazyFrame | None,
+        **__: object,
+    ) -> pl.LazyFrame:
+        captured.append(("event_panel", event_window_days))
+        assert require_ownership is False
+        assert ownership_lf is None
+        return pl.DataFrame({"doc_id": ["d1"]}).lazy()
+
+    monkeypatch.setattr(runner, "_write_event_screen_surface_stage", _event_surface_stub)
+    monkeypatch.setattr(runner, "build_lm2011_table_i_sample_creation", _table_i_stub)
+    monkeypatch.setattr(runner, "build_lm2011_event_panel", _event_panel_stub)
+    monkeypatch.setattr(runner, "_write_sue_panel_stage", lambda *args, **kwargs: pl.DataFrame({"doc_id": ["d1"]}).lazy())
+    monkeypatch.setattr(runner, "_prepare_doc_analyst_sue_input_lf", lambda _path: pl.DataFrame({"doc_id": ["d1"]}).lazy())
+    monkeypatch.setattr(runner, "build_lm2011_return_regression_panel", lambda *args, **kwargs: pl.DataFrame({"doc_id": ["d1"]}).lazy())
+    monkeypatch.setattr(runner, "build_lm2011_sue_regression_panel", lambda *args, **kwargs: pl.DataFrame({"doc_id": ["d1"]}).lazy())
+    for builder_name in (
+        "_build_lm2011_table_iv_results_bundle",
+        "_build_lm2011_table_iv_results_no_ownership_bundle",
+        "_build_lm2011_table_v_results_bundle",
+        "_build_lm2011_table_v_results_no_ownership_bundle",
+        "_build_lm2011_table_vi_results_bundle",
+        "_build_lm2011_table_vi_results_no_ownership_bundle",
+        "_build_lm2011_table_viii_results_bundle",
+        "_build_lm2011_table_viii_results_no_ownership_bundle",
+        "_build_lm2011_table_ia_i_results_bundle",
+        "_build_lm2011_table_ia_i_results_no_ownership_bundle",
+    ):
+        monkeypatch.setattr(runner, builder_name, lambda *args, **kwargs: _quarterly_bundle())
+
+    summary = runner._run_event_window_sensitivity_window(
+        run_cfg,
+        output_dir=output_dir,
+        event_window_days=18,
+        year_merged_lf=pl.DataFrame({"doc_id": ["d1"]}).lazy(),
+        sample_backbone_lf=pl.DataFrame({"doc_id": ["d1"]}).lazy(),
+        event_panel_lf=None,
+        annual_accounting_panel_lf=pl.DataFrame({"doc_id": ["d1"]}).lazy(),
+        quarterly_accounting_panel_lf=pl.DataFrame({"doc_id": ["d1"]}).lazy(),
+        ff_factors_daily_lf=pl.DataFrame({"doc_id": ["d1"]}).lazy(),
+        text_features_full_10k_lf=pl.DataFrame({"doc_id": ["d1"]}).lazy(),
+        text_features_mda_lf=pl.DataFrame({"doc_id": ["d1"]}).lazy(),
+    )
+
+    assert summary["status"] == "generated"
+    assert captured == [
+        ("event_screen_surface", 18),
+        ("table_i_sample_creation", 18),
+        ("event_panel", 18),
+    ]
+    window_manifest = json.loads((output_dir / runner.EVENT_WINDOW_SENSITIVITY_MANIFEST_FILENAME).read_text())
+    assert window_manifest["event_window"]["event_window_end_day"] == 17
+    assert window_manifest["event_window"]["postevent_start_day"] == 20
 
 
 def test_core_nw_lag_sensitivity_frame_stacks_enabled_lags() -> None:

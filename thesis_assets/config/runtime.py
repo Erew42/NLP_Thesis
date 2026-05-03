@@ -7,10 +7,12 @@ from thesis_assets.config.constants import ARTIFACT_FILENAMES
 from thesis_assets.config.constants import ARTIFACT_KEY_NW_LAG_CORE_TABLES
 from thesis_assets.config.constants import ARTIFACT_KEY_NW_LAG_EXTENSION_FIT_COMPARISONS
 from thesis_assets.config.constants import ARTIFACT_KEY_NW_LAG_EXTENSION_RESULTS
+from thesis_assets.config.constants import ARTIFACT_KEY_EVENT_WINDOW_SENSITIVITY_RESULTS
 from thesis_assets.config.constants import RUN_FAMILY_FINBERT_ROBUSTNESS
 from thesis_assets.config.constants import RUN_FAMILY_FINBERT_RUN
 from thesis_assets.config.constants import RUN_FAMILY_LM2011_EXTENSION
 from thesis_assets.config.constants import RUN_FAMILY_LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX
+from thesis_assets.config.constants import RUN_FAMILY_LM2011_EVENT_WINDOW_SENSITIVITY
 from thesis_assets.config.constants import RUN_FAMILY_LM2011_NW_LAG_SENSITIVITY
 from thesis_assets.config.constants import RUN_FAMILY_LM2011_POST_REFINITIV
 
@@ -105,6 +107,26 @@ def candidate_run_roots(repo_root: Path, run_family: str) -> tuple[Path, ...]:
                 Path("/content/drive/My Drive/Data_LM/results/lm2011_nw_lag_sensitivity"),
             ]
         )
+    elif run_family == RUN_FAMILY_LM2011_EVENT_WINDOW_SENSITIVITY:
+        local_candidate = _resolve_latest_event_window_sensitivity_run(full_data_run)
+        candidates = (
+            [local_candidate]
+            if local_candidate is not None
+            else [
+                local_sample_unified / "lm2011_post_refinitiv" / "event_window_sensitivity",
+                sample_results / "lm2011_sample_post_refinitiv_runner" / "event_window_sensitivity",
+                (
+                    Path("/content/drive/MyDrive/Data_LM/results/sec_ccm_unified_runner")
+                    / "lm2011_post_refinitiv"
+                    / "event_window_sensitivity"
+                ),
+                (
+                    Path("/content/drive/My Drive/Data_LM/results/sec_ccm_unified_runner")
+                    / "lm2011_post_refinitiv"
+                    / "event_window_sensitivity"
+                ),
+            ]
+        )
     else:
         raise ValueError(f"Unsupported run family: {run_family!r}")
 
@@ -135,6 +157,24 @@ def _resolve_latest_nw_lag_sensitivity_run(parent: Path) -> Path | None:
         for child in parent.glob("lm2011_nw_lag_sensitivity*")
         if child.is_dir() and all((child / filename).exists() for filename in required_filenames)
     ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda path: path.stat().st_mtime)
+
+
+def _resolve_latest_event_window_sensitivity_run(parent: Path) -> Path | None:
+    if not parent.exists() or not parent.is_dir():
+        return None
+    required_filename = ARTIFACT_FILENAMES[ARTIFACT_KEY_EVENT_WINDOW_SENSITIVITY_RESULTS]
+    candidates = [
+        child.resolve()
+        for child in parent.glob("lm2011_event_window_sensitivity*")
+        if child.is_dir() and (child / required_filename).exists()
+    ]
+    for post_refinitiv in parent.glob("lm2011_post_refinitiv*"):
+        nested = post_refinitiv / "event_window_sensitivity"
+        if nested.is_dir() and (nested / required_filename).exists():
+            candidates.append(nested.resolve())
     if not candidates:
         return None
     return max(candidates, key=lambda path: path.stat().st_mtime)

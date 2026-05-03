@@ -38,6 +38,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.lm2011_extension_finbert_visible_prefix_dir
         ),
         "lm2011_nw_lag_sensitivity_dir": args.lm2011_nw_lag_sensitivity_dir,
+        "lm2011_event_window_sensitivity_dir": args.lm2011_event_window_sensitivity_dir,
         "finbert_run_dir": args.finbert_run_dir,
         "finbert_robustness_dir": args.finbert_robustness_dir,
     }
@@ -67,6 +68,7 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--lm2011-extension-dir", type=Path, default=None)
     parser.add_argument("--lm2011-extension-finbert-visible-prefix-dir", type=Path, default=None)
     parser.add_argument("--lm2011-nw-lag-sensitivity-dir", type=Path, default=None)
+    parser.add_argument("--lm2011-event-window-sensitivity-dir", type=Path, default=None)
     parser.add_argument("--finbert-run-dir", type=Path, default=None)
     parser.add_argument("--finbert-robustness-dir", type=Path, default=None)
 

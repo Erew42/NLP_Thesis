@@ -338,17 +338,41 @@ def _validated_event_window_doc_batch_size(batch_size: int) -> int:
     return resolved
 
 
+def _validated_event_window_days(event_window_days: int) -> int:
+    resolved = int(event_window_days)
+    if resolved < 1:
+        raise ValueError("event_window_days must be >= 1")
+    return resolved
+
+
+def _event_window_end_day(event_window_days: int) -> int:
+    return _validated_event_window_days(event_window_days) - 1
+
+
+def _postevent_start_day(event_window_days: int) -> int:
+    return _validated_event_window_days(event_window_days) + 2
+
+
 def _format_table_i_window_label(sample_start: dt.date, sample_end: dt.date) -> str:
     return f"{sample_start.year}-{sample_end.year}"
 
 
-def _table_i_full_10k_row_labels(sample_start: dt.date, sample_end: dt.date) -> dict[str, str]:
+def _table_i_full_10k_row_labels(
+    sample_start: dt.date,
+    sample_end: dt.date,
+    *,
+    event_window_days: int = 4,
+) -> dict[str, str]:
+    labels = dict(_LM2011_TABLE_I_FULL_10K_ROW_LABELS)
+    labels["event_window_returns_and_volume"] = (
+        f"Returns and volume for day 0-{_event_window_end_day(event_window_days)} event period"
+    )
     return {
         "edgar_complete_nonduplicate_sample": (
             f"EDGAR 10-K/10-K405 {_format_table_i_window_label(sample_start, sample_end)} complete sample "
             "(excluding duplicates)"
         ),
-        **_LM2011_TABLE_I_FULL_10K_ROW_LABELS,
+        **labels,
     }
 
 
@@ -553,10 +577,23 @@ def _prepare_daily_event_source_lf(
     daily_date_col = _resolve_first_existing(daily_schema, ("CALDT", "daily_caldt"), "daily_panel")
     return_col = "FINAL_RET" if "FINAL_RET" in daily_schema else "RET"
     price_col = "FINAL_PRC" if "FINAL_PRC" in daily_schema else "PRC"
-    required_daily = [daily_permno_col, daily_date_col, return_col, "VOL", price_col, "SHROUT", "SHRCD", "EXCHCD"]
+    raw_price_col = "PRC" if "PRC" in daily_schema else price_col
+    required_daily = [daily_permno_col, daily_date_col, return_col, "VOL", price_col, "SHRCD", "EXCHCD"]
     missing_daily = [name for name in required_daily if name not in daily_schema]
+    if "SHROUT" not in daily_schema and ("TCAP" not in daily_schema or raw_price_col not in daily_schema):
+        missing_daily.append("SHROUT or TCAP plus price")
     if missing_daily:
         raise ValueError(f"daily_lf missing required columns for LM2011 event metrics: {missing_daily}")
+    shrout_expr = (
+        pl.col("SHROUT").cast(pl.Float64, strict=False)
+        if "SHROUT" in daily_schema
+        else pl.when(pl.col(raw_price_col).cast(pl.Float64, strict=False).abs() > 0)
+        .then(
+            pl.col("TCAP").cast(pl.Float64, strict=False)
+            / pl.col(raw_price_col).cast(pl.Float64, strict=False).abs()
+        )
+        .otherwise(None)
+    )
     return daily_lf.select(
         pl.col(daily_permno_col).cast(pl.Int32, strict=False).alias("KYPERMNO"),
         pl.col(daily_date_col).cast(pl.Date, strict=False).alias("trade_date"),
@@ -573,7 +610,7 @@ def _prepare_daily_event_source_lf(
             if "TCAP" in daily_schema
             else pl.lit(None, dtype=pl.Float64)
         ).alias("TCAP"),
-        pl.col("SHROUT").cast(pl.Float64, strict=False).alias("SHROUT"),
+        shrout_expr.alias("SHROUT"),
         pl.col("SHRCD").cast(pl.Int32, strict=False).alias("SHRCD"),
         pl.col("EXCHCD").cast(pl.Int32, strict=False).alias("EXCHCD"),
     ).drop_nulls(subset=["KYPERMNO", "trade_date"])
@@ -630,6 +667,41 @@ def _collect_daily_event_batch(
     return daily_df.join(factors_df, on="trade_date", how="left").sort("KYPERMNO", "trade_date")
 
 
+def _collect_daily_return_window_batch(
+    daily_source_lf: pl.LazyFrame,
+    factors_df: pl.DataFrame,
+    docs_df: pl.DataFrame,
+    *,
+    event_window_days: int,
+) -> pl.DataFrame:
+    permnos = docs_df.get_column("KYPERMNO").drop_nulls().unique().to_list()
+    if not permnos:
+        return _empty_prepared_daily_event_df()
+
+    filing_trade_dates = docs_df.get_column("filing_trade_date").drop_nulls()
+    if filing_trade_dates.len() == 0:
+        return _empty_prepared_daily_event_df()
+    min_trade_date = _coerce_python_date(filing_trade_dates.min(), label="minimum filing_trade_date")
+    max_trade_date = _coerce_python_date(filing_trade_dates.max(), label="maximum filing_trade_date")
+    lookup_padding_days = max(14, int(event_window_days) * 3 + 14)
+    daily_df = (
+        daily_source_lf.filter(
+            pl.col("KYPERMNO").cast(pl.Int32, strict=False).is_in(permnos)
+            & pl.col("trade_date").cast(pl.Date, strict=False).is_between(
+                pl.lit(min_trade_date),
+                pl.lit(max_trade_date + dt.timedelta(days=lookup_padding_days)),
+                closed="both",
+            )
+        )
+        .collect()
+        .unique(subset=["KYPERMNO", "trade_date"], keep="first")
+        .sort("KYPERMNO", "trade_date")
+    )
+    if daily_df.height == 0:
+        return _empty_prepared_daily_event_df()
+    return daily_df.join(factors_df, on="trade_date", how="left").sort("KYPERMNO", "trade_date")
+
+
 def _collect_event_screen_surface_df(event_screen_surface: pl.LazyFrame | pl.DataFrame) -> pl.DataFrame:
     surface_df = event_screen_surface.collect() if isinstance(event_screen_surface, pl.LazyFrame) else event_screen_surface
     missing = [name for name in _EVENT_SCREEN_SURFACE_REQUIRED_COLUMNS if name not in surface_df.columns]
@@ -672,7 +744,13 @@ def _attach_trade_indices(docs_df: pl.DataFrame, daily_df: pl.DataFrame) -> tupl
     return docs, daily
 
 
-def _build_window_rows(docs_df: pl.DataFrame, daily_df: pl.DataFrame) -> pl.DataFrame:
+def _build_window_rows(
+    docs_df: pl.DataFrame,
+    daily_df: pl.DataFrame,
+    *,
+    start_day: int = -252,
+    end_day: int = 252,
+) -> pl.DataFrame:
     left = docs_df.lazy().rename({"KYPERMNO": "_doc_permno"})
     right = daily_df.lazy().rename(
         {
@@ -697,8 +775,8 @@ def _build_window_rows(docs_df: pl.DataFrame, daily_df: pl.DataFrame) -> pl.Data
         left.join_where(
             right,
             pl.col("_doc_permno") == pl.col("_daily_permno"),
-            pl.col("_daily_trade_index") >= (pl.col("_filing_trade_index") - pl.lit(252)),
-            pl.col("_daily_trade_index") <= (pl.col("_filing_trade_index") + pl.lit(252)),
+            pl.col("_daily_trade_index") >= (pl.col("_filing_trade_index") + pl.lit(int(start_day))),
+            pl.col("_daily_trade_index") <= (pl.col("_filing_trade_index") + pl.lit(int(end_day))),
         )
         .with_columns(
             pl.col("_daily_trade_index").cast(pl.Int32, strict=False),
@@ -956,27 +1034,40 @@ def _apply_lm2011_regression_transforms(lf: pl.LazyFrame) -> pl.LazyFrame:
     )
 
 
-def _build_lm2011_event_screen_surface(docs_df: pl.DataFrame, daily_df: pl.DataFrame) -> pl.DataFrame:
+def _build_lm2011_event_screen_surface(
+    docs_df: pl.DataFrame,
+    daily_df: pl.DataFrame,
+    *,
+    event_window_days: int = 4,
+) -> pl.DataFrame:
+    event_window_end_day = _event_window_end_day(event_window_days)
+    postevent_start_day = _postevent_start_day(event_window_days)
     docs_df, daily_df = _attach_trade_indices(docs_df, daily_df)
     window_df = _build_window_rows(docs_df, daily_df)
 
     event_summary = window_df.group_by("doc_id").agg(
-        pl.when(pl.col("relative_day").is_between(0, 3, closed="both") & pl.col("stock_return").is_not_null())
+        pl.when(
+            pl.col("relative_day").is_between(0, event_window_end_day, closed="both")
+            & pl.col("stock_return").is_not_null()
+        )
         .then(pl.lit(1))
         .otherwise(pl.lit(0))
         .sum()
         .alias("event_return_day_count"),
-        pl.when(pl.col("relative_day").is_between(0, 3, closed="both") & pl.col("VOL").is_not_null())
+        pl.when(
+            pl.col("relative_day").is_between(0, event_window_end_day, closed="both")
+            & pl.col("VOL").is_not_null()
+        )
         .then(pl.lit(1))
         .otherwise(pl.lit(0))
         .sum()
         .alias("event_volume_day_count"),
-        pl.when(pl.col("relative_day").is_between(0, 3, closed="both"))
+        pl.when(pl.col("relative_day").is_between(0, event_window_end_day, closed="both"))
         .then(pl.col("stock_return") + pl.lit(1.0))
         .otherwise(None)
         .product()
         .alias("_event_stock_gross"),
-        pl.when(pl.col("relative_day").is_between(0, 3, closed="both"))
+        pl.when(pl.col("relative_day").is_between(0, event_window_end_day, closed="both"))
         .then(pl.col("market_return") + pl.lit(1.0))
         .otherwise(None)
         .product()
@@ -1017,7 +1108,10 @@ def _build_lm2011_event_screen_surface(docs_df: pl.DataFrame, daily_df: pl.DataF
         pl.col("VOL").std().alias("_pre_vol_std"),
     )
     abnormal_event = (
-        window_df.filter(pl.col("relative_day").is_between(0, 3, closed="both") & pl.col("VOL").is_not_null())
+        window_df.filter(
+            pl.col("relative_day").is_between(0, event_window_end_day, closed="both")
+            & pl.col("VOL").is_not_null()
+        )
         .join(abnormal_pre_stats, on="doc_id", how="left")
         .filter(pl.col("_pre_vol_std").is_not_null() & (pl.col("_pre_vol_std") > 0))
         .with_columns(((pl.col("VOL") - pl.col("_pre_vol_mean")) / pl.col("_pre_vol_std")).alias("_std_volume"))
@@ -1035,7 +1129,7 @@ def _build_lm2011_event_screen_surface(docs_df: pl.DataFrame, daily_df: pl.DataF
     ).rename({"n_obs": "pre_alpha_obs"})
     post_alpha = _regression_metrics_from_window(
         window_df,
-        start_day=6,
+        start_day=postevent_start_day,
         end_day=252,
         alpha_name="_post_ffalpha",
         rmse_name="postevent_return_volatility",
@@ -1077,11 +1171,13 @@ def write_lm2011_event_screen_surface_parquet(
     full_10k_text_features_lf: pl.LazyFrame | None,
     *,
     output_path: Path,
+    event_window_days: int = 4,
     event_window_doc_batch_size: int = DEFAULT_EVENT_WINDOW_DOC_BATCH_SIZE,
     progress_callback: Callable[[dict[str, int]], None] | None = None,
     temp_root: Path | None = None,
     cleanup_on_success: bool = True,
 ) -> int:
+    resolved_event_window_days = _validated_event_window_days(event_window_days)
     docs_base_lf = _prepare_table_i_base_lf(
         sample_backbone_lf,
         daily_lf,
@@ -1129,7 +1225,11 @@ def write_lm2011_event_screen_surface_parquet(
                 batch_size=batch_size,
             )
             daily_batch_df = _collect_daily_event_batch(daily_source_lf, factors_df, docs_batch)
-            surface_batch = _build_lm2011_event_screen_surface(docs_batch, daily_batch_df)
+            surface_batch = _build_lm2011_event_screen_surface(
+                docs_batch,
+                daily_batch_df,
+                event_window_days=resolved_event_window_days,
+            )
             if not surface_batch.is_empty():
                 shard_path = shard_dir / f"{int(batch_start / batch_size) + 1:06d}.parquet"
                 surface_batch.write_parquet(shard_path, compression=_STREAMING_PARQUET_COMPRESSION)
@@ -1170,6 +1270,201 @@ def write_lm2011_event_screen_surface_parquet(
         raise
 
 
+def _empty_event_window_return_surface_df() -> pl.DataFrame:
+    return pl.DataFrame(
+        schema={
+            "doc_id": pl.Utf8,
+            "event_return_day_count": pl.Int64,
+            "event_market_return_day_count": pl.Int64,
+            "filing_period_excess_return": pl.Float64,
+        }
+    )
+
+
+def _build_lm2011_event_window_return_surface(
+    docs_df: pl.DataFrame,
+    daily_df: pl.DataFrame,
+    *,
+    event_window_days: int = 4,
+) -> pl.DataFrame:
+    resolved_event_window_days = _validated_event_window_days(event_window_days)
+    event_window_end_day = _event_window_end_day(resolved_event_window_days)
+    docs_df, daily_df = _attach_trade_indices(docs_df, daily_df)
+    window_df = _build_window_rows(
+        docs_df,
+        daily_df,
+        start_day=0,
+        end_day=event_window_end_day,
+    )
+    if window_df.height == 0:
+        return _empty_event_window_return_surface_df()
+    return (
+        window_df.group_by("doc_id")
+        .agg(
+            pl.when(
+                pl.col("relative_day").is_between(0, event_window_end_day, closed="both")
+                & pl.col("stock_return").is_not_null()
+            )
+            .then(pl.lit(1))
+            .otherwise(pl.lit(0))
+            .sum()
+            .alias("event_return_day_count"),
+            pl.when(
+                pl.col("relative_day").is_between(0, event_window_end_day, closed="both")
+                & pl.col("market_return").is_not_null()
+            )
+            .then(pl.lit(1))
+            .otherwise(pl.lit(0))
+            .sum()
+            .alias("event_market_return_day_count"),
+            pl.when(pl.col("relative_day").is_between(0, event_window_end_day, closed="both"))
+            .then(pl.col("stock_return") + pl.lit(1.0))
+            .otherwise(None)
+            .product()
+            .alias("_event_stock_gross"),
+            pl.when(pl.col("relative_day").is_between(0, event_window_end_day, closed="both"))
+            .then(pl.col("market_return") + pl.lit(1.0))
+            .otherwise(None)
+            .product()
+            .alias("_event_market_gross"),
+        )
+        .with_columns(
+            (pl.col("_event_stock_gross") - pl.col("_event_market_gross")).alias("filing_period_excess_return")
+        )
+        .select(
+            pl.col("doc_id").cast(pl.Utf8, strict=False),
+            pl.col("event_return_day_count").cast(pl.Int64, strict=False),
+            pl.col("event_market_return_day_count").cast(pl.Int64, strict=False),
+            pl.col("filing_period_excess_return").cast(pl.Float64, strict=False),
+        )
+        .filter(
+            (pl.col("event_return_day_count") == resolved_event_window_days)
+            & (pl.col("event_market_return_day_count") == resolved_event_window_days)
+            & pl.col("filing_period_excess_return").is_not_null()
+        )
+    )
+
+
+def write_lm2011_event_window_return_panel_parquet(
+    canonical_event_panel_lf: pl.LazyFrame,
+    daily_lf: pl.LazyFrame,
+    ff_factors_daily_lf: pl.LazyFrame | None,
+    *,
+    output_path: Path,
+    event_window_days: int = 4,
+    event_window_doc_batch_size: int = DEFAULT_EVENT_WINDOW_DOC_BATCH_SIZE,
+    progress_callback: Callable[[dict[str, int]], None] | None = None,
+    temp_root: Path | None = None,
+    cleanup_on_success: bool = True,
+) -> int:
+    resolved_event_window_days = _validated_event_window_days(event_window_days)
+    required_event_panel_columns = tuple(_empty_event_panel_df().columns)
+    _require_columns(canonical_event_panel_lf, required_event_panel_columns, "canonical_event_panel")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    resolved_temp_root = temp_root or output_path.parent / f".{output_path.stem}_tmp"
+    if resolved_temp_root.exists():
+        shutil.rmtree(resolved_temp_root)
+    resolved_temp_root.mkdir(parents=True, exist_ok=True)
+    staged_panel_path = resolved_temp_root / "canonical_event_panel.parquet"
+    shard_dir = resolved_temp_root / "shards"
+    shard_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        canonical_event_panel_lf.select(required_event_panel_columns).sort(
+            "filing_date",
+            "KYPERMNO",
+            "doc_id",
+        ).sink_parquet(
+            staged_panel_path,
+            compression=_STREAMING_PARQUET_COMPRESSION,
+        )
+        staged_panel_lf = pl.scan_parquet(staged_panel_path)
+        docs_manifest = (
+            staged_panel_lf.select(
+                pl.col("doc_id").cast(pl.Utf8, strict=False),
+                pl.col("KYPERMNO").cast(pl.Int32, strict=False),
+                pl.col("filing_trade_date").cast(pl.Date, strict=False),
+            )
+            .drop_nulls(subset=["doc_id", "KYPERMNO", "filing_trade_date"])
+            .collect()
+        )
+        if docs_manifest.height == 0:
+            _empty_event_panel_df().write_parquet(output_path, compression=_STREAMING_PARQUET_COMPRESSION)
+            if cleanup_on_success and resolved_temp_root.exists():
+                shutil.rmtree(resolved_temp_root)
+            return 0
+
+        batch_size = _validated_event_window_doc_batch_size(event_window_doc_batch_size)
+        daily_source_lf = _prepare_daily_event_source_lf(daily_lf)
+        factors_df = _prepare_daily_factor_frame(ff_factors_daily_lf)
+        total_docs = docs_manifest.height
+        total_batches = int(math.ceil(total_docs / batch_size))
+        shard_paths: list[Path] = []
+
+        for batch_start in range(0, total_docs, batch_size):
+            docs_batch = (
+                staged_panel_lf.slice(batch_start, batch_size)
+                .collect()
+                .sort("filing_date", "KYPERMNO", "doc_id")
+            )
+            daily_batch_df = _collect_daily_return_window_batch(
+                daily_source_lf,
+                factors_df,
+                docs_batch,
+                event_window_days=resolved_event_window_days,
+            )
+            return_surface = _build_lm2011_event_window_return_surface(
+                docs_batch,
+                daily_batch_df,
+                event_window_days=resolved_event_window_days,
+            )
+            if not return_surface.is_empty():
+                panel_batch = (
+                    docs_batch.drop("filing_period_excess_return")
+                    .join(
+                        return_surface.select("doc_id", "filing_period_excess_return"),
+                        on="doc_id",
+                        how="inner",
+                    )
+                    .select(required_event_panel_columns)
+                )
+                if not panel_batch.is_empty():
+                    shard_path = shard_dir / f"{int(batch_start / batch_size) + 1:06d}.parquet"
+                    panel_batch.write_parquet(shard_path, compression=_STREAMING_PARQUET_COMPRESSION)
+                    shard_paths.append(shard_path)
+            if progress_callback is not None:
+                batch_index = int(batch_start / batch_size) + 1
+                progress_callback(
+                    {
+                        "batch_index": batch_index,
+                        "total_batches": total_batches,
+                        "batch_doc_count": docs_batch.height,
+                        "docs_completed": min(batch_start + docs_batch.height, total_docs),
+                        "docs_total": total_docs,
+                    }
+                )
+            del docs_batch
+            del daily_batch_df
+            del return_surface
+            gc.collect()
+
+        if output_path.exists():
+            output_path.unlink()
+        if shard_paths:
+            pl.scan_parquet([str(path) for path in shard_paths]).sink_parquet(
+                output_path,
+                compression=_STREAMING_PARQUET_COMPRESSION,
+            )
+        else:
+            _empty_event_panel_df().write_parquet(output_path, compression=_STREAMING_PARQUET_COMPRESSION)
+        row_count = int(pl.scan_parquet(output_path).select(pl.len()).collect().item())
+        if cleanup_on_success and resolved_temp_root.exists():
+            shutil.rmtree(resolved_temp_root)
+        return row_count
+    except Exception:
+        raise
+
+
 def _build_lm2011_event_screen_surface_batched(
     sample_backbone_lf: pl.LazyFrame,
     daily_lf: pl.LazyFrame,
@@ -1177,9 +1472,11 @@ def _build_lm2011_event_screen_surface_batched(
     ff_factors_daily_lf: pl.LazyFrame | None,
     full_10k_text_features_lf: pl.LazyFrame | None,
     *,
+    event_window_days: int = 4,
     event_window_doc_batch_size: int = DEFAULT_EVENT_WINDOW_DOC_BATCH_SIZE,
     progress_callback: Callable[[dict[str, int]], None] | None = None,
 ) -> pl.DataFrame:
+    resolved_event_window_days = _validated_event_window_days(event_window_days)
     docs_base_lf = _prepare_table_i_base_lf(
         sample_backbone_lf,
         daily_lf,
@@ -1207,7 +1504,13 @@ def _build_lm2011_event_screen_surface_batched(
             batch_size=batch_size,
         )
         daily_batch_df = _collect_daily_event_batch(daily_source_lf, factors_df, docs_batch)
-        batch_frames.append(_build_lm2011_event_screen_surface(docs_batch, daily_batch_df))
+        batch_frames.append(
+            _build_lm2011_event_screen_surface(
+                docs_batch,
+                daily_batch_df,
+                event_window_days=resolved_event_window_days,
+            )
+        )
         if progress_callback is not None:
             batch_index = int(batch_start / batch_size) + 1
             progress_callback(
@@ -1228,7 +1531,11 @@ def _build_lm2011_event_screen_surface_batched(
     return pl.concat(batch_frames, how="vertical_relaxed")
 
 
-def _lm2011_table_i_market_stage_specs() -> tuple[tuple[str, pl.Expr], ...]:
+def _lm2011_table_i_market_stage_specs(
+    *,
+    event_window_days: int = 4,
+) -> tuple[tuple[str, pl.Expr], ...]:
+    resolved_event_window_days = _validated_event_window_days(event_window_days)
     return (
         ("ordinary_common_equity", pl.col("event_shrcd").is_in([10, 11])),
         (
@@ -1243,7 +1550,8 @@ def _lm2011_table_i_market_stage_specs() -> tuple[tuple[str, pl.Expr], ...]:
         ),
         (
             "event_window_returns_and_volume",
-            (pl.col("event_return_day_count") == 4) & (pl.col("event_volume_day_count") == 4),
+            (pl.col("event_return_day_count") == resolved_event_window_days)
+            & (pl.col("event_volume_day_count") == resolved_event_window_days),
         ),
         ("major_exchange_listing", pl.col("event_exchcd").is_in([1, 2, 3])),
         (
@@ -1262,10 +1570,14 @@ def _lm2011_table_i_market_stage_specs() -> tuple[tuple[str, pl.Expr], ...]:
     )
 
 
-def _apply_lm2011_table_i_market_filters(panel: pl.DataFrame) -> tuple[tuple[str, pl.DataFrame], ...]:
+def _apply_lm2011_table_i_market_filters(
+    panel: pl.DataFrame,
+    *,
+    event_window_days: int = 4,
+) -> tuple[tuple[str, pl.DataFrame], ...]:
     current = panel
     stage_frames: list[tuple[str, pl.DataFrame]] = []
-    for row_id, predicate in _lm2011_table_i_market_stage_specs():
+    for row_id, predicate in _lm2011_table_i_market_stage_specs(event_window_days=event_window_days):
         current = current.filter(predicate)
         stage_frames.append((row_id, current))
     return tuple(stage_frames)
@@ -1278,10 +1590,12 @@ def _build_lm2011_table_i_market_stage_frames(
     ff_factors_daily_lf: pl.LazyFrame | None,
     full_10k_text_features_lf: pl.LazyFrame | None,
     *,
+    event_window_days: int = 4,
     event_window_doc_batch_size: int = DEFAULT_EVENT_WINDOW_DOC_BATCH_SIZE,
     precomputed_event_screen_surface_lf: pl.LazyFrame | pl.DataFrame | None = None,
     event_screen_progress_callback: Callable[[dict[str, int]], None] | None = None,
 ) -> tuple[tuple[str, pl.DataFrame], ...]:
+    resolved_event_window_days = _validated_event_window_days(event_window_days)
     panel = (
         _collect_event_screen_surface_df(precomputed_event_screen_surface_lf)
         if precomputed_event_screen_surface_lf is not None
@@ -1291,13 +1605,17 @@ def _build_lm2011_table_i_market_stage_frames(
             annual_accounting_panel_lf.with_columns(pl.col("gvkey_int").cast(pl.Int32, strict=False).alias("gvkey_int")),
             ff_factors_daily_lf,
             full_10k_text_features_lf,
+            event_window_days=resolved_event_window_days,
             event_window_doc_batch_size=event_window_doc_batch_size,
             progress_callback=event_screen_progress_callback,
         )
     )
     if panel.height == 0:
-        return tuple((row_id, panel.clone()) for row_id, _ in _lm2011_table_i_market_stage_specs())
-    return _apply_lm2011_table_i_market_filters(panel)
+        return tuple(
+            (row_id, panel.clone())
+            for row_id, _ in _lm2011_table_i_market_stage_specs(event_window_days=resolved_event_window_days)
+        )
+    return _apply_lm2011_table_i_market_filters(panel, event_window_days=resolved_event_window_days)
 
 
 def _build_table_i_sample_creation_row(
@@ -1335,13 +1653,18 @@ def _build_lm2011_table_i_output(
     *,
     sample_start: dt.date,
     sample_end: dt.date,
+    event_window_days: int = 4,
     mda_text_features_lf: pl.LazyFrame | None,
 ) -> pl.DataFrame:
     rows: list[dict[str, object]] = []
     row_order = 1
     previous_count: int | None = None
     final_market_df = market_stage_frames[-1][1] if market_stage_frames else pl.DataFrame()
-    full_10k_row_labels = _table_i_full_10k_row_labels(sample_start, sample_end)
+    full_10k_row_labels = _table_i_full_10k_row_labels(
+        sample_start,
+        sample_end,
+        event_window_days=event_window_days,
+    )
 
     for row_id, frame in (*early_stage_frames, *market_stage_frames):
         current_count = _frame_height(frame)
@@ -1462,14 +1785,20 @@ def _build_lm2011_table_i_output(
 def _build_lm2011_event_panel_df_from_surface(
     event_screen_surface: pl.LazyFrame | pl.DataFrame,
     ownership_lf: pl.LazyFrame | None,
+    *,
+    event_window_days: int = 4,
+    require_ownership: bool = True,
 ) -> pl.DataFrame:
     surface_df = _collect_event_screen_surface_df(event_screen_surface)
     if surface_df.height == 0:
         return _empty_event_panel_df()
 
-    ownership_df = _prepare_ownership_frame(ownership_lf)
-    panel = surface_df.join(ownership_df, on="doc_id", how="left")
-    panel = _apply_lm2011_table_i_market_filters(panel)[-1][1]
+    if require_ownership:
+        ownership_df = _prepare_ownership_frame(ownership_lf)
+        panel = surface_df.join(ownership_df, on="doc_id", how="left")
+    else:
+        panel = surface_df.with_columns(pl.lit(None, dtype=pl.Float64).alias("institutional_ownership"))
+    panel = _apply_lm2011_table_i_market_filters(panel, event_window_days=event_window_days)[-1][1]
     panel = _winsorize_column(panel, "bm_event")
     panel = panel.filter(pl.col("abnormal_volume").is_not_null())
     if panel.height == 0:
@@ -1506,11 +1835,13 @@ def build_lm2011_table_i_sample_creation(
     mda_text_features_lf: pl.LazyFrame | None = None,
     sample_start: dt.date = _LM2011_TABLE_I_DEFAULT_SAMPLE_START,
     sample_end: dt.date = _LM2011_TABLE_I_DEFAULT_SAMPLE_END,
+    event_window_days: int = 4,
     event_window_doc_batch_size: int = DEFAULT_EVENT_WINDOW_DOC_BATCH_SIZE,
     _precomputed_event_screen_surface_lf: pl.LazyFrame | pl.DataFrame | None = None,
     _event_screen_progress_callback: Callable[[dict[str, int]], None] | None = None,
 ) -> pl.DataFrame:
     """Build the LM2011 Table I sample-selection ladder as a normalized row table."""
+    resolved_event_window_days = _validated_event_window_days(event_window_days)
     early_stage_frames = _build_lm2011_sample_backbone_stage_frames(
         sec_parsed_lf,
         matched_clean_lf,
@@ -1524,6 +1855,7 @@ def build_lm2011_table_i_sample_creation(
         annual_accounting_panel_lf,
         ff_factors_daily_lf,
         full_10k_text_features_lf,
+        event_window_days=resolved_event_window_days,
         event_window_doc_batch_size=event_window_doc_batch_size,
         precomputed_event_screen_surface_lf=_precomputed_event_screen_surface_lf,
         event_screen_progress_callback=_event_screen_progress_callback,
@@ -1533,6 +1865,7 @@ def build_lm2011_table_i_sample_creation(
         market_stage_frames,
         sample_start=sample_start,
         sample_end=sample_end,
+        event_window_days=resolved_event_window_days,
         mda_text_features_lf=mda_text_features_lf,
     )
 
@@ -1545,10 +1878,13 @@ def build_lm2011_event_panel(
     ownership_lf: pl.LazyFrame | None,
     full_10k_text_features_lf: pl.LazyFrame | None,
     *,
+    event_window_days: int = 4,
     event_window_doc_batch_size: int = DEFAULT_EVENT_WINDOW_DOC_BATCH_SIZE,
+    require_ownership: bool = True,
     _precomputed_event_screen_surface_lf: pl.LazyFrame | pl.DataFrame | None = None,
     _event_screen_progress_callback: Callable[[dict[str, int]], None] | None = None,
 ) -> pl.LazyFrame:
+    resolved_event_window_days = _validated_event_window_days(event_window_days)
     event_screen_surface = (
         _precomputed_event_screen_surface_lf
         if _precomputed_event_screen_surface_lf is not None
@@ -1558,11 +1894,17 @@ def build_lm2011_event_panel(
             annual_accounting_panel_lf.with_columns(pl.col("gvkey_int").cast(pl.Int32, strict=False).alias("gvkey_int")),
             ff_factors_daily_lf,
             full_10k_text_features_lf,
+            event_window_days=resolved_event_window_days,
             event_window_doc_batch_size=event_window_doc_batch_size,
             progress_callback=_event_screen_progress_callback,
         )
     )
-    return _build_lm2011_event_panel_df_from_surface(event_screen_surface, ownership_lf).lazy()
+    return _build_lm2011_event_panel_df_from_surface(
+        event_screen_surface,
+        ownership_lf,
+        event_window_days=resolved_event_window_days,
+        require_ownership=require_ownership,
+    ).lazy()
 
 
 def _attach_pre_filing_price_and_prior_month_price(event_panel_df: pl.DataFrame, daily_lf: pl.LazyFrame) -> pl.DataFrame:

@@ -36,6 +36,7 @@ def resolve_usage_run_paths(
     lm2011_extension_dir: Path | None = None,
     lm2011_extension_finbert_visible_prefix_dir: Path | None = None,
     lm2011_nw_lag_sensitivity_dir: Path | None = None,
+    lm2011_event_window_sensitivity_dir: Path | None = None,
     finbert_run_dir: Path | None = None,
     finbert_robustness_dir: Path | None = None,
 ) -> dict[str, Path | None]:
@@ -47,6 +48,7 @@ def resolve_usage_run_paths(
                 lm2011_extension_finbert_visible_prefix_dir
             ),
             "lm2011_nw_lag_sensitivity_dir": _resolve_optional_path(lm2011_nw_lag_sensitivity_dir),
+            "lm2011_event_window_sensitivity_dir": _resolve_optional_path(lm2011_event_window_sensitivity_dir),
             "finbert_run_dir": _resolve_optional_path(finbert_run_dir),
             "finbert_robustness_dir": _resolve_optional_path(finbert_robustness_dir),
         }
@@ -74,6 +76,8 @@ def resolve_usage_run_paths(
         or defaults["lm2011_extension_finbert_visible_prefix_dir"],
         "lm2011_nw_lag_sensitivity_dir": _resolve_optional_path(lm2011_nw_lag_sensitivity_dir)
         or defaults["lm2011_nw_lag_sensitivity_dir"],
+        "lm2011_event_window_sensitivity_dir": _resolve_optional_path(lm2011_event_window_sensitivity_dir)
+        or defaults["lm2011_event_window_sensitivity_dir"],
         "finbert_run_dir": _resolve_optional_path(finbert_run_dir)
         or defaults["finbert_run_dir"],
         "finbert_robustness_dir": _resolve_optional_path(finbert_robustness_dir)
@@ -107,6 +111,13 @@ def resolve_local_profile_paths(repo_root: Path) -> dict[str, Path | None]:
             )
         ),
         "lm2011_nw_lag_sensitivity_dir": _resolve_latest_nw_lag_sensitivity_run(full_data_root),
+        "lm2011_event_window_sensitivity_dir": _resolve_latest_event_window_sensitivity_run(full_data_root)
+        or _first_existing_path(
+            (
+                unified_root / "lm2011_post_refinitiv" / "event_window_sensitivity",
+                sample_results_root / "lm2011_sample_post_refinitiv_runner" / "event_window_sensitivity",
+            )
+        ),
         "finbert_run_dir": _first_existing_path(
             (
                 _resolve_latest_finbert_run_with_sentence_scores(full_data_root),
@@ -136,6 +147,12 @@ def resolve_colab_profile_paths(drive_data_root: Path) -> dict[str, Path | None]
             (
                 results_root / "lm2011_nw_lag_sensitivity",
                 unified_root / "lm2011_nw_lag_sensitivity",
+            )
+        ),
+        "lm2011_event_window_sensitivity_dir": _first_existing_path(
+            (
+                unified_root / "lm2011_post_refinitiv" / "event_window_sensitivity",
+                results_root / "lm2011_sample_post_refinitiv_runner" / "event_window_sensitivity",
             )
         ),
         "finbert_run_dir": _first_existing_path(
@@ -234,6 +251,24 @@ def _resolve_latest_nw_lag_sensitivity_run(parent: Path) -> Path | None:
         for child in parent.glob("lm2011_nw_lag_sensitivity*")
         if child.is_dir() and all((child / filename).exists() for filename in required_filenames)
     ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda path: path.stat().st_mtime)
+
+
+def _resolve_latest_event_window_sensitivity_run(parent: Path) -> Path | None:
+    if not parent.exists() or not parent.is_dir():
+        return None
+    required_filename = "lm2011_event_window_sensitivity_results.parquet"
+    candidates = [
+        child.resolve()
+        for child in parent.glob("lm2011_event_window_sensitivity*")
+        if child.is_dir() and (child / required_filename).exists()
+    ]
+    for post_refinitiv in parent.glob("lm2011_post_refinitiv*"):
+        nested = post_refinitiv / "event_window_sensitivity"
+        if nested.is_dir() and (nested / required_filename).exists():
+            candidates.append(nested.resolve())
     if not candidates:
         return None
     return max(candidates, key=lambda path: path.stat().st_mtime)

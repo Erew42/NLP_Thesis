@@ -238,6 +238,21 @@ def test_lm2011_table_vi_no_ownership_companion_can_be_explicitly_disabled(
     assert flags["table_vi_results_no_ownership"] is False
 
 
+def test_runner_exposes_lm2011_event_window_sensitivity_env_surface() -> None:
+    source = _runner_source()
+
+    assert "SEC_CCM_RUN_LM2011_EVENT_WINDOW_SENSITIVITY" in source
+    assert "SEC_CCM_LM2011_EVENT_WINDOW_SENSITIVITY_DAYS" in source
+    assert "SEC_CCM_LM2011_EVENT_WINDOW_SENSITIVITY_OUTPUT_DIR" in source
+    assert "SEC_CCM_LM2011_EVENT_WINDOW_SENSITIVITY_INCLUDE_POSTEVENT_VOLATILITY" in source
+    assert "event_window_sensitivity_days=LM2011_EVENT_WINDOW_SENSITIVITY_DAYS" in source
+    assert "event_window_sensitivity_output_dir=LM2011_EVENT_WINDOW_SENSITIVITY_OUTPUT_DIR" in source
+    assert (
+        "event_window_sensitivity_include_postevent_volatility=("
+        in source
+    )
+
+
 def test_runner_exposes_lseg_request_bound_env_defaults() -> None:
     source = _runner_source()
 
