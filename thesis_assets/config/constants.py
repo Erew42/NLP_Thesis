@@ -8,6 +8,7 @@ RUN_FAMILY_LM2011_NW_LAG_SENSITIVITY = "lm2011_nw_lag_sensitivity"
 RUN_FAMILY_LM2011_EVENT_WINDOW_SENSITIVITY = "lm2011_event_window_sensitivity"
 RUN_FAMILY_FINBERT_RUN = "finbert_run"
 RUN_FAMILY_FINBERT_ROBUSTNESS = "finbert_robustness"
+RUN_FAMILY_FINBERT_SECONDARY_OUTCOMES = "finbert_secondary_outcomes"
 
 ARTIFACT_KEY_TABLE_I_SAMPLE_CREATION = "lm2011_table_i_sample_creation"
 ARTIFACT_KEY_TABLE_IA_II_RESULTS = "lm2011_table_ia_ii_results"
@@ -51,6 +52,10 @@ ARTIFACT_KEY_FINBERT_ROBUSTNESS_EXISTING_SCALE_FIT_SKIPPED_QUARTERS = (
 )
 ARTIFACT_KEY_FINBERT_ROBUSTNESS_TAIL_FIT_SKIPPED_QUARTERS = "finbert_robustness_tail_fit_skipped_quarters"
 ARTIFACT_KEY_FINBERT_ROBUSTNESS_QUANTILE_FIT_SKIPPED_QUARTERS = "finbert_robustness_quantile_fit_skipped_quarters"
+ARTIFACT_KEY_FINBERT_SECONDARY_OUTCOME_COEFFICIENTS = "finbert_secondary_outcome_coefficients"
+ARTIFACT_KEY_FINBERT_SECONDARY_OUTCOME_FIT_SUMMARY = "finbert_secondary_outcome_fit_summary"
+ARTIFACT_KEY_FINBERT_SECONDARY_OUTCOME_FIT_COMPARISONS = "finbert_secondary_outcome_fit_comparisons"
+ARTIFACT_KEY_FINBERT_SECONDARY_OUTCOME_FIT_SKIPPED_QUARTERS = "finbert_secondary_outcome_fit_skipped_quarters"
 
 ARTIFACT_FILENAMES: dict[str, str] = {
     ARTIFACT_KEY_TABLE_I_SAMPLE_CREATION: "lm2011_table_i_sample_creation.parquet",
@@ -103,6 +108,18 @@ ARTIFACT_FILENAMES: dict[str, str] = {
     ARTIFACT_KEY_FINBERT_ROBUSTNESS_QUANTILE_FIT_SKIPPED_QUARTERS: (
         "finbert_robustness_quantile_fit_skipped_quarters.parquet"
     ),
+    ARTIFACT_KEY_FINBERT_SECONDARY_OUTCOME_COEFFICIENTS: (
+        "finbert_secondary_outcome_coefficients.parquet"
+    ),
+    ARTIFACT_KEY_FINBERT_SECONDARY_OUTCOME_FIT_SUMMARY: (
+        "finbert_secondary_outcome_fit_summary.parquet"
+    ),
+    ARTIFACT_KEY_FINBERT_SECONDARY_OUTCOME_FIT_COMPARISONS: (
+        "finbert_secondary_outcome_fit_comparisons.parquet"
+    ),
+    ARTIFACT_KEY_FINBERT_SECONDARY_OUTCOME_FIT_SKIPPED_QUARTERS: (
+        "finbert_secondary_outcome_fit_skipped_quarters.parquet"
+    ),
 }
 
 ARTIFACT_ALTERNATE_FILENAMES: dict[str, tuple[str, ...]] = {
@@ -146,6 +163,16 @@ ARTIFACT_MANIFEST_KEYS: dict[str, tuple[str, ...]] = {
     ARTIFACT_KEY_FINBERT_ROBUSTNESS_EXISTING_SCALE_FIT_COMPARISONS: ("existing_scale_fit_comparisons_path",),
     ARTIFACT_KEY_FINBERT_ROBUSTNESS_TAIL_FIT_COMPARISONS: ("tail_fit_comparisons_path",),
     ARTIFACT_KEY_FINBERT_ROBUSTNESS_QUANTILE_FIT_COMPARISONS: ("quantile_fit_comparisons_path",),
+    ARTIFACT_KEY_FINBERT_SECONDARY_OUTCOME_COEFFICIENTS: ("coefficients", "coefficients_path"),
+    ARTIFACT_KEY_FINBERT_SECONDARY_OUTCOME_FIT_SUMMARY: ("fit_summary", "fit_summary_path"),
+    ARTIFACT_KEY_FINBERT_SECONDARY_OUTCOME_FIT_COMPARISONS: (
+        "fit_comparisons",
+        "fit_comparisons_path",
+    ),
+    ARTIFACT_KEY_FINBERT_SECONDARY_OUTCOME_FIT_SKIPPED_QUARTERS: (
+        "fit_skipped_quarters",
+        "fit_skipped_quarters_path",
+    ),
 }
 
 RUN_MANIFEST_FILENAMES: dict[str, tuple[str, ...]] = {
@@ -162,6 +189,7 @@ RUN_MANIFEST_FILENAMES: dict[str, tuple[str, ...]] = {
     ),
     RUN_FAMILY_FINBERT_RUN: ("run_manifest.json",),
     RUN_FAMILY_FINBERT_ROBUSTNESS: ("finbert_robustness_run_manifest.json",),
+    RUN_FAMILY_FINBERT_SECONDARY_OUTCOMES: ("finbert_secondary_outcome_run_manifest.json",),
 }
 
 RUN_FAMILY_SENTINEL_ARTIFACTS: dict[str, tuple[str, ...]] = {
@@ -188,6 +216,9 @@ RUN_FAMILY_SENTINEL_ARTIFACTS: dict[str, tuple[str, ...]] = {
         ARTIFACT_KEY_FINBERT_ROBUSTNESS_EXISTING_SCALE_COEFFICIENTS,
         ARTIFACT_KEY_FINBERT_ROBUSTNESS_TAIL_COEFFICIENTS,
         ARTIFACT_KEY_FINBERT_ROBUSTNESS_QUANTILE_COEFFICIENTS,
+    ),
+    RUN_FAMILY_FINBERT_SECONDARY_OUTCOMES: (
+        ARTIFACT_KEY_FINBERT_SECONDARY_OUTCOME_COEFFICIENTS,
     ),
 }
 

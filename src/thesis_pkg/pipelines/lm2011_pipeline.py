@@ -1177,6 +1177,7 @@ def write_lm2011_event_screen_surface_parquet(
     temp_root: Path | None = None,
     cleanup_on_success: bool = True,
 ) -> int:
+    """Write the batched event-screen surface used by Table I and event panels."""
     resolved_event_window_days = _validated_event_window_days(event_window_days)
     docs_base_lf = _prepare_table_i_base_lf(
         sample_backbone_lf,
@@ -1357,6 +1358,11 @@ def write_lm2011_event_window_return_panel_parquet(
     temp_root: Path | None = None,
     cleanup_on_success: bool = True,
 ) -> int:
+    """Write event-window returns for an existing canonical event panel.
+
+    The event panel is staged once, then processed in document batches so daily
+    return joins stay bounded on local machines.
+    """
     resolved_event_window_days = _validated_event_window_days(event_window_days)
     required_event_panel_columns = tuple(_empty_event_panel_df().columns)
     _require_columns(canonical_event_panel_lf, required_event_panel_columns, "canonical_event_panel")
@@ -1884,6 +1890,7 @@ def build_lm2011_event_panel(
     _precomputed_event_screen_surface_lf: pl.LazyFrame | pl.DataFrame | None = None,
     _event_screen_progress_callback: Callable[[dict[str, int]], None] | None = None,
 ) -> pl.LazyFrame:
+    """Build the canonical LM2011 event panel at filing-document grain."""
     resolved_event_window_days = _validated_event_window_days(event_window_days)
     event_screen_surface = (
         _precomputed_event_screen_surface_lf
@@ -2666,6 +2673,7 @@ def build_lm2011_trading_strategy_monthly_returns(
     cleaning_contract: Full10KCleaningContract = "current",
     batch_size: int = DEFAULT_TEXT_FEATURE_BATCH_SIZE,
 ) -> pl.LazyFrame:
+    """Build monthly high-minus-low portfolio returns from raw full-10-K text."""
     return _build_trading_strategy_monthly_returns_df(
         event_panel_lf,
         sec_parsed_lf,
@@ -2688,6 +2696,7 @@ def build_lm2011_trading_strategy_monthly_returns_from_text_features(
     portfolio_weighting: str = "equal",
     monthly_return_col: str = "MRET",
 ) -> pl.LazyFrame:
+    """Build monthly strategy returns from a precomputed full-10-K signal surface."""
     if portfolio_weighting not in {"equal", "lagged_value"}:
         raise ValueError("portfolio_weighting must be one of {'equal', 'lagged_value'}")
     docs_df = _prepare_trading_strategy_doc_universe_df(event_panel_lf)
@@ -2724,6 +2733,7 @@ def build_lm2011_trading_strategy_ff4_summary(
     trading_strategy_monthly_returns_lf: pl.LazyFrame,
     ff_factors_monthly_with_mom_lf: pl.LazyFrame | None,
 ) -> pl.LazyFrame:
+    """Estimate FF4 alpha summaries for monthly LM2011 portfolio returns."""
     _require_columns(
         trading_strategy_monthly_returns_lf,
         ("portfolio_month", "sort_signal_name", "long_short_return"),

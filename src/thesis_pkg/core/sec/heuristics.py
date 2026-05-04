@@ -1610,6 +1610,13 @@ def _select_best_boundaries(
     max_item: int,
     gij_context: dict[str, bool | list[tuple[int, int]] | set[str] | str] | None = None,
 ) -> tuple[list["_ItemBoundary"], dict[tuple[str | None, str], dict[str, int | bool]]]:
+    """Choose one start boundary per item after TOC and successor-leak guards.
+
+    The scanner intentionally emits more candidates than we want to keep. This
+    selector groups competing starts by item key, scores local context, and
+    rejects starts whose first content window looks like a TOC restart or a
+    leaked successor heading.
+    """
     if not candidates:
         return [], {}
 
@@ -1628,6 +1635,8 @@ def _select_best_boundaries(
     def _line_in_ranges(idx: int, ranges: list[tuple[int, int]]) -> bool:
         return any(start <= idx < end for start, end in ranges)
 
+    # Group duplicate raw hits by logical item so scoring compares only
+    # competing starts for the same section.
     by_key: dict[tuple[str | None, str], list[tuple[int, "_ItemBoundary"]]] = {}
     for idx, b in enumerate(candidates):
         part = b.item_part
@@ -1675,6 +1684,8 @@ def _select_best_boundaries(
         unordered.sort(key=lambda k: str(k[1]))
     ordered_keys = [k for _, k in orderable] + unordered
 
+    # Expected successors are used only as a guardrail; they help distinguish a
+    # real section start from a TOC row followed immediately by another item.
     next_map: dict[tuple[str | None, str], tuple[str | None, str]] = {}
     for idx, key in enumerate(ordered_keys):
         if idx + 1 < len(ordered_keys):
@@ -1835,6 +1846,9 @@ def _select_best_boundaries(
                 if inferred_part:
                     part_for_checks = inferred_part
 
+            # The first content window is the highest-value evidence for a bad
+            # start: TOC rows tend to restart at Item 1 or jump to successors
+            # before any prose appears.
             guard_text = _guard_window_text(b)
             guard_lines = guard_text.splitlines() if guard_text else []
             reserved_stub = _reserved_stub_end(guard_text) is not None

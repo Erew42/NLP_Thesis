@@ -50,6 +50,7 @@ def finbert_item_feature_contract_payload(
     *,
     segment_policy_id: str = FINBERT_SEGMENT_POLICY_ID,
 ) -> dict[str, Any]:
+    """Describe the item-feature grain and denominator contract for manifests."""
     return {
         "accepted_unit": ["doc_id", "benchmark_item_code"],
         "segment_grain": "benchmark_sentence_id",
@@ -160,6 +161,11 @@ def aggregate_sentence_scores_to_item_features(
     sentence_scores_df: pl.DataFrame,
     sections_df: pl.DataFrame,
 ) -> pl.DataFrame:
+    """Aggregate sentence-level FinBERT scores to item-level features.
+
+    The primary extension metrics are token-length weighted; legacy unweighted
+    means and argmax shares are retained for continuity with earlier analyses.
+    """
     schema_names = set(sections_df.columns)
     metadata = sections_df.select(
         [
@@ -280,6 +286,7 @@ def aggregate_sentence_scores_to_item_features(
 
 
 def pivot_item_features_to_doc_wide(item_features_df: pl.DataFrame) -> pl.DataFrame:
+    """Pivot long item features into one document-level row per ``doc_id``."""
     if item_features_df.is_empty():
         return _empty_doc_features_wide_frame()
 
@@ -317,6 +324,7 @@ def build_coverage_report(
     item_features_df: pl.DataFrame,
     backbone_df: pl.DataFrame,
 ) -> tuple[pl.DataFrame, dict[str, int]]:
+    """Compare FinBERT item-feature coverage against a document backbone."""
     if "doc_id" not in backbone_df.columns:
         raise ValueError("Backbone parquet must contain a doc_id column for coverage reporting.")
 
@@ -411,6 +419,7 @@ def run_finbert_item_analysis(
     *,
     authority: FinbertAuthoritySpec = DEFAULT_FINBERT_AUTHORITY,
 ) -> FinbertAnalysisRunArtifacts:
+    """Run preprocessing plus staged inference for the FinBERT item pipeline."""
     run_name = run_cfg.run_name or f"{RUNNER_NAME}_{utc_timestamp().replace(':', '')}"
     from thesis_pkg.benchmarking.finbert_staged_inference import (
         run_finbert_sentence_parquet_inference,

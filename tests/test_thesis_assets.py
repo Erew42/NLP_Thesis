@@ -104,6 +104,9 @@ def test_registry_loader_imports_expected_assets() -> None:
         "ch5_score_drift_by_year",
         "ch5_finbert_robustness_coefficients",
         "ch5_finbert_robustness_fit_comparisons",
+        "ch5_finbert_secondary_outcome_coefficients_appendix",
+        "ch5_finbert_secondary_outcome_raw_correlations",
+        "ch5_finbert_secondary_outcome_binned_means",
         "ch5_matched_dictionary_finbert_coefficients_full",
         "ch5_fama_macbeth_skipped_quarter_diagnostics",
         "ch5_alternative_signal_robustness_full_grid",
@@ -1827,6 +1830,94 @@ def test_cli_and_api_use_same_build_path(tmp_path: Path) -> None:
     assert set(api_manifest["assets"]) == set(cli_manifest["assets"])
 
 
+def test_chapter5_finbert_secondary_outcome_coefficients_appendix_asset(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    secondary_root = repo_root / "inputs" / "finbert_secondary_outcomes"
+    secondary_root.mkdir(parents=True)
+    _write_finbert_secondary_coefficients_parquet(
+        secondary_root / "finbert_secondary_outcome_coefficients.parquet"
+    )
+    (secondary_root / "finbert_secondary_outcome_run_manifest.json").write_text("{}", encoding="utf-8")
+
+    result = build_single_asset(
+        asset_id="ch5_finbert_secondary_outcome_coefficients_appendix",
+        run_id="unit_finbert_secondary_coefficients",
+        repo_root=repo_root,
+        finbert_secondary_outcomes_dir=secondary_root,
+    )
+
+    asset_result = result.asset_results["ch5_finbert_secondary_outcome_coefficients_appendix"]
+    assert asset_result.status == "completed"
+    assert asset_result.row_counts["table_rows"] == 16
+    table_df = pl.read_csv(asset_result.output_paths["csv"])
+    assert table_df.height == 16
+    volatility_row = table_df.filter(
+        (pl.col("outcome") == "Post-event return volatility")
+        & (pl.col("scope") == "Item 7 MD&A")
+        & (pl.col("specification") == "FinBERT only")
+    )
+    assert volatility_row.select("estimate").item() == pytest.approx(-2.0)
+    assert volatility_row.select("std_error").item() == pytest.approx(0.5)
+    assert volatility_row.select("reported_scale").item() == "x100"
+    abnormal_row = table_df.filter(
+        (pl.col("outcome") == "Abnormal volume")
+        & (pl.col("scope") == "Item 1A risk factors")
+        & (pl.col("specification") == "Dictionary only")
+    )
+    assert abnormal_row.select("estimate").item() == pytest.approx(0.12)
+    assert abnormal_row.select("reported_scale").item() == "raw"
+
+
+def test_chapter5_finbert_secondary_outcome_raw_correlations_asset(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    extension_root = repo_root / "inputs" / "lm2011_extension"
+    replication_root = extension_root / "replication"
+    replication_root.mkdir(parents=True)
+    _write_finbert_secondary_panel_parquet(replication_root / "lm2011_extension_analysis_panel.parquet")
+
+    result = build_single_asset(
+        asset_id="ch5_finbert_secondary_outcome_raw_correlations",
+        run_id="unit_finbert_secondary_raw_correlations",
+        repo_root=repo_root,
+        lm2011_extension_dir=extension_root,
+    )
+
+    asset_result = result.asset_results["ch5_finbert_secondary_outcome_raw_correlations"]
+    assert asset_result.status == "completed"
+    assert asset_result.row_counts["table_rows"] == 2
+    table_df = pl.read_csv(asset_result.output_paths["csv"])
+    assert table_df.height == 2
+    assert set(table_df.get_column("scope").to_list()) == {"Item 7 MD&A", "Item 1A risk factors"}
+    item7 = table_df.filter(pl.col("scope") == "Item 7 MD&A")
+    assert item7.select("lm_vs_abnormal_volume").item() == pytest.approx(1.0)
+    assert item7.select("finbert_vs_postevent_volatility").item() == pytest.approx(1.0)
+
+
+def test_chapter5_finbert_secondary_outcome_binned_means_asset(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    extension_root = repo_root / "inputs" / "lm2011_extension"
+    replication_root = extension_root / "replication"
+    replication_root.mkdir(parents=True)
+    _write_finbert_secondary_panel_parquet(replication_root / "lm2011_extension_analysis_panel.parquet")
+
+    result = build_single_asset(
+        asset_id="ch5_finbert_secondary_outcome_binned_means",
+        run_id="unit_finbert_secondary_bins",
+        repo_root=repo_root,
+        lm2011_extension_dir=extension_root,
+    )
+
+    asset_result = result.asset_results["ch5_finbert_secondary_outcome_binned_means"]
+    assert asset_result.status == "completed"
+    assert asset_result.row_counts["figure_rows"] == 10
+    assert Path(asset_result.output_paths["png"]).exists()
+    assert Path(asset_result.output_paths["pdf"]).exists()
+    source_df = pl.read_csv(asset_result.output_paths["csv"])
+    assert source_df.height == 10
+    assert set(source_df.get_column("finbert_negative_bin").to_list()) == {1, 2, 3, 4, 5}
+    assert set(source_df.get_column("scope").unique().to_list()) == {"Item 7 MD&A", "Item 1A risk factors"}
+
+
 def test_usage_run_paths_prefer_unified_runner_layout(tmp_path: Path) -> None:
     repo_root = tmp_path / "repo"
     unified_root = (
@@ -1852,17 +1943,20 @@ def test_usage_run_paths_prefer_unified_runner_layout(tmp_path: Path) -> None:
     event_window_sensitivity_root = (
         unified_root / "lm2011_post_refinitiv" / "event_window_sensitivity"
     )
+    secondary_root = repo_root / "full_data_run" / "finbert_secondary_outcomes_watchguard" / "results"
     fallback_post.mkdir(parents=True)
     fallback_ext.mkdir(parents=True)
     fallback_visible.mkdir(parents=True)
     sensitivity_root.mkdir(parents=True)
     event_window_sensitivity_root.mkdir(parents=True)
+    secondary_root.mkdir(parents=True)
     (sensitivity_root / "core_tables_nw_lag_sensitivity.parquet").touch()
     (sensitivity_root / "extension_results_nw_lag_sensitivity.parquet").touch()
     (sensitivity_root / "extension_fit_comparisons_nw_lag_sensitivity.parquet").touch()
     _write_event_window_sensitivity_results_parquet(
         event_window_sensitivity_root / "lm2011_event_window_sensitivity_results.parquet"
     )
+    (secondary_root / "finbert_secondary_outcome_run_manifest.json").write_text("{}", encoding="utf-8")
 
     resolved = resolve_usage_run_paths(
         repo_root=repo_root,
@@ -1877,6 +1971,7 @@ def test_usage_run_paths_prefer_unified_runner_layout(tmp_path: Path) -> None:
     assert resolved["lm2011_nw_lag_sensitivity_dir"] == sensitivity_root.resolve()
     assert resolved["lm2011_event_window_sensitivity_dir"] == event_window_sensitivity_root.resolve()
     assert resolved["finbert_run_dir"] == finbert_run.resolve()
+    assert resolved["finbert_secondary_outcomes_dir"] == secondary_root.resolve()
 
 
 def test_usage_run_paths_support_versioned_snapshot_and_drive_layouts(tmp_path: Path) -> None:
@@ -1889,9 +1984,12 @@ def test_usage_run_paths_support_versioned_snapshot_and_drive_layouts(tmp_path: 
         / "lm2011_extension_finbert_visible_prefix-20260421T114544Z-3-001"
         / "lm2011_extension_finbert_visible_prefix"
     )
+    local_secondary = full_data_root / "finbert_secondary_outcomes_watchguard" / "results"
     versioned_post.mkdir(parents=True)
     versioned_ext.mkdir(parents=True)
     versioned_visible.mkdir(parents=True)
+    local_secondary.mkdir(parents=True)
+    (local_secondary / "finbert_secondary_outcome_run_manifest.json").write_text("{}", encoding="utf-8")
 
     local_resolved = resolve_usage_run_paths(
         repo_root=repo_root,
@@ -1900,12 +1998,15 @@ def test_usage_run_paths_support_versioned_snapshot_and_drive_layouts(tmp_path: 
     assert local_resolved["lm2011_post_refinitiv_dir"] == versioned_post.resolve()
     assert local_resolved["lm2011_extension_dir"] == versioned_ext.resolve()
     assert local_resolved["lm2011_extension_finbert_visible_prefix_dir"] == versioned_visible.resolve()
+    assert local_resolved["finbert_secondary_outcomes_dir"] == local_secondary.resolve()
 
     drive_data_root = tmp_path / "content" / "drive" / "MyDrive" / "Data_LM"
     unified_drive_root = drive_data_root / "results" / "sec_ccm_unified_runner"
     (unified_drive_root / "lm2011_post_refinitiv").mkdir(parents=True)
     (unified_drive_root / "lm2011_extension").mkdir(parents=True)
     (unified_drive_root / "lm2011_extension_finbert_visible_prefix").mkdir(parents=True)
+    drive_secondary = drive_data_root / "results" / "finbert_secondary_outcomes"
+    drive_secondary.mkdir(parents=True)
     drive_finbert_run = unified_drive_root / "finbert_item_analysis" / "finbert_item_analysis_2026-04-20T105101+0000"
     drive_finbert_run.mkdir(parents=True)
     (drive_finbert_run / "run_manifest.json").write_text("{}", encoding="utf-8")
@@ -1922,6 +2023,7 @@ def test_usage_run_paths_support_versioned_snapshot_and_drive_layouts(tmp_path: 
         unified_drive_root / "lm2011_extension_finbert_visible_prefix"
     ).resolve()
     assert colab_resolved["finbert_run_dir"] == drive_finbert_run.resolve()
+    assert colab_resolved["finbert_secondary_outcomes_dir"] == drive_secondary.resolve()
 
 
 def test_tools_entrypoint_build_asset_emits_json_and_allows_failures(
@@ -1949,6 +2051,7 @@ def test_tools_entrypoint_build_asset_emits_json_and_allows_failures(
         "lm2011_event_window_sensitivity_dir": tmp_path / "inputs" / "lm2011_event_window_sensitivity",
         "finbert_run_dir": tmp_path / "inputs" / "finbert_item_analysis",
         "finbert_robustness_dir": tmp_path / "inputs" / "finbert_robustness",
+        "finbert_secondary_outcomes_dir": tmp_path / "inputs" / "finbert_secondary_outcomes",
     }
 
     monkeypatch.setattr(tool_module, "_resolve_run_paths", lambda **_: resolved_paths)
@@ -2982,6 +3085,65 @@ def _write_extension_analysis_panel(path: Path) -> None:
         }
     )
     df.write_parquet(path)
+
+
+def _write_finbert_secondary_coefficients_parquet(path: Path) -> None:
+    rows = []
+    coefficient_specs = {
+        "dictionary_only": ("lm_negative_tfidf",),
+        "finbert_only": ("finbert_neg_prob_lenw_mean",),
+        "dictionary_finbert_joint": ("lm_negative_tfidf", "finbert_neg_prob_lenw_mean"),
+    }
+    for outcome_name in ("abnormal_volume", "postevent_return_volatility"):
+        for text_scope in ("item_7_mda", "item_1a_risk_factors"):
+            for specification_name, coefficient_names in coefficient_specs.items():
+                for coefficient_name in coefficient_names:
+                    estimate = 0.12 if coefficient_name == "lm_negative_tfidf" else -0.02
+                    standard_error = 0.04 if coefficient_name == "lm_negative_tfidf" else 0.005
+                    rows.append(
+                        {
+                            "run_id": "unit",
+                            "sample_window": "unit",
+                            "text_scope": text_scope,
+                            "outcome_name": outcome_name,
+                            "feature_family": "replication",
+                            "control_set_id": "C0",
+                            "control_set_alias": "C0",
+                            "specification_name": specification_name,
+                            "coefficient_name": coefficient_name,
+                            "signal_name": coefficient_name,
+                            "estimate": estimate,
+                            "standard_error": standard_error,
+                            "t_stat": estimate / standard_error,
+                            "p_value": 0.01,
+                            "n_obs": 100,
+                            "n_quarters": 5,
+                            "mean_quarter_n": 20.0,
+                            "average_r2": 0.02,
+                            "weighting_rule": "quarter_observation_count",
+                            "nw_lags": 1,
+                            "estimator_status": "estimated",
+                            "failure_reason": None,
+                        }
+                    )
+    pl.DataFrame(rows).write_parquet(path)
+
+
+def _write_finbert_secondary_panel_parquet(path: Path) -> None:
+    rows = []
+    for scope_index, text_scope in enumerate(("item_7_mda", "item_1a_risk_factors")):
+        for idx in range(10):
+            rows.append(
+                {
+                    "doc_id": f"{text_scope}_{idx}",
+                    "text_scope": text_scope,
+                    "lm_negative_tfidf": float(idx + 1 + scope_index),
+                    "finbert_neg_prob_lenw_mean": 0.05 + (idx * 0.05),
+                    "abnormal_volume": 0.2 + (scope_index * 0.01) + (idx * 0.02),
+                    "postevent_return_volatility": 0.010 + (scope_index * 0.002) + (idx * 0.001),
+                }
+            )
+    pl.DataFrame(rows).write_parquet(path)
 
 
 def _write_extension_analysis_panel_observed_scale(path: Path) -> None:

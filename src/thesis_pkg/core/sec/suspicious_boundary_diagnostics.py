@@ -137,9 +137,7 @@ MISSING_PART_PART_ITEM_PUNCT_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-DEFAULT_PARQUET_DIR = Path(
-    r"C:\Users\erik9\Documents\SEC_Data\Data\Sample_Filings\parquet_batches"
-)
+DEFAULT_PARQUET_DIR = Path("data/sec/year_merged")
 DEFAULT_OUT_PATH = Path("results/suspicious_boundaries_v3_pre.csv")
 DEFAULT_REPORT_PATH = Path("results/suspicious_boundaries_report_v3_pre.txt")
 DEFAULT_SAMPLES_DIR = Path("results/Suspicious_Filings_Demo")

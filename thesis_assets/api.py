@@ -10,6 +10,7 @@ from thesis_assets.config import BUILD_LOG_FILENAME
 from thesis_assets.config import MANIFEST_FILENAME
 from thesis_assets.config import RUN_FAMILY_FINBERT_ROBUSTNESS
 from thesis_assets.config import RUN_FAMILY_FINBERT_RUN
+from thesis_assets.config import RUN_FAMILY_FINBERT_SECONDARY_OUTCOMES
 from thesis_assets.config import RUN_FAMILY_LM2011_EXTENSION
 from thesis_assets.config import RUN_FAMILY_LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX
 from thesis_assets.config import RUN_FAMILY_LM2011_EVENT_WINDOW_SENSITIVITY
@@ -42,6 +43,7 @@ def build_all_assets(
     lm2011_event_window_sensitivity_dir: Path | None = None,
     finbert_run_dir: Path | None = None,
     finbert_robustness_dir: Path | None = None,
+    finbert_secondary_outcomes_dir: Path | None = None,
     submission_lock_path: Path | None = None,
 ) -> BuildSessionResult:
     return _build_assets(
@@ -56,6 +58,7 @@ def build_all_assets(
         lm2011_event_window_sensitivity_dir=lm2011_event_window_sensitivity_dir,
         finbert_run_dir=finbert_run_dir,
         finbert_robustness_dir=finbert_robustness_dir,
+        finbert_secondary_outcomes_dir=finbert_secondary_outcomes_dir,
         submission_lock_path=submission_lock_path,
     )
 
@@ -73,6 +76,7 @@ def build_chapter_assets(
     lm2011_event_window_sensitivity_dir: Path | None = None,
     finbert_run_dir: Path | None = None,
     finbert_robustness_dir: Path | None = None,
+    finbert_secondary_outcomes_dir: Path | None = None,
     submission_lock_path: Path | None = None,
 ) -> BuildSessionResult:
     return _build_assets(
@@ -87,6 +91,7 @@ def build_chapter_assets(
         lm2011_event_window_sensitivity_dir=lm2011_event_window_sensitivity_dir,
         finbert_run_dir=finbert_run_dir,
         finbert_robustness_dir=finbert_robustness_dir,
+        finbert_secondary_outcomes_dir=finbert_secondary_outcomes_dir,
         submission_lock_path=submission_lock_path,
     )
 
@@ -104,6 +109,7 @@ def build_single_asset(
     lm2011_event_window_sensitivity_dir: Path | None = None,
     finbert_run_dir: Path | None = None,
     finbert_robustness_dir: Path | None = None,
+    finbert_secondary_outcomes_dir: Path | None = None,
     submission_lock_path: Path | None = None,
 ) -> BuildSessionResult:
     return _build_assets(
@@ -118,6 +124,7 @@ def build_single_asset(
         lm2011_event_window_sensitivity_dir=lm2011_event_window_sensitivity_dir,
         finbert_run_dir=finbert_run_dir,
         finbert_robustness_dir=finbert_robustness_dir,
+        finbert_secondary_outcomes_dir=finbert_secondary_outcomes_dir,
         submission_lock_path=submission_lock_path,
     )
 
@@ -135,6 +142,7 @@ def _build_assets(
     lm2011_event_window_sensitivity_dir: Path | None,
     finbert_run_dir: Path | None,
     finbert_robustness_dir: Path | None,
+    finbert_secondary_outcomes_dir: Path | None,
     submission_lock_path: Path | None,
 ) -> BuildSessionResult:
     repo_root = resolve_repo_root() if repo_root is None else repo_root.resolve()
@@ -154,6 +162,7 @@ def _build_assets(
         RUN_FAMILY_LM2011_EVENT_WINDOW_SENSITIVITY: lm2011_event_window_sensitivity_dir,
         RUN_FAMILY_FINBERT_RUN: finbert_run_dir,
         RUN_FAMILY_FINBERT_ROBUSTNESS: finbert_robustness_dir,
+        RUN_FAMILY_FINBERT_SECONDARY_OUTCOMES: finbert_secondary_outcomes_dir,
     }
     if strict_submission and any(path is not None for path in explicit_args.values()):
         raise ValueError("Do not combine submission_lock_path with explicit run-root arguments.")

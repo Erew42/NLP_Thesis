@@ -39,6 +39,7 @@ def resolve_usage_run_paths(
     lm2011_event_window_sensitivity_dir: Path | None = None,
     finbert_run_dir: Path | None = None,
     finbert_robustness_dir: Path | None = None,
+    finbert_secondary_outcomes_dir: Path | None = None,
 ) -> dict[str, Path | None]:
     if data_profile == EXPLICIT_PROFILE:
         return {
@@ -51,6 +52,7 @@ def resolve_usage_run_paths(
             "lm2011_event_window_sensitivity_dir": _resolve_optional_path(lm2011_event_window_sensitivity_dir),
             "finbert_run_dir": _resolve_optional_path(finbert_run_dir),
             "finbert_robustness_dir": _resolve_optional_path(finbert_robustness_dir),
+            "finbert_secondary_outcomes_dir": _resolve_optional_path(finbert_secondary_outcomes_dir),
         }
 
     if data_profile == LOCAL_REPO_PROFILE:
@@ -82,6 +84,8 @@ def resolve_usage_run_paths(
         or defaults["finbert_run_dir"],
         "finbert_robustness_dir": _resolve_optional_path(finbert_robustness_dir)
         or defaults["finbert_robustness_dir"],
+        "finbert_secondary_outcomes_dir": _resolve_optional_path(finbert_secondary_outcomes_dir)
+        or defaults["finbert_secondary_outcomes_dir"],
     }
 
 
@@ -126,6 +130,7 @@ def resolve_local_profile_paths(repo_root: Path) -> dict[str, Path | None]:
             )
         ),
         "finbert_robustness_dir": _resolve_latest_finbert_robustness_run(full_data_root),
+        "finbert_secondary_outcomes_dir": _resolve_latest_finbert_secondary_outcomes_run(full_data_root),
     }
 
 
@@ -163,6 +168,7 @@ def resolve_colab_profile_paths(drive_data_root: Path) -> dict[str, Path | None]
             )
         ),
         "finbert_robustness_dir": _first_existing_path((results_root / "finbert_robustness",)),
+        "finbert_secondary_outcomes_dir": _first_existing_path((results_root / "finbert_secondary_outcomes",)),
     }
 
 
@@ -232,6 +238,22 @@ def _resolve_latest_finbert_robustness_run(parent: Path) -> Path | None:
         child.resolve()
         for child in parent.glob("finbert_robustness*")
         if child.is_dir() and (child / "finbert_robustness_run_manifest.json").exists()
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda path: path.stat().st_mtime)
+
+
+def _resolve_latest_finbert_secondary_outcomes_run(parent: Path) -> Path | None:
+    if not parent.exists() or not parent.is_dir():
+        return None
+    watchguard_results = parent / "finbert_secondary_outcomes_watchguard" / "results"
+    if (watchguard_results / "finbert_secondary_outcome_run_manifest.json").exists():
+        return watchguard_results.resolve()
+    candidates = [
+        child.resolve()
+        for child in parent.glob("finbert_secondary_outcomes*")
+        if child.is_dir() and (child / "finbert_secondary_outcome_run_manifest.json").exists()
     ]
     if not candidates:
         return None

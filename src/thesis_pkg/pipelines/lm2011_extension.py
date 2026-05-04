@@ -440,6 +440,7 @@ def _normalize_scope_value(value: str) -> str:
 
 
 def normalize_lm2011_extension_text_scope_expr(expr: pl.Expr) -> pl.Expr:
+    """Normalize text-scope aliases to canonical extension scope names."""
     raw = expr.cast(pl.Utf8, strict=False).str.strip_chars().str.to_lowercase().str.replace_all("-", "_")
     return (
         pl.when(raw.is_in(["full_10k", "full_10_k", "10k", "10_k", "full_filing"]))
@@ -470,6 +471,7 @@ def normalize_lm2011_extension_text_scope_expr(expr: pl.Expr) -> pl.Expr:
 
 
 def build_lm2011_extension_control_ladder() -> pl.DataFrame:
+    """Return the configured extension control sets as an audit table."""
     return pl.DataFrame(
         [
             {
@@ -498,6 +500,7 @@ def build_lm2011_extension_specification_grid(
     text_scopes: Sequence[str] = EXTENSION_PRIMARY_TEXT_SCOPES,
     specification_names: Sequence[str] = _DEFAULT_COMPARISON_SPECIFICATION_NAMES,
 ) -> pl.DataFrame:
+    """Return the text-scope by specification grid used by extension runs."""
     return pl.DataFrame(
         [
             {
@@ -534,6 +537,7 @@ def build_lm2011_extension_dictionary_features(
     text_col: str = "full_text",
     raw_form_col: str = "document_type_filename",
 ) -> pl.LazyFrame:
+    """Build extension dictionary features from raw SEC item text."""
     frames: list[pl.LazyFrame] = []
     for raw_text_scope, item_id in text_scope_item_ids.items():
         text_scope = _normalize_scope_value(raw_text_scope)
@@ -576,6 +580,11 @@ def build_lm2011_extension_dictionary_features_from_cleaned_scopes(
     text_col: str = "cleaned_text",
     raw_form_col: str = "document_type_raw",
 ) -> pl.LazyFrame:
+    """Build extension dictionary features on the FinBERT-cleaned item universe.
+
+    This path preserves ``cleaning_policy_id`` so dictionary-vs-FinBERT panels
+    can enforce exact cleaned-scope alignment.
+    """
     _require_columns(
         cleaned_scope_lf,
         (
@@ -1072,6 +1081,7 @@ def build_lm2011_extension_analysis_panel(
     sample_end: dt.date = EXTENSION_SAMPLE_END,
     sample_window: str = EXTENSION_SAMPLE_WINDOW,
 ) -> pl.LazyFrame:
+    """Combine LM2011 events, dictionary features, FinBERT features, and controls."""
     dictionary_surface_lf = _select_extension_dictionary_surface(
         dictionary_features_lf,
         default_text_scope=dictionary_text_scope,
@@ -1124,6 +1134,7 @@ def apply_lm2011_extension_control_set(
     panel_lf: pl.LazyFrame,
     control_set_id: str,
 ) -> pl.LazyFrame:
+    """Apply the row restriction associated with an extension control set."""
     control_set = _control_set_by_id(control_set_id)
     _require_columns(
         panel_lf,
@@ -1209,6 +1220,7 @@ def build_lm2011_extension_sample_loss_table(
     filing_date_col: str = "filing_date",
     industry_col: str = "ff48_industry_id",
 ) -> pl.DataFrame:
+    """Summarize extension sample loss by year, scope, specification, and controls."""
     rows: list[pl.DataFrame] = []
     normalized_text_scopes = (
         tuple(dict.fromkeys(_normalize_scope_value(text_scope) for text_scope in text_scopes))
@@ -1431,6 +1443,7 @@ def run_lm2011_extension_estimation_scaffold(
     nw_lags: int = 1,
     quarter_weighting: QuarterWeighting = "quarter_observation_count",
 ) -> pl.DataFrame:
+    """Run baseline quarterly Fama-MacBeth extension specifications."""
     output_rows: list[dict[str, object]] = []
     for text_scope in text_scopes:
         normalized_text_scope = _normalize_scope_value(text_scope)
@@ -1615,6 +1628,11 @@ def run_lm2011_extension_fit_comparison_scaffold(
     filing_date_col: str = "filing_date",
     industry_col: str = "ff48_industry_id",
 ) -> Lm2011ExtensionFitComparisonArtifacts:
+    """Run common-sample fit comparisons across extension signal specifications.
+
+    Comparisons are evaluated only on quarters where all selected specifications
+    estimate successfully on the same observation count.
+    """
     quarterly_fit_rows: list[dict[str, object]] = []
     quarterly_difference_rows: list[dict[str, object]] = []
     summary_rows: list[dict[str, object]] = []

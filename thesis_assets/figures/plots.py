@@ -469,6 +469,39 @@ def build_concordance_by_scope_figure(
     return fig
 
 
+def build_finbert_secondary_binned_means_figure(
+    df: pl.DataFrame,
+    *,
+    x_col: str = "finbert_negative_bin",
+    y_col: str = "mean_postevent_volatility_percentage_points",
+    series_col: str = "scope",
+) -> plt.Figure:
+    fig, ax = plt.subplots(figsize=(7.4, 4.6))
+    colors = ("#345c72", "#98633d", "#4d6f43")
+    series_values = df.get_column(series_col).unique().sort().to_list()
+    for index, series in enumerate(series_values):
+        series_df = df.filter(pl.col(series_col) == series).sort(x_col)
+        ax.plot(
+            series_df.get_column(x_col).to_list(),
+            series_df.get_column(y_col).to_list(),
+            linewidth=1.9,
+            marker="o",
+            markersize=4.0,
+            color=colors[index % len(colors)],
+            label=str(series),
+        )
+
+    ax.set_xticks([1, 2, 3, 4, 5])
+    ax.set_xticklabels(["Q1\nlowest", "Q2", "Q3", "Q4", "Q5\nhighest"])
+    ax.set_xlabel("FinBERT negative probability bin")
+    ax.set_ylabel("Mean post-event return volatility (pp)")
+    ax.grid(alpha=0.16, linewidth=0.6)
+    ax.set_axisbelow(True)
+    ax.legend(frameon=False, fontsize=8)
+    fig.tight_layout()
+    return fig
+
+
 def _annotate_horizontal_bars(
     ax: plt.Axes,
     positions: list[int],

@@ -26,6 +26,12 @@ from retained outputs. The full rerun path remains explicit:
 python tools/run_submission_pipeline.py --submission-root . --stage all
 ```
 
+`--stage all` now starts from packaged SEC yearly parquet and CCM seed parquet
+inputs, regenerating SEC-CCM premerge and item-analysis artifacts before the
+analysis stages. Use `--stage retained` for the previous heavy-rerun behavior
+that consumes packaged retained `items_analysis` and `sec_ccm_matched_clean`
+inputs directly.
+
 See `SUBMISSION_README.md` for the exact expected zip layout.
 
 ## SEC-CCM Pre-Merge (Doc Grain)

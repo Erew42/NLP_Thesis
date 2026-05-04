@@ -130,6 +130,7 @@ def _standard_item_id_from_token(token: str | None) -> str | None:
 
 
 def count_standard_item_tokens(line: str) -> int:
+    """Count canonical Item tokens in one line for TOC/run heuristics."""
     if not line:
         return 0
     count = 0
@@ -184,6 +185,12 @@ def is_empty_section_line(line: str) -> bool:
 def detect_gij_context(
     lines: list[str],
 ) -> dict[str, bool | list[tuple[int, int]] | set[str] | str]:
+    """Identify GIJ asset-backed omission/substitution ranges.
+
+    Some asset-backed issuer filings explicitly omit or substitute standard
+    item disclosures. The extraction layer uses these ranges to avoid treating
+    intentional omissions as boundary failures.
+    """
     gij_asset_backed = False
     gij_omit_ranges: list[tuple[int, int]] = []
     gij_substitute_ranges: list[tuple[int, int]] = []
@@ -600,6 +607,12 @@ def _find_embedded_heading_hits(
     nearby_item_ids: set[str] | None = None,
     max_hits: int = EMBEDDED_MAX_HITS,
 ) -> list[EmbeddedHeadingHit]:
+    """Classify item/part-like headings found inside an extracted section.
+
+    The verifier separates true boundary leaks from TOC rows, cross references,
+    continuation labels, and asset-backed omission language. Downstream repair
+    and diagnostics rely on the classification rather than raw regex matches.
+    """
     if not full_text:
         return []
     full_text_len = len(full_text)
@@ -685,6 +698,9 @@ def _find_embedded_heading_hits(
                     or (strong_prose and _title_like_suffix(suffix))
                 )
 
+                # Prefer false-positive classifications unless there is prose
+                # or reserved-language evidence that the embedded heading is
+                # genuinely the next section bleeding into this item.
                 if toc_window_hit and not strong_prose:
                     classification = "toc_row"
                 elif toc_like:

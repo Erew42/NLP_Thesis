@@ -44,6 +44,7 @@ from thesis_assets import resolve_default_data_profile
 from thesis_assets import resolve_usage_run_paths
 from thesis_assets.config.constants import RUN_FAMILY_FINBERT_ROBUSTNESS
 from thesis_assets.config.constants import RUN_FAMILY_FINBERT_RUN
+from thesis_assets.config.constants import RUN_FAMILY_FINBERT_SECONDARY_OUTCOMES
 from thesis_assets.config.constants import RUN_FAMILY_LM2011_EXTENSION
 from thesis_assets.config.constants import RUN_FAMILY_LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX
 from thesis_assets.config.constants import RUN_FAMILY_LM2011_EVENT_WINDOW_SENSITIVITY
@@ -131,6 +132,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             lm2011_event_window_sensitivity_dir=args.lm2011_event_window_sensitivity_dir,
             finbert_run_dir=args.finbert_run_dir,
             finbert_robustness_dir=args.finbert_robustness_dir,
+            finbert_secondary_outcomes_dir=args.finbert_secondary_outcomes_dir,
         )
 
     build_kwargs = {
@@ -159,6 +161,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         ),
         "finbert_robustness_dir": (
             None if args.submission_lock is not None else resolved_paths["finbert_robustness_dir"]
+        ),
+        "finbert_secondary_outcomes_dir": (
+            None if args.submission_lock is not None else resolved_paths["finbert_secondary_outcomes_dir"]
         ),
         "submission_lock_path": args.submission_lock,
     }
@@ -225,6 +230,7 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--lm2011-event-window-sensitivity-dir", type=Path, default=None)
     parser.add_argument("--finbert-run-dir", type=Path, default=None)
     parser.add_argument("--finbert-robustness-dir", type=Path, default=None)
+    parser.add_argument("--finbert-secondary-outcomes-dir", type=Path, default=None)
     parser.add_argument(
         "--submission-lock",
         type=Path,
@@ -246,6 +252,7 @@ def _add_lock_root_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--lm2011-event-window-sensitivity-dir", type=Path, default=None)
     parser.add_argument("--finbert-run-dir", type=Path, default=None)
     parser.add_argument("--finbert-robustness-dir", type=Path, default=None)
+    parser.add_argument("--finbert-secondary-outcomes-dir", type=Path, default=None)
 
 
 def _init_lock(args: argparse.Namespace) -> int:
@@ -329,6 +336,7 @@ def _run_root_args(args: argparse.Namespace) -> dict[str, Path | None]:
         RUN_FAMILY_LM2011_EVENT_WINDOW_SENSITIVITY: args.lm2011_event_window_sensitivity_dir,
         RUN_FAMILY_FINBERT_RUN: args.finbert_run_dir,
         RUN_FAMILY_FINBERT_ROBUSTNESS: args.finbert_robustness_dir,
+        RUN_FAMILY_FINBERT_SECONDARY_OUTCOMES: args.finbert_secondary_outcomes_dir,
     }
 
 
@@ -372,6 +380,11 @@ def _resolved_paths_from_lock(lock: SubmissionLock) -> dict[str, Path | None]:
         "finbert_robustness_dir": lock.run_roots.get(RUN_FAMILY_FINBERT_ROBUSTNESS).path
         if RUN_FAMILY_FINBERT_ROBUSTNESS in lock.run_roots
         else None,
+        "finbert_secondary_outcomes_dir": (
+            lock.run_roots.get(RUN_FAMILY_FINBERT_SECONDARY_OUTCOMES).path
+            if RUN_FAMILY_FINBERT_SECONDARY_OUTCOMES in lock.run_roots
+            else None
+        ),
     }
 
 
@@ -387,6 +400,7 @@ def _resolve_run_paths(
     lm2011_event_window_sensitivity_dir: Path | None,
     finbert_run_dir: Path | None,
     finbert_robustness_dir: Path | None,
+    finbert_secondary_outcomes_dir: Path | None,
 ) -> dict[str, Path | None]:
     return resolve_usage_run_paths(
         repo_root=repo_root,
@@ -399,6 +413,7 @@ def _resolve_run_paths(
         lm2011_event_window_sensitivity_dir=lm2011_event_window_sensitivity_dir,
         finbert_run_dir=finbert_run_dir,
         finbert_robustness_dir=finbert_robustness_dir,
+        finbert_secondary_outcomes_dir=finbert_secondary_outcomes_dir,
     )
 
 

@@ -1142,6 +1142,7 @@ def _write_doc_ownership_universe_diagnostics(
 
 
 def main() -> None:
+    """Environment-driven unified SEC/CCM, LM2011, FinBERT, and extension runner."""
     # ## Runtime setup
     if IN_COLAB:
         from google.colab import drive

@@ -19,6 +19,7 @@ from thesis_assets.config.constants import ARTIFACT_KEY_FINBERT_ROBUSTNESS_QUANT
 from thesis_assets.config.constants import ARTIFACT_KEY_FINBERT_ROBUSTNESS_TAIL_COEFFICIENTS
 from thesis_assets.config.constants import ARTIFACT_KEY_FINBERT_ROBUSTNESS_TAIL_FIT_COMPARISONS
 from thesis_assets.config.constants import ARTIFACT_KEY_FINBERT_ROBUSTNESS_TAIL_FIT_SKIPPED_QUARTERS
+from thesis_assets.config.constants import ARTIFACT_KEY_FINBERT_SECONDARY_OUTCOME_COEFFICIENTS
 from thesis_assets.config.constants import ARTIFACT_KEY_NW_LAG_CORE_TABLES
 from thesis_assets.config.constants import ARTIFACT_KEY_NW_LAG_EXTENSION_FIT_COMPARISONS
 from thesis_assets.config.constants import ARTIFACT_KEY_NW_LAG_EXTENSION_RESULTS
@@ -33,6 +34,7 @@ from thesis_assets.config.constants import ARTIFACT_KEY_TABLE_VI_SKIPPED_QUARTER
 from thesis_assets.config.constants import ARTIFACT_KEY_TRADING_STRATEGY_MONTHLY_RETURNS
 from thesis_assets.config.constants import RUN_FAMILY_FINBERT_ROBUSTNESS
 from thesis_assets.config.constants import RUN_FAMILY_FINBERT_RUN
+from thesis_assets.config.constants import RUN_FAMILY_FINBERT_SECONDARY_OUTCOMES
 from thesis_assets.config.constants import RUN_FAMILY_LM2011_EXTENSION
 from thesis_assets.config.constants import RUN_FAMILY_LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX
 from thesis_assets.config.constants import RUN_FAMILY_LM2011_EVENT_WINDOW_SENSITIVITY
@@ -1598,6 +1600,121 @@ ASSETS: tuple[AssetSpec, ...] = (
                     "total_n_obs",
                     "n_quarters",
                     "estimator_status",
+                ),
+            ),
+        ),
+    ),
+    AssetSpec(
+        asset_id="ch5_finbert_secondary_outcome_coefficients_appendix",
+        chapter="chapter5",
+        asset_kind="table",
+        output_stem="ch5_finbert_secondary_outcome_coefficients_appendix",
+        caption_stub="C0 FinBERT secondary-outcome regression coefficients.",
+        notes_stub=(
+            "Rows report C0 Fama-MacBeth signal coefficients from the retained FinBERT secondary-outcome run. "
+            "Post-event return volatility coefficients and standard errors are multiplied by 100; abnormal volume is reported in raw units. "
+            "Stars denote two-sided p-values: *** p<0.01, ** p<0.05, * p<0.10."
+        ),
+        sample_contract_id="finbert_secondary_outcome_coefficients",
+        builder_id="chapter5_finbert_secondary_outcome_coefficients_appendix",
+        required_artifacts=(
+            ArtifactRequirement(
+                logical_name="secondary_coefficients",
+                run_family=RUN_FAMILY_FINBERT_SECONDARY_OUTCOMES,
+                artifact_key=ARTIFACT_KEY_FINBERT_SECONDARY_OUTCOME_COEFFICIENTS,
+                required_columns=(
+                    "text_scope",
+                    "outcome_name",
+                    "control_set_id",
+                    "specification_name",
+                    "coefficient_name",
+                    "estimate",
+                    "standard_error",
+                    "t_stat",
+                    "p_value",
+                    "n_obs",
+                    "n_quarters",
+                    "mean_quarter_n",
+                    "weighting_rule",
+                    "estimator_status",
+                ),
+            ),
+        ),
+        table_display_columns=(
+            "outcome",
+            "scope",
+            "specification",
+            "coefficient",
+            "estimate",
+            "std_error",
+            "t_stat",
+            "p_value",
+            "stars",
+            "n_obs",
+            "n_quarters",
+            "mean_quarter_n",
+            "reported_scale",
+        ),
+        write_full_appendix_table=True,
+        table_display_note="Primary rendering uses a compact coefficient column set; full audit columns are written with the _full suffix.",
+    ),
+    AssetSpec(
+        asset_id="ch5_finbert_secondary_outcome_raw_correlations",
+        chapter="chapter5",
+        asset_kind="table",
+        output_stem="ch5_finbert_secondary_outcome_raw_correlations",
+        caption_stub="Raw correlations between text scores and secondary outcomes.",
+        notes_stub=(
+            "Rows report Pearson correlations from the raw matched extension analysis panel before the regression design screen. "
+            "L--M denotes the Loughran--McDonald negative TF-IDF score; FinBERT denotes the length-weighted negative-probability score."
+        ),
+        sample_contract_id="finbert_secondary_outcome_raw_correlations",
+        builder_id="chapter5_finbert_secondary_outcome_raw_correlations",
+        required_artifacts=(
+            ArtifactRequirement(
+                logical_name="extension_analysis_panel",
+                run_family=RUN_FAMILY_LM2011_EXTENSION,
+                artifact_key=ARTIFACT_KEY_EXTENSION_ANALYSIS_PANEL,
+                relative_subdir="replication",
+                required_columns=(
+                    "text_scope",
+                    "lm_negative_tfidf",
+                    "finbert_neg_prob_lenw_mean",
+                    "abnormal_volume",
+                    "postevent_return_volatility",
+                ),
+            ),
+        ),
+        table_display_columns=(
+            "scope",
+            "lm_vs_abnormal_volume",
+            "lm_vs_postevent_volatility",
+            "finbert_vs_abnormal_volume",
+            "finbert_vs_postevent_volatility",
+        ),
+    ),
+    AssetSpec(
+        asset_id="ch5_finbert_secondary_outcome_binned_means",
+        chapter="chapter5",
+        asset_kind="figure",
+        output_stem="ch5_finbert_secondary_outcome_binned_means",
+        caption_stub="Mean post-event return volatility by FinBERT negativity bin.",
+        notes_stub=(
+            "The figure bins filings into five equal-count bins within each text scope using FinBERT negative probability, "
+            "then plots raw mean post-event return volatility in percentage points."
+        ),
+        sample_contract_id="finbert_secondary_outcome_binned_means",
+        builder_id="chapter5_finbert_secondary_outcome_binned_means",
+        required_artifacts=(
+            ArtifactRequirement(
+                logical_name="extension_analysis_panel",
+                run_family=RUN_FAMILY_LM2011_EXTENSION,
+                artifact_key=ARTIFACT_KEY_EXTENSION_ANALYSIS_PANEL,
+                relative_subdir="replication",
+                required_columns=(
+                    "text_scope",
+                    "finbert_neg_prob_lenw_mean",
+                    "postevent_return_volatility",
                 ),
             ),
         ),

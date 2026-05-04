@@ -25,6 +25,7 @@ from thesis_assets.errors import AssetBuildError
 from thesis_assets.figures import build_concordance_figure
 from thesis_assets.figures import build_concordance_by_scope_figure
 from thesis_assets.figures import build_ecdf_lines_figure
+from thesis_assets.figures import build_finbert_secondary_binned_means_figure
 from thesis_assets.figures import build_grouped_bar_figure
 from thesis_assets.figures import build_metric_panel_ecdf_figure
 from thesis_assets.figures import build_multi_series_line_figure
@@ -80,6 +81,10 @@ EXTENSION_OBSERVED_SCALE_SPECS = (
     "dictionary_only",
     "finbert_only",
     "dictionary_finbert_joint",
+)
+FINBERT_SECONDARY_OUTCOMES = (
+    "abnormal_volume",
+    "postevent_return_volatility",
 )
 VISIBLE_PREFIX_SENSITIVITY_TEXT_SCOPES = (
     "item_7_mda",
@@ -208,6 +213,12 @@ def build_asset(context: BuildContext, spec: AssetSpec) -> BuildResult:
             return _build_chapter5_finbert_robustness_coefficients(context, spec, artifact_map)
         if spec.builder_id == "chapter5_finbert_robustness_fit_comparisons":
             return _build_chapter5_finbert_robustness_fit_comparisons(context, spec, artifact_map)
+        if spec.builder_id == "chapter5_finbert_secondary_outcome_coefficients_appendix":
+            return _build_chapter5_finbert_secondary_outcome_coefficients_appendix(context, spec, artifact_map)
+        if spec.builder_id == "chapter5_finbert_secondary_outcome_raw_correlations":
+            return _build_chapter5_finbert_secondary_outcome_raw_correlations(context, spec, artifact_map)
+        if spec.builder_id == "chapter5_finbert_secondary_outcome_binned_means":
+            return _build_chapter5_finbert_secondary_outcome_binned_means(context, spec, artifact_map)
         if spec.builder_id == "chapter5_matched_dictionary_finbert_coefficients_full":
             return _build_chapter5_matched_dictionary_finbert_coefficients_full(context, spec, artifact_map)
         if spec.builder_id == "chapter5_fama_macbeth_skipped_quarter_diagnostics":
@@ -946,10 +957,14 @@ def _build_chapter4_dictionary_provenance_summary(
     rows: list[dict[str, object]] = []
     for family_dir in sorted(path for path in generated_root.iterdir() if path.is_dir()):
         list_files = sorted(path for path in family_dir.glob("*.txt") if path.is_file())
+        try:
+            source = family_dir.resolve().relative_to(context.repo_root.resolve()).as_posix()
+        except ValueError:
+            source = str(family_dir)
         rows.append(
             {
                 "dictionary_family": family_dir.name,
-                "source": str(family_dir),
+                "source": source,
                 "list_count": len(list_files),
                 "list_names": "; ".join(path.stem for path in list_files),
                 "total_terms": sum(_count_nonblank_lines(path) for path in list_files),
@@ -3265,6 +3280,138 @@ def _build_chapter5_finbert_robustness_fit_comparisons(
     )
 
 
+def _build_chapter5_finbert_secondary_outcome_coefficients_appendix(
+    context: BuildContext,
+    spec: AssetSpec,
+    artifacts: dict[str, ResolvedArtifact],
+) -> BuildResult:
+    _require_contract(spec, "finbert_secondary_outcome_coefficients")
+    source_artifact = artifacts["secondary_coefficients"]
+    selected = (
+        scan_parquet_artifact(source_artifact)
+        .filter(
+            (pl.col("estimator_status") == pl.lit("estimated"))
+            & (pl.col("control_set_id") == pl.lit("C0"))
+            & pl.col("outcome_name").is_in(FINBERT_SECONDARY_OUTCOMES)
+            & pl.col("text_scope").is_in(TARGET_TEXT_SCOPES)
+            & pl.col("specification_name").is_in(EXTENSION_OBSERVED_SCALE_SPECS)
+            & _extension_observed_scale_coefficient_filter()
+        )
+        .with_columns(
+            _scope_label_expr().alias("scope"),
+            _secondary_outcome_label_expr().alias("outcome"),
+            _specification_label_expr().alias("specification"),
+            _signal_label_expr().alias("coefficient"),
+            _stars_expr(pl.col("p_value")).alias("stars"),
+            _secondary_outcome_scale_expr().alias("_scale"),
+            _secondary_outcome_reported_scale_expr().alias("reported_scale"),
+            _scope_order_expr().alias("_scope_order"),
+            _secondary_outcome_order_expr().alias("_outcome_order"),
+            _specification_order_expr().alias("_spec_order"),
+        )
+        .with_columns(
+            (pl.col("estimate").cast(pl.Float64, strict=False) * pl.col("_scale")).alias("estimate"),
+            (pl.col("standard_error").cast(pl.Float64, strict=False) * pl.col("_scale")).alias("std_error"),
+        )
+        .sort("_outcome_order", "_scope_order", "_spec_order", "coefficient_name")
+        .select(
+            "outcome",
+            "scope",
+            "specification",
+            "coefficient",
+            "estimate",
+            "std_error",
+            "t_stat",
+            "p_value",
+            "stars",
+            "n_obs",
+            "n_quarters",
+            "mean_quarter_n",
+            "reported_scale",
+            "weighting_rule",
+            "nw_lags",
+            "outcome_name",
+            "text_scope",
+            "specification_name",
+            "coefficient_name",
+        )
+        .collect()
+    )
+    if selected.is_empty():
+        raise AssetBuildError("FinBERT secondary-outcome coefficient appendix returned zero rows.")
+    if selected.height != 16:
+        raise AssetBuildError(
+            f"FinBERT secondary-outcome coefficient appendix returned {selected.height} rows; expected 16."
+        )
+
+    output_paths = _write_table_outputs(context, spec, selected)
+    return BuildResult(
+        asset_id=spec.asset_id,
+        chapter=spec.chapter,
+        asset_kind=spec.asset_kind,
+        sample_contract_id=spec.sample_contract_id,
+        status="completed",
+        resolved_inputs={"secondary_coefficients": str(source_artifact.path)},
+        output_paths=output_paths,
+        row_counts={"table_rows": selected.height},
+    )
+
+
+def _build_chapter5_finbert_secondary_outcome_raw_correlations(
+    context: BuildContext,
+    spec: AssetSpec,
+    artifacts: dict[str, ResolvedArtifact],
+) -> BuildResult:
+    _require_contract(spec, "finbert_secondary_outcome_raw_correlations")
+    panel_artifact = artifacts["extension_analysis_panel"]
+    selected = _finbert_secondary_outcome_raw_correlations_df(scan_parquet_artifact(panel_artifact))
+    if selected.is_empty():
+        raise AssetBuildError("FinBERT secondary-outcome raw correlation table returned zero rows.")
+    if selected.height != 2:
+        raise AssetBuildError(
+            f"FinBERT secondary-outcome raw correlation table returned {selected.height} rows; expected 2."
+        )
+
+    output_paths = _write_table_outputs(context, spec, selected)
+    return BuildResult(
+        asset_id=spec.asset_id,
+        chapter=spec.chapter,
+        asset_kind=spec.asset_kind,
+        sample_contract_id=spec.sample_contract_id,
+        status="completed",
+        resolved_inputs={"extension_analysis_panel": str(panel_artifact.path)},
+        output_paths=output_paths,
+        row_counts={"table_rows": selected.height},
+    )
+
+
+def _build_chapter5_finbert_secondary_outcome_binned_means(
+    context: BuildContext,
+    spec: AssetSpec,
+    artifacts: dict[str, ResolvedArtifact],
+) -> BuildResult:
+    _require_contract(spec, "finbert_secondary_outcome_binned_means")
+    panel_artifact = artifacts["extension_analysis_panel"]
+    selected = _finbert_secondary_binned_means_df(scan_parquet_artifact(panel_artifact))
+    if selected.is_empty():
+        raise AssetBuildError("FinBERT secondary-outcome binned-means figure returned zero rows.")
+    if selected.height != 10:
+        raise AssetBuildError(f"FinBERT secondary-outcome binned-means source returned {selected.height} rows; expected 10.")
+
+    figure = build_finbert_secondary_binned_means_figure(selected)
+    output_paths = _write_figure_outputs(context, spec, selected, figure)
+    return BuildResult(
+        asset_id=spec.asset_id,
+        chapter=spec.chapter,
+        asset_kind=spec.asset_kind,
+        sample_contract_id=spec.sample_contract_id,
+        status="completed",
+        resolved_inputs={"extension_analysis_panel": str(panel_artifact.path)},
+        output_paths=output_paths,
+        row_counts={"figure_rows": selected.height},
+    )
+
+
 def _build_chapter5_matched_dictionary_finbert_coefficients_full(
     context: BuildContext,
     spec: AssetSpec,
@@ -3673,6 +3820,162 @@ def _extension_observed_scale_coefficient_filter() -> pl.Expr:
             (pl.col("specification_name") == pl.lit("dictionary_finbert_joint"))
             & pl.col("coefficient_name").is_in(EXTENSION_OBSERVED_SCALE_COEFFICIENTS)
         )
+    )
+
+
+def _secondary_outcome_label_expr() -> pl.Expr:
+    return (
+        pl.when(pl.col("outcome_name") == "abnormal_volume")
+        .then(pl.lit("Abnormal volume"))
+        .when(pl.col("outcome_name") == "postevent_return_volatility")
+        .then(pl.lit("Post-event return volatility"))
+        .otherwise(pl.col("outcome_name"))
+    )
+
+
+def _secondary_outcome_order_expr() -> pl.Expr:
+    return (
+        pl.when(pl.col("outcome_name") == "abnormal_volume")
+        .then(pl.lit(1))
+        .when(pl.col("outcome_name") == "postevent_return_volatility")
+        .then(pl.lit(2))
+        .otherwise(pl.lit(99))
+    )
+
+
+def _secondary_outcome_scale_expr() -> pl.Expr:
+    return (
+        pl.when(pl.col("outcome_name") == "postevent_return_volatility")
+        .then(pl.lit(100.0))
+        .otherwise(pl.lit(1.0))
+    )
+
+
+def _secondary_outcome_reported_scale_expr() -> pl.Expr:
+    return (
+        pl.when(pl.col("outcome_name") == "postevent_return_volatility")
+        .then(pl.lit("x100"))
+        .otherwise(pl.lit("raw"))
+    )
+
+
+def _finbert_secondary_outcome_raw_correlations_df(lf: pl.LazyFrame) -> pl.DataFrame:
+    filtered = (
+        lf.filter(pl.col("text_scope").is_in(TARGET_TEXT_SCOPES))
+        .select(
+            pl.col("text_scope").cast(pl.Utf8, strict=False),
+            pl.col("lm_negative_tfidf").cast(pl.Float64, strict=False),
+            pl.col("finbert_neg_prob_lenw_mean").cast(pl.Float64, strict=False),
+            pl.col("abnormal_volume").cast(pl.Float64, strict=False),
+            pl.col("postevent_return_volatility").cast(pl.Float64, strict=False),
+        )
+        .drop_nulls(
+            subset=(
+                "text_scope",
+                "lm_negative_tfidf",
+                "finbert_neg_prob_lenw_mean",
+                "abnormal_volume",
+                "postevent_return_volatility",
+            )
+        )
+    )
+    return (
+        filtered.group_by("text_scope")
+        .agg(
+            pl.len().alias("n_obs"),
+            pl.corr("lm_negative_tfidf", "abnormal_volume").alias("lm_vs_abnormal_volume"),
+            pl.corr("lm_negative_tfidf", "postevent_return_volatility").alias("lm_vs_postevent_volatility"),
+            pl.corr("finbert_neg_prob_lenw_mean", "abnormal_volume").alias("finbert_vs_abnormal_volume"),
+            pl.corr("finbert_neg_prob_lenw_mean", "postevent_return_volatility").alias(
+                "finbert_vs_postevent_volatility"
+            ),
+        )
+        .with_columns(
+            _scope_label_expr().alias("scope"),
+            _scope_order_expr().alias("_scope_order"),
+        )
+        .sort("_scope_order")
+        .select(
+            "scope",
+            "lm_vs_abnormal_volume",
+            "lm_vs_postevent_volatility",
+            "finbert_vs_abnormal_volume",
+            "finbert_vs_postevent_volatility",
+            "n_obs",
+            "text_scope",
+        )
+        .collect()
+    )
+
+
+def _finbert_secondary_binned_means_df(lf: pl.LazyFrame) -> pl.DataFrame:
+    ranked = (
+        lf.filter(pl.col("text_scope").is_in(TARGET_TEXT_SCOPES))
+        .select(
+            pl.col("text_scope").cast(pl.Utf8, strict=False),
+            pl.col("finbert_neg_prob_lenw_mean").cast(pl.Float64, strict=False),
+            pl.col("postevent_return_volatility").cast(pl.Float64, strict=False),
+        )
+        .drop_nulls(
+            subset=(
+                "text_scope",
+                "finbert_neg_prob_lenw_mean",
+                "postevent_return_volatility",
+            )
+        )
+        .with_columns(
+            pl.col("finbert_neg_prob_lenw_mean").rank("ordinal").over("text_scope").alias("_score_rank"),
+            pl.len().over("text_scope").alias("_scope_n"),
+        )
+        .with_columns(
+            (
+                (
+                    (pl.col("_score_rank").cast(pl.Float64) - 1.0)
+                    * 5.0
+                    / pl.col("_scope_n").cast(pl.Float64)
+                )
+                .floor()
+                .cast(pl.Int64)
+                + 1
+            ).alias("_bin_raw")
+        )
+        .with_columns(
+            pl.when(pl.col("_bin_raw") > 5)
+            .then(pl.lit(5))
+            .otherwise(pl.col("_bin_raw"))
+            .cast(pl.Int64)
+            .alias("finbert_negative_bin")
+        )
+    )
+    return (
+        ranked.group_by("text_scope", "finbert_negative_bin")
+        .agg(
+            pl.len().alias("n_obs"),
+            pl.col("finbert_neg_prob_lenw_mean").mean().alias("mean_finbert_negative_probability"),
+            pl.col("finbert_neg_prob_lenw_mean").min().alias("min_finbert_negative_probability"),
+            pl.col("finbert_neg_prob_lenw_mean").max().alias("max_finbert_negative_probability"),
+            (pl.col("postevent_return_volatility").mean() * 100.0).alias(
+                "mean_postevent_volatility_percentage_points"
+            ),
+        )
+        .with_columns(
+            _scope_label_expr().alias("scope"),
+            _scope_order_expr().alias("_scope_order"),
+            pl.concat_str([pl.lit("Q"), pl.col("finbert_negative_bin").cast(pl.Utf8)]).alias("bin_label"),
+        )
+        .sort("_scope_order", "finbert_negative_bin")
+        .select(
+            "scope",
+            "text_scope",
+            "finbert_negative_bin",
+            "bin_label",
+            "n_obs",
+            "mean_finbert_negative_probability",
+            "min_finbert_negative_probability",
+            "max_finbert_negative_probability",
+            "mean_postevent_volatility_percentage_points",
+        )
+        .collect()
     )
 
 
@@ -5347,14 +5650,20 @@ def _resolve_finbert_preprocessing_path(
     filename: str,
 ) -> Path:
     run = finbert_artifact.run
-    run_name = run.root.name
+    run_names = [run.root.name]
     if isinstance(run.manifest, dict) and isinstance(run.manifest.get("run_name"), str):
-        run_name = str(run.manifest["run_name"])
-    candidates = (
-        run.root.parent / "_staged_intermediates" / f"{run_name}_sentence_preprocessing" / filename,
-        run.root / "_staged_intermediates" / f"{run_name}_sentence_preprocessing" / filename,
-        run.root / filename,
-    )
+        manifest_run_name = str(run.manifest["run_name"])
+        if manifest_run_name not in run_names:
+            run_names.append(manifest_run_name)
+    candidates = []
+    for run_name in run_names:
+        candidates.extend(
+            [
+                run.root.parent / "_staged_intermediates" / f"{run_name}_sentence_preprocessing" / filename,
+                run.root / "_staged_intermediates" / f"{run_name}_sentence_preprocessing" / filename,
+            ]
+        )
+    candidates.append(run.root / filename)
     for candidate in candidates:
         if candidate.exists():
             return candidate.resolve()
@@ -5364,6 +5673,7 @@ def _resolve_finbert_preprocessing_path(
 
 def _resolve_generated_dictionary_family_root(context: BuildContext) -> Path:
     candidates = (
+        context.repo_root / "data" / "LM2011_additional_data" / "generated_dictionary_families",
         context.repo_root / "full_data_run" / "LM2011_additional_data" / "generated_dictionary_families",
         context.repo_root / "LM2011_additional_data" / "generated_dictionary_families",
     )
@@ -5698,6 +6008,12 @@ def _resolve_replication_negative_word_list(
     candidates.extend(
         [
             context.repo_root
+            / "data"
+            / "LM2011_additional_data"
+            / "generated_dictionary_families"
+            / "replication"
+            / "Fin-Neg.txt",
+            context.repo_root
             / "full_data_run"
             / "LM2011_additional_data"
             / "generated_dictionary_families"
@@ -5767,6 +6083,7 @@ def _manifest_path_candidates(context: BuildContext, raw_path: str) -> list[Path
         suffix_parts = parts[index + 1 :]
         if suffix_parts:
             suffix = Path(*suffix_parts)
+            candidates.append(context.repo_root / "data" / "LM2011_additional_data" / suffix)
             candidates.append(context.repo_root / "full_data_run" / "LM2011_additional_data" / suffix)
             candidates.append(context.repo_root / "LM2011_additional_data" / suffix)
     return candidates

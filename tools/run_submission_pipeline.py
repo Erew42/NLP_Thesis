@@ -8,6 +8,7 @@ import subprocess
 import sys
 from dataclasses import asdict
 from dataclasses import dataclass
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 from typing import Mapping
@@ -32,12 +33,15 @@ for candidate in (ROOT, SRC):
 
 from thesis_assets.config.constants import RUN_FAMILY_FINBERT_ROBUSTNESS
 from thesis_assets.config.constants import RUN_FAMILY_FINBERT_RUN
+from thesis_assets.config.constants import RUN_FAMILY_FINBERT_SECONDARY_OUTCOMES
 from thesis_assets.config.constants import RUN_FAMILY_LM2011_EXTENSION
 from thesis_assets.config.constants import RUN_FAMILY_LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX
+from thesis_assets.config.constants import RUN_FAMILY_LM2011_EVENT_WINDOW_SENSITIVITY
 from thesis_assets.config.constants import RUN_FAMILY_LM2011_NW_LAG_SENSITIVITY
 from thesis_assets.config.constants import RUN_FAMILY_LM2011_POST_REFINITIV
 from thesis_assets.submission_lock import DEFAULT_FINBERT_MODEL_NAME
 from thesis_assets.submission_lock import DEFAULT_FINBERT_REVISION
+from thesis_assets.submission_lock import FINBERT_INFERRED_REVISION_DISCLOSURE_ID
 from thesis_assets.submission_lock import build_submission_lock_payload
 from thesis_assets.submission_lock import validate_submission_lock
 from thesis_assets.submission_lock import write_submission_lock
@@ -48,9 +52,25 @@ SUBMISSION_PROFILE = "SUBMISSION"
 DEFAULT_RUN_ID = "submission_rerun"
 DEFAULT_FINBERT_RUN_NAME = "submission_finbert"
 DEFAULT_NW_LAGS: tuple[int, ...] = (1, 2, 3, 4)
+DEFAULT_EVENT_WINDOW_SENSITIVITY_DAYS: tuple[int, ...] = (6, 12, 18)
+SOURCE_MODE_RETAINED = "retained"
+SOURCE_MODE_FROM_YEAR_MERGED = "from_year_merged"
+SOURCE_MODE_FROM_RAW_ZIPS = "from_raw_zips"
+SOURCE_MODE_CHOICES: tuple[str, ...] = (
+    SOURCE_MODE_RETAINED,
+    SOURCE_MODE_FROM_YEAR_MERGED,
+    SOURCE_MODE_FROM_RAW_ZIPS,
+)
 STAGE_PACKAGE_MANIFEST = "package-manifest"
 STAGE_VALIDATE = "validate"
+STAGE_VALIDATE_SEED_INPUTS = "validate-seed-inputs"
+STAGE_SEC_PARSE_ZIPS = "sec-parse-zips"
+STAGE_SEC_YEARLY_MERGE = "sec-yearly-merge"
+STAGE_SEC_CCM_PREMERGE = "sec-ccm-premerge"
+STAGE_SEC_ITEMS_ANALYSIS = "sec-items-analysis"
+STAGE_VALIDATE_DERIVED_INPUTS = "validate-derived-inputs"
 STAGE_LM2011 = "lm2011"
+STAGE_EVENT_WINDOW_SENSITIVITY = "event-window-sensitivity"
 STAGE_NW_SENSITIVITY = "nw-sensitivity"
 STAGE_FINBERT_PREPROCESS = "finbert-preprocess"
 STAGE_FINBERT_ANALYSIS = "finbert-analysis"
@@ -59,11 +79,11 @@ STAGE_VISIBLE_PREFIX_EXTENSION = "visible-prefix-extension"
 STAGE_FINBERT_ROBUSTNESS = "finbert-robustness"
 STAGE_THESIS_ASSETS = "thesis-assets"
 STAGE_READINESS = "readiness"
+STAGE_RETAINED = "retained"
 STAGE_ALL = "all"
-ORDERED_STAGES: tuple[str, ...] = (
-    STAGE_PACKAGE_MANIFEST,
-    STAGE_VALIDATE,
+DOWNSTREAM_STAGES: tuple[str, ...] = (
     STAGE_LM2011,
+    STAGE_EVENT_WINDOW_SENSITIVITY,
     STAGE_NW_SENSITIVITY,
     STAGE_FINBERT_PREPROCESS,
     STAGE_FINBERT_ANALYSIS,
@@ -72,18 +92,52 @@ ORDERED_STAGES: tuple[str, ...] = (
     STAGE_FINBERT_ROBUSTNESS,
     STAGE_THESIS_ASSETS,
 )
-READINESS_STAGES: tuple[str, ...] = (
+RECOMPUTE_STAGES: tuple[str, ...] = (
+    STAGE_PACKAGE_MANIFEST,
+    STAGE_VALIDATE_SEED_INPUTS,
+    STAGE_SEC_CCM_PREMERGE,
+    STAGE_SEC_ITEMS_ANALYSIS,
+    STAGE_VALIDATE_DERIVED_INPUTS,
+    *DOWNSTREAM_STAGES,
+)
+RAW_RECOMPUTE_STAGES: tuple[str, ...] = (
+    STAGE_PACKAGE_MANIFEST,
+    STAGE_VALIDATE_SEED_INPUTS,
+    STAGE_SEC_PARSE_ZIPS,
+    STAGE_SEC_YEARLY_MERGE,
+    STAGE_SEC_CCM_PREMERGE,
+    STAGE_SEC_ITEMS_ANALYSIS,
+    STAGE_VALIDATE_DERIVED_INPUTS,
+    *DOWNSTREAM_STAGES,
+)
+RETAINED_STAGES: tuple[str, ...] = (
     STAGE_PACKAGE_MANIFEST,
     STAGE_VALIDATE,
+    *DOWNSTREAM_STAGES,
+)
+ORDERED_STAGES: tuple[str, ...] = RECOMPUTE_STAGES
+READINESS_STAGES: tuple[str, ...] = (
+    STAGE_PACKAGE_MANIFEST,
+    STAGE_VALIDATE_SEED_INPUTS,
     STAGE_THESIS_ASSETS,
 )
 AGGREGATE_STAGE_SEQUENCES: Mapping[str, tuple[str, ...]] = {
     STAGE_READINESS: READINESS_STAGES,
-    STAGE_ALL: ORDERED_STAGES,
+    STAGE_RETAINED: RETAINED_STAGES,
 }
-STAGE_CHOICES: tuple[str, ...] = (*ORDERED_STAGES, STAGE_READINESS, STAGE_ALL)
+STAGE_CHOICES: tuple[str, ...] = tuple(
+    dict.fromkeys(
+        (
+            *RAW_RECOMPUTE_STAGES,
+            *RETAINED_STAGES,
+            STAGE_READINESS,
+            STAGE_RETAINED,
+            STAGE_ALL,
+        )
+    )
+)
 
-REQUIRED_CCM_PARQUETS: tuple[str, ...] = (
+REQUIRED_CCM_DOWNSTREAM_PARQUETS: tuple[str, ...] = (
     "filingdates.parquet",
     "balancesheetquarterly.parquet",
     "incomestatementquarterly.parquet",
@@ -95,7 +149,24 @@ REQUIRED_CCM_PARQUETS: tuple[str, ...] = (
     "companyhistory.parquet",
     "companydescription.parquet",
     "sfz_mth.parquet",
-    "final_flagged_data_compdesc_added.parquet",
+)
+REQUIRED_CCM_DAILY_REBUILD_PARQUETS: tuple[str, ...] = (
+    "filingdates.parquet",
+    "linkhistory.parquet",
+    "linkfiscalperiodall.parquet",
+    "companydescription.parquet",
+    "companyhistory.parquet",
+    "securityheader.parquet",
+    "securityheaderhistory.parquet",
+    "sfz_ds_dly.parquet",
+    "sfz_dp_dly.parquet",
+    "sfz_del.parquet",
+    "sfz_nam.parquet",
+    "sfz_hdr.parquet",
+    "sfz_shr.parquet",
+)
+REQUIRED_CCM_PARQUETS: tuple[str, ...] = tuple(
+    dict.fromkeys((*REQUIRED_CCM_DOWNSTREAM_PARQUETS, *REQUIRED_CCM_DAILY_REBUILD_PARQUETS))
 )
 REQUIRED_ADDITIONAL_DATA_FILES: tuple[str, ...] = (
     "F-F_Research_Data_Factors_daily.csv",
@@ -126,6 +197,23 @@ PACKAGE_MANIFEST_REQUIRED_GROUPS: tuple[str, ...] = (
     "refinitiv_finalized",
     "lm2011_additional_data",
 )
+SEED_PACKAGE_MANIFEST_REQUIRED_GROUPS: tuple[str, ...] = (
+    "sec_year_merged",
+    "ccm_crsp_compustat",
+)
+RAW_SEED_PACKAGE_MANIFEST_REQUIRED_GROUPS: tuple[str, ...] = (
+    "raw_sec_zips",
+    "ccm_crsp_compustat",
+)
+PREMERGE_LINK_SOURCE_FILES: tuple[str, ...] = (
+    "linkhistory.parquet",
+    "linkfiscalperiodall.parquet",
+)
+PREMERGE_COMPANY_LINK_FILES: tuple[str, ...] = (
+    "companyhistory.parquet",
+    "companydescription.parquet",
+)
+CANONICAL_LINK_FILENAME = "canonical_link_table.parquet"
 ITEMS_ANALYSIS_REQUIRED_COLUMNS: tuple[str, ...] = (
     "doc_id",
     "item_id",
@@ -139,6 +227,14 @@ ITEMS_ANALYSIS_REQUIRED_COLUMN_GROUPS: Mapping[str, tuple[str, ...]] = {
     "accession": ("accession_nodash", "accession_number"),
     "filing_date": ("filing_date", "file_date_filename"),
     "document_type": ("document_type_filename", "document_type"),
+}
+YEAR_MERGED_REQUIRED_COLUMNS: tuple[str, ...] = (
+    "doc_id",
+    "cik_10",
+    "full_text",
+)
+YEAR_MERGED_REQUIRED_COLUMN_GROUPS: Mapping[str, tuple[str, ...]] = {
+    "filing_date": ("filing_date", "file_date_filename"),
 }
 
 
@@ -167,6 +263,9 @@ class SubmissionPipelineConfig:
     run_id: str = DEFAULT_RUN_ID
     years: tuple[int, ...] | None = None
     nw_lags: tuple[int, ...] = DEFAULT_NW_LAGS
+    source_mode: str = SOURCE_MODE_FROM_YEAR_MERGED
+    run_raw_sec_stages: bool = False
+    item_extraction_regime: str = "legacy"
     finbert: FinbertSubmissionConfig = FinbertSubmissionConfig()
     artifact_overrides: tuple[ArtifactOverrideConfig, ...] = ()
 
@@ -189,6 +288,10 @@ class SubmissionProfile:
         return self.sec_root / "year_merged"
 
     @property
+    def raw_sec_zip_dir(self) -> Path:
+        return self.sec_root / "raw_zips"
+
+    @property
     def items_analysis_dir(self) -> Path:
         return self.sec_root / "items_analysis"
 
@@ -205,8 +308,18 @@ class SubmissionProfile:
         return self.ccm_dir / "final_flagged_data_compdesc_added.parquet"
 
     @property
+    def generated_daily_panel_path(self) -> Path:
+        return self.ccm_derived_dir / "final_flagged_data_compdesc_added.parquet"
+
+    @property
+    def active_daily_panel_path(self) -> Path:
+        if self.config.source_mode == SOURCE_MODE_RETAINED:
+            return self.daily_panel_path
+        return self.generated_daily_panel_path
+
+    @property
     def monthly_stock_path(self) -> Path:
-        return self.ccm_dir / "sfz_mth.parquet"
+        return _resolve_ccm_parquet_path(self.ccm_dir, "sfz_mth.parquet")
 
     @property
     def additional_data_dir(self) -> Path:
@@ -229,12 +342,70 @@ class SubmissionProfile:
         return self.submission_root / "analysis_outputs"
 
     @property
+    def sec_batch_root(self) -> Path:
+        return self.analysis_outputs_root / "sec_batches"
+
+    @property
+    def generated_year_merged_dir(self) -> Path:
+        return self.analysis_outputs_root / "sec_year_merged"
+
+    @property
+    def ccm_derived_dir(self) -> Path:
+        return self.analysis_outputs_root / "ccm_derived"
+
+    @property
+    def packaged_canonical_link_path(self) -> Path:
+        return self.ccm_dir / CANONICAL_LINK_FILENAME
+
+    @property
+    def generated_canonical_link_path(self) -> Path:
+        return self.ccm_derived_dir / CANONICAL_LINK_FILENAME
+
+    @property
+    def sec_ccm_premerge_dir(self) -> Path:
+        return self.analysis_outputs_root / "sec_ccm_premerge"
+
+    @property
+    def generated_matched_clean_path(self) -> Path:
+        return self.sec_ccm_premerge_dir / "sec_ccm_matched_clean.parquet"
+
+    @property
+    def sec_ccm_analysis_doc_ids_path(self) -> Path:
+        return self.sec_ccm_premerge_dir / "sec_ccm_analysis_doc_ids.parquet"
+
+    @property
+    def generated_items_analysis_dir(self) -> Path:
+        return self.analysis_outputs_root / "items_analysis"
+
+    @property
+    def active_year_merged_dir(self) -> Path:
+        if self.config.source_mode == SOURCE_MODE_FROM_RAW_ZIPS and self.config.run_raw_sec_stages:
+            return self.generated_year_merged_dir
+        return self.year_merged_dir
+
+    @property
+    def active_items_analysis_dir(self) -> Path:
+        if self.config.source_mode == SOURCE_MODE_RETAINED:
+            return self.items_analysis_dir
+        return self.generated_items_analysis_dir
+
+    @property
+    def active_matched_clean_path(self) -> Path:
+        if self.config.source_mode == SOURCE_MODE_RETAINED:
+            return self.matched_clean_path
+        return self.generated_matched_clean_path
+
+    @property
     def lm2011_output_dir(self) -> Path:
         return self.analysis_outputs_root / "lm2011_post_refinitiv"
 
     @property
     def nw_sensitivity_dir(self) -> Path:
         return self.analysis_outputs_root / "lm2011_nw_lag_sensitivity"
+
+    @property
+    def event_window_sensitivity_dir(self) -> Path:
+        return self.analysis_outputs_root / "lm2011_event_window_sensitivity"
 
     @property
     def finbert_output_dir(self) -> Path:
@@ -259,6 +430,10 @@ class SubmissionProfile:
     @property
     def finbert_robustness_output_dir(self) -> Path:
         return self.analysis_outputs_root / "finbert_robustness"
+
+    @property
+    def finbert_secondary_outcomes_output_dir(self) -> Path:
+        return self.analysis_outputs_root / "finbert_secondary_outcomes"
 
     @property
     def local_work_root(self) -> Path:
@@ -286,13 +461,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         description=(
             "Supervisor entrypoint for submitted thesis packages. The default readiness mode "
             "validates the zip layout and rebuilds thesis assets from retained outputs; "
-            "--stage all remains the explicit full rerun path."
+            "--stage all rebuilds derived SEC/CCM artifacts from submission seed parquets."
         )
     )
     parser.add_argument("--submission-root", type=Path, required=True)
     parser.add_argument("--stage", choices=STAGE_CHOICES, default=STAGE_READINESS)
     parser.add_argument("--run-id", type=str, default=None)
     parser.add_argument("--config", type=Path, default=None)
+    parser.add_argument("--source-mode", choices=SOURCE_MODE_CHOICES, default=None)
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args(argv)
@@ -300,12 +476,16 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
+    source_mode_override = args.source_mode
+    if args.stage == STAGE_RETAINED:
+        source_mode_override = SOURCE_MODE_RETAINED
     profile = resolve_submission_profile(
         submission_root=args.submission_root,
         config_path=args.config,
         run_id_override=args.run_id,
+        source_mode_override=source_mode_override,
     )
-    if args.stage in AGGREGATE_STAGE_SEQUENCES:
+    if _is_aggregate_stage(args.stage):
         return run_all_stages(
             profile,
             force=bool(args.force),
@@ -321,17 +501,19 @@ def resolve_submission_profile(
     submission_root: Path,
     config_path: Path | None = None,
     run_id_override: str | None = None,
+    source_mode_override: str | None = None,
 ) -> SubmissionProfile:
     root = Path(submission_root).expanduser().resolve()
     config = load_submission_pipeline_config(root, config_path=config_path)
-    if run_id_override:
-        config = SubmissionPipelineConfig(
-            run_id=run_id_override,
-            years=config.years,
-            nw_lags=config.nw_lags,
-            finbert=config.finbert,
-            artifact_overrides=config.artifact_overrides,
+    if source_mode_override is not None:
+        source_mode = _normalize_source_mode(source_mode_override)
+        config = replace(
+            config,
+            source_mode=source_mode,
+            run_raw_sec_stages=False if source_mode == SOURCE_MODE_RETAINED else config.run_raw_sec_stages,
         )
+    if run_id_override:
+        config = replace(config, run_id=run_id_override)
     profile = SubmissionProfile(submission_root=root, config=config)
     _assert_profile_paths_inside_submission_root(profile)
     return profile
@@ -359,7 +541,19 @@ def load_submission_pipeline_config(
     payload = json.loads(resolved_config_path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise SubmissionPipelineError("Submission pipeline config must be a JSON object.")
-    unknown = sorted(set(payload) - {"run_id", "years", "nw_lags", "finbert", "artifact_overrides"})
+    unknown = sorted(
+        set(payload)
+        - {
+            "run_id",
+            "years",
+            "nw_lags",
+            "source_mode",
+            "run_raw_sec_stages",
+            "item_extraction_regime",
+            "finbert",
+            "artifact_overrides",
+        }
+    )
     if unknown:
         raise SubmissionPipelineError(f"Unknown submission pipeline config keys: {unknown}")
 
@@ -387,6 +581,15 @@ def load_submission_pipeline_config(
         run_id=_str_or_default(payload.get("run_id"), DEFAULT_RUN_ID, label="run_id"),
         years=_normalize_years(payload.get("years")),
         nw_lags=_normalize_nw_lags(payload.get("nw_lags", list(DEFAULT_NW_LAGS))),
+        source_mode=_normalize_source_mode(payload.get("source_mode", SOURCE_MODE_FROM_YEAR_MERGED)),
+        run_raw_sec_stages=_bool_or_default(
+            payload.get("run_raw_sec_stages"),
+            False,
+            label="run_raw_sec_stages",
+        ),
+        item_extraction_regime=_normalize_item_extraction_regime(
+            payload.get("item_extraction_regime", "legacy")
+        ),
         finbert=FinbertSubmissionConfig(
             batch_profile=batch_profile,
             device=_optional_str(finbert_payload.get("device"), label="finbert.device"),
@@ -417,7 +620,7 @@ def run_all_stages(
     config_path: Path | None,
     aggregate_stage: str = STAGE_ALL,
 ) -> int:
-    stages = AGGREGATE_STAGE_SEQUENCES[aggregate_stage]
+    stages = _aggregate_stage_sequence(profile, aggregate_stage)
     plan = stage_plan(profile, aggregate_stage, force=force, config_path=config_path)
     if dry_run:
         print(
@@ -456,6 +659,10 @@ def run_stage(profile: SubmissionProfile, stage: str, *, force: bool, dry_run: b
         validate_submission_profile(profile)
         _record_pipeline_stage(profile, stage, "completed", {"validated": True})
         return 0
+    if stage == STAGE_VALIDATE_SEED_INPUTS:
+        validate_submission_seed_inputs(profile)
+        _record_pipeline_stage(profile, stage, "completed", {"validated": True})
+        return 0
     if stage == STAGE_PACKAGE_MANIFEST:
         manifest_path = _write_submission_package_manifest(profile)
         _record_pipeline_stage(
@@ -465,8 +672,56 @@ def run_stage(profile: SubmissionProfile, stage: str, *, force: bool, dry_run: b
             {"package_manifest_path": _rel(manifest_path, profile)},
         )
         return 0
+    if stage == STAGE_SEC_PARSE_ZIPS:
+        _run_sec_parse_zips_stage(profile, force=force)
+        _record_pipeline_stage(
+            profile,
+            stage,
+            "completed",
+            {"sec_batch_root": _rel(profile.sec_batch_root, profile)},
+        )
+        return 0
+    if stage == STAGE_SEC_YEARLY_MERGE:
+        _run_sec_yearly_merge_stage(profile, force=force)
+        _record_pipeline_stage(
+            profile,
+            stage,
+            "completed",
+            {"year_merged_dir": _rel(profile.generated_year_merged_dir, profile)},
+        )
+        return 0
+    if stage == STAGE_SEC_CCM_PREMERGE:
+        paths = _run_sec_ccm_premerge_stage(profile, force=force)
+        _record_pipeline_stage(
+            profile,
+            stage,
+            "completed",
+            {"artifacts": {key: _rel(path, profile) for key, path in sorted(paths.items())}},
+        )
+        return 0
+    if stage == STAGE_SEC_ITEMS_ANALYSIS:
+        paths = _run_sec_items_analysis_stage(profile, force=force)
+        _record_pipeline_stage(
+            profile,
+            stage,
+            "completed",
+            {"paths": [_rel(path, profile) for path in paths]},
+        )
+        return 0
+    if stage == STAGE_VALIDATE_DERIVED_INPUTS:
+        validate_submission_derived_inputs(profile)
+        _record_pipeline_stage(profile, stage, "completed", {"validated": True})
+        return 0
     if stage == STAGE_LM2011:
         return _run_command_stage(profile, stage, build_lm2011_command(profile, force=force))
+    if stage == STAGE_EVENT_WINDOW_SENSITIVITY:
+        if force:
+            _remove_generated_output_dir(profile.event_window_sensitivity_dir, profile)
+        return _run_command_stage(
+            profile,
+            stage,
+            build_lm2011_event_window_sensitivity_command(profile, force=force),
+        )
     if stage == STAGE_NW_SENSITIVITY:
         _promote_nw_sensitivity_pack(profile, require_core=True, require_extension=False)
         _record_pipeline_stage(profile, stage, "completed", {"nw_lags": list(profile.config.nw_lags)})
@@ -477,13 +732,19 @@ def run_stage(profile: SubmissionProfile, stage: str, *, force: bool, dry_run: b
         _require_finbert_preprocessing_checkpoint(profile)
         return _run_command_stage(profile, stage, build_finbert_analysis_command(profile, force=force))
     if stage == STAGE_EXTENSION:
-        validate_submission_profile(profile, outputs_required=False)
+        if profile.config.source_mode == SOURCE_MODE_RETAINED:
+            validate_submission_profile(profile, outputs_required=False)
+        else:
+            validate_submission_derived_inputs(profile)
         _run_extension_stage(profile, force=force)
         _promote_nw_sensitivity_pack(profile, require_core=True, require_extension=len(profile.config.nw_lags) > 1)
         _record_pipeline_stage(profile, stage, "completed", {"extension_output_dir": _rel(profile.extension_output_dir, profile)})
         return 0
     if stage == STAGE_VISIBLE_PREFIX_EXTENSION:
-        validate_submission_profile(profile, outputs_required=False)
+        if profile.config.source_mode == SOURCE_MODE_RETAINED:
+            validate_submission_profile(profile, outputs_required=False)
+        else:
+            validate_submission_derived_inputs(profile)
         _run_visible_prefix_extension_stage(profile, force=force)
         _record_pipeline_stage(
             profile,
@@ -513,7 +774,7 @@ def stage_plan(
     force: bool,
     config_path: Path | None = None,
 ) -> list[dict[str, Any]]:
-    stages = AGGREGATE_STAGE_SEQUENCES.get(stage, (stage,))
+    stages = _aggregate_stage_sequence(profile, stage) if _is_aggregate_stage(stage) else (stage,)
     plan: list[dict[str, Any]] = []
     for stage_name in stages:
         if stage_name == STAGE_PACKAGE_MANIFEST:
@@ -523,8 +784,50 @@ def stage_plan(
             }
         elif stage_name == STAGE_VALIDATE:
             details = {"action": "validate strict SUBMISSION layout"}
+        elif stage_name == STAGE_VALIDATE_SEED_INPUTS:
+            details = {
+                "action": "validate recompute seed inputs",
+                "source_mode": profile.config.source_mode,
+                "year_merged_dir": _rel(profile.active_year_merged_dir, profile),
+                "ccm_dir": _rel(profile.ccm_dir, profile),
+            }
+        elif stage_name == STAGE_SEC_PARSE_ZIPS:
+            details = {
+                "action": "parse optional raw SEC ZIPs into yearly batch parquets",
+                "raw_zip_dir": _rel(profile.raw_sec_zip_dir, profile),
+                "output_dir": _rel(profile.sec_batch_root, profile),
+            }
+        elif stage_name == STAGE_SEC_YEARLY_MERGE:
+            details = {
+                "action": "merge parsed SEC batches into yearly filing parquets",
+                "batch_dir": _rel(profile.sec_batch_root, profile),
+                "output_dir": _rel(profile.generated_year_merged_dir, profile),
+            }
+        elif stage_name == STAGE_SEC_CCM_PREMERGE:
+            details = {
+                "action": "build SEC-CCM premerge artifacts from SEC and CCM seed parquets",
+                "output_dir": _rel(profile.sec_ccm_premerge_dir, profile),
+            }
+        elif stage_name == STAGE_SEC_ITEMS_ANALYSIS:
+            details = {
+                "action": "extract SEC item text for matched-analysis doc_ids",
+                "output_dir": _rel(profile.generated_items_analysis_dir, profile),
+                "item_extraction_regime": profile.config.item_extraction_regime,
+            }
+        elif stage_name == STAGE_VALIDATE_DERIVED_INPUTS:
+            details = {
+                "action": "validate generated SEC-CCM and item-analysis artifacts plus downstream inputs",
+                "items_analysis_dir": _rel(profile.active_items_analysis_dir, profile),
+                "matched_clean_path": _rel(profile.active_matched_clean_path, profile),
+            }
         elif stage_name == STAGE_LM2011:
             details = {"command": _display_command(build_lm2011_command(profile, force=force))}
+        elif stage_name == STAGE_EVENT_WINDOW_SENSITIVITY:
+            details = {
+                "command": _display_command(
+                    build_lm2011_event_window_sensitivity_command(profile, force=force)
+                )
+            }
         elif stage_name == STAGE_NW_SENSITIVITY:
             details = {"action": "promote NW sensitivity artifacts", "output_dir": _rel(profile.nw_sensitivity_dir, profile)}
         elif stage_name == STAGE_FINBERT_PREPROCESS:
@@ -548,6 +851,23 @@ def stage_plan(
     return plan
 
 
+def _is_aggregate_stage(stage: str) -> bool:
+    return stage in {STAGE_READINESS, STAGE_RETAINED, STAGE_ALL}
+
+
+def _aggregate_stage_sequence(profile: SubmissionProfile, aggregate_stage: str) -> tuple[str, ...]:
+    if aggregate_stage == STAGE_ALL:
+        if profile.config.source_mode == SOURCE_MODE_RETAINED:
+            return RETAINED_STAGES
+        if profile.config.source_mode == SOURCE_MODE_FROM_RAW_ZIPS and profile.config.run_raw_sec_stages:
+            return RAW_RECOMPUTE_STAGES
+        return RECOMPUTE_STAGES
+    try:
+        return AGGREGATE_STAGE_SEQUENCES[aggregate_stage]
+    except KeyError as exc:
+        raise SubmissionPipelineError(f"Unsupported aggregate stage: {aggregate_stage}") from exc
+
+
 def build_lm2011_command(profile: SubmissionProfile, *, force: bool) -> list[str]:
     command = [
         sys.executable,
@@ -563,15 +883,15 @@ def build_lm2011_command(profile: SubmissionProfile, *, force: bool) -> list[str
         "--local-work-root",
         str(profile.local_work_root / "lm2011_post_refinitiv"),
         "--year-merged-dir",
-        str(profile.year_merged_dir),
+        str(profile.active_year_merged_dir),
         "--items-analysis-dir",
-        str(profile.items_analysis_dir),
+        str(profile.active_items_analysis_dir),
         "--ccm-base-dir",
         str(profile.ccm_dir),
         "--daily-panel-path",
-        str(profile.daily_panel_path),
+        str(profile.active_daily_panel_path),
         "--matched-clean-path",
-        str(profile.matched_clean_path),
+        str(profile.active_matched_clean_path),
         "--doc-ownership-path",
         str(profile.doc_ownership_path),
         "--doc-analyst-selected-path",
@@ -592,6 +912,25 @@ def build_lm2011_command(profile: SubmissionProfile, *, force: bool) -> list[str
                 "--recompute-regression-tables",
             ]
         )
+    return command
+
+
+def build_lm2011_event_window_sensitivity_command(
+    profile: SubmissionProfile,
+    *,
+    force: bool,
+) -> list[str]:
+    del force
+    command = build_lm2011_command(profile, force=False)
+    command.extend(
+        [
+            "--event-window-sensitivity-days",
+            *[str(days) for days in DEFAULT_EVENT_WINDOW_SENSITIVITY_DAYS],
+            "--event-window-sensitivity-output-dir",
+            str(profile.event_window_sensitivity_dir),
+            "--event-window-sensitivity-only",
+        ]
+    )
     return command
 
 
@@ -639,7 +978,7 @@ def build_thesis_assets_command(profile: SubmissionProfile) -> list[str]:
         "--repo-root",
         str(ROOT),
         "--output-root",
-        str(profile.thesis_assets_output_root),
+        str(profile.thesis_assets_output_root / profile.config.run_id),
         "--submission-lock",
         str(profile.submission_lock_path),
     ]
@@ -652,61 +991,101 @@ def _write_submission_package_manifest(profile: SubmissionProfile) -> Path:
 
 
 def _build_submission_package_manifest(profile: SubmissionProfile) -> dict[str, Any]:
-    additional_data_paths = _additional_data_manifest_paths(profile)
-    artifact_groups: dict[str, dict[str, Any]] = {
-        "sec_year_merged": _manifest_group(
+    artifact_groups: dict[str, dict[str, Any]] = {}
+
+    _add_manifest_group_if_available(
+        artifact_groups,
+        "sec_year_merged",
+        profile,
+        lambda: _parquet_shards_for_manifest(profile.active_year_merged_dir, _rel(profile.active_year_merged_dir, profile)),
+        schema_summary={
+            "required_columns": list(YEAR_MERGED_REQUIRED_COLUMNS),
+            "required_column_groups": {
+                key: list(values)
+                for key, values in YEAR_MERGED_REQUIRED_COLUMN_GROUPS.items()
+            },
+        },
+    )
+    _add_manifest_group_if_available(
+        artifact_groups,
+        "sec_items_analysis",
+        profile,
+        lambda: _first_available_parquet_shards_for_manifest(
+            (
+                profile.active_items_analysis_dir,
+                profile.items_analysis_dir,
+            ),
             profile,
-            _parquet_shards_for_manifest(profile.year_merged_dir, "data/sec/year_merged"),
-            schema_summary={"required_columns": ["doc_id"]},
         ),
-        "sec_items_analysis": _manifest_group(
-            profile,
-            _parquet_shards_for_manifest(profile.items_analysis_dir, "data/sec/items_analysis"),
-            schema_summary={
-                "required_columns": list(ITEMS_ANALYSIS_REQUIRED_COLUMNS),
-                "required_column_groups": {
-                    key: list(values)
-                    for key, values in ITEMS_ANALYSIS_REQUIRED_COLUMN_GROUPS.items()
+        schema_summary={
+            "required_columns": list(ITEMS_ANALYSIS_REQUIRED_COLUMNS),
+            "required_column_groups": {
+                key: list(values)
+                for key, values in ITEMS_ANALYSIS_REQUIRED_COLUMN_GROUPS.items()
+            },
+        },
+    )
+    _add_manifest_group_if_available(
+        artifact_groups,
+        "sec_ccm_matched_clean",
+        profile,
+        lambda: _first_available_paths_for_manifest(
+            (
+                profile.active_matched_clean_path,
+                profile.matched_clean_path,
+            ),
+            "SEC/CCM matched-clean parquet",
+        ),
+        schema_summary={"required_columns": ["doc_id"]},
+    )
+    _add_manifest_group_if_available(
+        artifact_groups,
+        "ccm_crsp_compustat",
+        profile,
+        lambda: _ccm_manifest_paths(profile),
+        schema_summary={
+            "required_files_for_downstream": list(REQUIRED_CCM_DOWNSTREAM_PARQUETS),
+            "required_files_for_daily_panel_rebuild": list(REQUIRED_CCM_DAILY_REBUILD_PARQUETS),
+            "premerge_company_files": list(PREMERGE_COMPANY_LINK_FILES),
+            "premerge_link_source_files": list(PREMERGE_LINK_SOURCE_FILES),
+            "canonical_link_candidate": CANONICAL_LINK_FILENAME,
+            "daily_panel_key_columns": ["KYPERMNO", "CALDT"],
+            "generated_daily_panel": _rel(profile.generated_daily_panel_path, profile),
+        },
+    )
+    _add_manifest_group_if_available(
+        artifact_groups,
+        "refinitiv_finalized",
+        profile,
+        lambda: _required_existing_paths(
+            [profile.doc_ownership_path, profile.doc_analyst_selected_path],
+            "finalized Refinitiv document-level inputs",
+        ),
+        schema_summary={"required_columns": ["doc_id"]},
+    )
+    _add_manifest_group_if_available(
+        artifact_groups,
+        "lm2011_additional_data",
+        profile,
+        lambda: _additional_data_manifest_paths(profile),
+        schema_summary={
+            "required_files": list(REQUIRED_ADDITIONAL_DATA_FILES),
+            "master_dictionary_candidates": list(MASTER_DICTIONARY_CANDIDATES),
+            "dictionary_family_inputs": ["replication", "extended"],
+        },
+    )
+
+    if profile.raw_sec_zip_dir.exists():
+        raw_zip_paths = tuple(sorted(path.resolve() for path in profile.raw_sec_zip_dir.glob("*.zip") if path.is_file()))
+        if raw_zip_paths:
+            artifact_groups["raw_sec_zips"] = _manifest_group(
+                profile,
+                raw_zip_paths,
+                schema_summary={
+                    "purpose": "Optional raw SEC zip inputs for disabled-by-default rebuild stages.",
+                    "required_when": f"source_mode={SOURCE_MODE_FROM_RAW_ZIPS} and run_raw_sec_stages=true",
                 },
-            },
-        ),
-        "sec_ccm_matched_clean": _manifest_group(
-            profile,
-            _required_existing_paths(
-                [profile.matched_clean_path],
-                "SEC/CCM matched-clean parquet",
-            ),
-            schema_summary={"required_columns": ["doc_id"]},
-        ),
-        "ccm_crsp_compustat": _manifest_group(
-            profile,
-            _required_existing_paths(
-                [profile.ccm_dir / filename for filename in REQUIRED_CCM_PARQUETS],
-                "CCM/CRSP/Compustat submission inputs",
-            ),
-            schema_summary={
-                "required_files": list(REQUIRED_CCM_PARQUETS),
-                "daily_panel_key_columns": ["KYPERMNO", "CALDT"],
-            },
-        ),
-        "refinitiv_finalized": _manifest_group(
-            profile,
-            _required_existing_paths(
-                [profile.doc_ownership_path, profile.doc_analyst_selected_path],
-                "finalized Refinitiv document-level inputs",
-            ),
-            schema_summary={"required_columns": ["doc_id"]},
-        ),
-        "lm2011_additional_data": _manifest_group(
-            profile,
-            additional_data_paths,
-            schema_summary={
-                "required_files": list(REQUIRED_ADDITIONAL_DATA_FILES),
-                "master_dictionary_candidates": list(MASTER_DICTIONARY_CANDIDATES),
-                "dictionary_family_inputs": ["replication", "extended"],
-            },
-        ),
-    }
+            )
 
     retained_output_roots = _retained_output_roots_for_manifest(profile)
     if retained_output_roots:
@@ -721,10 +1100,12 @@ def _build_submission_package_manifest(profile: SubmissionProfile) -> dict[str, 
                 "run_families": [
                     RUN_FAMILY_LM2011_POST_REFINITIV,
                     RUN_FAMILY_LM2011_NW_LAG_SENSITIVITY,
+                    RUN_FAMILY_LM2011_EVENT_WINDOW_SENSITIVITY,
                     RUN_FAMILY_FINBERT_RUN,
                     RUN_FAMILY_LM2011_EXTENSION,
                     RUN_FAMILY_LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX,
                     RUN_FAMILY_FINBERT_ROBUSTNESS,
+                    RUN_FAMILY_FINBERT_SECONDARY_OUTCOMES,
                 ],
             },
         )
@@ -751,6 +1132,23 @@ def _manifest_group(
     }
 
 
+def _add_manifest_group_if_available(
+    artifact_groups: dict[str, dict[str, Any]],
+    group_name: str,
+    profile: SubmissionProfile,
+    paths_factory,
+    *,
+    schema_summary: Mapping[str, Any],
+) -> None:
+    try:
+        paths = tuple(paths_factory())
+    except SubmissionPipelineError:
+        return
+    if not paths:
+        return
+    artifact_groups[group_name] = _manifest_group(profile, paths, schema_summary=schema_summary)
+
+
 def _parquet_shards_for_manifest(path: Path, label: str) -> tuple[Path, ...]:
     if not path.exists() or not path.is_dir():
         raise SubmissionPipelineError(f"Required directory is missing: {label} ({path})")
@@ -760,12 +1158,64 @@ def _parquet_shards_for_manifest(path: Path, label: str) -> tuple[Path, ...]:
     return paths
 
 
+def _first_available_parquet_shards_for_manifest(paths: Sequence[Path], profile: SubmissionProfile) -> tuple[Path, ...]:
+    last_error: SubmissionPipelineError | None = None
+    for path in paths:
+        try:
+            return _parquet_shards_for_manifest(path, _rel(path, profile))
+        except SubmissionPipelineError as exc:
+            last_error = exc
+    if last_error is not None:
+        raise last_error
+    raise SubmissionPipelineError("No candidate parquet directories supplied for manifest group.")
+
+
 def _required_existing_paths(paths: Sequence[Path], label: str) -> tuple[Path, ...]:
     unique_paths = tuple(dict.fromkeys(Path(path).resolve() for path in paths))
     missing = [str(path) for path in unique_paths if not path.exists()]
     if missing:
         raise SubmissionPipelineError(f"Missing required {label}: {missing}")
     return unique_paths
+
+
+def _first_available_paths_for_manifest(paths: Sequence[Path], label: str) -> tuple[Path, ...]:
+    for path in paths:
+        resolved = Path(path).resolve()
+        if resolved.exists():
+            return (resolved,)
+    raise SubmissionPipelineError(f"Missing required {label}: {[str(Path(path).resolve()) for path in paths]}")
+
+
+def _ccm_parquet_candidate_paths(ccm_dir: Path, filename: str) -> tuple[Path, ...]:
+    direct = ccm_dir / filename
+    nested = tuple(sorted(path for path in ccm_dir.rglob(filename) if path.is_file() and path != direct))
+    return (direct, *nested)
+
+
+def _resolve_ccm_parquet_path(ccm_dir: Path, filename: str) -> Path:
+    for path in _ccm_parquet_candidate_paths(ccm_dir, filename):
+        if path.exists():
+            return path.resolve()
+    return (ccm_dir / filename).resolve()
+
+
+def _require_ccm_parquet(profile: SubmissionProfile, filename: str, label: str) -> Path:
+    path = _resolve_ccm_parquet_path(profile.ccm_dir, filename)
+    _require_file(path, f"{label} {filename}")
+    return path
+
+
+def _require_ccm_parquet_files(profile: SubmissionProfile, filenames: Sequence[str], label: str) -> tuple[Path, ...]:
+    return tuple(_require_ccm_parquet(profile, filename, label) for filename in filenames)
+
+
+def _ccm_manifest_paths(profile: SubmissionProfile) -> tuple[Path, ...]:
+    if not profile.ccm_dir.exists() or not profile.ccm_dir.is_dir():
+        raise SubmissionPipelineError(f"Required directory is missing: data/ccm_crsp_compustat ({profile.ccm_dir})")
+    paths = tuple(sorted(path.resolve() for path in profile.ccm_dir.rglob("*.parquet") if path.is_file()))
+    if not paths:
+        raise SubmissionPipelineError(f"Required directory contains no parquet files: data/ccm_crsp_compustat ({profile.ccm_dir})")
+    return paths
 
 
 def _additional_data_manifest_paths(profile: SubmissionProfile) -> tuple[Path, ...]:
@@ -793,12 +1243,18 @@ def _retained_output_roots_for_manifest(profile: SubmissionProfile) -> tuple[Pat
     candidates = (
         profile.lm2011_output_dir,
         profile.nw_sensitivity_dir,
+        profile.event_window_sensitivity_dir,
         profile.finbert_analysis_run_dir,
         profile.extension_output_dir,
         profile.visible_prefix_extension_output_dir,
         profile.finbert_robustness_output_dir,
+        profile.finbert_secondary_outcomes_output_dir,
     )
-    return tuple(path.resolve() for path in candidates if path.exists())
+    return tuple(path.resolve() for path in candidates if _dir_contains_files(path))
+
+
+def _dir_contains_files(path: Path) -> bool:
+    return path.exists() and path.is_dir() and any(child.is_file() for child in path.rglob("*"))
 
 
 def _code_version_payload() -> dict[str, Any]:
@@ -832,7 +1288,7 @@ def _git_output(*args: str) -> str | None:
 
 def validate_submission_profile(profile: SubmissionProfile, *, outputs_required: bool = False) -> None:
     _assert_profile_paths_inside_submission_root(profile)
-    _validate_submission_package_manifest(profile)
+    _validate_submission_package_manifest(profile, required_groups=PACKAGE_MANIFEST_REQUIRED_GROUPS)
     _require_dir_with_parquet(profile.year_merged_dir, "data/sec/year_merged")
     _require_dir_with_parquet(profile.items_analysis_dir, "data/sec/items_analysis")
     _require_file(profile.matched_clean_path, "SEC/CCM matched-clean parquet")
@@ -840,8 +1296,7 @@ def validate_submission_profile(profile: SubmissionProfile, *, outputs_required:
     _require_file(profile.doc_analyst_selected_path, "finalized Refinitiv analyst-selected parquet")
     _require_file(profile.daily_panel_path, "CCM daily market panel parquet")
     _require_file(profile.monthly_stock_path, "CCM monthly stock returns parquet")
-    for filename in REQUIRED_CCM_PARQUETS:
-        _require_file(profile.ccm_dir / filename, f"CCM input {filename}")
+    _require_ccm_parquet_files(profile, REQUIRED_CCM_DOWNSTREAM_PARQUETS, "CCM downstream input")
     for filename in REQUIRED_ADDITIONAL_DATA_FILES:
         _require_file(profile.additional_data_dir / filename, f"LM2011 additional-data input {filename}")
     _require_file(
@@ -854,7 +1309,7 @@ def validate_submission_profile(profile: SubmissionProfile, *, outputs_required:
             + ", ".join(MASTER_DICTIONARY_CANDIDATES)
         )
 
-    _validate_parquet_columns(_first_parquet(profile.year_merged_dir), ("doc_id",), "year_merged shard")
+    _validate_year_merged_shards(profile.year_merged_dir)
     _validate_items_analysis_shards(profile.items_analysis_dir)
     _validate_parquet_columns(profile.matched_clean_path, ("doc_id",), "sec_ccm_matched_clean")
     _validate_parquet_columns(profile.doc_ownership_path, ("doc_id",), "refinitiv_lm2011_doc_ownership")
@@ -869,11 +1324,82 @@ def validate_submission_profile(profile: SubmissionProfile, *, outputs_required:
         profile.extension_output_dir,
         profile.visible_prefix_extension_output_dir,
         profile.finbert_robustness_output_dir,
+        profile.finbert_secondary_outcomes_output_dir,
         profile.thesis_assets_output_root,
     ):
         _assert_inside_submission_root(output_root, profile.submission_root)
         if outputs_required and not output_root.exists():
             raise SubmissionPipelineError(f"Expected output root is missing: {output_root}")
+
+
+def validate_submission_seed_inputs(profile: SubmissionProfile) -> None:
+    _assert_profile_paths_inside_submission_root(profile)
+    _validate_submission_package_manifest(
+        profile,
+        required_groups=(
+            RAW_SEED_PACKAGE_MANIFEST_REQUIRED_GROUPS
+            if profile.config.source_mode == SOURCE_MODE_FROM_RAW_ZIPS and profile.config.run_raw_sec_stages
+            else SEED_PACKAGE_MANIFEST_REQUIRED_GROUPS
+        ),
+    )
+    if profile.config.source_mode == SOURCE_MODE_FROM_RAW_ZIPS and profile.config.run_raw_sec_stages:
+        _require_raw_sec_zip_inputs(profile)
+    else:
+        _require_dir_with_parquet(profile.active_year_merged_dir, _rel(profile.active_year_merged_dir, profile))
+        _validate_year_merged_shards(profile.active_year_merged_dir)
+    _validate_ccm_premerge_seed_inputs(profile)
+
+
+def validate_submission_derived_inputs(profile: SubmissionProfile) -> None:
+    _assert_profile_paths_inside_submission_root(profile)
+    _validate_submission_package_manifest(
+        profile,
+        required_groups=(
+            RAW_SEED_PACKAGE_MANIFEST_REQUIRED_GROUPS
+            if profile.config.source_mode == SOURCE_MODE_FROM_RAW_ZIPS and profile.config.run_raw_sec_stages
+            else SEED_PACKAGE_MANIFEST_REQUIRED_GROUPS
+        ),
+    )
+    _require_dir_with_parquet(profile.active_items_analysis_dir, _rel(profile.active_items_analysis_dir, profile))
+    _require_file(profile.active_matched_clean_path, "generated SEC/CCM matched-clean parquet")
+    _validate_items_analysis_shards(profile.active_items_analysis_dir)
+    _validate_parquet_columns(profile.active_matched_clean_path, ("doc_id",), "sec_ccm_matched_clean")
+    _validate_downstream_static_inputs(profile)
+
+
+def _validate_downstream_static_inputs(profile: SubmissionProfile) -> None:
+    _require_file(profile.doc_ownership_path, "finalized Refinitiv document ownership parquet")
+    _require_file(profile.doc_analyst_selected_path, "finalized Refinitiv analyst-selected parquet")
+    _require_file(profile.active_daily_panel_path, "CCM daily market panel parquet")
+    _require_file(profile.monthly_stock_path, "CCM monthly stock returns parquet")
+    _require_ccm_parquet_files(profile, REQUIRED_CCM_DOWNSTREAM_PARQUETS, "CCM downstream input")
+    for filename in REQUIRED_ADDITIONAL_DATA_FILES:
+        _require_file(profile.additional_data_dir / filename, f"LM2011 additional-data input {filename}")
+    _require_file(
+        profile.additional_data_dir / EXTENDED_MASTER_DICTIONARY_FILENAME,
+        "extended LM master dictionary for dictionary-family comparison",
+    )
+    if not any((profile.additional_data_dir / filename).exists() for filename in MASTER_DICTIONARY_CANDIDATES):
+        raise SubmissionPipelineError(
+            "LM2011 additional-data directory is missing a master dictionary candidate: "
+            + ", ".join(MASTER_DICTIONARY_CANDIDATES)
+        )
+    _validate_parquet_columns(profile.doc_ownership_path, ("doc_id",), "refinitiv_lm2011_doc_ownership")
+    _validate_parquet_columns(profile.doc_analyst_selected_path, ("doc_id",), "refinitiv_doc_analyst_selected")
+    _validate_daily_panel_schema(profile.active_daily_panel_path)
+
+
+def _validate_ccm_premerge_seed_inputs(profile: SubmissionProfile) -> None:
+    _require_ccm_parquet_files(profile, REQUIRED_CCM_DAILY_REBUILD_PARQUETS, "CCM daily-panel rebuild input")
+
+
+def _require_raw_sec_zip_inputs(profile: SubmissionProfile) -> None:
+    if not profile.raw_sec_zip_dir.exists() or not profile.raw_sec_zip_dir.is_dir():
+        raise SubmissionPipelineError(f"Required raw SEC zip directory is missing: {profile.raw_sec_zip_dir}")
+    years = _selected_year_strings(profile, source_dir=profile.raw_sec_zip_dir, suffix=".zip")
+    missing = [year for year in years if not (profile.raw_sec_zip_dir / f"{year}.zip").exists()]
+    if missing:
+        raise SubmissionPipelineError(f"Missing raw SEC zip files for years: {missing}")
 
 
 def _run_extension_stage(profile: SubmissionProfile, *, force: bool) -> None:
@@ -896,12 +1422,12 @@ def _run_extension_stage(profile: SubmissionProfile, *, force: bool) -> None:
     cfg = LM2011ExtensionRunConfig(
         output_dir=profile.extension_output_dir,
         additional_data_dir=profile.additional_data_dir,
-        items_analysis_dir=profile.items_analysis_dir,
-        company_history_path=profile.ccm_dir / "companyhistory.parquet",
-        company_description_path=profile.ccm_dir / "companydescription.parquet",
+        items_analysis_dir=profile.active_items_analysis_dir,
+        company_history_path=_resolve_ccm_parquet_path(profile.ccm_dir, "companyhistory.parquet"),
+        company_description_path=_resolve_ccm_parquet_path(profile.ccm_dir, "companydescription.parquet"),
         ff48_siccodes_path=profile.additional_data_dir / "FF_Siccodes_48_Industries.txt",
         event_panel_path=profile.lm2011_output_dir / "lm2011_event_panel.parquet",
-        year_merged_dir=profile.year_merged_dir,
+        year_merged_dir=profile.active_year_merged_dir,
         local_work_root=profile.local_work_root / "lm2011_extension",
         full_10k_cleaning_contract=DEFAULT_LM2011_FULL_10K_CLEANING_CONTRACT,
         full_10k_text_feature_batch_size=DEFAULT_LM2011_FULL_10K_TEXT_FEATURE_BATCH_SIZE,
@@ -946,12 +1472,12 @@ def _run_visible_prefix_extension_stage(profile: SubmissionProfile, *, force: bo
     cfg = LM2011ExtensionRunConfig(
         output_dir=profile.visible_prefix_extension_output_dir,
         additional_data_dir=profile.additional_data_dir,
-        items_analysis_dir=profile.items_analysis_dir,
-        company_history_path=profile.ccm_dir / "companyhistory.parquet",
-        company_description_path=profile.ccm_dir / "companydescription.parquet",
+        items_analysis_dir=profile.active_items_analysis_dir,
+        company_history_path=_resolve_ccm_parquet_path(profile.ccm_dir, "companyhistory.parquet"),
+        company_description_path=_resolve_ccm_parquet_path(profile.ccm_dir, "companydescription.parquet"),
         ff48_siccodes_path=profile.additional_data_dir / "FF_Siccodes_48_Industries.txt",
         event_panel_path=profile.lm2011_output_dir / "lm2011_event_panel.parquet",
-        year_merged_dir=profile.year_merged_dir,
+        year_merged_dir=profile.active_year_merged_dir,
         local_work_root=profile.local_work_root / "lm2011_extension_finbert_visible_prefix",
         full_10k_cleaning_contract=DEFAULT_LM2011_FULL_10K_CLEANING_CONTRACT,
         full_10k_text_feature_batch_size=DEFAULT_LM2011_FULL_10K_TEXT_FEATURE_BATCH_SIZE,
@@ -981,11 +1507,14 @@ def _write_submission_lock(profile: SubmissionProfile) -> Path:
     run_roots = {
         RUN_FAMILY_LM2011_POST_REFINITIV: profile.lm2011_output_dir,
         RUN_FAMILY_LM2011_NW_LAG_SENSITIVITY: profile.nw_sensitivity_dir,
+        RUN_FAMILY_LM2011_EVENT_WINDOW_SENSITIVITY: profile.event_window_sensitivity_dir,
         RUN_FAMILY_FINBERT_RUN: profile.finbert_analysis_run_dir,
         RUN_FAMILY_LM2011_EXTENSION: profile.extension_output_dir,
         RUN_FAMILY_LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX: profile.visible_prefix_extension_output_dir,
         RUN_FAMILY_FINBERT_ROBUSTNESS: profile.finbert_robustness_output_dir,
     }
+    if profile.finbert_secondary_outcomes_output_dir.exists():
+        run_roots[RUN_FAMILY_FINBERT_SECONDARY_OUTCOMES] = profile.finbert_secondary_outcomes_output_dir
     overrides = [
         (override.artifact_key, override.path, override.reason)
         for override in profile.config.artifact_overrides
@@ -995,9 +1524,26 @@ def _write_submission_lock(profile: SubmissionProfile) -> Path:
         run_id=profile.config.run_id,
         run_roots=run_roots,
         artifact_overrides=overrides,
-        provenance_disclosures=[],
+        provenance_disclosures=_submission_provenance_disclosures(profile),
     )
     return write_submission_lock(profile.submission_lock_path, payload)
+
+
+def _submission_provenance_disclosures(profile: SubmissionProfile) -> list[dict[str, Any]]:
+    return [
+        {
+            "id": FINBERT_INFERRED_REVISION_DISCLOSURE_ID,
+            "severity": "warning",
+            "run_family": RUN_FAMILY_FINBERT_RUN,
+            "model_name": profile.config.finbert.model_name,
+            "model_revision": profile.config.finbert.model_revision,
+            "tokenizer_revision": profile.config.finbert.tokenizer_revision,
+            "reason": (
+                "Retained FinBERT artifacts have incomplete persisted revision provenance; "
+                "the revision is inferred and disclosed for deterministic retained-output rebuilds."
+            ),
+        }
+    ]
 
 
 def _promote_nw_sensitivity_pack(
@@ -1065,14 +1611,60 @@ def _promote_nw_sensitivity_pack(
     _write_json(profile.nw_sensitivity_dir / "lm2011_nw_lag_sensitivity_run_manifest.json", manifest)
 
 
+def _finbert_manifest_authority(profile: SubmissionProfile) -> dict[str, Any] | None:
+    for manifest_path in (
+        profile.finbert_preprocessing_run_dir / "run_manifest.json",
+        profile.finbert_analysis_run_dir / "run_manifest.json",
+    ):
+        if not manifest_path.exists():
+            continue
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            continue
+
+        guard_payload = (manifest.get("semantic_reuse_guard") or {}).get("payload")
+        authority = None
+        if isinstance(guard_payload, dict) and isinstance(guard_payload.get("authority"), dict):
+            authority = guard_payload["authority"]
+        elif isinstance(manifest.get("authority"), dict):
+            authority = manifest["authority"]
+        if isinstance(authority, dict):
+            return authority
+    return None
+
+
+def _finbert_revision_cli_value(value: object) -> str:
+    if value is None:
+        return "none"
+    text = str(value).strip()
+    return text if text else "none"
+
+
+def _finbert_command_authority(profile: SubmissionProfile) -> tuple[str, str, str]:
+    authority = _finbert_manifest_authority(profile)
+    if authority is not None:
+        return (
+            str(authority.get("model_name") or profile.config.finbert.model_name),
+            _finbert_revision_cli_value(authority.get("model_revision")),
+            _finbert_revision_cli_value(authority.get("tokenizer_revision")),
+        )
+    return (
+        profile.config.finbert.model_name,
+        _finbert_revision_cli_value(profile.config.finbert.model_revision),
+        _finbert_revision_cli_value(profile.config.finbert.tokenizer_revision),
+    )
+
+
 def _base_finbert_command(profile: SubmissionProfile) -> list[str]:
+    model_name, model_revision, tokenizer_revision = _finbert_command_authority(profile)
     command = [
         sys.executable,
         str(ROOT / "src" / "thesis_pkg" / "notebooks_and_scripts" / "finbert_item_analysis_runner.py"),
         "--data-profile",
         "EXPLICIT",
         "--source-items-dir",
-        str(profile.items_analysis_dir),
+        str(profile.active_items_analysis_dir),
         "--backbone-path",
         str(profile.lm2011_output_dir / "lm2011_sample_backbone.parquet"),
         "--output-dir",
@@ -1082,11 +1674,11 @@ def _base_finbert_command(profile: SubmissionProfile) -> list[str]:
         "--batch-profile",
         profile.config.finbert.batch_profile,
         "--model-name",
-        profile.config.finbert.model_name,
+        model_name,
         "--model-revision",
-        profile.config.finbert.model_revision,
+        model_revision,
         "--tokenizer-revision",
-        profile.config.finbert.tokenizer_revision,
+        tokenizer_revision,
     ]
     if profile.config.finbert.device is not None:
         command.extend(["--device", profile.config.finbert.device])
@@ -1109,6 +1701,17 @@ def _run_command_stage(profile: SubmissionProfile, stage: str, command: Sequence
     return int(completed.returncode)
 
 
+def _remove_generated_output_dir(path: Path, profile: SubmissionProfile) -> None:
+    resolved = path.resolve()
+    analysis_root = profile.analysis_outputs_root.resolve()
+    if not resolved.is_relative_to(analysis_root):
+        raise SubmissionPipelineError(f"Refusing to remove output outside analysis_outputs: {resolved}")
+    if resolved.exists():
+        if not resolved.is_dir():
+            raise SubmissionPipelineError(f"Expected generated output path to be a directory: {resolved}")
+        shutil.rmtree(resolved)
+
+
 def _self_stage_command(
     profile: SubmissionProfile,
     stage: str,
@@ -1126,6 +1729,7 @@ def _self_stage_command(
     ]
     if config_path is not None:
         command.extend(["--config", str(config_path)])
+    command.extend(["--source-mode", profile.config.source_mode])
     if profile.config.run_id != DEFAULT_RUN_ID:
         command.extend(["--run-id", profile.config.run_id])
     if force:
@@ -1150,6 +1754,9 @@ def _record_pipeline_stage(
             "config": {
                 "years": list(profile.config.years) if profile.config.years is not None else None,
                 "nw_lags": list(profile.config.nw_lags),
+                "source_mode": profile.config.source_mode,
+                "run_raw_sec_stages": profile.config.run_raw_sec_stages,
+                "item_extraction_regime": profile.config.item_extraction_regime,
                 "finbert": asdict(profile.config.finbert),
             },
         }
@@ -1171,21 +1778,287 @@ def _require_finbert_preprocessing_checkpoint(profile: SubmissionProfile) -> Non
         )
 
 
+def _run_sec_parse_zips_stage(profile: SubmissionProfile, *, force: bool) -> list[Path]:
+    from thesis_pkg.pipelines.sec_pipeline import process_zip_year
+
+    _require_raw_sec_zip_inputs(profile)
+    written: list[Path] = []
+    for year in _selected_year_strings(profile, source_dir=profile.raw_sec_zip_dir, suffix=".zip"):
+        zip_path = profile.raw_sec_zip_dir / f"{year}.zip"
+        out_year = profile.sec_batch_root / year
+        existing = sorted(out_year.glob(f"{year}_batch_*.parquet")) if out_year.exists() else []
+        if existing and not force:
+            written.extend(existing)
+            continue
+        written.extend(
+            process_zip_year(
+                zip_path=zip_path,
+                out_dir=out_year,
+                batch_max_rows=2000,
+                batch_max_text_bytes=250 * 1024 * 1024,
+                header_search_limit=8000,
+                tmp_dir=profile.local_work_root / "_tmp",
+                encoding="utf-8",
+                compression="zstd",
+                local_work_dir=profile.local_work_root / "sec_parse_zips",
+                copy_retries=5,
+                copy_sleep=2.0,
+                validate_on_copy=True,
+            )
+        )
+    return written
+
+
+def _run_sec_yearly_merge_stage(profile: SubmissionProfile, *, force: bool) -> list[Path]:
+    from thesis_pkg.pipelines.sec_pipeline import merge_yearly_batches
+
+    if not profile.sec_batch_root.exists():
+        raise SubmissionPipelineError(f"Parsed SEC batch directory is missing: {profile.sec_batch_root}")
+    checkpoint_path = profile.generated_year_merged_dir / "done_years.json"
+    if force:
+        checkpoint_path.unlink(missing_ok=True)
+    return merge_yearly_batches(
+        batch_dir=profile.sec_batch_root,
+        out_dir=profile.generated_year_merged_dir,
+        checkpoint_path=checkpoint_path,
+        local_work_dir=profile.local_work_root / "sec_yearly_merge",
+        batch_size=128_000,
+        compression="zstd",
+        compression_level=1,
+        validate_inputs="full",
+        copy_retries=5,
+        copy_sleep=2.0,
+        years=[str(year) for year in profile.config.years] if profile.config.years is not None else None,
+    )
+
+
+def _run_sec_ccm_premerge_stage(profile: SubmissionProfile, *, force: bool) -> dict[str, Path]:
+    from thesis_pkg.core.ccm.sec_ccm_contracts import SEC_CCM_PHASE_B_DAILY_FEATURE_COLUMNS
+    from thesis_pkg.core.ccm.sec_ccm_contracts import SecCcmJoinSpecV2
+    from thesis_pkg.core.ccm.sec_ccm_contracts import make_sec_ccm_join_spec_preset
+    from thesis_pkg.pipelines.ccm_pipeline import build_or_reuse_ccm_daily_stage
+    from thesis_pkg.pipelines.sec_ccm_pipeline import run_sec_ccm_premerge_pipeline
+
+    _require_dir_with_parquet(profile.active_year_merged_dir, _rel(profile.active_year_merged_dir, profile))
+    _validate_ccm_premerge_seed_inputs(profile)
+    ccm_daily_artifacts_exist = _generated_ccm_daily_artifacts_exist(profile)
+    ccm_run_mode = "REUSE" if ccm_daily_artifacts_exist and not force else "REBUILD"
+
+    ccm_stage_paths = build_or_reuse_ccm_daily_stage(
+        run_mode=ccm_run_mode,
+        ccm_base_dir=profile.ccm_dir,
+        ccm_derived_dir=profile.ccm_derived_dir,
+        ccm_reuse_daily_path=profile.generated_daily_panel_path,
+        forms_10k_10q=("10-K", "10-Q"),
+        canonical_name=CANONICAL_LINK_FILENAME,
+        daily_name=profile.generated_daily_panel_path.name,
+        verbose=1,
+    )
+    ccm_daily_market_core_lf = pl.scan_parquet(ccm_stage_paths["ccm_daily_market_core_path"])
+    ccm_daily_phase_b_lf = pl.scan_parquet(ccm_stage_paths["ccm_daily_phase_b_surface_path"])
+    phase_b_schema = ccm_daily_phase_b_lf.collect_schema()
+    resolved_permno_col = _first_existing(phase_b_schema, ("KYPERMNO", "LPERMNO", "PERMNO"), "ccm_daily_phase_b_surface")
+    resolved_date_col = _first_existing(phase_b_schema, ("CALDT", "caldt"), "ccm_daily_phase_b_surface")
+    trading_calendar_lf = (
+        ccm_daily_market_core_lf.select(pl.col(resolved_date_col).cast(pl.Date, strict=False).alias("CALDT"))
+        .drop_nulls(subset=["CALDT"])
+        .unique()
+        .sort("CALDT")
+    )
+    join_spec_base = SecCcmJoinSpecV2(
+        daily_join_enabled=True,
+        daily_join_source="MERGED_DAILY_PANEL",
+        daily_permno_col=resolved_permno_col,
+        daily_date_col=resolved_date_col,
+        daily_feature_columns=tuple(SEC_CCM_PHASE_B_DAILY_FEATURE_COLUMNS),
+        required_daily_non_null_features=("RET",),
+    )
+    join_spec = make_sec_ccm_join_spec_preset("lm2011_filing_date", base=join_spec_base)
+    return run_sec_ccm_premerge_pipeline(
+        sec_filings_lf=_build_sec_premerge_input_lf(profile.active_year_merged_dir),
+        link_universe_lf=pl.scan_parquet(profile.generated_canonical_link_path),
+        trading_calendar_lf=trading_calendar_lf,
+        output_dir=profile.sec_ccm_premerge_dir,
+        daily_lf=ccm_daily_phase_b_lf,
+        join_spec=join_spec,
+        emit_run_report=True,
+    )
+
+
+def _run_sec_items_analysis_stage(profile: SubmissionProfile, *, force: bool) -> list[Path]:
+    from thesis_pkg.pipelines.sec_pipeline import process_year_dir_extract_items_gated
+
+    _require_file(profile.sec_ccm_analysis_doc_ids_path, "SEC-CCM analysis doc-id allowlist")
+    if profile.active_items_analysis_dir.exists() and any(profile.active_items_analysis_dir.glob("*.parquet")) and not force:
+        return sorted(profile.active_items_analysis_dir.glob("*.parquet"))
+    return process_year_dir_extract_items_gated(
+        year_dir=profile.active_year_merged_dir,
+        out_dir=profile.active_items_analysis_dir,
+        doc_id_allowlist=profile.sec_ccm_analysis_doc_ids_path,
+        years=list(_selected_year_strings(profile, source_dir=profile.active_year_merged_dir, suffix=".parquet")),
+        parquet_batch_rows=16,
+        out_batch_max_rows=50_000,
+        out_batch_max_text_bytes=250 * 1024 * 1024,
+        tmp_dir=profile.local_work_root / "_tmp",
+        compression="zstd",
+        local_work_dir=profile.local_work_root / "sec_items_analysis",
+        copy_retries=5,
+        copy_sleep=2.0,
+        non_item_diagnostic=False,
+        include_full_text=False,
+        regime=True,
+        extraction_regime=profile.config.item_extraction_regime,
+    )
+
+
+def _generated_ccm_daily_artifacts_exist(profile: SubmissionProfile) -> bool:
+    required_paths = (
+        profile.generated_canonical_link_path,
+        profile.generated_daily_panel_path,
+        profile.ccm_derived_dir / "ccm_daily_market_core.parquet",
+        profile.ccm_derived_dir / "ccm_daily_phase_b_surface.parquet",
+        profile.ccm_derived_dir / "ccm_daily_bridge_surface.parquet",
+    )
+    return all(path.exists() for path in required_paths)
+
+
+def _ensure_submission_canonical_link_table(profile: SubmissionProfile, *, force: bool) -> Path:
+    from thesis_pkg.core.ccm.canonical_links import build_canonical_link_table
+
+    target = profile.generated_canonical_link_path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if profile.packaged_canonical_link_path.exists():
+        shutil.copy2(profile.packaged_canonical_link_path, target)
+        return target
+
+    linkhistory_path = _require_ccm_parquet(profile, "linkhistory.parquet", "CCM canonical-link input")
+    linkfiscalperiodall_path = _require_ccm_parquet(profile, "linkfiscalperiodall.parquet", "CCM canonical-link input")
+    companyhistory_path = _require_ccm_parquet(profile, "companyhistory.parquet", "CCM canonical-link input")
+    companydescription_path = _require_ccm_parquet(profile, "companydescription.parquet", "CCM canonical-link input")
+    canonical_lf = build_canonical_link_table(
+        pl.scan_parquet(linkhistory_path),
+        pl.scan_parquet(linkfiscalperiodall_path),
+        pl.scan_parquet(companyhistory_path),
+        pl.scan_parquet(companydescription_path),
+    )
+    target.unlink(missing_ok=True)
+    canonical_lf.sink_parquet(target, compression="zstd")
+    return target
+
+
+def _build_sec_premerge_input_lf(year_merged_dir: Path) -> pl.LazyFrame:
+    year_files = _year_parquet_paths(year_merged_dir)
+    sec_raw_lf = pl.scan_parquet(year_files)
+    sec_schema = sec_raw_lf.collect_schema()
+    for column in ("doc_id", "cik_10"):
+        if column not in sec_schema:
+            raise SubmissionPipelineError(f"Missing required SEC column: {column}")
+
+    if "filing_date" in sec_schema and "file_date_filename" in sec_schema:
+        filing_date_expr = pl.coalesce(
+            [
+                pl.col("filing_date").cast(pl.Date, strict=False),
+                pl.col("file_date_filename").cast(pl.Date, strict=False),
+            ]
+        ).alias("filing_date")
+    elif "filing_date" in sec_schema:
+        filing_date_expr = pl.col("filing_date").cast(pl.Date, strict=False).alias("filing_date")
+    elif "file_date_filename" in sec_schema:
+        filing_date_expr = pl.col("file_date_filename").cast(pl.Date, strict=False).alias("filing_date")
+    else:
+        raise SubmissionPipelineError("Missing both filing_date and file_date_filename.")
+
+    optional_cols = [
+        column
+        for column in (
+            "document_type_filename",
+            "form_type",
+            "period_end",
+            "acceptance_datetime",
+            "accession_number",
+            "accession_nodash",
+        )
+        if column in sec_schema
+    ]
+    return (
+        sec_raw_lf.with_columns(
+            pl.col("doc_id").cast(pl.Utf8, strict=False),
+            pl.col("cik_10").cast(pl.Utf8, strict=False),
+            filing_date_expr,
+        )
+        .filter(pl.col("filing_date").is_not_null())
+        .select("doc_id", "cik_10", "filing_date", *optional_cols)
+    )
+
+
+def _selected_year_strings(profile: SubmissionProfile, *, source_dir: Path, suffix: str | None) -> tuple[str, ...]:
+    if profile.config.years is not None:
+        return tuple(str(year) for year in profile.config.years)
+    if suffix is None:
+        years = [
+            path.name
+            for path in source_dir.iterdir()
+            if path.is_dir() and path.name.isdigit() and len(path.name) == 4
+        ]
+    else:
+        years = [
+            path.stem
+            for path in source_dir.glob(f"*{suffix}")
+            if path.stem.isdigit() and len(path.stem) == 4
+        ]
+    if not years:
+        raise SubmissionPipelineError(f"No year inputs found under {source_dir}")
+    return tuple(sorted(dict.fromkeys(years)))
+
+
+def _year_parquet_paths(year_merged_dir: Path) -> list[Path]:
+    paths = sorted(
+        path
+        for path in year_merged_dir.glob("*.parquet")
+        if path.stem.isdigit() and len(path.stem) == 4
+    )
+    if not paths:
+        raise SubmissionPipelineError(f"No yearly SEC parquet files found in {year_merged_dir}")
+    return paths
+
+
+def _first_existing(schema: pl.Schema, candidates: Sequence[str], label: str) -> str:
+    for candidate in candidates:
+        if candidate in schema:
+            return candidate
+    raise SubmissionPipelineError(f"{label} missing any of expected columns: {list(candidates)}")
+
+
 def _assert_profile_paths_inside_submission_root(profile: SubmissionProfile) -> None:
     for path in (
         profile.data_root,
         profile.sec_root,
         profile.year_merged_dir,
+        profile.raw_sec_zip_dir,
         profile.items_analysis_dir,
         profile.matched_clean_path,
         profile.ccm_dir,
         profile.daily_panel_path,
+        profile.generated_daily_panel_path,
+        profile.active_daily_panel_path,
         profile.monthly_stock_path,
         profile.additional_data_dir,
         profile.refinitiv_dir,
         profile.doc_ownership_path,
         profile.doc_analyst_selected_path,
         profile.analysis_outputs_root,
+        profile.sec_batch_root,
+        profile.generated_year_merged_dir,
+        profile.ccm_derived_dir,
+        profile.packaged_canonical_link_path,
+        profile.generated_canonical_link_path,
+        profile.sec_ccm_premerge_dir,
+        profile.generated_matched_clean_path,
+        profile.sec_ccm_analysis_doc_ids_path,
+        profile.generated_items_analysis_dir,
+        profile.active_year_merged_dir,
+        profile.active_items_analysis_dir,
+        profile.active_matched_clean_path,
         profile.lm2011_output_dir,
         profile.nw_sensitivity_dir,
         profile.finbert_output_dir,
@@ -1194,6 +2067,7 @@ def _assert_profile_paths_inside_submission_root(profile: SubmissionProfile) -> 
         profile.extension_output_dir,
         profile.visible_prefix_extension_output_dir,
         profile.finbert_robustness_output_dir,
+        profile.finbert_secondary_outcomes_output_dir,
         profile.thesis_assets_output_root,
         profile.pipeline_manifest_path,
         profile.package_manifest_path,
@@ -1261,6 +2135,36 @@ def _normalize_nw_lags(raw_value: Any) -> tuple[int, ...]:
     return lags
 
 
+def _normalize_source_mode(raw_value: Any) -> str:
+    value = _str_or_default(raw_value, SOURCE_MODE_FROM_YEAR_MERGED, label="source_mode").strip().lower()
+    if value not in SOURCE_MODE_CHOICES:
+        raise SubmissionPipelineError(
+            f"source_mode must be one of {list(SOURCE_MODE_CHOICES)}, got {raw_value!r}."
+        )
+    return value
+
+
+def _normalize_item_extraction_regime(raw_value: Any) -> str:
+    value = _str_or_default(raw_value, "legacy", label="item_extraction_regime").strip().lower()
+    if value not in {"legacy", "v2", "fast"}:
+        raise SubmissionPipelineError("item_extraction_regime must be one of legacy, v2, fast.")
+    return value
+
+
+def _bool_or_default(value: Any, default: bool, *, label: str) -> bool:
+    if value in (None, ""):
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "y", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "n", "off"}:
+            return False
+    raise SubmissionPipelineError(f"{label} must be a boolean.")
+
+
 def _optional_str(value: Any, *, label: str) -> str | None:
     if value in (None, ""):
         return None
@@ -1310,6 +2214,22 @@ def _validate_parquet_columns(path: Path, required_columns: Sequence[str], label
         raise SubmissionPipelineError(f"{label} is missing required columns {missing}: {path}")
 
 
+def _validate_year_merged_shards(year_merged_dir: Path) -> None:
+    for path in _parquet_paths(year_merged_dir):
+        schema_names = set(pl.scan_parquet(path).collect_schema().names())
+        missing_columns = [column for column in YEAR_MERGED_REQUIRED_COLUMNS if column not in schema_names]
+        missing_groups = [
+            label
+            for label, candidates in YEAR_MERGED_REQUIRED_COLUMN_GROUPS.items()
+            if not any(candidate in schema_names for candidate in candidates)
+        ]
+        if missing_columns or missing_groups:
+            raise SubmissionPipelineError(
+                "year_merged shard schema is invalid. "
+                f"Missing columns={missing_columns}; missing column groups={missing_groups}; path={path}"
+            )
+
+
 def _validate_items_analysis_shards(items_analysis_dir: Path) -> None:
     for path in _parquet_paths(items_analysis_dir):
         schema_names = set(pl.scan_parquet(path).collect_schema().names())
@@ -1326,7 +2246,11 @@ def _validate_items_analysis_shards(items_analysis_dir: Path) -> None:
             )
 
 
-def _validate_submission_package_manifest(profile: SubmissionProfile) -> None:
+def _validate_submission_package_manifest(
+    profile: SubmissionProfile,
+    *,
+    required_groups: Sequence[str] = PACKAGE_MANIFEST_REQUIRED_GROUPS,
+) -> None:
     _require_file(profile.package_manifest_path, "submission package manifest")
     try:
         payload = json.loads(profile.package_manifest_path.read_text(encoding="utf-8"))
@@ -1351,10 +2275,10 @@ def _validate_submission_package_manifest(profile: SubmissionProfile) -> None:
     artifact_groups = payload.get("artifact_groups")
     if not isinstance(artifact_groups, dict):
         raise SubmissionPipelineError("submission package manifest artifact_groups must be a JSON object.")
-    missing_groups = [group for group in PACKAGE_MANIFEST_REQUIRED_GROUPS if group not in artifact_groups]
+    missing_groups = [group for group in required_groups if group not in artifact_groups]
     if missing_groups:
         raise SubmissionPipelineError(f"submission package manifest is missing artifact groups: {missing_groups}")
-    for group_name in PACKAGE_MANIFEST_REQUIRED_GROUPS:
+    for group_name in required_groups:
         group_payload = artifact_groups[group_name]
         if not isinstance(group_payload, dict):
             raise SubmissionPipelineError(

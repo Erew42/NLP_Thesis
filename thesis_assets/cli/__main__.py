@@ -41,6 +41,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "lm2011_event_window_sensitivity_dir": args.lm2011_event_window_sensitivity_dir,
         "finbert_run_dir": args.finbert_run_dir,
         "finbert_robustness_dir": args.finbert_robustness_dir,
+        "finbert_secondary_outcomes_dir": args.finbert_secondary_outcomes_dir,
     }
 
     if args.command == "build-all":
@@ -71,6 +72,7 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--lm2011-event-window-sensitivity-dir", type=Path, default=None)
     parser.add_argument("--finbert-run-dir", type=Path, default=None)
     parser.add_argument("--finbert-robustness-dir", type=Path, default=None)
+    parser.add_argument("--finbert-secondary-outcomes-dir", type=Path, default=None)
 
 
 if __name__ == "__main__":

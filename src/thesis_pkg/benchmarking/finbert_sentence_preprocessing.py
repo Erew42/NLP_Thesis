@@ -509,6 +509,12 @@ def run_finbert_sentence_preprocessing(
     *,
     authority: FinbertAuthoritySpec = DEFAULT_FINBERT_AUTHORITY,
 ) -> FinbertSentencePreprocessingRunArtifacts:
+    """Materialize reusable FinBERT sentence datasets and cleaning audits.
+
+    The run is year-sharded for memory safety. Existing shards are reused only
+    when the semantic guard, source fingerprint, accepted universe, and target
+    document universe still match the requested configuration.
+    """
     year_paths = _resolve_year_paths_for_run(run_cfg)
     run_name = run_cfg.run_name or f"{RUNNER_NAME}_{utc_timestamp().replace(':', '')}"
     run_dir = run_cfg.out_root / run_name
@@ -570,6 +576,9 @@ def run_finbert_sentence_preprocessing(
             semantic_file_fingerprint(year_path),
             sort_keys=True,
         )
+        # Reuse is deliberately stricter than path existence: stale sentence
+        # shards are unsafe when cleaning, segmentation, model authority, or
+        # accepted-universe inputs change.
         can_reuse = (
             not run_cfg.overwrite
             and existing_summary_row is not None
@@ -630,6 +639,9 @@ def run_finbert_sentence_preprocessing(
         scope_diagnostics_rows = 0
         manual_audit_rows = 0
 
+        # Process each SEC item shard in bounded Polars batches so cleaning,
+        # sentence splitting, and audit surfaces do not require full-year eager
+        # materialization.
         section_batches = load_eligible_section_universe(
             run_cfg.section_universe,
             year_paths=[year_path],
@@ -773,6 +785,8 @@ def run_finbert_sentence_preprocessing(
                         else max(max_original_char_count, batch_original)
                     )
 
+        # Collapse batch shards into the stable per-year artifacts consumed by
+        # downstream inference and audits.
         _sink_parquet_from_paths(
             cleaned_scope_shards,
             output_path=cleaned_scope_path,
@@ -908,6 +922,8 @@ def run_finbert_sentence_preprocessing(
     summary_df.write_parquet(yearly_summary_path, compression="zstd")
     summary_df.write_csv(yearly_summary_csv_path)
 
+    # The manifest is the compatibility contract for analysis-only and reused
+    # preprocessing runs; keep paths manifest-relative for relocatable outputs.
     manifest = {
         "path_semantics": MANIFEST_PATH_SEMANTICS_RELATIVE,
         "runner_name": RUNNER_NAME,

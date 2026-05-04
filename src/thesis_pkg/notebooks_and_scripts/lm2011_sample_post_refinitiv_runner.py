@@ -880,6 +880,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--event-window-sensitivity-output-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Output directory for additive LM2011 event-window sensitivity artifacts. "
+            "Defaults to <output-dir>/event_window_sensitivity."
+        ),
+    )
+    parser.add_argument(
         "--event-window-sensitivity-only",
         action="store_true",
         help=(
@@ -3232,6 +3241,7 @@ def build_lm2011_post_refinitiv_run_config(
         enabled_stages=resolved_enabled_stages,
         fail_closed_for_enabled_stages=fail_closed_for_enabled_stages,
         event_window_sensitivity_days=tuple(args.event_window_sensitivity_days or ()),
+        event_window_sensitivity_output_dir=args.event_window_sensitivity_output_dir,
         event_window_sensitivity_include_postevent_volatility=bool(
             args.event_window_sensitivity_include_postevent_volatility
         ),
@@ -6522,6 +6532,11 @@ def _skip_or_raise_stage(
 
 
 def run_lm2011_post_refinitiv_pipeline(run_cfg: LM2011PostRefinitivRunConfig) -> int:
+    """Run the post-Refinitiv LM2011 replication and extension artifact stages.
+
+    The manifest is checkpointed after each stage so long local/Colab runs can
+    be audited or resumed without guessing which cached artifact is authoritative.
+    """
     paths = run_cfg.paths
     paths.output_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = paths.output_dir / MANIFEST_FILENAME
@@ -7722,6 +7737,7 @@ def run_lm2011_post_refinitiv_pipeline(run_cfg: LM2011PostRefinitivRunConfig) ->
 
 
 def run_lm2011_extension_pipeline(run_cfg: LM2011ExtensionRunConfig) -> int:
+    """Run one LM2011 extension dictionary/FinBERT comparison family."""
     output_dir = Path(run_cfg.output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     resolved_finbert_inputs = _resolve_finbert_extension_inputs(run_cfg)
@@ -8265,6 +8281,7 @@ def _stack_extension_family_nw_sensitivity_frame(
 def run_lm2011_extension_dictionary_family_comparison_pipeline(
     run_cfg: LM2011ExtensionRunConfig,
 ) -> int:
+    """Run and stack replication-vs-extended dictionary family extension outputs."""
     output_dir = Path(run_cfg.output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     resolved_finbert_inputs = _resolve_finbert_extension_inputs(run_cfg)

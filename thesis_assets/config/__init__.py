@@ -12,6 +12,7 @@ from thesis_assets.config.constants import OUTPUT_SUBDIRS
 from thesis_assets.config.constants import REGISTRY_MODULES
 from thesis_assets.config.constants import RUN_FAMILY_FINBERT_ROBUSTNESS
 from thesis_assets.config.constants import RUN_FAMILY_FINBERT_RUN
+from thesis_assets.config.constants import RUN_FAMILY_FINBERT_SECONDARY_OUTCOMES
 from thesis_assets.config.constants import RUN_FAMILY_LM2011_EXTENSION
 from thesis_assets.config.constants import RUN_FAMILY_LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX
 from thesis_assets.config.constants import RUN_FAMILY_LM2011_EVENT_WINDOW_SENSITIVITY
@@ -34,6 +35,7 @@ __all__ = [
     "REGISTRY_MODULES",
     "RUN_FAMILY_FINBERT_ROBUSTNESS",
     "RUN_FAMILY_FINBERT_RUN",
+    "RUN_FAMILY_FINBERT_SECONDARY_OUTCOMES",
     "RUN_FAMILY_LM2011_EXTENSION",
     "RUN_FAMILY_LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX",
     "RUN_FAMILY_LM2011_EVENT_WINDOW_SENSITIVITY",

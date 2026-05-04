@@ -10,6 +10,7 @@ from thesis_assets.config.constants import ARTIFACT_KEY_NW_LAG_EXTENSION_RESULTS
 from thesis_assets.config.constants import ARTIFACT_KEY_EVENT_WINDOW_SENSITIVITY_RESULTS
 from thesis_assets.config.constants import RUN_FAMILY_FINBERT_ROBUSTNESS
 from thesis_assets.config.constants import RUN_FAMILY_FINBERT_RUN
+from thesis_assets.config.constants import RUN_FAMILY_FINBERT_SECONDARY_OUTCOMES
 from thesis_assets.config.constants import RUN_FAMILY_LM2011_EXTENSION
 from thesis_assets.config.constants import RUN_FAMILY_LM2011_EXTENSION_FINBERT_VISIBLE_PREFIX
 from thesis_assets.config.constants import RUN_FAMILY_LM2011_EVENT_WINDOW_SENSITIVITY
@@ -96,6 +97,23 @@ def candidate_run_roots(repo_root: Path, run_family: str) -> tuple[Path, ...]:
             candidates = [
                 Path("/content/drive/MyDrive/Data_LM/results/finbert_robustness"),
                 Path("/content/drive/My Drive/Data_LM/results/finbert_robustness"),
+            ]
+    elif run_family == RUN_FAMILY_FINBERT_SECONDARY_OUTCOMES:
+        local_watchguard_results = full_data_run / "finbert_secondary_outcomes_watchguard" / "results"
+        secondary_candidates = [
+            candidate
+            for candidate in full_data_run.glob("finbert_secondary_outcomes*")
+            if candidate.is_dir()
+            and (candidate / "finbert_secondary_outcome_run_manifest.json").exists()
+        ]
+        if local_watchguard_results.exists():
+            candidates = [local_watchguard_results]
+        elif secondary_candidates:
+            candidates = [max(secondary_candidates, key=lambda path: path.stat().st_mtime)]
+        else:
+            candidates = [
+                Path("/content/drive/MyDrive/Data_LM/results/finbert_secondary_outcomes"),
+                Path("/content/drive/My Drive/Data_LM/results/finbert_secondary_outcomes"),
             ]
     elif run_family == RUN_FAMILY_LM2011_NW_LAG_SENSITIVITY:
         local_candidate = _resolve_latest_nw_lag_sensitivity_run(full_data_run)

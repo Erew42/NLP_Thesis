@@ -453,7 +453,7 @@ def _parse_args() -> SampleConfig:
     parser.add_argument(
         "--linkdata-dir",
         type=Path,
-        default=Path(r"C:\Users\erik9\Documents\SEC_Data\Data\original data parquet\LinkData"),
+        default=Path("data/original_data_parquet/LinkData"),
     )
     parser.add_argument(
         "--output-dir",

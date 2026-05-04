@@ -56,6 +56,7 @@ def _normalize_dictionary_tokens(values: Iterable[str] | None) -> frozenset[str]
 def normalize_lm2011_dictionary_lists(
     dictionary_lists: Mapping[str, Iterable[str]],
 ) -> dict[str, frozenset[str]]:
+    """Normalize required LM2011 dictionary categories to token sets."""
     missing = [name for name in LM2011_DICTIONARY_REQUIRED_LISTS if name not in dictionary_lists]
     if missing:
         raise ValueError(f"dictionary_lists missing required categories: {missing}")
@@ -66,10 +67,12 @@ def normalize_lm2011_dictionary_lists(
 
 
 def tokenize_lm2011_text(text: str | None) -> list[str]:
+    """Return LM2011-compatible case-folded word tokens."""
     return list(iter_lm2011_tokens(text))
 
 
 def iter_lm2011_tokens(text: str | None) -> Iterator[str]:
+    """Yield LM2011-compatible tokens while repairing line-break hyphenation."""
     if text is None:
         return
     normalized = text.replace("\r\n", "\n").replace("\r", "\n")
@@ -1047,6 +1050,11 @@ def build_lm2011_text_features_full_10k(
     cleaning_contract: Full10KCleaningContract = "current",
     batch_size: int = DEFAULT_TEXT_FEATURE_BATCH_SIZE,
 ) -> pl.LazyFrame:
+    """Build full-10-K LM2011 dictionary features at ``doc_id`` grain.
+
+    ``total_token_count_full_10k`` counts all post-cleaning tokens, while
+    ``token_count_full_10k`` counts tokens recognized by the master dictionary.
+    """
     normalized_dict = normalize_lm2011_dictionary_lists(dictionary_lists)
     signal_specs = _build_lm2011_signal_specs(
         normalized_dict=normalized_dict,
@@ -1087,6 +1095,11 @@ def write_lm2011_text_features_full_10k_parquet(
     temp_root: Path | None = None,
     cleanup_on_success: bool = True,
 ) -> int:
+    """Write full-10-K LM2011 features with local microbatch staging.
+
+    This production path avoids materializing the whole text universe in memory
+    and returns the final parquet row count.
+    """
     normalized_dict = normalize_lm2011_dictionary_lists(dictionary_lists)
     signal_specs = _build_lm2011_signal_specs(
         normalized_dict=normalized_dict,
@@ -1123,6 +1136,11 @@ def build_lm2011_text_features_mda(
     required_item_id: str = "7",
     batch_size: int = DEFAULT_TEXT_FEATURE_BATCH_SIZE,
 ) -> pl.LazyFrame:
+    """Build LM2011 dictionary features for MD&A item text.
+
+    Input rows are expected at SEC item grain and are filtered to
+    ``required_item_id`` before scoring.
+    """
     normalized_dict = normalize_lm2011_dictionary_lists(dictionary_lists)
     signal_specs = _build_lm2011_signal_specs(
         normalized_dict=normalized_dict,
@@ -1165,6 +1183,7 @@ def write_lm2011_text_features_mda_parquet(
     temp_root: Path | None = None,
     cleanup_on_success: bool = True,
 ) -> int:
+    """Write MD&A LM2011 features with local microbatch staging."""
     normalized_dict = normalize_lm2011_dictionary_lists(dictionary_lists)
     signal_specs = _build_lm2011_signal_specs(
         normalized_dict=normalized_dict,
@@ -1202,6 +1221,7 @@ def build_lm2011_trading_strategy_signal_frame(
     cleaning_contract: Full10KCleaningContract = "current",
     batch_size: int = DEFAULT_TEXT_FEATURE_BATCH_SIZE,
 ) -> pl.LazyFrame:
+    """Build the full-10-K negative-word signals used by monthly portfolios."""
     normalized_lm_dict = normalize_lm2011_dictionary_lists(lm_dictionary_lists)
     harvard_tokens = _normalize_dictionary_tokens(harvard_negative_word_list)
     if not harvard_tokens:
