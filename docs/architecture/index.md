@@ -1,50 +1,38 @@
 # Architecture
 
-This section groups the durable design notes for `thesis_pkg`. It complements the generated API reference by explaining how the SEC extraction stack, CCM merge logic, and pipeline entry points fit together.
+This tracked page is the stable architecture entrypoint for `thesis_pkg`. The
+expanded module-level architecture pages that may appear under this directory
+are local/generated artifacts and are intentionally not required for a clean
+checkout.
 
-## Recommended Reading Order
+## Source Areas
 
-1. [Thesis Pipeline Architecture](FINAL_THESIS_PIPELINE.md)
-2. [Master Execution Index](00_master_index.md)
-3. [Full Pipeline Architecture](FULL_PIPELINE_ARCHITECTURE.md)
+- `src/thesis_pkg/core/sec/`: SEC filing text normalization, item extraction,
+  regime logic, HTML/text boundary diagnostics, and parquet streaming helpers.
+- `src/thesis_pkg/core/ccm/`: CRSP/Compustat transforms, canonical links,
+  SEC-CCM contracts, and document-grain pre-merge logic.
+- `src/thesis_pkg/pipelines/`: reusable pipeline entrypoints for SEC, CCM,
+  SEC-CCM, LM2011, and Refinitiv workflows.
+- `src/thesis_pkg/pipelines/refinitiv/`: Refinitiv/LSEG authority, request,
+  ownership, analyst, ledger, and recovery stages.
+- `src/thesis_pkg/benchmarking/`: FinBERT sentence preprocessing/inference,
+  item-scope cleaning, benchmark sweeps, and diagnostic audits.
+- `src/thesis_pkg/notebooks_and_scripts/`: runnable local and Colab workflow
+  entrypoints.
+- `src/thesis_pkg/io/` and `src/thesis_pkg/cleaning/`: shared I/O and cleaning
+  helpers.
 
-## Package Entry Points
+## Pipeline Shape
 
-- [Package Root](16___init__.md)
-- [API Facade](14_api.md)
-- [Pipeline Facade](17_pipeline.md)
-- [Filing Text Facade](18_filing_text.md)
-- [Settings](01_settings.md)
+1. Build and clean CRSP/Compustat market-data inputs.
+2. Normalize SEC filing text and extract filing items.
+3. Link filings to market data at the document grain and populate
+   `data_status`.
+4. Add Refinitiv/LSEG ownership and analyst enrichments where required.
+5. Build LM2011 dictionary features, FinBERT item features, event panels,
+   regressions, and thesis-facing assets.
 
-## Pipelines and IO
+## Generated Reference
 
-- [SEC Pipeline](25_sec_pipeline.md)
-- [CCM Pipeline](22_ccm_pipeline.md)
-- [SEC-CCM Pipeline](19_sec_ccm_pipeline.md)
-- [Parquet IO](26_parquet.md)
-
-## CCM Merge Stack
-
-- [Canonical Links](24_canonical_links.md)
-- [Transforms](23_transforms.md)
-- [SEC-CCM Contracts](21_sec_ccm_contracts.md)
-- [SEC-CCM Pre-Merge](20_sec_ccm_premerge.md)
-- [CCM Cleaning](13_ccm_cleaning.md)
-
-## SEC Extraction Stack
-
-- [Patterns](32_patterns.md)
-- [Heuristics](29_heuristics.md)
-- [Embedded Headings](08_embedded_headings.md)
-- [Extraction Utilities](33_extraction_utils.md)
-- [Extraction Engine](28_extraction.md)
-- [Regime Logic](31_regime.md)
-- [Parquet Streaming](06_parquet_stream.md)
-- [HTML Audit](07_html_audit.md)
-- [Boundary Diagnostics](05_suspicious_boundary_diagnostics.md)
-- [Utilities](30_utilities.md)
-
-## Context
-
-- [Design Choices](98_design_choices.md)
-- [Literature Mapping](99_literature_mapping.md)
+Run `python tools/docs_pipeline.py all` to refresh generated API/reference pages
+and the MkDocs navigation for the current source tree.

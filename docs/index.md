@@ -1,13 +1,17 @@
-# NLP Thesis Documentation
+# Master Thesis Documentation
 
 This site documents the `thesis_pkg` codebase that supports SEC filing extraction, CRSP/Compustat linking, SEC-CCM pre-merge logic, and downstream thesis analysis workflows.
 
 ## Start Here
 
-- [Architecture](architecture/index.md) for system maps, pipeline flows, and module-level design notes.
+- [Architecture](architecture/index.md) for the tracked architecture overview and source-area map.
 - [Reference](reference/index.md) for generated API pages and behavior evidence artifacts.
-- [Notes](other/index.md) for contracts, reviews, and supporting operational documentation.
 - [Decisions](decisions/index.md) for stable architectural choices and ADR-style records.
+- [Docstring Audit Report](docstring_audit_report.md) for tracked docstring coverage notes.
+
+The reference and behavior-evidence sections are generated or refreshed locally
+by the docs workflow. If those pages are missing in a fresh checkout, run the
+workflow below before building the site.
 
 ## Primary Workflows
 
@@ -18,11 +22,12 @@ This site documents the `thesis_pkg` codebase that supports SEC filing extractio
 
 ## Docs Workflow
 
-Prefer the repository wrappers over direct `mkdocs` commands so metadata refresh and Windows UTF-8 handling stay consistent.
+Prefer the repository wrapper over direct `mkdocs` commands so metadata refresh
+and Windows UTF-8 handling stay consistent.
 
 ```bash
-python tools/docs_pipeline.py extract
-python tools/docs_pipeline.py scaffold
-python tools/docs_pipeline.py check
-python tools/docs_pipeline.py build
+python tools/docs_pipeline.py all
 ```
+
+Use the individual `extract`, `scaffold`, `check`, and `build` subcommands when
+debugging a specific docs stage. `check` runs a MkDocs build by default.

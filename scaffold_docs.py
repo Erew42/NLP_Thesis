@@ -297,7 +297,7 @@ def _update_mkdocs_nav(mkdocs_config: Path, nav_lines: list[str]) -> None:
 def _bootstrap_top_level_docs(docs_dir: Path) -> None:
     docs_dir.mkdir(parents=True, exist_ok=True)
     (docs_dir / "index.md").write_text(
-        "# NLP Thesis Documentation\n\nWelcome to the documentation site.\n",
+        "# Master Thesis Documentation\n\nWelcome to the documentation site.\n",
         encoding="utf-8",
     )
     (docs_dir / "architecture").mkdir(parents=True, exist_ok=True)

@@ -1,89 +1,222 @@
-# NLP_THESIS
+# Master Thesis Code
 
-Python package for my NLP thesis (SEC filings, CRSP/Compustat, etc.).
+Python package and workflow repository for a Master thesis project using SEC
+filing text, CRSP/Compustat market data, Refinitiv/LSEG enrichment, LM2011-style
+dictionary measures, and FinBERT sentiment features.
 
-SEC and CCM use different raw naming conventions for filing forms. SEC text and filename metadata generally use hyphenated labels such as `10-K`, `10-Q`, and `10-K/A`, while CCM `filingdates.SRCTYPE` commonly uses compact labels such as `10K`, `10Q`, and `10K/A`. Any filter or join that crosses those sources should normalize form labels first rather than relying on raw string equality.
+The installable package is `thesis_pkg`. Most core data work is implemented with
+Polars and is organized around analysis-ready document identifiers, conservative
+SEC-CCM linking, and reproducible staged outputs.
 
-## Submission Package
+## Repository Sections
 
-For supervisor-facing zip submissions, include the retained `data/` and
-`analysis_outputs/` directories plus `src/`, `thesis_assets/`, and the two thin
-tools used by the submission entrypoint. Development folders such as `tests/`,
-`docs/`, `reports/`, and scratch/cache directories can be omitted.
+| Path | Purpose |
+| --- | --- |
+| `src/thesis_pkg/core/sec/` | SEC filing text normalization, 10-K/10-Q item extraction, regime-aware item definitions, HTML/text boundary diagnostics, and parquet streaming helpers. |
+| `src/thesis_pkg/core/ccm/` | CRSP/Compustat cleaning, canonical link construction, SEC-CCM contract definitions, and document-grain pre-merge logic. |
+| `src/thesis_pkg/pipelines/` | Reusable pipeline entrypoints for SEC processing, CCM processing, SEC-CCM merging, LM2011 replication/extension workflows, and Refinitiv bridge stages. |
+| `src/thesis_pkg/pipelines/refinitiv/` | Refinitiv/LSEG authority, ownership, analyst, batching, request ledger, and recovery helpers. |
+| `src/thesis_pkg/benchmarking/` | FinBERT sentence preprocessing/inference, item-scope cleaning, benchmark sweeps, diagnostic audits, and sentence-length/tokenization tools. |
+| `src/thesis_pkg/notebooks_and_scripts/` | Script and notebook entrypoints for full local/Colab runs, sample reruns, FinBERT analysis, LM2011 validation, and Refinitiv finalization. |
+| `src/thesis_pkg/io/` and `src/thesis_pkg/cleaning/` | Thin I/O adapters and shared cleaning utilities. |
+| `tests/` | Pytest coverage for extraction, SEC-CCM contracts, Refinitiv stages, LM2011 pipelines, FinBERT workflows, docs tooling, and submission packaging. |
+| `docs/` | Tracked documentation entrypoints plus locally generated MkDocs, architecture, reference, behavior, and operational artifacts. Many generated docs paths are intentionally ignored. |
+| `thesis_assets/` | Final thesis-facing tables, figures, and reporting adapters generated from retained outputs. |
+| `tools/` | Repository utilities for documentation, submission packaging, and retained-output workflows. |
 
-Default readiness check from the extracted zip root:
+Generated or local-run directories such as `results/`, `output/`,
+`full_data_run/`, `reports/`, and scratch/cache folders are not the primary code
+surface. Treat them as run artifacts unless a specific workflow documents
+otherwise.
+
+## Main Workflows
+
+### 1. Market Data And SEC-CCM Linking
+
+The CCM side cleans and aligns CRSP/Compustat data, then links filings at the
+document grain. The canonical SEC filing identifier is:
+
+```text
+doc_id = "{cik_10}:{accession_nodash}"
+```
+
+The SEC-CCM pre-merge is split into:
+
+1. Phase A (`doc_id -> gvkey/KYPERMNO`) in
+   `src/thesis_pkg/core/ccm/sec_ccm_premerge.py`.
+2. Phase B, which applies explicit filing-date alignment and daily market-data
+   join modes from `src/thesis_pkg/core/ccm/sec_ccm_contracts.py`.
+
+Pipeline entrypoint:
+
+```python
+thesis_pkg.pipeline.run_sec_ccm_premerge_pipeline
+```
+
+Canonical reason codes and join-spec definitions live in
+`src/thesis_pkg/core/ccm/sec_ccm_contracts.py`.
+
+### 2. SEC Filing Text Processing
+
+SEC extraction is a multi-stage heuristic engine, not simple regex scanning. It
+normalizes raw filing text, handles sparse HTML layouts, filters hostile tables
+of contents, applies filing-date-specific item regimes, and writes item-level
+parquet outputs for downstream analysis.
+
+Important modules:
+
+- `src/thesis_pkg/core/sec/extraction.py`
+- `src/thesis_pkg/core/sec/embedded_headings.py`
+- `src/thesis_pkg/core/sec/regime.py`
+- `src/thesis_pkg/pipelines/sec_pipeline.py`
+
+Form labels differ across data sources. SEC text and filenames usually use
+hyphenated labels such as `10-K`, `10-Q`, and `10-K/A`, while CCM
+`filingdates.SRCTYPE` commonly uses compact labels such as `10K`, `10Q`, and
+`10K/A`. Filters or joins that cross those sources should normalize form labels
+before comparing them.
+
+### 3. Refinitiv/LSEG Enrichment
+
+Refinitiv and LSEG stages resolve instrument authority, build ownership and
+analyst request universes, execute or finalize API outputs, and bridge those
+inputs back to document-level thesis panels.
+
+The related code lives primarily in:
+
+- `src/thesis_pkg/pipelines/refinitiv/`
+- `src/thesis_pkg/pipelines/refinitiv_bridge_pipeline.py`
+- `src/thesis_pkg/notebooks_and_scripts/refinitiv_local_api_runner.py`
+- `src/thesis_pkg/notebooks_and_scripts/lm2011_refinitiv_finalize_colab.ipynb`
+
+### 4. LM2011 Replication And Extensions
+
+The LM2011 workflow builds seeded sample backbones, dictionary families,
+event-window panels, Fama-MacBeth tables, quarterly sensitivity outputs, and
+monthly trading-strategy artifacts.
+
+Primary entrypoint:
+
+```bash
+python src/thesis_pkg/notebooks_and_scripts/lm2011_sample_post_refinitiv_runner.py
+```
+
+The unified runner can also trigger these stages through environment variables:
+
+```bash
+python src/thesis_pkg/notebooks_and_scripts/sec_ccm_unified_runner.py
+```
+
+### 5. FinBERT Item Analysis
+
+FinBERT processing cleans item scopes, materializes sentence datasets, runs
+staged inference, aggregates item-level features, and writes diagnostic audits.
+The workflow supports preprocessing-only and analysis-only passes.
+
+Primary entrypoint:
+
+```bash
+python src/thesis_pkg/notebooks_and_scripts/finbert_item_analysis_runner.py --data-profile LOCAL_SAMPLE
+```
+
+For explicit non-sample runs:
+
+```bash
+python src/thesis_pkg/notebooks_and_scripts/finbert_item_analysis_runner.py --data-profile EXPLICIT --source-items-dir <items_analysis_dir> --output-dir <output_dir>
+```
+
+### 6. Thesis Assets And Submission Package
+
+`thesis_assets/` contains thesis-facing tables and figures derived from retained
+pipeline outputs. `tools/run_submission_pipeline.py` validates a submission
+layout and can rebuild retained thesis assets.
+
+Default readiness check from an extracted submission zip root:
 
 ```bash
 pip install -e .[benchmark]
 python tools/run_submission_pipeline.py --submission-root .
 ```
 
-This lightweight default writes `submission_package_manifest.json`, validates
-the packaged layout, creates `submission_lock.json`, and rebuilds thesis assets
-from retained outputs. The full rerun path remains explicit:
+Full rerun path from packaged inputs:
 
 ```bash
 python tools/run_submission_pipeline.py --submission-root . --stage all
 ```
 
-`--stage all` now starts from packaged SEC yearly parquet and CCM seed parquet
-inputs, regenerating SEC-CCM premerge and item-analysis artifacts before the
-analysis stages. Use `--stage retained` for the previous heavy-rerun behavior
-that consumes packaged retained `items_analysis` and `sec_ccm_matched_clean`
-inputs directly.
+Use `--stage retained` when retained `items_analysis` and
+`sec_ccm_matched_clean` inputs should be consumed directly. See
+`SUBMISSION_README.md` for the expected zip layout.
 
-See `SUBMISSION_README.md` for the exact expected zip layout.
+## Installation
 
-## SEC-CCM Pre-Merge (Doc Grain)
+```bash
+pip install -e .
+```
 
-The repository includes a two-phase SEC-CCM pre-merge pipeline:
-
-1. Phase A (`doc_id -> gvkey/kypermno`) in `src/thesis_pkg/core/ccm/sec_ccm_premerge.py`:
-   - Normalizes filing identifiers.
-   - Resolves conservative link candidates.
-   - Emits `sec_ccm_links_doc.parquet` (one row per `doc_id`).
-
-2. Phase B (alignment + optional daily join):
-   - Uses a versioned join spec with explicit modes:
-     - Alignment modes:
-       - `NEXT_TRADING_DAY_STRICT` (legacy default)
-       - `FILING_DATE_EXACT_OR_NEXT_TRADING` (LM2011-style filing-date anchoring)
-       - `FILING_DATE_EXACT_ONLY` (diagnostic strict exact match)
-     - Daily join modes:
-       - `ASOF_FORWARD` (legacy default)
-       - `EXACT_ON_ALIGNED_DATE`
-   - Legacy V1 inputs are normalized to canonical V2 behavior.
-   - `FIRST_CLOSE_AFTER_ACCEPTANCE` in V1 is currently rejected with an explicit error.
-   - Emits `final_flagged_data.parquet` (one row per `doc_id`).
-
-Canonical reason codes and join-spec are defined in:
-- `src/thesis_pkg/core/ccm/sec_ccm_contracts.py`
-
-Pipeline entrypoint:
-- `thesis_pkg.pipeline.run_sec_ccm_premerge_pipeline`
-
-Additional contract details:
-- `docs/sec_ccm_premerge.md`
-
-Automatic per-run observability artifacts are produced by default:
-- Step performance table: `sec_ccm_run_steps.parquet`
-- DAG visuals: `sec_ccm_run_dag.mmd` and `sec_ccm_run_dag.dot`
-- Run manifest: `sec_ccm_run_manifest.json`
-- Run report: `sec_ccm_run_report.md`
-
-## Documentation
-
-Install the docs toolchain with:
+Development and documentation extras:
 
 ```bash
 pip install -e .[dev,docs]
 ```
 
-Preferred commands:
+Benchmarking and model-related extras:
 
-- `python tools/docs_pipeline.py extract`
-- `python tools/docs_pipeline.py scaffold`
-- `python tools/docs_pipeline.py check`
-- `python tools/docs_pipeline.py build`
+```bash
+pip install -e .[benchmark]
+```
 
-On Windows, prefer the wrapper above over direct `python -m mkdocs build` so UTF-8 output handling is applied consistently.
+## Documentation
+
+The docs site is built with MkDocs. Most architecture/reference pages are
+generated locally and intentionally ignored, so refresh them before checking or
+building the site:
+
+```bash
+python tools/docs_pipeline.py all
+```
+
+Use the individual `extract`, `scaffold`, `check`, and `build` subcommands when
+debugging a specific docs stage. The `check` subcommand runs a MkDocs build by
+default.
+
+Tracked documentation entrypoints:
+
+- `docs/index.md`
+- `docs/architecture/index.md`
+- `docs/decisions/index.md`
+- `docs/docstring_audit_report.md`
+
+## Testing
+
+Tests use `pytest`:
+
+```bash
+pytest
+```
+
+Run focused tests when changing a narrow area, for example:
+
+```bash
+pytest tests/test_sec_ccm_premerge.py
+pytest tests/test_finbert_item_analysis.py
+pytest tests/test_lm2011_pipeline.py
+```
+
+Changes to SEC item-boundary extraction should also run the tracked
+suspicious-boundary diagnostics entrypoint with an explicit input directory:
+
+```bash
+python run_diagnostics.py --parquet-dir <sec_parquet_dir>
+```
+
+## Core Conventions
+
+- Python 3.10+.
+- Core pipeline transformations should use Polars, preferably `LazyFrame`.
+- `data_status` is the canonical integer bitmask for data availability and
+  merge provenance; avoid duplicate boolean availability columns.
+- Key identifiers should use the repository vocabulary: `cik_10`,
+  `accession_nodash`, `doc_id`, and `KYPERMNO`.
+- Regime-aware filing item logic should come from the JSON regime definitions,
+  not hard-coded item titles.

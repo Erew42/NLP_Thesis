@@ -10,4 +10,4 @@ Use this section for stable architectural decisions that should outlive day-to-d
 ## Related Material
 
 - [Architecture Overview](../architecture/index.md)
-- [Notes and Audits](../other/index.md)
+- [Docstring Audit Report](../docstring_audit_report.md)
