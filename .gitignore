@@ -37,8 +37,8 @@ repo_review/
 output/
 .codex_spreadsheet_work/
 submission_Ewen_10060297/
-# Agent ephemeral state and memory
 .agent/
+.agents/
 .claude/
 /CLAUDE.md
 
