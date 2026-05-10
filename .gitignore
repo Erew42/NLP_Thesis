@@ -38,11 +38,7 @@ output/
 .codex_spreadsheet_work/
 submission_Ewen_10060297/
 # Agent ephemeral state and memory
-.agent/logs/
-.agent/cache/
-.agent/memory/
-.agent/artifacts/
-
+.agent/
 .claude/
 /CLAUDE.md
 
