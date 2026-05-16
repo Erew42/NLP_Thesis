@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from importlib import metadata
 from pathlib import Path
@@ -11,9 +11,17 @@ from thesis_pkg.benchmarking.contracts import DEFAULT_FINBERT_AUTHORITY
 from thesis_pkg.benchmarking.contracts import FinbertAuthoritySpec
 from thesis_pkg.benchmarking.contracts import ItemTextCleaningConfig
 from thesis_pkg.benchmarking.contracts import SentenceDatasetConfig
-from thesis_pkg.benchmarking.item_text_cleaning import benchmark_item_code_to_text_scope
+from thesis_pkg.benchmarking.item_text_cleaning import benchmark_item_code_to_text_scope_expr
 from thesis_pkg.benchmarking.item_text_cleaning import build_segment_policy_id
 from thesis_pkg.benchmarking.token_lengths import annotate_finbert_token_lengths_in_batches
+
+try:
+    from thesis_native import _lm2011_rust
+except Exception as exc:  # pragma: no cover - optional native extension
+    _lm2011_rust = None
+    _SENTENCE_POSTPROCESS_RUST_IMPORT_ERROR: str | None = f"{type(exc).__name__}: {exc}"
+else:
+    _SENTENCE_POSTPROCESS_RUST_IMPORT_ERROR = None
 
 
 SENTENCE_FRAME_SCHEMA: dict[str, pl.DataType] = {
@@ -122,6 +130,44 @@ _SECTION_METADATA_COLUMNS: tuple[str, ...] = (
     "cleaning_policy_id",
     "segment_policy_id",
 )
+_SENTENCE_POSTPROCESS_RUST_METRICS: dict[str, int] = {
+    "chunk_end_fast_success": 0,
+    "chunk_end_fast_failures": 0,
+    "chunk_end_fallbacks": 0,
+    "chunk_rows_fast_success": 0,
+    "chunk_rows_fast_failures": 0,
+    "chunk_rows_fallbacks": 0,
+    "normalize_key_fast_success": 0,
+    "normalize_key_fast_failures": 0,
+    "normalize_key_fallbacks": 0,
+    "reference_stub_fast_success": 0,
+    "reference_stub_fallbacks": 0,
+    "generic_reference_no_fast_success": 0,
+    "generic_reference_no_fallbacks": 0,
+    "citation_prefix_fast_success": 0,
+    "citation_prefix_fallbacks": 0,
+    "citation_continuation_fast_success": 0,
+    "citation_continuation_fallbacks": 0,
+    "citation_continuation_v3_fast_success": 0,
+    "citation_continuation_v3_fallbacks": 0,
+    "header_like_fast_success": 0,
+    "header_like_fallbacks": 0,
+    "postprocess_texts_fast_success": 0,
+    "postprocess_texts_fast_failures": 0,
+    "postprocess_texts_fallbacks": 0,
+}
+
+
+def get_sentence_postprocess_rust_accel_metrics() -> dict[str, int | str | bool | None]:
+    metrics: dict[str, int | str | bool | None] = dict(_SENTENCE_POSTPROCESS_RUST_METRICS)
+    metrics["rust_accel_available"] = _lm2011_rust is not None
+    metrics["rust_accel_import_error"] = _SENTENCE_POSTPROCESS_RUST_IMPORT_ERROR
+    return metrics
+
+
+def reset_sentence_postprocess_rust_accel_metrics() -> None:
+    for key in _SENTENCE_POSTPROCESS_RUST_METRICS:
+        _SENTENCE_POSTPROCESS_RUST_METRICS[key] = 0
 
 
 def _ensure_sentence_provenance(
@@ -147,11 +193,7 @@ def _ensure_sentence_provenance(
             if "text_scope" in schema_names
             else pl.lit(None, dtype=pl.Utf8)
         )
-        .otherwise(
-            pl.col("benchmark_item_code")
-            .cast(pl.Utf8, strict=False)
-            .map_elements(benchmark_item_code_to_text_scope, return_dtype=pl.Utf8)
-        )
+        .otherwise(benchmark_item_code_to_text_scope_expr("benchmark_item_code"))
     )
     return sections_df.with_columns(
         text_scope_expr.alias("text_scope"),
@@ -226,7 +268,7 @@ def _last_boundary_end(
     return last_end
 
 
-def _choose_chunk_end(text: str, *, start: int) -> tuple[int, str]:
+def _choose_chunk_end_py(text: str, *, start: int) -> tuple[int, str]:
     max_end = min(start + SENTENCE_CHUNK_CHAR_LIMIT, len(text))
     if max_end >= len(text):
         return len(text), "end_of_text"
@@ -244,7 +286,23 @@ def _choose_chunk_end(text: str, *, start: int) -> tuple[int, str]:
     return max_end, "hard_limit_250k"
 
 
-def _chunk_row_text(row: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def _choose_chunk_end(text: str, *, start: int) -> tuple[int, str]:
+    if _lm2011_rust is not None:
+        try:
+            end, reason = _lm2011_rust.choose_sentence_chunk_end(
+                text,
+                int(start),
+                int(SENTENCE_CHUNK_CHAR_LIMIT),
+            )
+            _SENTENCE_POSTPROCESS_RUST_METRICS["chunk_end_fast_success"] += 1
+            return int(end), str(reason)
+        except Exception:
+            _SENTENCE_POSTPROCESS_RUST_METRICS["chunk_end_fast_failures"] += 1
+    _SENTENCE_POSTPROCESS_RUST_METRICS["chunk_end_fallbacks"] += 1
+    return _choose_chunk_end_py(text, start=start)
+
+
+def _chunk_row_text_py(row: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     full_text = str(row["full_text"])
     original_char_count = len(full_text)
     if original_char_count <= SENTENCE_CHUNK_CHAR_LIMIT:
@@ -290,11 +348,31 @@ def _chunk_row_text(row: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dic
     return chunk_rows, audit_rows
 
 
-def _expand_chunked_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], pl.DataFrame]:
+def _chunk_rows_with_rust(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    raw_chunks, raw_audit = _lm2011_rust.expand_sentence_chunk_rows(
+        rows,
+        int(SENTENCE_CHUNK_CHAR_LIMIT),
+    )
+    return [dict(row) for row in raw_chunks], [dict(row) for row in raw_audit]
+
+
+def _chunk_row_text(row: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    if _lm2011_rust is not None:
+        try:
+            chunk_rows, audit_rows = _chunk_rows_with_rust([row])
+            _SENTENCE_POSTPROCESS_RUST_METRICS["chunk_rows_fast_success"] += 1
+            return chunk_rows, audit_rows
+        except Exception:
+            _SENTENCE_POSTPROCESS_RUST_METRICS["chunk_rows_fast_failures"] += 1
+    _SENTENCE_POSTPROCESS_RUST_METRICS["chunk_rows_fallbacks"] += 1
+    return _chunk_row_text_py(row)
+
+
+def _expand_chunked_rows_py(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], pl.DataFrame]:
     expanded_rows: list[dict[str, Any]] = []
     audit_rows: list[dict[str, Any]] = []
     for row in rows:
-        row_chunks, row_audit = _chunk_row_text(row)
+        row_chunks, row_audit = _chunk_row_text_py(row)
         expanded_rows.extend(row_chunks)
         audit_rows.extend(row_audit)
 
@@ -303,35 +381,126 @@ def _expand_chunked_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any
     return expanded_rows, pl.DataFrame(audit_rows, schema=SENTENCE_SPLIT_AUDIT_SCHEMA)
 
 
-def _normalize_sentence_key(text: str) -> str:
+def _expand_chunked_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], pl.DataFrame]:
+    if _lm2011_rust is not None:
+        try:
+            expanded_rows, audit_rows = _chunk_rows_with_rust(rows)
+            _SENTENCE_POSTPROCESS_RUST_METRICS["chunk_rows_fast_success"] += 1
+            if not audit_rows:
+                return expanded_rows, _empty_sentence_split_audit_frame()
+            return expanded_rows, pl.DataFrame(audit_rows, schema=SENTENCE_SPLIT_AUDIT_SCHEMA)
+        except Exception:
+            _SENTENCE_POSTPROCESS_RUST_METRICS["chunk_rows_fast_failures"] += 1
+    _SENTENCE_POSTPROCESS_RUST_METRICS["chunk_rows_fallbacks"] += 1
+    return _expand_chunked_rows_py(rows)
+
+
+def _normalize_sentence_key_py(text: str) -> str:
     return _NORMALIZED_WHITESPACE_RE.sub(" ", str(text)).strip()
 
 
+def _normalize_sentence_key(text: str) -> str:
+    if _lm2011_rust is not None:
+        try:
+            out = str(_lm2011_rust.normalize_sentence_key_value(str(text)))
+            _SENTENCE_POSTPROCESS_RUST_METRICS["normalize_key_fast_success"] += 1
+            return out
+        except Exception:
+            _SENTENCE_POSTPROCESS_RUST_METRICS["normalize_key_fast_failures"] += 1
+    _SENTENCE_POSTPROCESS_RUST_METRICS["normalize_key_fallbacks"] += 1
+    return _normalize_sentence_key_py(text)
+
+
+def _ends_with_reference_stub_py(text: str) -> bool:
+    return bool(_REFERENCE_STUB_END_RE.search(_normalize_sentence_key_py(text)))
+
+
 def _ends_with_reference_stub(text: str) -> bool:
-    return bool(_REFERENCE_STUB_END_RE.search(_normalize_sentence_key(text)))
+    if _lm2011_rust is not None:
+        try:
+            out = bool(_lm2011_rust.sentence_ends_with_reference_stub(str(text or "")))
+            _SENTENCE_POSTPROCESS_RUST_METRICS["reference_stub_fast_success"] += 1
+            return out
+        except Exception:
+            _SENTENCE_POSTPROCESS_RUST_METRICS["reference_stub_fallbacks"] += 1
+    else:
+        _SENTENCE_POSTPROCESS_RUST_METRICS["reference_stub_fallbacks"] += 1
+    return _ends_with_reference_stub_py(text)
+
+
+def _ends_with_generic_reference_no_py(text: str) -> bool:
+    return bool(_GENERIC_REFERENCE_NO_END_RE.search(_normalize_sentence_key_py(text)))
 
 
 def _ends_with_generic_reference_no(text: str) -> bool:
-    return bool(_GENERIC_REFERENCE_NO_END_RE.search(_normalize_sentence_key(text)))
+    if _lm2011_rust is not None:
+        try:
+            out = bool(_lm2011_rust.sentence_ends_with_generic_reference_no(str(text or "")))
+            _SENTENCE_POSTPROCESS_RUST_METRICS["generic_reference_no_fast_success"] += 1
+            return out
+        except Exception:
+            _SENTENCE_POSTPROCESS_RUST_METRICS["generic_reference_no_fallbacks"] += 1
+    else:
+        _SENTENCE_POSTPROCESS_RUST_METRICS["generic_reference_no_fallbacks"] += 1
+    return _ends_with_generic_reference_no_py(text)
 
 
-def _is_citation_prefix_only_line(line: str) -> bool:
+def _is_citation_prefix_only_line_py(line: str) -> bool:
     return bool(_CITATION_PREFIX_ONLY_RE.fullmatch(line.strip()))
 
 
+def _is_citation_prefix_only_line(line: str) -> bool:
+    if _lm2011_rust is not None:
+        try:
+            out = bool(_lm2011_rust.sentence_is_citation_prefix_only_line(str(line or "")))
+            _SENTENCE_POSTPROCESS_RUST_METRICS["citation_prefix_fast_success"] += 1
+            return out
+        except Exception:
+            _SENTENCE_POSTPROCESS_RUST_METRICS["citation_prefix_fallbacks"] += 1
+    else:
+        _SENTENCE_POSTPROCESS_RUST_METRICS["citation_prefix_fallbacks"] += 1
+    return _is_citation_prefix_only_line_py(line)
+
+
+def _looks_like_citation_continuation_py(text: str) -> bool:
+    return bool(_CITATION_CONTINUATION_START_RE.search(_normalize_sentence_key_py(text)))
+
+
 def _looks_like_citation_continuation(text: str) -> bool:
-    return bool(_CITATION_CONTINUATION_START_RE.search(_normalize_sentence_key(text)))
+    if _lm2011_rust is not None:
+        try:
+            out = bool(_lm2011_rust.sentence_looks_like_citation_continuation(str(text or "")))
+            _SENTENCE_POSTPROCESS_RUST_METRICS["citation_continuation_fast_success"] += 1
+            return out
+        except Exception:
+            _SENTENCE_POSTPROCESS_RUST_METRICS["citation_continuation_fallbacks"] += 1
+    else:
+        _SENTENCE_POSTPROCESS_RUST_METRICS["citation_continuation_fallbacks"] += 1
+    return _looks_like_citation_continuation_py(text)
+
+
+def _looks_like_citation_continuation_v3_py(text: str) -> bool:
+    return bool(_V3_CITATION_CONTINUATION_START_RE.search(_normalize_sentence_key_py(text)))
 
 
 def _looks_like_citation_continuation_v3(text: str) -> bool:
-    return bool(_V3_CITATION_CONTINUATION_START_RE.search(_normalize_sentence_key(text)))
+    if _lm2011_rust is not None:
+        try:
+            out = bool(_lm2011_rust.sentence_looks_like_citation_continuation_v3(str(text or "")))
+            _SENTENCE_POSTPROCESS_RUST_METRICS["citation_continuation_v3_fast_success"] += 1
+            return out
+        except Exception:
+            _SENTENCE_POSTPROCESS_RUST_METRICS["citation_continuation_v3_fallbacks"] += 1
+    else:
+        _SENTENCE_POSTPROCESS_RUST_METRICS["citation_continuation_v3_fallbacks"] += 1
+    return _looks_like_citation_continuation_v3_py(text)
 
 
 def _is_separator_line(line: str) -> bool:
     return bool(_SEPARATOR_ONLY_RE.fullmatch(line.strip()))
 
 
-def _is_header_like_line(line: str) -> bool:
+def _is_header_like_line_py(line: str) -> bool:
     stripped = line.strip()
     if not stripped:
         return True
@@ -353,6 +522,19 @@ def _is_header_like_line(line: str) -> bool:
     if len(stripped) > 140:
         return False
     return True
+
+
+def _is_header_like_line(line: str) -> bool:
+    if _lm2011_rust is not None:
+        try:
+            out = bool(_lm2011_rust.sentence_is_header_like_line(str(line or "")))
+            _SENTENCE_POSTPROCESS_RUST_METRICS["header_like_fast_success"] += 1
+            return out
+        except Exception:
+            _SENTENCE_POSTPROCESS_RUST_METRICS["header_like_fallbacks"] += 1
+    else:
+        _SENTENCE_POSTPROCESS_RUST_METRICS["header_like_fallbacks"] += 1
+    return _is_header_like_line_py(line)
 
 
 def _strip_leading_artifact_lines(text: str) -> str:
@@ -436,7 +618,7 @@ def _should_apply_reference_stitching(*, policy: str, text_scope: str | None) ->
     return text_scope == "item_7_mda"
 
 
-def _postprocess_sentence_texts(
+def _postprocess_sentence_texts_py(
     sentence_texts: list[str],
     *,
     text_scope: str | None,
@@ -488,6 +670,47 @@ def _postprocess_sentence_texts(
             processed.append(current)
         idx += 1
     return processed
+
+
+def _postprocess_sentence_texts(
+    sentence_texts: list[str],
+    *,
+    text_scope: str | None,
+    cfg: SentenceDatasetConfig,
+) -> list[str]:
+    if cfg.postprocess_policy == "none":
+        return sentence_texts
+
+    artifact_cleanup = _should_apply_item7_artifact_cleanup(
+        policy=cfg.postprocess_policy,
+        text_scope=text_scope,
+    )
+    reference_stitching = _should_apply_reference_stitching(
+        policy=cfg.postprocess_policy,
+        text_scope=text_scope,
+    )
+    if not artifact_cleanup and not reference_stitching:
+        return sentence_texts
+
+    if _lm2011_rust is not None and all(isinstance(text, str) for text in sentence_texts):
+        try:
+            out = list(
+                _lm2011_rust.postprocess_sentence_texts_value(
+                    sentence_texts,
+                    text_scope,
+                    cfg.postprocess_policy,
+                )
+            )
+            _SENTENCE_POSTPROCESS_RUST_METRICS["postprocess_texts_fast_success"] += 1
+            return [str(text) for text in out]
+        except Exception:
+            _SENTENCE_POSTPROCESS_RUST_METRICS["postprocess_texts_fast_failures"] += 1
+    _SENTENCE_POSTPROCESS_RUST_METRICS["postprocess_texts_fallbacks"] += 1
+    return _postprocess_sentence_texts_py(
+        sentence_texts,
+        text_scope=text_scope,
+        cfg=cfg,
+    )
 
 
 def _derive_sentence_batch(

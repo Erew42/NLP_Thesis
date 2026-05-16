@@ -7,6 +7,14 @@ from typing import Any
 
 import polars as pl
 
+try:
+    from thesis_native import _lm2011_rust
+except Exception as exc:  # pragma: no cover - optional native extension
+    _lm2011_rust = None
+    _LSEG_ANALYST_API_RUST_IMPORT_ERROR: str | None = f"{type(exc).__name__}: {exc}"
+else:
+    _LSEG_ANALYST_API_RUST_IMPORT_ERROR = None
+
 from thesis_pkg.pipelines.refinitiv.analyst import (
     ANALYST_ACTUALS_RAW_COLUMNS,
     ANALYST_ESTIMATES_MONTHLY_RAW_COLUMNS,
@@ -19,7 +27,7 @@ from thesis_pkg.pipelines.refinitiv.doc_ownership import (
     _normalize_date_value,
     _normalize_float_value,
 )
-from thesis_pkg.pipelines.refinitiv.lseg_api_common import (
+from thesis_refinitiv.lseg_client.api_common import (
     candidate_output_path as _candidate_output_path,
     promote_candidate_output as _promote_candidate_output,
     retry_delay_seconds as _retry_delay_seconds,
@@ -27,7 +35,7 @@ from thesis_pkg.pipelines.refinitiv.lseg_api_common import (
     write_parquet_atomic as _write_parquet_atomic,
 )
 from thesis_pkg.pipelines.refinitiv.lseg_api_execution import run_api_batches
-from thesis_pkg.pipelines.refinitiv.lseg_batching import (
+from thesis_refinitiv.lseg_client.batching import (
     IntervalBatchPlan,
     IntervalBatchPlannerConfig,
     RequestItem,
@@ -36,9 +44,9 @@ from thesis_pkg.pipelines.refinitiv.lseg_batching import (
     request_signature,
     stable_hash_id,
 )
-from thesis_pkg.pipelines.refinitiv.lseg_ledger import RequestLedger
-from thesis_pkg.pipelines.refinitiv.lseg_ledger import LsegResumeCompatibilityError
-from thesis_pkg.pipelines.refinitiv.lseg_stage_audit import (
+from thesis_refinitiv.lseg_client.ledger import RequestLedger
+from thesis_refinitiv.lseg_client.ledger import LsegResumeCompatibilityError
+from thesis_refinitiv.lseg_client.stage_audit import (
     audit_api_stage,
     default_stage_fetch_manifest_path,
     default_stage_manifest_path,
@@ -47,7 +55,7 @@ from thesis_pkg.pipelines.refinitiv.lseg_stage_audit import (
     write_stage_completion_manifest,
     write_stage_fetch_manifest,
 )
-from thesis_pkg.pipelines.refinitiv_bridge_pipeline import (
+from thesis_refinitiv.bridge import (
     _cast_df_to_schema,
 )
 
@@ -100,6 +108,54 @@ ANALYST_ESTIMATES_FIELD_ALIASES: dict[str, tuple[str, ...]] = {
     "TR.EPSNumberofEstimates": ("Number Of Estimates", "Earnings Per Share - Number of Estimates"),
 }
 API_STAGE_MODES: frozenset[str] = frozenset({"full", "fetch_only", "finalize_only"})
+
+_LSEG_ANALYST_API_RUST_METRICS: dict[str, int] = {
+    "actual_items_column_fast_success": 0,
+    "actual_items_column_fast_failures": 0,
+    "actual_items_column_fallbacks": 0,
+    "actual_items_fast_success": 0,
+    "actual_items_fast_failures": 0,
+    "actual_items_fallbacks": 0,
+    "estimate_items_column_fast_success": 0,
+    "estimate_items_column_fast_failures": 0,
+    "estimate_items_column_fallbacks": 0,
+    "estimate_items_fast_success": 0,
+    "estimate_items_fast_failures": 0,
+    "estimate_items_fallbacks": 0,
+    "actual_response_column_fast_success": 0,
+    "actual_response_column_fast_failures": 0,
+    "actual_response_column_fallbacks": 0,
+    "actual_response_fast_success": 0,
+    "actual_response_fast_failures": 0,
+    "actual_response_fallbacks": 0,
+    "estimate_response_column_fast_success": 0,
+    "estimate_response_column_fast_failures": 0,
+    "estimate_response_column_fallbacks": 0,
+    "estimate_response_fast_success": 0,
+    "estimate_response_fast_failures": 0,
+    "estimate_response_fallbacks": 0,
+    "int_value_fast_success": 0,
+    "int_value_fast_failures": 0,
+    "int_value_fallbacks": 0,
+    "fperiod_fast_success": 0,
+    "fperiod_fast_failures": 0,
+    "fperiod_fallbacks": 0,
+    "item_window_fast_success": 0,
+    "item_window_fast_failures": 0,
+    "item_window_fallbacks": 0,
+}
+
+
+def get_lseg_analyst_api_rust_accel_metrics() -> dict[str, int | str | bool | None]:
+    metrics: dict[str, int | str | bool | None] = dict(_LSEG_ANALYST_API_RUST_METRICS)
+    metrics["rust_accel_available"] = _lm2011_rust is not None
+    metrics["rust_accel_import_error"] = _LSEG_ANALYST_API_RUST_IMPORT_ERROR
+    return metrics
+
+
+def reset_lseg_analyst_api_rust_accel_metrics() -> None:
+    for key in _LSEG_ANALYST_API_RUST_METRICS:
+        _LSEG_ANALYST_API_RUST_METRICS[key] = 0
 
 
 def _analyst_resume_metadata(
@@ -683,7 +739,44 @@ def _analyst_output_label(stage_name: str) -> str:
     raise ValueError(f"Unsupported analyst stage: {stage_name}")
 
 
-def _build_analyst_actuals_items(request_df: pl.DataFrame) -> list[RequestItem]:
+def _analyst_actual_item_rows_to_request_items(
+    source_rows: list[dict[str, Any]],
+    item_rows: list[tuple[int, str, str, str, str, str | None]],
+) -> list[RequestItem]:
+    return [
+        RequestItem(
+            item_id=item_id,
+            stage=ANALYST_ACTUALS_STAGE,
+            instrument=ric,
+            batch_key=f"{start_text}|{end_text}",
+            fields=ANALYST_ACTUALS_FIELDS,
+            parameters={"Frq": "FQ", "Period": "FI0", "SDate": start_text, "EDate": end_text},
+            payload={"request_row": source_rows[int(row_index)]},
+        )
+        for row_index, item_id, ric, start_text, end_text, _period in item_rows
+    ]
+
+
+def _analyst_estimate_item_rows_to_request_items(
+    source_rows: list[dict[str, Any]],
+    item_rows: list[tuple[int, str, str, str, str, str | None]],
+) -> list[RequestItem]:
+    return [
+        RequestItem(
+            item_id=item_id,
+            stage=ANALYST_ESTIMATES_STAGE,
+            instrument=ric,
+            batch_key=f"{start_text}|{end_text}|{request_period}",
+            fields=ANALYST_ESTIMATES_FIELDS,
+            parameters={"Frq": "M", "Period": request_period, "SDate": start_text, "EDate": end_text},
+            payload={"request_row": source_rows[int(row_index)]},
+        )
+        for row_index, item_id, ric, start_text, end_text, request_period in item_rows
+        if request_period is not None
+    ]
+
+
+def _build_analyst_actuals_items_py(request_df: pl.DataFrame) -> list[RequestItem]:
     items: list[RequestItem] = []
     for row in request_df.filter(pl.col("retrieval_eligible").fill_null(False)).to_dicts():
         request_group_id = row.get("request_group_id")
@@ -708,7 +801,59 @@ def _build_analyst_actuals_items(request_df: pl.DataFrame) -> list[RequestItem]:
     return items
 
 
-def _build_analyst_estimate_items(request_df: pl.DataFrame) -> list[RequestItem]:
+def _build_analyst_actuals_items(request_df: pl.DataFrame) -> list[RequestItem]:
+    if _lm2011_rust is not None:
+        source_rows: list[dict[str, Any]] | None = None
+        try:
+            raw_rows = _lm2011_rust.build_analyst_actual_item_row_columns(
+                request_df.columns,
+                [request_df.get_column(column).to_list() for column in request_df.columns],
+            )
+            _LSEG_ANALYST_API_RUST_METRICS["actual_items_column_fast_success"] += 1
+            source_rows = request_df.to_dicts()
+            return _analyst_actual_item_rows_to_request_items(
+                source_rows,
+                [
+                    (
+                        int(row_index),
+                        str(item_id),
+                        str(ric),
+                        str(start_text),
+                        str(end_text),
+                        None if request_period is None else str(request_period),
+                    )
+                    for row_index, item_id, ric, start_text, end_text, request_period in raw_rows
+                ],
+            )
+        except Exception:
+            _LSEG_ANALYST_API_RUST_METRICS["actual_items_column_fast_failures"] += 1
+            _LSEG_ANALYST_API_RUST_METRICS["actual_items_column_fallbacks"] += 1
+        try:
+            if source_rows is None:
+                source_rows = request_df.to_dicts()
+            raw_rows = _lm2011_rust.build_analyst_actual_item_rows_value(source_rows)
+            _LSEG_ANALYST_API_RUST_METRICS["actual_items_fast_success"] += 1
+            return _analyst_actual_item_rows_to_request_items(
+                source_rows,
+                [
+                    (
+                        int(row_index),
+                        str(item_id),
+                        str(ric),
+                        str(start_text),
+                        str(end_text),
+                        None if request_period is None else str(request_period),
+                    )
+                    for row_index, item_id, ric, start_text, end_text, request_period in raw_rows
+                ],
+            )
+        except Exception:
+            _LSEG_ANALYST_API_RUST_METRICS["actual_items_fast_failures"] += 1
+    _LSEG_ANALYST_API_RUST_METRICS["actual_items_fallbacks"] += 1
+    return _build_analyst_actuals_items_py(request_df)
+
+
+def _build_analyst_estimate_items_py(request_df: pl.DataFrame) -> list[RequestItem]:
     items: list[RequestItem] = []
     for row in request_df.filter(pl.col("retrieval_eligible").fill_null(False)).to_dicts():
         request_group_id = row.get("request_group_id")
@@ -734,14 +879,100 @@ def _build_analyst_estimate_items(request_df: pl.DataFrame) -> list[RequestItem]
     return items
 
 
-def _normalize_int_value(value: Any) -> int | None:
+def _build_analyst_estimate_items(request_df: pl.DataFrame) -> list[RequestItem]:
+    if _lm2011_rust is not None:
+        source_rows: list[dict[str, Any]] | None = None
+        try:
+            raw_rows = _lm2011_rust.build_analyst_estimate_item_row_columns(
+                request_df.columns,
+                [request_df.get_column(column).to_list() for column in request_df.columns],
+                tuple(ANALYST_ESTIMATE_REQUEST_PERIODS),
+            )
+            _LSEG_ANALYST_API_RUST_METRICS["estimate_items_column_fast_success"] += 1
+            source_rows = request_df.to_dicts()
+            return _analyst_estimate_item_rows_to_request_items(
+                source_rows,
+                [
+                    (
+                        int(row_index),
+                        str(item_id),
+                        str(ric),
+                        str(start_text),
+                        str(end_text),
+                        None if request_period is None else str(request_period),
+                    )
+                    for row_index, item_id, ric, start_text, end_text, request_period in raw_rows
+                ],
+            )
+        except Exception:
+            _LSEG_ANALYST_API_RUST_METRICS["estimate_items_column_fast_failures"] += 1
+            _LSEG_ANALYST_API_RUST_METRICS["estimate_items_column_fallbacks"] += 1
+        try:
+            if source_rows is None:
+                source_rows = request_df.to_dicts()
+            raw_rows = _lm2011_rust.build_analyst_estimate_item_rows_value(
+                source_rows,
+                tuple(ANALYST_ESTIMATE_REQUEST_PERIODS),
+            )
+            _LSEG_ANALYST_API_RUST_METRICS["estimate_items_fast_success"] += 1
+            return _analyst_estimate_item_rows_to_request_items(
+                source_rows,
+                [
+                    (
+                        int(row_index),
+                        str(item_id),
+                        str(ric),
+                        str(start_text),
+                        str(end_text),
+                        None if request_period is None else str(request_period),
+                    )
+                    for row_index, item_id, ric, start_text, end_text, request_period in raw_rows
+                ],
+            )
+        except Exception:
+            _LSEG_ANALYST_API_RUST_METRICS["estimate_items_fast_failures"] += 1
+    _LSEG_ANALYST_API_RUST_METRICS["estimate_items_fallbacks"] += 1
+    return _build_analyst_estimate_items_py(request_df)
+
+
+def _normalize_int_value_py(value: Any) -> int | None:
     numeric = _normalize_float_value(value)
     if numeric is None:
         return None
     return int(numeric)
 
 
-def _normalize_analyst_actuals_batch_response(items: list[Any], frame: pl.DataFrame) -> pl.DataFrame:
+def _normalize_int_value(value: Any) -> int | None:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.normalize_doc_ownership_int_value(value)
+            _LSEG_ANALYST_API_RUST_METRICS["int_value_fast_success"] += 1
+            return out
+        except Exception:
+            _LSEG_ANALYST_API_RUST_METRICS["int_value_fast_failures"] += 1
+    _LSEG_ANALYST_API_RUST_METRICS["int_value_fallbacks"] += 1
+    return _normalize_int_value_py(value)
+
+
+def _normalize_fperiod_value_py(value: Any) -> str | None:
+    if value is None:
+        return None
+    return str(value).strip() or None
+
+
+def _normalize_fperiod_value(value: Any) -> str | None:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.normalize_lookup_text_any_value(value)
+            _LSEG_ANALYST_API_RUST_METRICS["fperiod_fast_success"] += 1
+            return None if out is None else str(out)
+        except Exception:
+            _LSEG_ANALYST_API_RUST_METRICS["fperiod_fast_failures"] += 1
+    _LSEG_ANALYST_API_RUST_METRICS["fperiod_fallbacks"] += 1
+    return _normalize_fperiod_value_py(value)
+
+
+def _normalize_analyst_actuals_batch_response_py(items: list[Any], frame: pl.DataFrame) -> pl.DataFrame:
     normalized_frame = _standardize_field_frame(
         frame,
         expected_fields=ANALYST_ACTUALS_FIELDS,
@@ -766,11 +997,7 @@ def _normalize_analyst_actuals_batch_response(items: list[Any], frame: pl.DataFr
                 continue
             fiscal_period_end = _normalize_date_value(matched_row.get("TR.EPSActValue.periodenddate"))
             actual_eps = _normalize_float_value(matched_row.get("TR.EPSActValue"))
-            raw_fperiod = (
-                None
-                if matched_row.get("TR.EPSActValue.fperiod") is None
-                else str(matched_row.get("TR.EPSActValue.fperiod")).strip() or None
-            )
+            raw_fperiod = _normalize_fperiod_value(matched_row.get("TR.EPSActValue.fperiod"))
             if announcement_date is None and actual_eps is None:
                 continue
             rows.append(
@@ -802,7 +1029,138 @@ def _normalize_analyst_actuals_batch_response(items: list[Any], frame: pl.DataFr
     )
 
 
-def _normalize_analyst_estimates_batch_response(items: list[Any], frame: pl.DataFrame) -> pl.DataFrame:
+def _analyst_actual_response_rows_to_frame(
+    items: list[Any],
+    response_rows: list[tuple[int, int, str, str | None, float | None, str | None, str]],
+) -> pl.DataFrame:
+    rows: list[dict[str, Any]] = []
+    for (
+        item_index,
+        response_row_index,
+        announcement_date,
+        fiscal_period_end,
+        actual_eps,
+        raw_fperiod,
+        row_parse_status,
+    ) in response_rows:
+        item = items[int(item_index)]
+        request_row = dict(item.payload["request_row"])
+        rows.append(
+            {
+                "item_id": item.item_id,
+                "response_row_index": response_row_index,
+                "request_group_id": request_row.get("request_group_id"),
+                "gvkey_int": request_row.get("gvkey_int"),
+                "effective_collection_ric": request_row.get("effective_collection_ric"),
+                "announcement_date": announcement_date,
+                "fiscal_period_end": fiscal_period_end,
+                "actual_eps": actual_eps,
+                "raw_fperiod": raw_fperiod,
+                "row_parse_status": row_parse_status,
+            }
+        )
+    if not rows:
+        return pl.DataFrame(schema=_actuals_raw_schema())
+    return _cast_df_to_schema(
+        pl.DataFrame(rows, infer_schema_length=None),
+        _actuals_raw_schema(),
+    )
+
+
+def _normalize_analyst_actuals_batch_response(items: list[Any], frame: pl.DataFrame) -> pl.DataFrame:
+    if _lm2011_rust is not None:
+        normalized_frame: pl.DataFrame | None = None
+        try:
+            normalized_frame = _standardize_field_frame(
+                frame,
+                expected_fields=ANALYST_ACTUALS_FIELDS,
+                field_aliases=ANALYST_ACTUALS_FIELD_ALIASES,
+            )
+            raw_rows = _lm2011_rust.normalize_analyst_actuals_batch_response_columns(
+                [item.instrument for item in items],
+                [item.parameters.get("SDate") for item in items],
+                [item.parameters.get("EDate") for item in items],
+                normalized_frame.columns,
+                [normalized_frame.get_column(column).to_list() for column in normalized_frame.columns],
+            )
+            _LSEG_ANALYST_API_RUST_METRICS["actual_response_column_fast_success"] += 1
+            return _analyst_actual_response_rows_to_frame(
+                items,
+                [
+                    (
+                        int(item_index),
+                        int(response_row_index),
+                        str(announcement_date),
+                        None if fiscal_period_end is None else str(fiscal_period_end),
+                        None if actual_eps is None else float(actual_eps),
+                        None if raw_fperiod is None else str(raw_fperiod),
+                        str(row_parse_status),
+                    )
+                    for (
+                        item_index,
+                        response_row_index,
+                        announcement_date,
+                        fiscal_period_end,
+                        actual_eps,
+                        raw_fperiod,
+                        row_parse_status,
+                    ) in raw_rows
+                ],
+            )
+        except Exception:
+            _LSEG_ANALYST_API_RUST_METRICS["actual_response_column_fast_failures"] += 1
+            _LSEG_ANALYST_API_RUST_METRICS["actual_response_column_fallbacks"] += 1
+        try:
+            if normalized_frame is None:
+                normalized_frame = _standardize_field_frame(
+                    frame,
+                    expected_fields=ANALYST_ACTUALS_FIELDS,
+                    field_aliases=ANALYST_ACTUALS_FIELD_ALIASES,
+                )
+            item_rows = [
+                {
+                    "item_index": item_index,
+                    "instrument": item.instrument,
+                    "start_text": item.parameters.get("SDate"),
+                    "end_text": item.parameters.get("EDate"),
+                }
+                for item_index, item in enumerate(items)
+            ]
+            raw_rows = _lm2011_rust.normalize_analyst_actuals_batch_response_rows_value(
+                item_rows,
+                normalized_frame.to_dicts(),
+            )
+            _LSEG_ANALYST_API_RUST_METRICS["actual_response_fast_success"] += 1
+            return _analyst_actual_response_rows_to_frame(
+                items,
+                [
+                    (
+                        int(item_index),
+                        int(response_row_index),
+                        str(announcement_date),
+                        None if fiscal_period_end is None else str(fiscal_period_end),
+                        None if actual_eps is None else float(actual_eps),
+                        None if raw_fperiod is None else str(raw_fperiod),
+                        str(row_parse_status),
+                    )
+                    for (
+                        item_index,
+                        response_row_index,
+                        announcement_date,
+                        fiscal_period_end,
+                        actual_eps,
+                        raw_fperiod,
+                        row_parse_status,
+                    ) in raw_rows
+                ],
+            )
+        except Exception:
+            _LSEG_ANALYST_API_RUST_METRICS["actual_response_fast_failures"] += 1
+    _LSEG_ANALYST_API_RUST_METRICS["actual_response_fallbacks"] += 1
+    return _normalize_analyst_actuals_batch_response_py(items, frame)
+
+
+def _normalize_analyst_estimates_batch_response_py(items: list[Any], frame: pl.DataFrame) -> pl.DataFrame:
     normalized_frame = _standardize_field_frame(
         frame,
         expected_fields=ANALYST_ESTIMATES_FIELDS,
@@ -829,11 +1187,7 @@ def _normalize_analyst_estimates_batch_response(items: list[Any], frame: pl.Data
             forecast_consensus_mean = _normalize_float_value(matched_row.get("TR.EPSMean"))
             forecast_dispersion = _normalize_float_value(matched_row.get("TR.EPSStdDev"))
             estimate_count = _normalize_int_value(matched_row.get("TR.EPSNumberofEstimates"))
-            raw_fperiod = (
-                None
-                if matched_row.get("TR.EPSMean.fperiod") is None
-                else str(matched_row.get("TR.EPSMean.fperiod")).strip() or None
-            )
+            raw_fperiod = _normalize_fperiod_value(matched_row.get("TR.EPSMean.fperiod"))
             if (
                 calc_date is None
                 and fiscal_period_end is None
@@ -873,6 +1227,152 @@ def _normalize_analyst_estimates_batch_response(items: list[Any], frame: pl.Data
         pl.DataFrame(rows, schema=_estimates_raw_schema()),
         _estimates_raw_schema(),
     )
+
+
+def _analyst_estimate_response_rows_to_frame(
+    items: list[Any],
+    response_rows: list[
+        tuple[int, int, str, str | None, str | None, float | None, float | None, int | None, str]
+    ],
+) -> pl.DataFrame:
+    rows: list[dict[str, Any]] = []
+    for (
+        item_index,
+        response_row_index,
+        calc_date,
+        fiscal_period_end,
+        raw_fperiod,
+        forecast_consensus_mean,
+        forecast_dispersion,
+        estimate_count,
+        row_parse_status,
+    ) in response_rows:
+        item = items[int(item_index)]
+        request_row = dict(item.payload["request_row"])
+        rows.append(
+            {
+                "item_id": item.item_id,
+                "response_row_index": response_row_index,
+                "request_group_id": request_row.get("request_group_id"),
+                "request_period": item.parameters.get("Period"),
+                "gvkey_int": request_row.get("gvkey_int"),
+                "effective_collection_ric": request_row.get("effective_collection_ric"),
+                "calc_date": calc_date,
+                "fiscal_period_end": fiscal_period_end,
+                "raw_fperiod": raw_fperiod,
+                "forecast_consensus_mean": forecast_consensus_mean,
+                "forecast_dispersion": forecast_dispersion,
+                "estimate_count": estimate_count,
+                "row_parse_status": row_parse_status,
+            }
+        )
+    if not rows:
+        return pl.DataFrame(schema=_estimates_raw_schema())
+    return _cast_df_to_schema(
+        pl.DataFrame(rows, infer_schema_length=None),
+        _estimates_raw_schema(),
+    )
+
+
+def _normalize_analyst_estimates_batch_response(items: list[Any], frame: pl.DataFrame) -> pl.DataFrame:
+    if _lm2011_rust is not None:
+        normalized_frame: pl.DataFrame | None = None
+        try:
+            normalized_frame = _standardize_field_frame(
+                frame,
+                expected_fields=ANALYST_ESTIMATES_FIELDS,
+                field_aliases=ANALYST_ESTIMATES_FIELD_ALIASES,
+            )
+            raw_rows = _lm2011_rust.normalize_analyst_estimates_batch_response_columns(
+                [item.instrument for item in items],
+                [item.parameters.get("SDate") for item in items],
+                [item.parameters.get("EDate") for item in items],
+                normalized_frame.columns,
+                [normalized_frame.get_column(column).to_list() for column in normalized_frame.columns],
+            )
+            _LSEG_ANALYST_API_RUST_METRICS["estimate_response_column_fast_success"] += 1
+            return _analyst_estimate_response_rows_to_frame(
+                items,
+                [
+                    (
+                        int(item_index),
+                        int(response_row_index),
+                        str(calc_date),
+                        None if fiscal_period_end is None else str(fiscal_period_end),
+                        None if raw_fperiod is None else str(raw_fperiod),
+                        None if forecast_consensus_mean is None else float(forecast_consensus_mean),
+                        None if forecast_dispersion is None else float(forecast_dispersion),
+                        None if estimate_count is None else int(estimate_count),
+                        str(row_parse_status),
+                    )
+                    for (
+                        item_index,
+                        response_row_index,
+                        calc_date,
+                        fiscal_period_end,
+                        raw_fperiod,
+                        forecast_consensus_mean,
+                        forecast_dispersion,
+                        estimate_count,
+                        row_parse_status,
+                    ) in raw_rows
+                ],
+            )
+        except Exception:
+            _LSEG_ANALYST_API_RUST_METRICS["estimate_response_column_fast_failures"] += 1
+            _LSEG_ANALYST_API_RUST_METRICS["estimate_response_column_fallbacks"] += 1
+        try:
+            if normalized_frame is None:
+                normalized_frame = _standardize_field_frame(
+                    frame,
+                    expected_fields=ANALYST_ESTIMATES_FIELDS,
+                    field_aliases=ANALYST_ESTIMATES_FIELD_ALIASES,
+                )
+            item_rows = [
+                {
+                    "item_index": item_index,
+                    "instrument": item.instrument,
+                    "start_text": item.parameters.get("SDate"),
+                    "end_text": item.parameters.get("EDate"),
+                }
+                for item_index, item in enumerate(items)
+            ]
+            raw_rows = _lm2011_rust.normalize_analyst_estimates_batch_response_rows_value(
+                item_rows,
+                normalized_frame.to_dicts(),
+            )
+            _LSEG_ANALYST_API_RUST_METRICS["estimate_response_fast_success"] += 1
+            return _analyst_estimate_response_rows_to_frame(
+                items,
+                [
+                    (
+                        int(item_index),
+                        int(response_row_index),
+                        str(calc_date),
+                        None if fiscal_period_end is None else str(fiscal_period_end),
+                        None if raw_fperiod is None else str(raw_fperiod),
+                        None if forecast_consensus_mean is None else float(forecast_consensus_mean),
+                        None if forecast_dispersion is None else float(forecast_dispersion),
+                        None if estimate_count is None else int(estimate_count),
+                        str(row_parse_status),
+                    )
+                    for (
+                        item_index,
+                        response_row_index,
+                        calc_date,
+                        fiscal_period_end,
+                        raw_fperiod,
+                        forecast_consensus_mean,
+                        forecast_dispersion,
+                        estimate_count,
+                        row_parse_status,
+                    ) in raw_rows
+                ],
+            )
+        except Exception:
+            _LSEG_ANALYST_API_RUST_METRICS["estimate_response_fast_failures"] += 1
+    _LSEG_ANALYST_API_RUST_METRICS["estimate_response_fallbacks"] += 1
+    return _normalize_analyst_estimates_batch_response_py(items, frame)
 
 
 def _resolve_interval_batch_config(
@@ -948,12 +1448,33 @@ def _analyst_interval_signature(item: RequestItem) -> str:
     )
 
 
+def _item_window_py(item: Any) -> tuple[dt.date, dt.date]:
+    start_text = item.parameters.get("SDate")
+    end_text = item.parameters.get("EDate")
+    if not start_text or not end_text:
+        raise ValueError(f"missing interval parameters for item_id={item.item_id}")
+    return (
+        dt.date.fromisoformat(str(start_text)),
+        dt.date.fromisoformat(str(end_text)),
+    )
+
+
 def _item_window(item: Any) -> tuple[dt.date, dt.date]:
     start_text = item.parameters.get("SDate")
     end_text = item.parameters.get("EDate")
     if not start_text or not end_text:
         raise ValueError(f"missing interval parameters for item_id={item.item_id}")
-    return (dt.date.fromisoformat(str(start_text)), dt.date.fromisoformat(str(end_text)))
+    if _lm2011_rust is not None:
+        try:
+            start_out, end_out = _lm2011_rust.lseg_item_window_dates(str(start_text), str(end_text))
+            _LSEG_ANALYST_API_RUST_METRICS["item_window_fast_success"] += 1
+            return start_out, end_out
+        except Exception:
+            _LSEG_ANALYST_API_RUST_METRICS["item_window_fast_failures"] += 1
+            _LSEG_ANALYST_API_RUST_METRICS["item_window_fallbacks"] += 1
+    else:
+        _LSEG_ANALYST_API_RUST_METRICS["item_window_fallbacks"] += 1
+    return _item_window_py(item)
 
 
 def _build_analyst_actuals_interval_batch(

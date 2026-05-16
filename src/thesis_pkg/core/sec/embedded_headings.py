@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import re
 from collections import Counter
@@ -26,6 +26,37 @@ from .patterns import (
     EMBEDDED_TOC_ITEM_ONLY_PATTERN,
     EMBEDDED_SEPARATOR_PATTERN,
 )
+
+try:
+    from thesis_native import _lm2011_rust
+except Exception as exc:  # pragma: no cover - optional native extension
+    _lm2011_rust = None
+    _EMBEDDED_HEADINGS_RUST_IMPORT_ERROR: str | None = f"{type(exc).__name__}: {exc}"
+else:
+    _EMBEDDED_HEADINGS_RUST_IMPORT_ERROR = None
+
+
+_EMBEDDED_HEADINGS_RUST_METRICS: dict[str, int] = {
+    "gij_context_fast_success": 0,
+    "gij_context_fast_failures": 0,
+    "gij_context_fallbacks": 0,
+    "embedded_heading_hits_fast_success": 0,
+    "embedded_heading_hits_fast_failures": 0,
+    "embedded_heading_hits_fallbacks": 0,
+}
+
+
+def get_embedded_headings_rust_accel_metrics() -> dict[str, int | str | bool | None]:
+    metrics: dict[str, int | str | bool | None] = dict(_EMBEDDED_HEADINGS_RUST_METRICS)
+    metrics["rust_accel_available"] = _lm2011_rust is not None
+    metrics["rust_accel_import_error"] = _EMBEDDED_HEADINGS_RUST_IMPORT_ERROR
+    return metrics
+
+
+def reset_embedded_headings_rust_accel_metrics() -> None:
+    for key in _EMBEDDED_HEADINGS_RUST_METRICS:
+        _EMBEDDED_HEADINGS_RUST_METRICS[key] = 0
+
 
 EMBEDDED_TOC_WINDOW_LINES = 150
 EMBEDDED_SELF_HIT_MAX_CHAR = 10
@@ -182,7 +213,7 @@ def is_empty_section_line(line: str) -> bool:
     return bool(EMPTY_SECTION_LINE_RE.match(line))
 
 
-def detect_gij_context(
+def _detect_gij_context_py(
     lines: list[str],
 ) -> dict[str, bool | list[tuple[int, int]] | set[str] | str]:
     """Identify GIJ asset-backed omission/substitution ranges.
@@ -246,6 +277,43 @@ def detect_gij_context(
         "gij_omitted_items": gij_omitted_items,
         "gij_reason": "General Instruction J" if gij_asset_backed else "",
     }
+
+
+def _gij_context_from_rust_payload(
+    payload: tuple[
+        bool,
+        list[tuple[int, int]],
+        list[tuple[int, int]],
+        list[str],
+        str,
+    ],
+) -> dict[str, bool | list[tuple[int, int]] | set[str] | str]:
+    gij_asset_backed, omit_ranges, substitute_ranges, omitted_items, reason = payload
+    return {
+        "gij_asset_backed": bool(gij_asset_backed),
+        "gij_omit_ranges": [
+            (int(start), int(end)) for start, end in omit_ranges
+        ],
+        "gij_substitute_ranges": [
+            (int(start), int(end)) for start, end in substitute_ranges
+        ],
+        "gij_omitted_items": {str(item) for item in omitted_items},
+        "gij_reason": str(reason),
+    }
+
+
+def detect_gij_context(
+    lines: list[str],
+) -> dict[str, bool | list[tuple[int, int]] | set[str] | str]:
+    if _lm2011_rust is not None:
+        try:
+            payload = _lm2011_rust.sec_detect_gij_context(lines)
+            _EMBEDDED_HEADINGS_RUST_METRICS["gij_context_fast_success"] += 1
+            return _gij_context_from_rust_payload(payload)
+        except Exception:
+            _EMBEDDED_HEADINGS_RUST_METRICS["gij_context_fast_failures"] += 1
+    _EMBEDDED_HEADINGS_RUST_METRICS["gij_context_fallbacks"] += 1
+    return _detect_gij_context_py(lines)
 
 
 def _is_late_item(current_item_id: str | None, current_part: str | None) -> bool:
@@ -598,7 +666,7 @@ def _summarize_embedded_hits(
     return warn, fail, first_hit, first_flagged, first_fail, counts
 
 
-def _find_embedded_heading_hits(
+def _find_embedded_heading_hits_py(
     full_text: str,
     *,
     current_item_id: str,
@@ -822,6 +890,68 @@ def _find_embedded_heading_hits(
         offset += len(line)
 
     return hits
+
+
+def _embedded_hits_from_rust_rows(
+    rows: list[tuple[str, str, str | None, str | None, int, int, int, str]],
+) -> list[EmbeddedHeadingHit]:
+    return [
+        EmbeddedHeadingHit(
+            kind=str(kind),
+            classification=str(classification),
+            item_id=None if item_id is None else str(item_id),
+            part=None if part is None else str(part),
+            line_idx=int(line_idx),
+            char_pos=int(char_pos),
+            full_text_len=int(full_text_len),
+            snippet=str(snippet),
+        )
+        for (
+            kind,
+            classification,
+            item_id,
+            part,
+            line_idx,
+            char_pos,
+            full_text_len,
+            snippet,
+        ) in rows
+    ]
+
+
+def _find_embedded_heading_hits(
+    full_text: str,
+    *,
+    current_item_id: str,
+    current_part: str | None,
+    next_item_id: str | None = None,
+    nearby_item_ids: set[str] | None = None,
+    max_hits: int = EMBEDDED_MAX_HITS,
+) -> list[EmbeddedHeadingHit]:
+    if _lm2011_rust is not None:
+        try:
+            rows = _lm2011_rust.sec_find_embedded_heading_hits(
+                full_text,
+                current_item_id,
+                current_part,
+                next_item_id,
+                sorted(nearby_item_ids) if nearby_item_ids else None,
+                int(max_hits),
+            )
+            if rows is not None:
+                _EMBEDDED_HEADINGS_RUST_METRICS["embedded_heading_hits_fast_success"] += 1
+                return _embedded_hits_from_rust_rows(list(rows))
+        except Exception:
+            _EMBEDDED_HEADINGS_RUST_METRICS["embedded_heading_hits_fast_failures"] += 1
+    _EMBEDDED_HEADINGS_RUST_METRICS["embedded_heading_hits_fallbacks"] += 1
+    return _find_embedded_heading_hits_py(
+        full_text,
+        current_item_id=current_item_id,
+        current_part=current_part,
+        next_item_id=next_item_id,
+        nearby_item_ids=nearby_item_ids,
+        max_hits=max_hits,
+    )
 
 
 def find_strong_leak(

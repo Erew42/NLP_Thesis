@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import dataclass
 from dataclasses import replace
@@ -16,8 +16,34 @@ from thesis_pkg.benchmarking.item_text_cleaning import clean_item_scopes_with_au
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+try:
+    from thesis_native import _lm2011_rust
+except Exception as exc:  # pragma: no cover - optional native extension
+    _lm2011_rust = None
+    _ITEM7_LM_FLOOR_SWEEP_RUST_IMPORT_ERROR: str | None = f"{type(exc).__name__}: {exc}"
+else:
+    _ITEM7_LM_FLOOR_SWEEP_RUST_IMPORT_ERROR = None
+
 
 DEFAULT_ITEM7_FLOOR_THRESHOLDS: tuple[int, ...] = (0, 60, 100, 125, 150, 175, 200, 225, 250, 300)
+
+_ITEM7_LM_FLOOR_SWEEP_RUST_METRICS: dict[str, int] = {
+    "threshold_summary_row_fast_success": 0,
+    "threshold_summary_row_fast_failures": 0,
+    "threshold_summary_row_fallbacks": 0,
+}
+
+
+def get_item7_lm_floor_sweep_rust_accel_metrics() -> dict[str, int | str | bool | None]:
+    metrics: dict[str, int | str | bool | None] = dict(_ITEM7_LM_FLOOR_SWEEP_RUST_METRICS)
+    metrics["rust_accel_available"] = _lm2011_rust is not None
+    metrics["rust_accel_import_error"] = _ITEM7_LM_FLOOR_SWEEP_RUST_IMPORT_ERROR
+    return metrics
+
+
+def reset_item7_lm_floor_sweep_rust_accel_metrics() -> None:
+    for key in _ITEM7_LM_FLOOR_SWEEP_RUST_METRICS:
+        _ITEM7_LM_FLOOR_SWEEP_RUST_METRICS[key] = 0
 
 
 @dataclass(frozen=True)
@@ -63,6 +89,66 @@ def load_reviewed_removed_segment_cases(review_cases_path: Path) -> pl.DataFrame
             pl.col("review_label").cast(pl.Utf8, strict=False),
         )
         .unique(subset=["benchmark_row_id"], keep="first")
+    )
+
+
+def _threshold_summary_row_py(
+    row_audit_df: pl.DataFrame,
+    *,
+    threshold: int,
+    confirmed_false_positive_ids: set[str],
+) -> dict[str, Any]:
+    dropped_df = row_audit_df.filter(pl.col("dropped_after_cleaning"))
+    floor_dropped_df = dropped_df.filter(pl.col("drop_reason") == "item7_below_lm_token_floor")
+    reference_stub_dropped_df = dropped_df.filter(pl.col("drop_reason") == "reference_only_stub")
+    total_dropped = int(dropped_df.height)
+    floor_dropped = int(floor_dropped_df.height)
+    confirmed_fp_removed = sum(
+        1
+        for benchmark_row_id in dropped_df["benchmark_row_id"].to_list()
+        if benchmark_row_id in confirmed_false_positive_ids
+    )
+    return {
+        "item7_min_lm_tokens": int(threshold),
+        "item7_floor_enabled": threshold > 0,
+        "sample_item7_rows": int(row_audit_df.height),
+        "item7_rows_dropped_total": total_dropped,
+        "item7_rows_dropped_by_floor": floor_dropped,
+        "item7_rows_dropped_by_reference_stub": int(reference_stub_dropped_df.height),
+        "item7_rows_kept": int(row_audit_df.height - total_dropped),
+        "confirmed_false_positive_removed_rows": confirmed_fp_removed,
+        "confirmed_false_positive_saved_rows": len(confirmed_false_positive_ids) - confirmed_fp_removed,
+        "confirmed_fp_share_of_total_dropped": (
+            confirmed_fp_removed / total_dropped if total_dropped else None
+        ),
+        "confirmed_fp_share_of_floor_dropped": (
+            confirmed_fp_removed / floor_dropped if floor_dropped else None
+        ),
+    }
+
+
+def _threshold_summary_row(
+    row_audit_df: pl.DataFrame,
+    *,
+    threshold: int,
+    confirmed_false_positive_ids: set[str],
+) -> dict[str, Any]:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.item7_lm_floor_threshold_summary_row(
+                row_audit_df.to_dicts(),
+                int(threshold),
+                sorted(confirmed_false_positive_ids),
+            )
+            _ITEM7_LM_FLOOR_SWEEP_RUST_METRICS["threshold_summary_row_fast_success"] += 1
+            return dict(out)
+        except Exception:
+            _ITEM7_LM_FLOOR_SWEEP_RUST_METRICS["threshold_summary_row_fast_failures"] += 1
+    _ITEM7_LM_FLOOR_SWEEP_RUST_METRICS["threshold_summary_row_fallbacks"] += 1
+    return _threshold_summary_row_py(
+        row_audit_df,
+        threshold=threshold,
+        confirmed_false_positive_ids=confirmed_false_positive_ids,
     )
 
 
@@ -112,39 +198,16 @@ def analyze_item7_lm_floor_sweep(
             segment_policy_id="item7_floor_sweep",
         )
         row_audit_df = cleaning_result.row_audit_df.sort("benchmark_row_id")
-        dropped_df = row_audit_df.filter(pl.col("dropped_after_cleaning"))
-        floor_dropped_df = dropped_df.filter(pl.col("drop_reason") == "item7_below_lm_token_floor")
-        reference_stub_dropped_df = dropped_df.filter(pl.col("drop_reason") == "reference_only_stub")
-        total_dropped = int(dropped_df.height)
-        floor_dropped = int(floor_dropped_df.height)
+        threshold_summary = _threshold_summary_row(
+            row_audit_df,
+            threshold=threshold,
+            confirmed_false_positive_ids=confirmed_false_positive_ids,
+        )
+        total_dropped = int(threshold_summary["item7_rows_dropped_total"])
         if threshold == 250:
             baseline_removed_rows_at_250 = total_dropped
 
-        confirmed_fp_removed = sum(
-            1
-            for benchmark_row_id in dropped_df["benchmark_row_id"].to_list()
-            if benchmark_row_id in confirmed_false_positive_ids
-        )
-
-        result_rows.append(
-            {
-                "item7_min_lm_tokens": threshold,
-                "item7_floor_enabled": threshold > 0,
-                "sample_item7_rows": int(row_audit_df.height),
-                "item7_rows_dropped_total": total_dropped,
-                "item7_rows_dropped_by_floor": floor_dropped,
-                "item7_rows_dropped_by_reference_stub": int(reference_stub_dropped_df.height),
-                "item7_rows_kept": int(row_audit_df.height - total_dropped),
-                "confirmed_false_positive_removed_rows": confirmed_fp_removed,
-                "confirmed_false_positive_saved_rows": len(confirmed_false_positive_ids) - confirmed_fp_removed,
-                "confirmed_fp_share_of_total_dropped": (
-                    confirmed_fp_removed / total_dropped if total_dropped else None
-                ),
-                "confirmed_fp_share_of_floor_dropped": (
-                    confirmed_fp_removed / floor_dropped if floor_dropped else None
-                ),
-            }
-        )
+        result_rows.append(threshold_summary)
 
         if not reviewed_lookup.is_empty():
             reviewed_status_df = (

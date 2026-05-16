@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import asdict
 from dataclasses import dataclass
@@ -8,6 +8,14 @@ from pathlib import Path
 from typing import Any
 
 import polars as pl
+
+try:
+    from thesis_native import _lm2011_rust
+except Exception as exc:  # pragma: no cover - optional native extension
+    _lm2011_rust = None
+    _BUCKET_LENGTH_TUNING_RUST_IMPORT_ERROR: str | None = f"{type(exc).__name__}: {exc}"
+else:
+    _BUCKET_LENGTH_TUNING_RUST_IMPORT_ERROR = None
 
 from thesis_pkg.benchmarking.contracts import BucketEdgeSpec
 from thesis_pkg.benchmarking.contracts import BucketLengthSpec
@@ -32,6 +40,42 @@ REQUIRED_COLUMNS: tuple[str, ...] = (
     TOKEN_COUNT_COLUMN,
     TOKEN_BUCKET_COLUMN,
 )
+
+_BUCKET_LENGTH_TUNING_RUST_METRICS: dict[str, int] = {
+    "item_codes_fast_success": 0,
+    "item_codes_fast_failures": 0,
+    "item_codes_fallbacks": 0,
+    "years_fast_success": 0,
+    "years_fast_failures": 0,
+    "years_fallbacks": 0,
+    "bucket_value_fast_success": 0,
+    "bucket_value_fast_failures": 0,
+    "bucket_value_fallbacks": 0,
+    "round_up_fast_success": 0,
+    "round_up_fast_failures": 0,
+    "round_up_fallbacks": 0,
+    "recommend_edge_fast_success": 0,
+    "recommend_edge_fast_failures": 0,
+    "recommend_edge_fallbacks": 0,
+    "bucket_summary_rows_column_fast_success": 0,
+    "bucket_summary_rows_column_fast_failures": 0,
+    "bucket_summary_rows_column_fallbacks": 0,
+    "bucket_summary_rows_fast_success": 0,
+    "bucket_summary_rows_fast_failures": 0,
+    "bucket_summary_rows_fallbacks": 0,
+}
+
+
+def get_bucket_length_tuning_rust_accel_metrics() -> dict[str, int | str | bool | None]:
+    metrics: dict[str, int | str | bool | None] = dict(_BUCKET_LENGTH_TUNING_RUST_METRICS)
+    metrics["rust_accel_available"] = _lm2011_rust is not None
+    metrics["rust_accel_import_error"] = _BUCKET_LENGTH_TUNING_RUST_IMPORT_ERROR
+    return metrics
+
+
+def reset_bucket_length_tuning_rust_accel_metrics() -> None:
+    for key in _BUCKET_LENGTH_TUNING_RUST_METRICS:
+        _BUCKET_LENGTH_TUNING_RUST_METRICS[key] = 0
 
 
 @dataclass(frozen=True)
@@ -69,7 +113,7 @@ def _quantile_alias(quantile: float) -> str:
     raise ValueError(f"Unsupported summary quantile: {quantile!r}")
 
 
-def _normalize_item_codes(item_codes: tuple[str, ...] | None) -> tuple[str, ...] | None:
+def _normalize_item_codes_py(item_codes: tuple[str, ...] | None) -> tuple[str, ...] | None:
     if item_codes is None:
         return None
     normalized = tuple(
@@ -78,11 +122,35 @@ def _normalize_item_codes(item_codes: tuple[str, ...] | None) -> tuple[str, ...]
     return normalized or None
 
 
-def _normalize_years(years: tuple[int, ...] | None) -> tuple[int, ...] | None:
+def _normalize_item_codes(item_codes: tuple[str, ...] | None) -> tuple[str, ...] | None:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.normalize_item_codes_optional_value(item_codes)
+            _BUCKET_LENGTH_TUNING_RUST_METRICS["item_codes_fast_success"] += 1
+            return None if out is None else tuple(str(value) for value in out)
+        except Exception:
+            _BUCKET_LENGTH_TUNING_RUST_METRICS["item_codes_fast_failures"] += 1
+    _BUCKET_LENGTH_TUNING_RUST_METRICS["item_codes_fallbacks"] += 1
+    return _normalize_item_codes_py(item_codes)
+
+
+def _normalize_years_py(years: tuple[int, ...] | None) -> tuple[int, ...] | None:
     if years is None:
         return None
     normalized = tuple(sorted({int(year) for year in years}))
     return normalized or None
+
+
+def _normalize_years(years: tuple[int, ...] | None) -> tuple[int, ...] | None:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.normalize_years_optional_value(years)
+            _BUCKET_LENGTH_TUNING_RUST_METRICS["years_fast_success"] += 1
+            return None if out is None else tuple(int(value) for value in out)
+        except Exception:
+            _BUCKET_LENGTH_TUNING_RUST_METRICS["years_fast_failures"] += 1
+    _BUCKET_LENGTH_TUNING_RUST_METRICS["years_fallbacks"] += 1
+    return _normalize_years_py(years)
 
 
 def _required_schema(path: Path) -> None:
@@ -109,52 +177,82 @@ def _scan_sentence_tokens(
     return lf, parquet_paths, by_year_dir
 
 
-def _current_bucket_upper_edge(bucket: str, current_edges: BucketEdgeSpec) -> int:
+def _bucket_value_for_name_py(bucket: str, short_value: int, medium_value: int, long_value: int) -> int:
     if bucket == "short":
-        return current_edges.short_edge
+        return short_value
     if bucket == "medium":
-        return current_edges.medium_edge
+        return medium_value
     if bucket == "long":
-        return BucketLengthSpec().long_max_length
+        return long_value
     raise ValueError(f"Unknown bucket: {bucket!r}")
+
+
+def _bucket_value_for_name(bucket: str, short_value: int, medium_value: int, long_value: int) -> int:
+    if _lm2011_rust is not None:
+        try:
+            out = int(_lm2011_rust.finbert_bucket_value_for_name(bucket, short_value, medium_value, long_value))
+            _BUCKET_LENGTH_TUNING_RUST_METRICS["bucket_value_fast_success"] += 1
+            return out
+        except Exception:
+            _BUCKET_LENGTH_TUNING_RUST_METRICS["bucket_value_fast_failures"] += 1
+    _BUCKET_LENGTH_TUNING_RUST_METRICS["bucket_value_fallbacks"] += 1
+    return _bucket_value_for_name_py(bucket, short_value, medium_value, long_value)
+
+
+def _current_bucket_upper_edge(bucket: str, current_edges: BucketEdgeSpec) -> int:
+    return _bucket_value_for_name(
+        bucket,
+        current_edges.short_edge,
+        current_edges.medium_edge,
+        BucketLengthSpec().long_max_length,
+    )
 
 
 def _bucket_current_length(bucket: str, current_lengths: BucketLengthSpec) -> int:
-    if bucket == "short":
-        return current_lengths.short_max_length
-    if bucket == "medium":
-        return current_lengths.medium_max_length
-    if bucket == "long":
-        return current_lengths.long_max_length
-    raise ValueError(f"Unknown bucket: {bucket!r}")
+    return _bucket_value_for_name(
+        bucket,
+        current_lengths.short_max_length,
+        current_lengths.medium_max_length,
+        current_lengths.long_max_length,
+    )
 
 
 def _recommended_bucket_upper_edge(bucket: str, recommended_edges: BucketEdgeSpec) -> int:
-    if bucket == "short":
-        return recommended_edges.short_edge
-    if bucket == "medium":
-        return recommended_edges.medium_edge
-    if bucket == "long":
-        return BucketLengthSpec().long_max_length
-    raise ValueError(f"Unknown bucket: {bucket!r}")
+    return _bucket_value_for_name(
+        bucket,
+        recommended_edges.short_edge,
+        recommended_edges.medium_edge,
+        BucketLengthSpec().long_max_length,
+    )
 
 
 def _recommended_bucket_length(bucket: str, bucket_lengths: BucketLengthSpec) -> int:
-    if bucket == "short":
-        return bucket_lengths.short_max_length
-    if bucket == "medium":
-        return bucket_lengths.medium_max_length
-    if bucket == "long":
-        return bucket_lengths.long_max_length
-    raise ValueError(f"Unknown bucket: {bucket!r}")
+    return _bucket_value_for_name(
+        bucket,
+        bucket_lengths.short_max_length,
+        bucket_lengths.medium_max_length,
+        bucket_lengths.long_max_length,
+    )
 
 
-def _round_up_to_multiple(value: int, multiple: int) -> int:
+def _round_up_to_multiple_py(value: int, multiple: int) -> int:
     if multiple <= 0:
         raise ValueError("multiple must be a positive integer.")
     if value <= 0:
         return multiple
     return int(math.ceil(value / multiple) * multiple)
+
+
+def _round_up_to_multiple(value: int, multiple: int) -> int:
+    if _lm2011_rust is not None:
+        try:
+            out = int(_lm2011_rust.round_up_to_multiple_value(value, multiple))
+            _BUCKET_LENGTH_TUNING_RUST_METRICS["round_up_fast_success"] += 1
+            return out
+        except Exception:
+            _BUCKET_LENGTH_TUNING_RUST_METRICS["round_up_fast_failures"] += 1
+    _BUCKET_LENGTH_TUNING_RUST_METRICS["round_up_fallbacks"] += 1
+    return _round_up_to_multiple_py(value, multiple)
 
 
 def _quantile_exprs(target_quantile: float) -> list[pl.Expr]:
@@ -195,14 +293,12 @@ def _empty_summary_row(
     }
 
 
-def _bucket_summary(
-    token_lf: pl.LazyFrame,
+def _bucket_summary_rows_py(
+    grouped: pl.DataFrame,
     *,
     current_edges: BucketEdgeSpec,
     current_lengths: BucketLengthSpec,
-    target_quantile: float,
-) -> pl.DataFrame:
-    grouped = token_lf.group_by(TOKEN_BUCKET_COLUMN).agg(_quantile_exprs(target_quantile)).collect()
+) -> list[dict[str, Any]]:
     grouped_rows = {
         str(row[TOKEN_BUCKET_COLUMN]): row
         for row in grouped.to_dicts()
@@ -222,10 +318,73 @@ def _bucket_summary(
         row["current_edge_upper_bound"] = _current_bucket_upper_edge(bucket, current_edges)
         row["current_max_length"] = _bucket_current_length(bucket, current_lengths)
         ordered_rows.append(row)
+    return ordered_rows
+
+
+def _bucket_summary_rows(
+    grouped: pl.DataFrame,
+    *,
+    current_edges: BucketEdgeSpec,
+    current_lengths: BucketLengthSpec,
+) -> list[dict[str, Any]]:
+    if _lm2011_rust is not None:
+        try:
+            raw_rows = _lm2011_rust.finbert_bucket_length_summary_columns(
+                grouped.columns,
+                [grouped.get_column(column).to_list() for column in grouped.columns],
+                TOKEN_BUCKET_COLUMN,
+                current_edges.short_edge,
+                current_edges.medium_edge,
+                BucketLengthSpec().long_max_length,
+                current_lengths.short_max_length,
+                current_lengths.medium_max_length,
+                current_lengths.long_max_length,
+            )
+            _BUCKET_LENGTH_TUNING_RUST_METRICS["bucket_summary_rows_column_fast_success"] += 1
+            return [dict(row) for row in raw_rows]
+        except Exception:
+            _BUCKET_LENGTH_TUNING_RUST_METRICS["bucket_summary_rows_column_fast_failures"] += 1
+            _BUCKET_LENGTH_TUNING_RUST_METRICS["bucket_summary_rows_column_fallbacks"] += 1
+        try:
+            raw_rows = _lm2011_rust.finbert_bucket_length_summary_rows(
+                grouped.to_dicts(),
+                TOKEN_BUCKET_COLUMN,
+                current_edges.short_edge,
+                current_edges.medium_edge,
+                BucketLengthSpec().long_max_length,
+                current_lengths.short_max_length,
+                current_lengths.medium_max_length,
+                current_lengths.long_max_length,
+            )
+            _BUCKET_LENGTH_TUNING_RUST_METRICS["bucket_summary_rows_fast_success"] += 1
+            return [dict(row) for row in raw_rows]
+        except Exception:
+            _BUCKET_LENGTH_TUNING_RUST_METRICS["bucket_summary_rows_fast_failures"] += 1
+    _BUCKET_LENGTH_TUNING_RUST_METRICS["bucket_summary_rows_fallbacks"] += 1
+    return _bucket_summary_rows_py(
+        grouped,
+        current_edges=current_edges,
+        current_lengths=current_lengths,
+    )
+
+
+def _bucket_summary(
+    token_lf: pl.LazyFrame,
+    *,
+    current_edges: BucketEdgeSpec,
+    current_lengths: BucketLengthSpec,
+    target_quantile: float,
+) -> pl.DataFrame:
+    grouped = token_lf.group_by(TOKEN_BUCKET_COLUMN).agg(_quantile_exprs(target_quantile)).collect()
+    ordered_rows = _bucket_summary_rows(
+        grouped,
+        current_edges=current_edges,
+        current_lengths=current_lengths,
+    )
     return pl.DataFrame(ordered_rows)
 
 
-def _recommend_edge(
+def _recommend_edge_py(
     *,
     bucket: str,
     current_edge: int,
@@ -246,6 +405,43 @@ def _recommend_edge(
     if bucket == "medium" and candidate < lower_bound:
         candidate = lower_bound
     return candidate, "target_quantile"
+
+
+def _recommend_edge(
+    *,
+    bucket: str,
+    current_edge: int,
+    lower_bound: int,
+    token_target_quantile: float | int | None,
+    round_to: int,
+    safety_margin_tokens: int,
+    policy: str,
+) -> tuple[int, str]:
+    if _lm2011_rust is not None:
+        try:
+            edge, reason = _lm2011_rust.finbert_recommend_bucket_edge(
+                bucket,
+                int(current_edge),
+                int(lower_bound),
+                None if token_target_quantile is None else float(token_target_quantile),
+                int(round_to),
+                int(safety_margin_tokens),
+                policy,
+            )
+            _BUCKET_LENGTH_TUNING_RUST_METRICS["recommend_edge_fast_success"] += 1
+            return int(edge), str(reason)
+        except Exception:
+            _BUCKET_LENGTH_TUNING_RUST_METRICS["recommend_edge_fast_failures"] += 1
+    _BUCKET_LENGTH_TUNING_RUST_METRICS["recommend_edge_fallbacks"] += 1
+    return _recommend_edge_py(
+        bucket=bucket,
+        current_edge=current_edge,
+        lower_bound=lower_bound,
+        token_target_quantile=token_target_quantile,
+        round_to=round_to,
+        safety_margin_tokens=safety_margin_tokens,
+        policy=policy,
+    )
 
 
 def _rebucket_expr(recommended_edges: BucketEdgeSpec) -> pl.Expr:

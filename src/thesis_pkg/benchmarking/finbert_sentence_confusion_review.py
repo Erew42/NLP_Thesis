@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import asdict
 from dataclasses import dataclass
@@ -11,6 +11,14 @@ import random
 from typing import Any
 
 import polars as pl
+
+try:
+    from thesis_native import _lm2011_rust
+except Exception as exc:  # pragma: no cover - optional native extension
+    _lm2011_rust = None
+    _CONFUSION_REVIEW_RUST_IMPORT_ERROR: str | None = f"{type(exc).__name__}: {exc}"
+else:
+    _CONFUSION_REVIEW_RUST_IMPORT_ERROR = None
 
 
 THESIS_REVIEW_TEXT_SCOPES: tuple[str, ...] = ("item_1a_risk_factors", "item_7_mda")
@@ -28,6 +36,93 @@ MAJORITY_BUCKET_VALUES: tuple[str, ...] = (
 ALLOCATION_MODE_VALUES: tuple[str, ...] = ("balanced", "proportional")
 LABEL_VALUES: tuple[str, ...] = ("yes", "no", "uncertain")
 CONFUSION_VALUES: tuple[str, ...] = ("TP", "FP", "FN", "TN", "uncertain")
+
+_CONFUSION_REVIEW_RUST_METRICS: dict[str, int] = {
+    "binary_label_fast_success": 0,
+    "binary_label_fast_failures": 0,
+    "binary_label_fallbacks": 0,
+    "stable_seed_fast_success": 0,
+    "stable_seed_fast_failures": 0,
+    "stable_seed_fallbacks": 0,
+    "candidate_threshold_fast_success": 0,
+    "candidate_threshold_fast_failures": 0,
+    "candidate_threshold_fallbacks": 0,
+    "confusion_cell_fast_success": 0,
+    "confusion_cell_fast_failures": 0,
+    "confusion_cell_fallbacks": 0,
+    "metric_payload_fast_success": 0,
+    "metric_payload_fast_failures": 0,
+    "metric_payload_fallbacks": 0,
+    "balanced_allocation_fast_success": 0,
+    "balanced_allocation_fast_failures": 0,
+    "balanced_allocation_fallbacks": 0,
+    "proportional_allocation_fast_success": 0,
+    "proportional_allocation_fast_failures": 0,
+    "proportional_allocation_fallbacks": 0,
+    "target_positions_column_fast_success": 0,
+    "target_positions_column_fast_failures": 0,
+    "target_positions_column_fallbacks": 0,
+    "target_positions_fast_success": 0,
+    "target_positions_fast_failures": 0,
+    "target_positions_fallbacks": 0,
+    "allocation_rows_fast_success": 0,
+    "allocation_rows_fast_failures": 0,
+    "allocation_rows_fallbacks": 0,
+    "sample_id_rows_column_fast_success": 0,
+    "sample_id_rows_column_fast_failures": 0,
+    "sample_id_rows_column_fallbacks": 0,
+    "sample_id_rows_fast_success": 0,
+    "sample_id_rows_fast_failures": 0,
+    "sample_id_rows_fallbacks": 0,
+    "neighbor_targets_column_fast_success": 0,
+    "neighbor_targets_column_fast_failures": 0,
+    "neighbor_targets_column_fallbacks": 0,
+    "neighbor_targets_fast_success": 0,
+    "neighbor_targets_fast_failures": 0,
+    "neighbor_targets_fallbacks": 0,
+    "labeling_records_fast_success": 0,
+    "labeling_records_fast_failures": 0,
+    "labeling_records_fallbacks": 0,
+    "chunk_rows_fast_success": 0,
+    "chunk_rows_fast_failures": 0,
+    "chunk_rows_fallbacks": 0,
+    "csv_safe_rows_fast_success": 0,
+    "csv_safe_rows_fast_failures": 0,
+    "csv_safe_rows_fallbacks": 0,
+    "reviewed_rows_column_fast_success": 0,
+    "reviewed_rows_column_fast_failures": 0,
+    "reviewed_rows_column_fallbacks": 0,
+    "reviewed_rows_fast_success": 0,
+    "reviewed_rows_fast_failures": 0,
+    "reviewed_rows_fallbacks": 0,
+    "counts_by_cell_fast_success": 0,
+    "counts_by_cell_fast_failures": 0,
+    "counts_by_cell_fallbacks": 0,
+    "uncertain_bounds_fast_success": 0,
+    "uncertain_bounds_fast_failures": 0,
+    "uncertain_bounds_fallbacks": 0,
+    "bucket_metric_rows_column_fast_success": 0,
+    "bucket_metric_rows_column_fast_failures": 0,
+    "bucket_metric_rows_column_fallbacks": 0,
+    "bucket_metric_rows_fast_success": 0,
+    "bucket_metric_rows_fast_failures": 0,
+    "bucket_metric_rows_fallbacks": 0,
+    "examples_by_cell_fast_success": 0,
+    "examples_by_cell_fast_failures": 0,
+    "examples_by_cell_fallbacks": 0,
+}
+
+
+def get_confusion_review_rust_accel_metrics() -> dict[str, int | str | bool | None]:
+    metrics: dict[str, int | str | bool | None] = dict(_CONFUSION_REVIEW_RUST_METRICS)
+    metrics["rust_accel_available"] = _lm2011_rust is not None
+    metrics["rust_accel_import_error"] = _CONFUSION_REVIEW_RUST_IMPORT_ERROR
+    return metrics
+
+
+def reset_confusion_review_rust_accel_metrics() -> None:
+    for key in _CONFUSION_REVIEW_RUST_METRICS:
+        _CONFUSION_REVIEW_RUST_METRICS[key] = 0
 
 REQUIRED_SENTENCE_SCORE_COLUMNS: tuple[str, ...] = (
     "benchmark_sentence_id",
@@ -427,12 +522,12 @@ def _counts_preflight(
     return bucket_counts, stratum_counts, summary
 
 
-def _finalize_allocation_rows(
+def _finalized_allocation_row_dicts_py(
     rows: list[dict[str, Any]],
     *,
     total_population: int,
     allocation_mode: str,
-) -> pl.DataFrame:
+) -> list[dict[str, Any]]:
     allocated_rows = []
     for row in rows:
         sample_count = int(row["sample_count"])
@@ -446,9 +541,121 @@ def _finalize_allocation_rows(
                 "allocation_mode": allocation_mode,
             }
         )
-    return pl.DataFrame(allocated_rows).sort(
-        ["text_scope", "predicted_label", "probability_majority_bucket"]
+    return allocated_rows
+
+
+def _finalized_allocation_row_dicts(
+    rows: list[dict[str, Any]],
+    *,
+    total_population: int,
+    allocation_mode: str,
+) -> list[dict[str, Any]]:
+    if _lm2011_rust is not None:
+        try:
+            out = [
+                dict(row)
+                for row in _lm2011_rust.finbert_confusion_finalize_allocation_rows(
+                    rows,
+                    int(total_population),
+                    str(allocation_mode),
+                )
+            ]
+            _CONFUSION_REVIEW_RUST_METRICS["allocation_rows_fast_success"] += 1
+            return out
+        except Exception:
+            _CONFUSION_REVIEW_RUST_METRICS["allocation_rows_fast_failures"] += 1
+    _CONFUSION_REVIEW_RUST_METRICS["allocation_rows_fallbacks"] += 1
+    return _finalized_allocation_row_dicts_py(
+        rows,
+        total_population=total_population,
+        allocation_mode=allocation_mode,
     )
+
+
+def _finalize_allocation_rows_py(
+    rows: list[dict[str, Any]],
+    *,
+    total_population: int,
+    allocation_mode: str,
+) -> pl.DataFrame:
+    return pl.DataFrame(
+        _finalized_allocation_row_dicts_py(
+            rows,
+            total_population=total_population,
+            allocation_mode=allocation_mode,
+        )
+    ).sort(["text_scope", "predicted_label", "probability_majority_bucket"])
+
+
+def _finalize_allocation_rows(
+    rows: list[dict[str, Any]],
+    *,
+    total_population: int,
+    allocation_mode: str,
+) -> pl.DataFrame:
+    return pl.DataFrame(
+        _finalized_allocation_row_dicts(
+            rows,
+            total_population=total_population,
+            allocation_mode=allocation_mode,
+        )
+    ).sort(["text_scope", "predicted_label", "probability_majority_bucket"])
+
+
+def _balanced_sample_count_pairs_py(
+    rows: list[dict[str, Any]],
+    *,
+    target_sample_size: int,
+) -> list[tuple[int, int]]:
+    ordered_rows = sorted(enumerate(rows), key=lambda item: str(item[1]["stratum_id"]))
+    active_rows = [(index, row) for index, row in ordered_rows if int(row["population_count"]) > 0]
+    if not active_rows:
+        raise ValueError("No eligible rows found for the requested review universe.")
+
+    base = target_sample_size // len(active_rows)
+    remainder = target_sample_size % len(active_rows)
+    allocation_pairs: list[tuple[int, int]] = []
+    for active_index, (row_index, row) in enumerate(active_rows):
+        allocation_pairs.append(
+            (
+                row_index,
+                min(base + (1 if active_index < remainder else 0), int(row["population_count"])),
+            )
+        )
+
+    allocated = sum(sample_count for _, sample_count in allocation_pairs)
+    while allocated < target_sample_size:
+        progressed = False
+        next_pairs: list[tuple[int, int]] = []
+        for row_index, sample_count in allocation_pairs:
+            if allocated < target_sample_size and sample_count < int(rows[row_index]["population_count"]):
+                sample_count += 1
+                allocated += 1
+                progressed = True
+            next_pairs.append((row_index, sample_count))
+        allocation_pairs = next_pairs
+        if not progressed:
+            break
+    return allocation_pairs
+
+
+def _balanced_sample_count_pairs(
+    rows: list[dict[str, Any]],
+    *,
+    target_sample_size: int,
+) -> list[tuple[int, int]]:
+    if _lm2011_rust is not None:
+        try:
+            pairs = _lm2011_rust.finbert_confusion_balanced_sample_count_pairs(
+                rows,
+                int(target_sample_size),
+            )
+            _CONFUSION_REVIEW_RUST_METRICS["balanced_allocation_fast_success"] += 1
+            return [(int(row_index), int(sample_count)) for row_index, sample_count in pairs]
+        except Exception:
+            _CONFUSION_REVIEW_RUST_METRICS["balanced_allocation_fast_failures"] += 1
+    _CONFUSION_REVIEW_RUST_METRICS["balanced_allocation_fallbacks"] += 1
+    return _balanced_sample_count_pairs_py(rows, target_sample_size=target_sample_size)
 
 
 def _allocate_balanced_sample_counts(
@@ -457,34 +664,18 @@ def _allocate_balanced_sample_counts(
     target_sample_size: int,
     total_population: int,
 ) -> pl.DataFrame:
-    ordered_rows = sorted(rows, key=lambda row: str(row["stratum_id"]))
-    active_rows = [row for row in ordered_rows if int(row["population_count"]) > 0]
-    if not active_rows:
-        raise ValueError("No eligible rows found for the requested review universe.")
-
-    base = target_sample_size // len(active_rows)
-    remainder = target_sample_size % len(active_rows)
-    allocation_rows = []
-    for index, row in enumerate(active_rows):
-        allocation_rows.append(
-            {
-                **row,
-                "sample_count": min(base + (1 if index < remainder else 0), int(row["population_count"])),
-            }
-        )
-
+    allocation_pairs = _balanced_sample_count_pairs(
+        rows,
+        target_sample_size=target_sample_size,
+    )
+    allocation_rows = [
+        {
+            **rows[row_index],
+            "sample_count": sample_count,
+        }
+        for row_index, sample_count in allocation_pairs
+    ]
     allocated = sum(int(row["sample_count"]) for row in allocation_rows)
-    while allocated < target_sample_size:
-        progressed = False
-        for row in allocation_rows:
-            if allocated >= target_sample_size:
-                break
-            if int(row["sample_count"]) < int(row["population_count"]):
-                row["sample_count"] = int(row["sample_count"]) + 1
-                allocated += 1
-                progressed = True
-        if not progressed:
-            break
 
     if allocated != target_sample_size:
         raise RuntimeError(
@@ -503,19 +694,33 @@ def _allocate_proportional_sample_counts(
     target_sample_size: int,
     total_population: int,
 ) -> pl.DataFrame:
+    sample_counts = _proportional_sample_counts(
+        rows,
+        target_sample_size=target_sample_size,
+        total_population=total_population,
+    )
+    allocated_rows = [
+        {
+            **row,
+            "sample_count": sample_count,
+        }
+        for row, sample_count in zip(rows, sample_counts, strict=True)
+    ]
+    return _finalize_allocation_rows(
+        allocated_rows,
+        total_population=total_population,
+        allocation_mode="proportional",
+    )
+
+
+def _proportional_sample_counts_py(
+    rows: list[dict[str, Any]],
+    *,
+    target_sample_size: int,
+    total_population: int,
+) -> list[int]:
     if target_sample_size == total_population:
-        allocated = [
-            {
-                **row,
-                "sample_count": int(row["population_count"]),
-            }
-            for row in rows
-        ]
-        return _finalize_allocation_rows(
-            allocated,
-            total_population=total_population,
-            allocation_mode="proportional",
-        )
+        return [int(row["population_count"]) for row in rows]
 
     quota_rows: list[dict[str, Any]] = []
     running_floor = 0
@@ -570,19 +775,31 @@ def _allocate_proportional_sample_counts(
         raise RuntimeError(
             f"Internal allocation error: allocated {actual_total}, expected {target_sample_size}."
         )
+    return [int(row["sample_count"]) for row in quota_rows]
 
-    allocated_rows = [
-        {
-            key: value
-            for key, value in row.items()
-            if key not in {"_exact_quota", "_remainder"}
-        }
-        for row in quota_rows
-    ]
-    return _finalize_allocation_rows(
-        allocated_rows,
+
+def _proportional_sample_counts(
+    rows: list[dict[str, Any]],
+    *,
+    target_sample_size: int,
+    total_population: int,
+) -> list[int]:
+    if _lm2011_rust is not None:
+        try:
+            sample_counts = _lm2011_rust.finbert_confusion_proportional_sample_counts(
+                rows,
+                int(target_sample_size),
+                int(total_population),
+            )
+            _CONFUSION_REVIEW_RUST_METRICS["proportional_allocation_fast_success"] += 1
+            return [int(value) for value in sample_counts]
+        except Exception:
+            _CONFUSION_REVIEW_RUST_METRICS["proportional_allocation_fast_failures"] += 1
+    _CONFUSION_REVIEW_RUST_METRICS["proportional_allocation_fallbacks"] += 1
+    return _proportional_sample_counts_py(
+        rows,
+        target_sample_size=target_sample_size,
         total_population=total_population,
-        allocation_mode="proportional",
     )
 
 
@@ -628,12 +845,28 @@ def _sample_key_expr(seed: int) -> pl.Expr:
     )
 
 
-def _stable_random(seed: int, value: str) -> random.Random:
+def _stable_seed_u64_py(seed: int, value: str) -> int:
     digest = hashlib.sha256(f"{seed}::{value}".encode("utf-8")).digest()
-    return random.Random(int.from_bytes(digest[:8], byteorder="big", signed=False))
+    return int.from_bytes(digest[:8], byteorder="big", signed=False)
 
 
-def _target_positions_for_allocation(
+def _stable_seed_u64(seed: int, value: str) -> int:
+    if _lm2011_rust is not None:
+        try:
+            out = int(_lm2011_rust.sha256_first_u64_value(f"{seed}::{value}"))
+            _CONFUSION_REVIEW_RUST_METRICS["stable_seed_fast_success"] += 1
+            return out
+        except Exception:
+            _CONFUSION_REVIEW_RUST_METRICS["stable_seed_fast_failures"] += 1
+    _CONFUSION_REVIEW_RUST_METRICS["stable_seed_fallbacks"] += 1
+    return _stable_seed_u64_py(seed, value)
+
+
+def _stable_random(seed: int, value: str) -> random.Random:
+    return random.Random(_stable_seed_u64(seed, value))
+
+
+def _target_positions_for_allocation_py(
     allocation_df: pl.DataFrame,
     *,
     seed: int,
@@ -676,6 +909,48 @@ def _target_positions_for_allocation(
         "_target_rank": pl.Int64,
     }
     return pl.DataFrame(target_rows, schema=schema), summary_rows
+
+
+def _target_positions_for_allocation(
+    allocation_df: pl.DataFrame,
+    *,
+    seed: int,
+) -> tuple[pl.DataFrame, list[dict[str, Any]]]:
+    schema = {
+        "stratum_id": pl.Utf8,
+        "_target_ordinal": pl.Int64,
+        "_target_rank": pl.Int64,
+    }
+    if _lm2011_rust is not None:
+        try:
+            selected = allocation_df.select("stratum_id", "population_count", "sample_count")
+            target_rows, summary_rows = _lm2011_rust.finbert_confusion_target_position_columns(
+                selected.columns,
+                [selected.get_column(column).to_list() for column in selected.columns],
+                int(seed),
+            )
+            _CONFUSION_REVIEW_RUST_METRICS["target_positions_column_fast_success"] += 1
+            return (
+                pl.DataFrame([dict(row) for row in target_rows], schema=schema),
+                [dict(row) for row in summary_rows],
+            )
+        except Exception:
+            _CONFUSION_REVIEW_RUST_METRICS["target_positions_column_fast_failures"] += 1
+            _CONFUSION_REVIEW_RUST_METRICS["target_positions_column_fallbacks"] += 1
+        try:
+            target_rows, summary_rows = _lm2011_rust.finbert_confusion_target_position_rows(
+                allocation_df.to_dicts(),
+                int(seed),
+            )
+            _CONFUSION_REVIEW_RUST_METRICS["target_positions_fast_success"] += 1
+            return (
+                pl.DataFrame([dict(row) for row in target_rows], schema=schema),
+                [dict(row) for row in summary_rows],
+            )
+        except Exception:
+            _CONFUSION_REVIEW_RUST_METRICS["target_positions_fast_failures"] += 1
+    _CONFUSION_REVIEW_RUST_METRICS["target_positions_fallbacks"] += 1
+    return _target_positions_for_allocation_py(allocation_df, seed=seed)
 
 
 def _collect_exact_sample_streaming(
@@ -771,10 +1046,28 @@ def _collect_exact_sample_streaming(
     return selected, [sampling_summary]
 
 
-def _candidate_threshold(population_count: int, sample_count: int, oversampling_factor: float) -> float:
+def _candidate_threshold_py(population_count: int, sample_count: int, oversampling_factor: float) -> float:
     if population_count <= 0 or sample_count <= 0:
         return 0.0
     return min(float(oversampling_factor) * sample_count / population_count, 1.0)
+
+
+def _candidate_threshold(population_count: int, sample_count: int, oversampling_factor: float) -> float:
+    if _lm2011_rust is not None:
+        try:
+            out = float(
+                _lm2011_rust.finbert_confusion_candidate_threshold(
+                    int(population_count),
+                    int(sample_count),
+                    float(oversampling_factor),
+                )
+            )
+            _CONFUSION_REVIEW_RUST_METRICS["candidate_threshold_fast_success"] += 1
+            return out
+        except Exception:
+            _CONFUSION_REVIEW_RUST_METRICS["candidate_threshold_fast_failures"] += 1
+    _CONFUSION_REVIEW_RUST_METRICS["candidate_threshold_fallbacks"] += 1
+    return _candidate_threshold_py(population_count, sample_count, oversampling_factor)
 
 
 def _select_exact_allocated_candidates(candidates: pl.DataFrame) -> pl.DataFrame:
@@ -906,32 +1199,7 @@ def _attach_neighbor_context(
     if sample_df.is_empty():
         return sample_df.with_columns(pl.lit(None).alias("prev_text"), pl.lit(None).alias("next_text"))
 
-    target_rows: list[dict[str, object]] = []
-    for row in sample_df.select(["review_case_id", "benchmark_row_id", "sentence_index"]).to_dicts():
-        sentence_index = row["sentence_index"]
-        if sentence_index is None:
-            continue
-        try:
-            current_index = int(sentence_index)
-        except (TypeError, ValueError):
-            continue
-        target_rows.append(
-            {
-                "review_case_id": row["review_case_id"],
-                "neighbor_kind": "prev_text",
-                "benchmark_row_id": row["benchmark_row_id"],
-                "sentence_index": current_index - 1,
-            }
-        )
-        target_rows.append(
-            {
-                "review_case_id": row["review_case_id"],
-                "neighbor_kind": "next_text",
-                "benchmark_row_id": row["benchmark_row_id"],
-                "sentence_index": current_index + 1,
-            }
-        )
-
+    target_rows = _neighbor_target_rows_from_frame(sample_df)
     sample_rows = sample_df.to_dicts()
     if not target_rows:
         for row in sample_rows:
@@ -982,6 +1250,113 @@ def _attach_neighbor_context(
     return pl.DataFrame(sample_rows)
 
 
+def _neighbor_target_rows_py(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    target_rows: list[dict[str, Any]] = []
+    for row in rows:
+        sentence_index = row["sentence_index"]
+        if sentence_index is None:
+            continue
+        try:
+            current_index = int(sentence_index)
+        except (TypeError, ValueError):
+            continue
+        target_rows.append(
+            {
+                "review_case_id": row["review_case_id"],
+                "neighbor_kind": "prev_text",
+                "benchmark_row_id": row["benchmark_row_id"],
+                "sentence_index": current_index - 1,
+            }
+        )
+        target_rows.append(
+            {
+                "review_case_id": row["review_case_id"],
+                "neighbor_kind": "next_text",
+                "benchmark_row_id": row["benchmark_row_id"],
+                "sentence_index": current_index + 1,
+            }
+        )
+    return target_rows
+
+
+def _neighbor_target_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if _lm2011_rust is not None:
+        try:
+            out = [
+                dict(row)
+                for row in _lm2011_rust.finbert_confusion_neighbor_target_rows(rows)
+            ]
+            _CONFUSION_REVIEW_RUST_METRICS["neighbor_targets_fast_success"] += 1
+            return out
+        except Exception:
+            _CONFUSION_REVIEW_RUST_METRICS["neighbor_targets_fast_failures"] += 1
+    _CONFUSION_REVIEW_RUST_METRICS["neighbor_targets_fallbacks"] += 1
+    return _neighbor_target_rows_py(rows)
+
+
+def _neighbor_target_rows_from_frame(sample_df: pl.DataFrame) -> list[dict[str, Any]]:
+    selected = sample_df.select(["review_case_id", "benchmark_row_id", "sentence_index"])
+    if _lm2011_rust is not None:
+        try:
+            out = [
+                dict(row)
+                for row in _lm2011_rust.finbert_confusion_neighbor_target_columns(
+                    selected.columns,
+                    [selected.get_column(column).to_list() for column in selected.columns],
+                )
+            ]
+            _CONFUSION_REVIEW_RUST_METRICS["neighbor_targets_column_fast_success"] += 1
+            return out
+        except Exception:
+            _CONFUSION_REVIEW_RUST_METRICS["neighbor_targets_column_fast_failures"] += 1
+            _CONFUSION_REVIEW_RUST_METRICS["neighbor_targets_column_fallbacks"] += 1
+    return _neighbor_target_rows(selected.to_dicts())
+
+
+def _sample_id_rows_py(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            **row,
+            "sample_order": index,
+            "review_case_id": f"finbert_review_{index:06d}",
+        }
+        for index, row in enumerate(rows, start=1)
+    ]
+
+
+def _sample_id_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if _lm2011_rust is not None:
+        try:
+            out = [
+                dict(row)
+                for row in _lm2011_rust.finbert_confusion_sample_id_rows(rows)
+            ]
+            _CONFUSION_REVIEW_RUST_METRICS["sample_id_rows_fast_success"] += 1
+            return out
+        except Exception:
+            _CONFUSION_REVIEW_RUST_METRICS["sample_id_rows_fast_failures"] += 1
+    _CONFUSION_REVIEW_RUST_METRICS["sample_id_rows_fallbacks"] += 1
+    return _sample_id_rows_py(rows)
+
+
+def _sample_id_rows_from_frame(sample_df: pl.DataFrame) -> list[dict[str, Any]]:
+    if _lm2011_rust is not None:
+        try:
+            out = [
+                dict(row)
+                for row in _lm2011_rust.finbert_confusion_sample_id_columns(
+                    sample_df.columns,
+                    [sample_df.get_column(column).to_list() for column in sample_df.columns],
+                )
+            ]
+            _CONFUSION_REVIEW_RUST_METRICS["sample_id_rows_column_fast_success"] += 1
+            return out
+        except Exception:
+            _CONFUSION_REVIEW_RUST_METRICS["sample_id_rows_column_fast_failures"] += 1
+            _CONFUSION_REVIEW_RUST_METRICS["sample_id_rows_column_fallbacks"] += 1
+    return _sample_id_rows(sample_df.to_dicts())
+
+
 def _finalize_sample_frame(
     sample_df: pl.DataFrame,
     parquet_paths: tuple[Path, ...],
@@ -989,15 +1364,7 @@ def _finalize_sample_frame(
     batch_size: int,
 ) -> pl.DataFrame:
     ordered = sample_df.sort("sample_key")
-    rows = []
-    for index, row in enumerate(ordered.to_dicts(), start=1):
-        rows.append(
-            {
-                **row,
-                "sample_order": index,
-                "review_case_id": f"finbert_review_{index:06d}",
-            }
-        )
+    rows = _sample_id_rows_from_frame(ordered)
     with_ids = pl.DataFrame(rows)
     with_context = _attach_neighbor_context(with_ids, parquet_paths, text_scopes, batch_size)
     for column in SAMPLE_OUTPUT_COLUMNS:
@@ -1006,13 +1373,33 @@ def _finalize_sample_frame(
     return with_context.select(list(SAMPLE_OUTPUT_COLUMNS)).sort("sample_order")
 
 
-def _chunk_rows(rows: list[dict[str, Any]], chunk_count: int) -> list[list[dict[str, Any]]]:
+def _chunk_rows_py(rows: list[dict[str, Any]], chunk_count: int) -> list[list[dict[str, Any]]]:
     if chunk_count <= 0:
         raise ValueError("chunk_count must be positive.")
     chunks: list[list[dict[str, Any]]] = [[] for _ in range(chunk_count)]
     for index, row in enumerate(rows):
         chunks[index % chunk_count].append(row)
     return chunks
+
+
+def _chunk_rows(rows: list[dict[str, Any]], chunk_count: int) -> list[list[dict[str, Any]]]:
+    if chunk_count <= 0:
+        raise ValueError("chunk_count must be positive.")
+    if _lm2011_rust is not None:
+        try:
+            chunk_indices = _lm2011_rust.finbert_confusion_chunk_row_indices(
+                len(rows),
+                int(chunk_count),
+            )
+            _CONFUSION_REVIEW_RUST_METRICS["chunk_rows_fast_success"] += 1
+            return [
+                [rows[int(row_index)] for row_index in chunk]
+                for chunk in chunk_indices
+            ]
+        except Exception:
+            _CONFUSION_REVIEW_RUST_METRICS["chunk_rows_fast_failures"] += 1
+    _CONFUSION_REVIEW_RUST_METRICS["chunk_rows_fallbacks"] += 1
+    return _chunk_rows_py(rows, chunk_count)
 
 
 def _json_ready_record(row: dict[str, Any]) -> dict[str, Any]:
@@ -1049,6 +1436,55 @@ def _labeling_input_record(row: dict[str, Any], *, pass_id: str | None = None) -
     return payload
 
 
+def _labeling_input_records_py(
+    rows: list[dict[str, Any]],
+    *,
+    pass_id: str | None = None,
+    recommended_model: str | None = None,
+    recommended_reasoning_effort: str | None = None,
+) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for row in rows:
+        record = _labeling_input_record(row, pass_id=pass_id)
+        if recommended_model is not None:
+            record["recommended_model"] = recommended_model
+        if recommended_reasoning_effort is not None:
+            record["recommended_reasoning_effort"] = recommended_reasoning_effort
+        records.append(record)
+    return records
+
+
+def _labeling_input_records(
+    rows: list[dict[str, Any]],
+    *,
+    pass_id: str | None = None,
+    recommended_model: str | None = None,
+    recommended_reasoning_effort: str | None = None,
+) -> list[dict[str, Any]]:
+    if _lm2011_rust is not None:
+        try:
+            out = [
+                dict(row)
+                for row in _lm2011_rust.finbert_confusion_labeling_input_records(
+                    rows,
+                    pass_id,
+                    recommended_model,
+                    recommended_reasoning_effort,
+                )
+            ]
+            _CONFUSION_REVIEW_RUST_METRICS["labeling_records_fast_success"] += 1
+            return out
+        except Exception:
+            _CONFUSION_REVIEW_RUST_METRICS["labeling_records_fast_failures"] += 1
+    _CONFUSION_REVIEW_RUST_METRICS["labeling_records_fallbacks"] += 1
+    return _labeling_input_records_py(
+        rows,
+        pass_id=pass_id,
+        recommended_model=recommended_model,
+        recommended_reasoning_effort=recommended_reasoning_effort,
+    )
+
+
 def _write_labeling_chunks(sample_df: pl.DataFrame, output_dir: Path, chunk_count: int) -> Path:
     chunk_dir = output_dir / "chunks"
     chunk_dir.mkdir(parents=True, exist_ok=True)
@@ -1057,7 +1493,7 @@ def _write_labeling_chunks(sample_df: pl.DataFrame, output_dir: Path, chunk_coun
     for index, chunk in enumerate(chunks, start=1):
         _write_jsonl(
             chunk_dir / f"chunk_{index:02d}.jsonl",
-            [_labeling_input_record(row) for row in chunk],
+            _labeling_input_records(chunk),
         )
 
     pass_specs = (
@@ -1069,12 +1505,12 @@ def _write_labeling_chunks(sample_df: pl.DataFrame, output_dir: Path, chunk_coun
         pass_dir = pass_root / pass_id
         pass_dir.mkdir(parents=True, exist_ok=True)
         for index, chunk in enumerate(chunks, start=1):
-            records = []
-            for row in chunk:
-                record = _labeling_input_record(row, pass_id=pass_id)
-                record["recommended_model"] = model
-                record["recommended_reasoning_effort"] = effort
-                records.append(record)
+            records = _labeling_input_records(
+                chunk,
+                pass_id=pass_id,
+                recommended_model=model,
+                recommended_reasoning_effort=effort,
+            )
             _write_jsonl(pass_dir / f"chunk_{index:02d}.jsonl", records)
     return chunk_dir
 
@@ -1530,7 +1966,7 @@ def _load_review_records(path: Path) -> list[dict[str, Any]]:
     raise ValueError(f"Unsupported review JSON shape: {path}")
 
 
-def _normalize_binary_label(value: Any) -> str:
+def _normalize_binary_label_py(value: Any) -> str:
     raw = "" if value is None else str(value).strip().lower()
     if raw in {"yes", "y", "true", "1", "negative", "adverse"}:
         return "yes"
@@ -1539,6 +1975,18 @@ def _normalize_binary_label(value: Any) -> str:
     if raw in {"uncertain", "unknown", "unsure", "maybe", "ambiguous"}:
         return "uncertain"
     return ""
+
+
+def _normalize_binary_label(value: Any) -> str:
+    if _lm2011_rust is not None:
+        try:
+            out = str(_lm2011_rust.normalize_binary_label_value(value))
+            _CONFUSION_REVIEW_RUST_METRICS["binary_label_fast_success"] += 1
+            return out
+        except Exception:
+            _CONFUSION_REVIEW_RUST_METRICS["binary_label_fast_failures"] += 1
+    _CONFUSION_REVIEW_RUST_METRICS["binary_label_fallbacks"] += 1
+    return _normalize_binary_label_py(value)
 
 
 def _final_gold_negative(record: dict[str, Any]) -> tuple[str, str]:
@@ -1553,7 +2001,7 @@ def _final_gold_negative(record: dict[str, Any]) -> tuple[str, str]:
     return "", "missing"
 
 
-def _confusion_cell(predicted_label: str, gold_negative: str) -> str:
+def _confusion_cell_py(predicted_label: str, gold_negative: str) -> str:
     if gold_negative not in {"yes", "no"}:
         return "uncertain"
     predicted_negative = predicted_label == "negative"
@@ -1567,13 +2015,25 @@ def _confusion_cell(predicted_label: str, gold_negative: str) -> str:
     return "TN"
 
 
+def _confusion_cell(predicted_label: str, gold_negative: str) -> str:
+    if _lm2011_rust is not None:
+        try:
+            out = str(_lm2011_rust.finbert_confusion_cell(str(predicted_label), str(gold_negative)))
+            _CONFUSION_REVIEW_RUST_METRICS["confusion_cell_fast_success"] += 1
+            return out
+        except Exception:
+            _CONFUSION_REVIEW_RUST_METRICS["confusion_cell_fast_failures"] += 1
+    _CONFUSION_REVIEW_RUST_METRICS["confusion_cell_fallbacks"] += 1
+    return _confusion_cell_py(predicted_label, gold_negative)
+
+
 def _safe_divide(numerator: float, denominator: float) -> float | None:
     if denominator == 0:
         return None
     return numerator / denominator
 
 
-def _metric_payload(counts: dict[str, float]) -> dict[str, float | None]:
+def _metric_payload_py(counts: dict[str, float]) -> dict[str, float | None]:
     tp = counts.get("TP", 0.0)
     fp = counts.get("FP", 0.0)
     fn = counts.get("FN", 0.0)
@@ -1590,7 +2050,23 @@ def _metric_payload(counts: dict[str, float]) -> dict[str, float | None]:
     }
 
 
-def _counts_by_cell(rows: list[dict[str, Any]], *, weighted: bool) -> dict[str, float]:
+def _metric_payload(counts: dict[str, float]) -> dict[str, float | None]:
+    tp = float(counts.get("TP", 0.0))
+    fp = float(counts.get("FP", 0.0))
+    fn = float(counts.get("FN", 0.0))
+    tn = float(counts.get("TN", 0.0))
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.finbert_confusion_metric_payload(tp, fp, fn, tn)
+            _CONFUSION_REVIEW_RUST_METRICS["metric_payload_fast_success"] += 1
+            return {str(key): (None if value is None else float(value)) for key, value in dict(out).items()}
+        except Exception:
+            _CONFUSION_REVIEW_RUST_METRICS["metric_payload_fast_failures"] += 1
+    _CONFUSION_REVIEW_RUST_METRICS["metric_payload_fallbacks"] += 1
+    return _metric_payload_py({"TP": tp, "FP": fp, "FN": fn, "TN": tn})
+
+
+def _counts_by_cell_py(rows: list[dict[str, Any]], *, weighted: bool) -> dict[str, float]:
     counts = {cell: 0.0 for cell in CONFUSION_VALUES}
     for row in rows:
         weight = float(row.get("sample_weight") or 1.0) if weighted else 1.0
@@ -1598,8 +2074,20 @@ def _counts_by_cell(rows: list[dict[str, Any]], *, weighted: bool) -> dict[str, 
     return counts
 
 
-def _uncertain_metric_bounds(rows: list[dict[str, Any]], *, weighted: bool) -> dict[str, dict[str, float | None]]:
-    resolved = _counts_by_cell([row for row in rows if row["confusion_cell"] != "uncertain"], weighted=weighted)
+def _counts_by_cell(rows: list[dict[str, Any]], *, weighted: bool) -> dict[str, float]:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.finbert_confusion_counts_by_cell(rows, bool(weighted))
+            _CONFUSION_REVIEW_RUST_METRICS["counts_by_cell_fast_success"] += 1
+            return {str(key): float(value) for key, value in dict(out).items()}
+        except Exception:
+            _CONFUSION_REVIEW_RUST_METRICS["counts_by_cell_fast_failures"] += 1
+    _CONFUSION_REVIEW_RUST_METRICS["counts_by_cell_fallbacks"] += 1
+    return _counts_by_cell_py(rows, weighted=weighted)
+
+
+def _uncertain_metric_bounds_py(rows: list[dict[str, Any]], *, weighted: bool) -> dict[str, dict[str, float | None]]:
+    resolved = _counts_by_cell_py([row for row in rows if row["confusion_cell"] != "uncertain"], weighted=weighted)
     uncertain_pred_pos = 0.0
     uncertain_pred_neg = 0.0
     for row in rows:
@@ -1629,6 +2117,24 @@ def _uncertain_metric_bounds(rows: list[dict[str, Any]], *, weighted: bool) -> d
             "upper": _safe_divide(tp + tn + uncertain_pred_pos + uncertain_pred_neg, total),
         },
     }
+
+
+def _uncertain_metric_bounds(rows: list[dict[str, Any]], *, weighted: bool) -> dict[str, dict[str, float | None]]:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.finbert_confusion_uncertain_metric_bounds(rows, bool(weighted))
+            _CONFUSION_REVIEW_RUST_METRICS["uncertain_bounds_fast_success"] += 1
+            return {
+                str(metric): {
+                    str(bound_name): None if bound_value is None else float(bound_value)
+                    for bound_name, bound_value in dict(bounds).items()
+                }
+                for metric, bounds in dict(out).items()
+            }
+        except Exception:
+            _CONFUSION_REVIEW_RUST_METRICS["uncertain_bounds_fast_failures"] += 1
+    _CONFUSION_REVIEW_RUST_METRICS["uncertain_bounds_fallbacks"] += 1
+    return _uncertain_metric_bounds_py(rows, weighted=weighted)
 
 
 def _metrics_markdown(metrics: dict[str, Any]) -> str:
@@ -1667,7 +2173,7 @@ def _metrics_markdown(metrics: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _write_examples_by_cell(path: Path, rows: list[dict[str, Any]], per_cell: int = 10) -> None:
+def _examples_by_cell_markdown_py(rows: list[dict[str, Any]], per_cell: int = 10) -> str:
     lines = ["# Examples by Confusion Cell", ""]
     for cell in CONFUSION_VALUES:
         examples = [row for row in rows if row["confusion_cell"] == cell][:per_cell]
@@ -1684,10 +2190,26 @@ def _write_examples_by_cell(path: Path, rows: list[dict[str, Any]], per_cell: in
                 f"gold={row.get('gold_negative_final')}: {sentence}"
             )
         lines.append("")
-    path.write_text("\n".join(lines), encoding="utf-8")
+    return "\n".join(lines)
 
 
-def _bucket_metric_rows(reviewed_df: pl.DataFrame) -> pl.DataFrame:
+def _examples_by_cell_markdown(rows: list[dict[str, Any]], per_cell: int = 10) -> str:
+    if _lm2011_rust is not None:
+        try:
+            out = str(_lm2011_rust.finbert_confusion_examples_by_cell_markdown(rows, int(per_cell)))
+            _CONFUSION_REVIEW_RUST_METRICS["examples_by_cell_fast_success"] += 1
+            return out
+        except Exception:
+            _CONFUSION_REVIEW_RUST_METRICS["examples_by_cell_fast_failures"] += 1
+    _CONFUSION_REVIEW_RUST_METRICS["examples_by_cell_fallbacks"] += 1
+    return _examples_by_cell_markdown_py(rows, per_cell=per_cell)
+
+
+def _write_examples_by_cell(path: Path, rows: list[dict[str, Any]], per_cell: int = 10) -> None:
+    path.write_text(_examples_by_cell_markdown(rows, per_cell=per_cell), encoding="utf-8")
+
+
+def _bucket_metric_rows_py(reviewed_df: pl.DataFrame) -> pl.DataFrame:
     if reviewed_df.is_empty():
         return pl.DataFrame()
     rows: list[dict[str, Any]] = []
@@ -1712,7 +2234,65 @@ def _bucket_metric_rows(reviewed_df: pl.DataFrame) -> pl.DataFrame:
     return pl.DataFrame(rows)
 
 
-def _csv_safe_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _bucket_metric_rows(reviewed_df: pl.DataFrame) -> pl.DataFrame:
+    if reviewed_df.is_empty():
+        return pl.DataFrame()
+    if _lm2011_rust is not None:
+        sample_weight_values = (
+            reviewed_df.get_column("sample_weight").to_list()
+            if "sample_weight" in reviewed_df.columns
+            else None
+        )
+        try:
+            rows = [
+                {
+                    "probability_majority_bucket": str(row[0]),
+                    "row_count": int(row[1]),
+                    "weighted_TP": float(row[2]),
+                    "weighted_FP": float(row[3]),
+                    "weighted_FN": float(row[4]),
+                    "weighted_TN": float(row[5]),
+                    "weighted_uncertain": float(row[6]),
+                    "precision": None if row[7] is None else float(row[7]),
+                    "recall": None if row[8] is None else float(row[8]),
+                    "specificity": None if row[9] is None else float(row[9]),
+                }
+                for row in _lm2011_rust.finbert_confusion_bucket_metric_columns(
+                    reviewed_df.get_column("probability_majority_bucket").to_list(),
+                    reviewed_df.get_column("confusion_cell").to_list(),
+                    sample_weight_values,
+                )
+            ]
+            _CONFUSION_REVIEW_RUST_METRICS["bucket_metric_rows_column_fast_success"] += 1
+            return pl.DataFrame(rows)
+        except Exception:
+            _CONFUSION_REVIEW_RUST_METRICS["bucket_metric_rows_column_fast_failures"] += 1
+            _CONFUSION_REVIEW_RUST_METRICS["bucket_metric_rows_column_fallbacks"] += 1
+        try:
+            rows = [
+                {
+                    "probability_majority_bucket": str(row[0]),
+                    "row_count": int(row[1]),
+                    "weighted_TP": float(row[2]),
+                    "weighted_FP": float(row[3]),
+                    "weighted_FN": float(row[4]),
+                    "weighted_TN": float(row[5]),
+                    "weighted_uncertain": float(row[6]),
+                    "precision": None if row[7] is None else float(row[7]),
+                    "recall": None if row[8] is None else float(row[8]),
+                    "specificity": None if row[9] is None else float(row[9]),
+                }
+                for row in _lm2011_rust.finbert_confusion_bucket_metric_rows(reviewed_df.to_dicts())
+            ]
+            _CONFUSION_REVIEW_RUST_METRICS["bucket_metric_rows_fast_success"] += 1
+            return pl.DataFrame(rows)
+        except Exception:
+            _CONFUSION_REVIEW_RUST_METRICS["bucket_metric_rows_fast_failures"] += 1
+    _CONFUSION_REVIEW_RUST_METRICS["bucket_metric_rows_fallbacks"] += 1
+    return _bucket_metric_rows_py(reviewed_df)
+
+
+def _csv_safe_rows_py(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     safe_rows: list[dict[str, Any]] = []
     for row in rows:
         safe_rows.append(
@@ -1722,6 +2302,82 @@ def _csv_safe_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             }
         )
     return safe_rows
+
+
+def _csv_safe_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if _lm2011_rust is not None:
+        try:
+            out = [
+                dict(row)
+                for row in _lm2011_rust.finbert_confusion_csv_safe_rows(rows)
+            ]
+            _CONFUSION_REVIEW_RUST_METRICS["csv_safe_rows_fast_success"] += 1
+            return out
+        except Exception:
+            _CONFUSION_REVIEW_RUST_METRICS["csv_safe_rows_fast_failures"] += 1
+    _CONFUSION_REVIEW_RUST_METRICS["csv_safe_rows_fallbacks"] += 1
+    return _csv_safe_rows_py(rows)
+
+
+def _reviewed_row_dicts_py(
+    sample_rows: list[dict[str, Any]],
+    labels_by_case_id: dict[str, dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    reviewed_rows: list[dict[str, Any]] = []
+    missing_review_case_ids: list[str] = []
+    for row in sample_rows:
+        record = labels_by_case_id.get(str(row["review_case_id"]), {})
+        gold_negative, label_source = _final_gold_negative(record)
+        if not gold_negative:
+            missing_review_case_ids.append(str(row["review_case_id"]))
+            gold_negative = "uncertain"
+        reviewed_rows.append(
+            {
+                **row,
+                **{f"review_{key}": value for key, value in record.items() if key not in row},
+                "gold_negative_final": gold_negative,
+                "gold_negative_source": label_source,
+                "confusion_cell": _confusion_cell(str(row["predicted_label"]), gold_negative),
+            }
+        )
+    return reviewed_rows, missing_review_case_ids
+
+
+def _reviewed_row_dicts(
+    sample_rows: list[dict[str, Any]],
+    labels_by_case_id: dict[str, dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    if _lm2011_rust is not None:
+        try:
+            rows, missing_ids = _lm2011_rust.finbert_confusion_reviewed_case_rows(
+                sample_rows,
+                labels_by_case_id,
+            )
+            _CONFUSION_REVIEW_RUST_METRICS["reviewed_rows_fast_success"] += 1
+            return [dict(row) for row in rows], [str(case_id) for case_id in missing_ids]
+        except Exception:
+            _CONFUSION_REVIEW_RUST_METRICS["reviewed_rows_fast_failures"] += 1
+    _CONFUSION_REVIEW_RUST_METRICS["reviewed_rows_fallbacks"] += 1
+    return _reviewed_row_dicts_py(sample_rows, labels_by_case_id)
+
+
+def _reviewed_row_dicts_from_frame(
+    sample_df: pl.DataFrame,
+    labels_by_case_id: dict[str, dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    if _lm2011_rust is not None:
+        try:
+            rows, missing_ids = _lm2011_rust.finbert_confusion_reviewed_case_columns(
+                sample_df.columns,
+                [sample_df.get_column(column).to_list() for column in sample_df.columns],
+                labels_by_case_id,
+            )
+            _CONFUSION_REVIEW_RUST_METRICS["reviewed_rows_column_fast_success"] += 1
+            return [dict(row) for row in rows], [str(case_id) for case_id in missing_ids]
+        except Exception:
+            _CONFUSION_REVIEW_RUST_METRICS["reviewed_rows_column_fast_failures"] += 1
+            _CONFUSION_REVIEW_RUST_METRICS["reviewed_rows_column_fallbacks"] += 1
+    return _reviewed_row_dicts(sample_df.to_dicts(), labels_by_case_id)
 
 
 def summarize_finbert_sentence_confusion_review(
@@ -1742,23 +2398,10 @@ def summarize_finbert_sentence_confusion_review(
     }
 
     sample_df = pl.read_parquet(sample_path)
-    reviewed_rows: list[dict[str, Any]] = []
-    missing_review_case_ids: list[str] = []
-    for row in sample_df.to_dicts():
-        record = labels_by_case_id.get(str(row["review_case_id"]), {})
-        gold_negative, label_source = _final_gold_negative(record)
-        if not gold_negative:
-            missing_review_case_ids.append(str(row["review_case_id"]))
-            gold_negative = "uncertain"
-        reviewed_rows.append(
-            {
-                **row,
-                **{f"review_{key}": value for key, value in record.items() if key not in row},
-                "gold_negative_final": gold_negative,
-                "gold_negative_source": label_source,
-                "confusion_cell": _confusion_cell(str(row["predicted_label"]), gold_negative),
-            }
-        )
+    reviewed_rows, missing_review_case_ids = _reviewed_row_dicts_from_frame(
+        sample_df,
+        labels_by_case_id,
+    )
 
     reviewed_df = pl.DataFrame(reviewed_rows)
     out_dir = (output_dir.resolve() if output_dir is not None else resolved_review_dir / "review_summary")

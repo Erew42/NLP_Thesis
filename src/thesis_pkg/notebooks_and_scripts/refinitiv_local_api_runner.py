@@ -55,7 +55,7 @@ from thesis_pkg.pipelines.refinitiv.lseg_recovery import (
     build_ownership_unresolved_recovery_artifact,
     write_recovery_manifest,
 )
-from thesis_pkg.pipelines.refinitiv.lseg_stage_audit import (
+from thesis_refinitiv.lseg_client.stage_audit import (
     AuditIssue,
     StageAuditResult,
     audit_api_stage,
@@ -63,7 +63,7 @@ from thesis_pkg.pipelines.refinitiv.lseg_stage_audit import (
     default_stage_manifest_path,
     write_stage_completion_manifest,
 )
-from thesis_pkg.pipelines.refinitiv_bridge_pipeline import build_refinitiv_ownership_universe_row_summary
+from thesis_refinitiv.bridge import build_refinitiv_ownership_universe_row_summary
 
 
 STAGE_ORDER: tuple[str, ...] = (

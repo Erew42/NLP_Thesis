@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import asdict
 from dataclasses import dataclass
@@ -16,6 +16,14 @@ from thesis_pkg.benchmarking.item_text_cleaning import SCOPE_DIAGNOSTICS_SCHEMA
 from thesis_pkg.benchmarking.manifest_contracts import resolve_manifest_path
 from thesis_pkg.benchmarking.manifest_contracts import write_manifest_path_value
 from thesis_pkg.core.sec.parquet_stream import iter_parquet_filing_texts
+
+try:
+    from thesis_native import _lm2011_rust
+except Exception as exc:  # pragma: no cover - optional native extension
+    _lm2011_rust = None
+    _MULTISURFACE_AUDIT_RUST_IMPORT_ERROR: str | None = f"{type(exc).__name__}: {exc}"
+else:
+    _MULTISURFACE_AUDIT_RUST_IMPORT_ERROR = None
 
 
 CASE_SOURCE_VALUES: tuple[str, ...] = (
@@ -120,6 +128,54 @@ _TOC_CLUSTER_RE = re.compile(
     r"(?:item\s+\d+[a-z]?\b.*?){2,}",
     re.IGNORECASE | re.DOTALL,
 )
+
+_MULTISURFACE_AUDIT_RUST_METRICS: dict[str, int] = {
+    "normalize_spaces_fast_success": 0,
+    "normalize_spaces_fast_failures": 0,
+    "normalize_spaces_fallbacks": 0,
+    "boundary_snippet_risk_fast_success": 0,
+    "boundary_snippet_risk_fast_failures": 0,
+    "boundary_snippet_risk_fallbacks": 0,
+    "boundary_snippet_risk_batch_fast_success": 0,
+    "boundary_snippet_risk_batch_fast_failures": 0,
+    "boundary_snippet_risk_batch_fallbacks": 0,
+    "snippet_delta_risk_batch_fast_success": 0,
+    "snippet_delta_risk_batch_fast_failures": 0,
+    "snippet_delta_risk_batch_fallbacks": 0,
+    "stable_int_fast_success": 0,
+    "stable_int_fast_failures": 0,
+    "stable_int_fallbacks": 0,
+    "stable_int_batch_fast_success": 0,
+    "stable_int_batch_fast_failures": 0,
+    "stable_int_batch_fallbacks": 0,
+    "normalize_with_positions_fast_success": 0,
+    "normalize_with_positions_fast_failures": 0,
+    "normalize_with_positions_fallbacks": 0,
+    "normalized_match_bounds_fast_success": 0,
+    "normalized_match_bounds_fast_failures": 0,
+    "normalized_match_bounds_fallbacks": 0,
+    "mark_escalated_cases_fast_success": 0,
+    "mark_escalated_cases_fast_failures": 0,
+    "mark_escalated_cases_fallbacks": 0,
+    "chunk_records_column_fast_success": 0,
+    "chunk_records_column_fast_failures": 0,
+    "chunk_records_column_fallbacks": 0,
+    "chunk_records_fast_success": 0,
+    "chunk_records_fast_failures": 0,
+    "chunk_records_fallbacks": 0,
+}
+
+
+def get_multisurface_audit_rust_accel_metrics() -> dict[str, int | str | bool | None]:
+    metrics: dict[str, int | str | bool | None] = dict(_MULTISURFACE_AUDIT_RUST_METRICS)
+    metrics["rust_accel_available"] = _lm2011_rust is not None
+    metrics["rust_accel_import_error"] = _MULTISURFACE_AUDIT_RUST_IMPORT_ERROR
+    return metrics
+
+
+def reset_multisurface_audit_rust_accel_metrics() -> None:
+    for key in _MULTISURFACE_AUDIT_RUST_METRICS:
+        _MULTISURFACE_AUDIT_RUST_METRICS[key] = 0
 _ITEM_ANCHOR_PATTERNS: dict[str, re.Pattern[str]] = {
     "item_1": re.compile(r"\bitem\s+1\b", re.IGNORECASE),
     "item_1a": re.compile(r"\bitem\s+1a\b", re.IGNORECASE),
@@ -362,11 +418,78 @@ def _align_frame_to_schema(df: pl.DataFrame, schema: dict[str, pl.DataType]) -> 
     )
 
 
-def _stable_int(value: str, seed: int) -> int:
+def _stable_int_py(value: str, seed: int) -> int:
     digits = re.sub(r"\D+", "", value)
     if digits:
         return int(digits[-15:])
     return abs(hash((seed, value)))
+
+
+def _stable_int(value: str, seed: int) -> int:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.stable_digits_int_value(value)
+            if out is not None:
+                _MULTISURFACE_AUDIT_RUST_METRICS["stable_int_fast_success"] += 1
+                return int(out)
+        except Exception:
+            _MULTISURFACE_AUDIT_RUST_METRICS["stable_int_fast_failures"] += 1
+        _MULTISURFACE_AUDIT_RUST_METRICS["stable_int_fallbacks"] += 1
+    else:
+        _MULTISURFACE_AUDIT_RUST_METRICS["stable_int_fallbacks"] += 1
+    return _stable_int_py(value, seed)
+
+
+def _stable_int_values_py(values: list[str], seed: int) -> list[int]:
+    return [_stable_int_py(value, seed) for value in values]
+
+
+def _stable_int_values(values: list[str], seed: int) -> list[int]:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.stable_digits_int_values(values)
+            _MULTISURFACE_AUDIT_RUST_METRICS["stable_int_batch_fast_success"] += 1
+            return [
+                _stable_int_py(value, seed) if resolved is None else int(resolved)
+                for value, resolved in zip(values, out, strict=True)
+            ]
+        except Exception:
+            _MULTISURFACE_AUDIT_RUST_METRICS["stable_int_batch_fast_failures"] += 1
+    _MULTISURFACE_AUDIT_RUST_METRICS["stable_int_batch_fallbacks"] += 1
+    return _stable_int_values_py(values, seed)
+
+
+def _int64_series_from_values(series: pl.Series, values: list[int | None]) -> pl.Series:
+    return pl.Series(series.name, values, dtype=pl.Int64)
+
+
+def _stable_int_expr(column_name: str, seed: int) -> pl.Expr:
+    def _map_batch(series: pl.Series) -> pl.Series:
+        values = series.to_list()
+        non_null_values = [str(value) for value in values if value is not None]
+        stable_values = iter(_stable_int_values(non_null_values, seed))
+        return _int64_series_from_values(
+            series,
+            [None if value is None else next(stable_values) for value in values],
+        )
+
+    return pl.col(column_name).map_batches(
+        _map_batch,
+        return_dtype=pl.Int64,
+        is_elementwise=True,
+    )
+
+
+def _peer_group_hit_expr(peer_pairs: set[tuple[str, str]]) -> pl.Expr:
+    if not peer_pairs:
+        return pl.lit(False)
+    peer_records = [{"doc_id": doc_id, "text_scope": text_scope} for doc_id, text_scope in sorted(peer_pairs)]
+    return pl.struct(
+        [
+            pl.col("doc_id").cast(pl.Utf8, strict=False).fill_null("None").alias("doc_id"),
+            pl.col("text_scope").cast(pl.Utf8, strict=False).fill_null("None").alias("text_scope"),
+        ]
+    ).is_in(peer_records)
 
 
 def _sanitize_text(value: str | None) -> str:
@@ -375,8 +498,20 @@ def _sanitize_text(value: str | None) -> str:
     return str(value).replace("\r\n", "\n").replace("\r", "\n").strip()
 
 
-def _normalize_spaces(value: str | None) -> str:
+def _normalize_spaces_py(value: str | None) -> str:
     return re.sub(r"\s+", " ", _sanitize_text(value)).strip()
+
+
+def _normalize_spaces(value: str | None) -> str:
+    if _lm2011_rust is not None:
+        try:
+            out = str(_lm2011_rust.normalize_spaces_value(value))
+            _MULTISURFACE_AUDIT_RUST_METRICS["normalize_spaces_fast_success"] += 1
+            return out
+        except Exception:
+            _MULTISURFACE_AUDIT_RUST_METRICS["normalize_spaces_fast_failures"] += 1
+    _MULTISURFACE_AUDIT_RUST_METRICS["normalize_spaces_fallbacks"] += 1
+    return _normalize_spaces_py(value)
 
 
 def _sentence_suspect_reason(text: str) -> str:
@@ -396,11 +531,174 @@ def _sentence_suspect_reason(text: str) -> str:
     return "control_peer"
 
 
-def _boundary_snippet_risk(*snippets: str | None) -> bool:
+def _boundary_snippet_risk_py(*snippets: str | None) -> bool:
     joined = "\n".join(_sanitize_text(snippet) for snippet in snippets if snippet)
     if not joined:
         return False
     return bool(_BOUNDARY_LEAK_RE.search(joined) or _TOC_CLUSTER_RE.search(joined))
+
+
+def _boundary_snippet_risk(*snippets: str | None) -> bool:
+    if _lm2011_rust is not None:
+        try:
+            out = bool(_lm2011_rust.multisurface_boundary_snippet_risk(list(snippets)))
+            _MULTISURFACE_AUDIT_RUST_METRICS["boundary_snippet_risk_fast_success"] += 1
+            return out
+        except Exception:
+            _MULTISURFACE_AUDIT_RUST_METRICS["boundary_snippet_risk_fast_failures"] += 1
+            _MULTISURFACE_AUDIT_RUST_METRICS["boundary_snippet_risk_fallbacks"] += 1
+    else:
+        _MULTISURFACE_AUDIT_RUST_METRICS["boundary_snippet_risk_fallbacks"] += 1
+    return _boundary_snippet_risk_py(*snippets)
+
+
+_BOUNDARY_SNIPPET_COLUMNS: tuple[str, str, str, str] = (
+    "original_start_snippet",
+    "cleaned_start_snippet",
+    "original_end_snippet",
+    "cleaned_end_snippet",
+)
+
+
+def _boundary_snippet_risk_values_py(
+    original_start_values: list[Any],
+    cleaned_start_values: list[Any],
+    original_end_values: list[Any],
+    cleaned_end_values: list[Any],
+) -> list[bool]:
+    return [
+        _boundary_snippet_risk_py(original_start, cleaned_start, original_end, cleaned_end)
+        for original_start, cleaned_start, original_end, cleaned_end in zip(
+            original_start_values,
+            cleaned_start_values,
+            original_end_values,
+            cleaned_end_values,
+            strict=True,
+        )
+    ]
+
+
+def _boundary_snippet_risk_values(
+    original_start_values: list[Any],
+    cleaned_start_values: list[Any],
+    original_end_values: list[Any],
+    cleaned_end_values: list[Any],
+) -> list[bool]:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.multisurface_boundary_snippet_risk_values(
+                original_start_values,
+                cleaned_start_values,
+                original_end_values,
+                cleaned_end_values,
+            )
+            _MULTISURFACE_AUDIT_RUST_METRICS["boundary_snippet_risk_batch_fast_success"] += 1
+            return [bool(value) for value in out]
+        except Exception:
+            _MULTISURFACE_AUDIT_RUST_METRICS["boundary_snippet_risk_batch_fast_failures"] += 1
+    _MULTISURFACE_AUDIT_RUST_METRICS["boundary_snippet_risk_batch_fallbacks"] += 1
+    return _boundary_snippet_risk_values_py(
+        original_start_values,
+        cleaned_start_values,
+        original_end_values,
+        cleaned_end_values,
+    )
+
+
+def _snippet_delta_risk_py(
+    original_start: Any,
+    cleaned_start: Any,
+    original_end: Any,
+    cleaned_end: Any,
+) -> bool:
+    return (_normalize_spaces_py(original_start) != _normalize_spaces_py(cleaned_start)) or (
+        _normalize_spaces_py(original_end) != _normalize_spaces_py(cleaned_end)
+    )
+
+
+def _snippet_delta_risk_values_py(
+    original_start_values: list[Any],
+    cleaned_start_values: list[Any],
+    original_end_values: list[Any],
+    cleaned_end_values: list[Any],
+) -> list[bool]:
+    return [
+        _snippet_delta_risk_py(original_start, cleaned_start, original_end, cleaned_end)
+        for original_start, cleaned_start, original_end, cleaned_end in zip(
+            original_start_values,
+            cleaned_start_values,
+            original_end_values,
+            cleaned_end_values,
+            strict=True,
+        )
+    ]
+
+
+def _snippet_delta_risk_values(
+    original_start_values: list[Any],
+    cleaned_start_values: list[Any],
+    original_end_values: list[Any],
+    cleaned_end_values: list[Any],
+) -> list[bool]:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.multisurface_snippet_delta_risk_values(
+                original_start_values,
+                cleaned_start_values,
+                original_end_values,
+                cleaned_end_values,
+            )
+            _MULTISURFACE_AUDIT_RUST_METRICS["snippet_delta_risk_batch_fast_success"] += 1
+            return [bool(value) for value in out]
+        except Exception:
+            _MULTISURFACE_AUDIT_RUST_METRICS["snippet_delta_risk_batch_fast_failures"] += 1
+    _MULTISURFACE_AUDIT_RUST_METRICS["snippet_delta_risk_batch_fallbacks"] += 1
+    return _snippet_delta_risk_values_py(
+        original_start_values,
+        cleaned_start_values,
+        original_end_values,
+        cleaned_end_values,
+    )
+
+
+def _boolean_series_from_values(series: pl.Series, values: list[bool]) -> pl.Series:
+    return pl.Series(series.name, values, dtype=pl.Boolean)
+
+
+def _snippet_column_values(series: pl.Series, column_name: str) -> list[Any]:
+    return series.struct.field(column_name).to_list()
+
+
+def _boundary_snippet_risk_expr() -> pl.Expr:
+    def _map_batch(series: pl.Series) -> pl.Series:
+        return _boolean_series_from_values(
+            series,
+            _boundary_snippet_risk_values(
+                *[_snippet_column_values(series, column_name) for column_name in _BOUNDARY_SNIPPET_COLUMNS],
+            ),
+        )
+
+    return pl.struct(list(_BOUNDARY_SNIPPET_COLUMNS)).map_batches(
+        _map_batch,
+        return_dtype=pl.Boolean,
+        is_elementwise=True,
+    )
+
+
+def _snippet_delta_risk_expr() -> pl.Expr:
+    def _map_batch(series: pl.Series) -> pl.Series:
+        return _boolean_series_from_values(
+            series,
+            _snippet_delta_risk_values(
+                *[_snippet_column_values(series, column_name) for column_name in _BOUNDARY_SNIPPET_COLUMNS],
+            ),
+        )
+
+    return pl.struct(list(_BOUNDARY_SNIPPET_COLUMNS)).map_batches(
+        _map_batch,
+        return_dtype=pl.Boolean,
+        is_elementwise=True,
+    )
 
 
 def _item_primary_text(row: dict[str, Any]) -> str:
@@ -415,7 +713,7 @@ def _item_primary_text(row: dict[str, Any]) -> str:
     return _sanitize_text(row.get("cleaned_text"))[:1200]
 
 
-def _normalize_with_positions(text: str) -> _NormalizedTextIndex:
+def _normalize_with_positions_py(text: str) -> _NormalizedTextIndex:
     normalized_chars: list[str] = []
     normalized_to_original: list[int] = []
     pending_space = False
@@ -440,8 +738,27 @@ def _normalize_with_positions(text: str) -> _NormalizedTextIndex:
     )
 
 
-def _normalized_match_bounds(index: _NormalizedTextIndex, query: str) -> tuple[int, int] | None:
-    normalized_query = _normalize_spaces(query).casefold()
+def _normalize_with_positions(text: str) -> _NormalizedTextIndex:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.normalize_ascii_with_positions_value(text)
+            if out is not None:
+                normalized_text, normalized_to_original = out
+                _MULTISURFACE_AUDIT_RUST_METRICS["normalize_with_positions_fast_success"] += 1
+                return _NormalizedTextIndex(
+                    normalized_text=str(normalized_text),
+                    normalized_to_original=tuple(int(index) for index in normalized_to_original),
+                )
+        except Exception:
+            _MULTISURFACE_AUDIT_RUST_METRICS["normalize_with_positions_fast_failures"] += 1
+        _MULTISURFACE_AUDIT_RUST_METRICS["normalize_with_positions_fallbacks"] += 1
+    else:
+        _MULTISURFACE_AUDIT_RUST_METRICS["normalize_with_positions_fallbacks"] += 1
+    return _normalize_with_positions_py(text)
+
+
+def _normalized_match_bounds_py(index: _NormalizedTextIndex, query: str) -> tuple[int, int] | None:
+    normalized_query = _normalize_spaces_py(query).casefold()
     if len(normalized_query) < 40:
         return None
     start = index.normalized_text.find(normalized_query)
@@ -453,6 +770,31 @@ def _normalized_match_bounds(index: _NormalizedTextIndex, query: str) -> tuple[i
     original_start = index.normalized_to_original[start]
     original_end = index.normalized_to_original[end] + 1
     return original_start, original_end
+
+
+def _normalized_match_bounds(index: _NormalizedTextIndex, query: str) -> tuple[int, int] | None:
+    if (
+        _lm2011_rust is not None
+        and isinstance(query, str)
+        and index.normalized_text.isascii()
+        and query.isascii()
+        and len(index.normalized_text) == len(index.normalized_to_original)
+    ):
+        try:
+            out = _lm2011_rust.normalized_ascii_match_bounds_value(
+                index.normalized_text,
+                [int(position) for position in index.normalized_to_original],
+                query,
+            )
+            _MULTISURFACE_AUDIT_RUST_METRICS["normalized_match_bounds_fast_success"] += 1
+            if out is None:
+                return None
+            start, end = out
+            return int(start), int(end)
+        except Exception:
+            _MULTISURFACE_AUDIT_RUST_METRICS["normalized_match_bounds_fast_failures"] += 1
+    _MULTISURFACE_AUDIT_RUST_METRICS["normalized_match_bounds_fallbacks"] += 1
+    return _normalized_match_bounds_py(index, query)
 
 
 def _extract_window(text: str, *, start: int, end: int, window_chars: int) -> str:
@@ -744,44 +1086,8 @@ def _item_surface(
         .with_columns(
             [
                 pl.col("benchmark_row_id").is_in(manual_boundary_ids).alias("manual_boundary_sample"),
-                pl.struct(
-                    [
-                        "original_start_snippet",
-                        "cleaned_start_snippet",
-                        "original_end_snippet",
-                        "cleaned_end_snippet",
-                    ]
-                )
-                .map_elements(
-                    lambda row: _boundary_snippet_risk(
-                        row.get("original_start_snippet"),
-                        row.get("cleaned_start_snippet"),
-                        row.get("original_end_snippet"),
-                        row.get("cleaned_end_snippet"),
-                    ),
-                    return_dtype=pl.Boolean,
-                )
-                .alias("boundary_snippet_risk"),
-                pl.struct(
-                    [
-                        "original_start_snippet",
-                        "cleaned_start_snippet",
-                        "original_end_snippet",
-                        "cleaned_end_snippet",
-                    ]
-                )
-                .map_elements(
-                    lambda row: (
-                        _normalize_spaces(row.get("original_start_snippet"))
-                        != _normalize_spaces(row.get("cleaned_start_snippet"))
-                    )
-                    or (
-                        _normalize_spaces(row.get("original_end_snippet"))
-                        != _normalize_spaces(row.get("cleaned_end_snippet"))
-                    ),
-                    return_dtype=pl.Boolean,
-                )
-                .alias("snippet_delta_risk"),
+                _boundary_snippet_risk_expr().alias("boundary_snippet_risk"),
+                _snippet_delta_risk_expr().alias("snippet_delta_risk"),
             ]
         )
         .with_columns(
@@ -813,11 +1119,7 @@ def _item_surface(
 
 
 def _with_stable_sort_key(df: pl.DataFrame, *, key_col: str, sort_key_name: str, seed: int) -> pl.DataFrame:
-    return df.with_columns(
-        pl.col(key_col)
-        .map_elements(lambda value: _stable_int(str(value), seed), return_dtype=pl.Int64)
-        .alias(sort_key_name)
-    )
+    return df.with_columns(_stable_int_expr(key_col, seed).alias(sort_key_name))
 
 
 def _case_base() -> dict[str, Any]:
@@ -923,12 +1225,7 @@ def _select_sentence_cases(sentence_df: pl.DataFrame, cfg: MultiSurfaceAuditPack
         .filter(~pl.col("long_candidate"))
         .with_columns(
             [
-                pl.struct(["doc_id", "text_scope"])
-                .map_elements(
-                    lambda row: (str(row.get("doc_id")), str(row.get("text_scope"))) in suspicious_doc_scope_pairs,
-                    return_dtype=pl.Boolean,
-                )
-                .alias("_peer_group_hit"),
+                _peer_group_hit_expr(suspicious_doc_scope_pairs).alias("_peer_group_hit"),
                 (pl.col("finbert_token_count_512") - pl.lit(40)).abs().alias("_median_token_gap"),
                 (pl.col("sentence_char_count") - pl.lit(180)).abs().alias("_median_char_gap"),
             ]
@@ -1074,7 +1371,7 @@ def _validate_cfg(cfg: MultiSurfaceAuditPackConfig) -> None:
         raise ValueError("All audit-pack counts and window sizes must be positive.")
 
 
-def _mark_escalated_cases(cases: list[dict[str, Any]], *, cap: int) -> list[dict[str, Any]]:
+def _mark_escalated_cases_py(cases: list[dict[str, Any]], *, cap: int) -> list[dict[str, Any]]:
     scored_cases: list[tuple[int, str, dict[str, Any], list[str]]] = []
     for case in cases:
         score = 0
@@ -1126,6 +1423,21 @@ def _mark_escalated_cases(cases: list[dict[str, Any]], *, cap: int) -> list[dict
             updated["escalation_reason"] = "|".join(dict.fromkeys(reasons)) if reasons else "context_review"
         enriched.append(updated)
     return enriched
+
+
+def _mark_escalated_cases(cases: list[dict[str, Any]], *, cap: int) -> list[dict[str, Any]]:
+    if _lm2011_rust is not None:
+        try:
+            enriched = _lm2011_rust.multisurface_mark_escalated_cases(
+                cases,
+                int(cap),
+            )
+            _MULTISURFACE_AUDIT_RUST_METRICS["mark_escalated_cases_fast_success"] += 1
+            return list(enriched)
+        except Exception:
+            _MULTISURFACE_AUDIT_RUST_METRICS["mark_escalated_cases_fast_failures"] += 1
+    _MULTISURFACE_AUDIT_RUST_METRICS["mark_escalated_cases_fallbacks"] += 1
+    return _mark_escalated_cases_py(cases, cap=cap)
 
 
 def _apply_full_report_context(
@@ -1243,12 +1555,72 @@ def _write_review_instructions(path: Path) -> None:
     path.write_text(text, encoding="utf-8")
 
 
-def _chunk_records(records: list[dict[str, Any]], *, chunk_count: int) -> list[list[dict[str, Any]]]:
+def _chunk_records_py(records: list[dict[str, Any]], *, chunk_count: int) -> list[list[dict[str, Any]]]:
     ordered_records = _interleave_bucketed_records(records)
     chunks: list[list[dict[str, Any]]] = [[] for _ in range(chunk_count)]
     for index, record in enumerate(ordered_records):
         chunks[index % chunk_count].append(record)
     return chunks
+
+
+def _chunk_records(records: list[dict[str, Any]], *, chunk_count: int) -> list[list[dict[str, Any]]]:
+    if _lm2011_rust is not None:
+        try:
+            chunk_indices = _lm2011_rust.multisurface_chunk_record_indices(
+                records,
+                int(chunk_count),
+            )
+            _MULTISURFACE_AUDIT_RUST_METRICS["chunk_records_fast_success"] += 1
+            return [
+                [records[int(row_index)] for row_index in chunk]
+                for chunk in chunk_indices
+            ]
+        except Exception:
+            _MULTISURFACE_AUDIT_RUST_METRICS["chunk_records_fast_failures"] += 1
+    _MULTISURFACE_AUDIT_RUST_METRICS["chunk_records_fallbacks"] += 1
+    return _chunk_records_py(records, chunk_count=chunk_count)
+
+
+def _chunk_rows_from_indices(frame: pl.DataFrame, indices: list[int]) -> list[dict[str, Any]]:
+    if not indices:
+        return []
+    order_df = pl.DataFrame(
+        {
+            "__chunk_order": list(range(len(indices))),
+            "__chunk_row_index": [int(index) for index in indices],
+        },
+        schema={"__chunk_order": pl.UInt32, "__chunk_row_index": pl.UInt32},
+    )
+    return (
+        order_df.join(
+            frame.with_row_index("__chunk_row_index"),
+            on="__chunk_row_index",
+            how="left",
+        )
+        .sort("__chunk_order")
+        .drop(["__chunk_order", "__chunk_row_index"])
+        .to_dicts()
+    )
+
+
+def _chunk_records_from_frame(frame: pl.DataFrame, *, chunk_count: int) -> list[list[dict[str, Any]]]:
+    selected = frame.select(["case_source", "text_scope", "full_report_needed"])
+    if _lm2011_rust is not None:
+        try:
+            chunk_indices = _lm2011_rust.multisurface_chunk_record_indices_columns(
+                selected.columns,
+                [selected.get_column(column).to_list() for column in selected.columns],
+                int(chunk_count),
+            )
+            _MULTISURFACE_AUDIT_RUST_METRICS["chunk_records_column_fast_success"] += 1
+            return [
+                _chunk_rows_from_indices(frame, [int(row_index) for row_index in chunk])
+                for chunk in chunk_indices
+            ]
+        except Exception:
+            _MULTISURFACE_AUDIT_RUST_METRICS["chunk_records_column_fast_failures"] += 1
+            _MULTISURFACE_AUDIT_RUST_METRICS["chunk_records_column_fallbacks"] += 1
+    return _chunk_records(frame.to_dicts(), chunk_count=chunk_count)
 
 
 def build_multisurface_audit_pack(
@@ -1287,7 +1659,7 @@ def build_multisurface_audit_pack(
     cases_df.write_csv(output_dir / "audit_cases.csv")
 
     _write_review_instructions(review_instructions_path)
-    chunk_records = _chunk_records(cases_df.to_dicts(), chunk_count=cfg.chunk_count)
+    chunk_records = _chunk_records_from_frame(cases_df, chunk_count=cfg.chunk_count)
     chunk_manifest_rows: list[dict[str, Any]] = []
     for chunk_index, records in enumerate(chunk_records, start=1):
         chunk_id = f"chunk_{chunk_index:02d}"

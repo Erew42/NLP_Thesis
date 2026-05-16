@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import warnings
@@ -38,8 +38,47 @@ from thesis_pkg.benchmarking.sentences import SENTENCE_SPLIT_AUDIT_SCHEMA
 from thesis_pkg.benchmarking.sentences import _derive_sentence_frame_with_split_audit
 from thesis_pkg.benchmarking.token_lengths import FINBERT_TOKEN_BUCKET_COLUMN
 
+try:
+    from thesis_native import _lm2011_rust
+except Exception as exc:  # pragma: no cover - optional native extension
+    _lm2011_rust = None
+    _FINBERT_PREPROCESSING_RUST_IMPORT_ERROR: str | None = f"{type(exc).__name__}: {exc}"
+else:
+    _FINBERT_PREPROCESSING_RUST_IMPORT_ERROR = None
+
 
 RUNNER_NAME = "finbert_sentence_preprocessing"
+_BUCKETS: tuple[str, ...] = ("short", "medium", "long")
+
+_FINBERT_PREPROCESSING_RUST_METRICS: dict[str, int] = {
+    "split_metrics_fast_success": 0,
+    "split_metrics_fast_failures": 0,
+    "split_metrics_fallbacks": 0,
+    "fallback_split_warning_fast_success": 0,
+    "fallback_split_warning_fast_failures": 0,
+    "fallback_split_warning_fallbacks": 0,
+    "token_bucket_counts_fast_success": 0,
+    "token_bucket_counts_fast_failures": 0,
+    "token_bucket_counts_fallbacks": 0,
+    "manifest_counts_column_fast_success": 0,
+    "manifest_counts_column_fast_failures": 0,
+    "manifest_counts_column_fallbacks": 0,
+    "manifest_counts_fast_success": 0,
+    "manifest_counts_fast_failures": 0,
+    "manifest_counts_fallbacks": 0,
+}
+
+
+def get_finbert_preprocessing_rust_accel_metrics() -> dict[str, int | str | bool | None]:
+    metrics: dict[str, int | str | bool | None] = dict(_FINBERT_PREPROCESSING_RUST_METRICS)
+    metrics["rust_accel_available"] = _lm2011_rust is not None
+    metrics["rust_accel_import_error"] = _FINBERT_PREPROCESSING_RUST_IMPORT_ERROR
+    return metrics
+
+
+def reset_finbert_preprocessing_rust_accel_metrics() -> None:
+    for key in _FINBERT_PREPROCESSING_RUST_METRICS:
+        _FINBERT_PREPROCESSING_RUST_METRICS[key] = 0
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -177,7 +216,7 @@ def _load_existing_split_audit(path: Path, *, overwrite: bool) -> pl.DataFrame:
     return split_audit_df
 
 
-def _split_metrics(split_audit_df: pl.DataFrame) -> dict[str, Any]:
+def _split_metrics_py(split_audit_df: pl.DataFrame) -> dict[str, Any]:
     if split_audit_df.is_empty():
         return {
             "chunked_section_rows": 0,
@@ -193,17 +232,143 @@ def _split_metrics(split_audit_df: pl.DataFrame) -> dict[str, Any]:
     }
 
 
-def _warn_on_fallback_split_boundaries(filing_year: int, split_audit_df: pl.DataFrame) -> None:
+def _split_metrics(split_audit_df: pl.DataFrame) -> dict[str, Any]:
+    if split_audit_df.is_empty():
+        return _split_metrics_py(split_audit_df)
+    if _lm2011_rust is not None:
+        try:
+            chunked_section_rows, warning_split_rows, max_original_char_count = _lm2011_rust.finbert_split_metrics(
+                split_audit_df["benchmark_row_id"].to_list(),
+                split_audit_df["warning_boundary_used"].to_list(),
+                split_audit_df["original_char_count"].to_list(),
+            )
+            _FINBERT_PREPROCESSING_RUST_METRICS["split_metrics_fast_success"] += 1
+            return {
+                "chunked_section_rows": int(chunked_section_rows),
+                "warning_split_rows": int(warning_split_rows),
+                "max_original_char_count": (
+                    int(max_original_char_count) if max_original_char_count is not None else None
+                ),
+            }
+        except Exception:
+            _FINBERT_PREPROCESSING_RUST_METRICS["split_metrics_fast_failures"] += 1
+    _FINBERT_PREPROCESSING_RUST_METRICS["split_metrics_fallbacks"] += 1
+    return _split_metrics_py(split_audit_df)
+
+
+def _token_bucket_counts_py(sentence_df: pl.DataFrame) -> dict[str, int]:
+    grouped_rows = (
+        sentence_df.group_by(FINBERT_TOKEN_BUCKET_COLUMN)
+        .agg(pl.len().alias("sentence_rows"))
+        .to_dicts()
+    )
+    counts = {
+        str(row[FINBERT_TOKEN_BUCKET_COLUMN]): int(row["sentence_rows"])
+        for row in grouped_rows
+    }
+    return {bucket: int(counts.get(bucket, 0)) for bucket in _BUCKETS}
+
+
+def _token_bucket_counts(sentence_df: pl.DataFrame) -> dict[str, int]:
+    if _lm2011_rust is not None:
+        try:
+            bucket_values = [
+                None if value is None else str(value)
+                for value in sentence_df[FINBERT_TOKEN_BUCKET_COLUMN].to_list()
+            ]
+            short_count, medium_count, long_count = _lm2011_rust.finbert_token_bucket_counts(
+                bucket_values
+            )
+            _FINBERT_PREPROCESSING_RUST_METRICS["token_bucket_counts_fast_success"] += 1
+            return {
+                "short": int(short_count),
+                "medium": int(medium_count),
+                "long": int(long_count),
+            }
+        except Exception:
+            _FINBERT_PREPROCESSING_RUST_METRICS["token_bucket_counts_fast_failures"] += 1
+    _FINBERT_PREPROCESSING_RUST_METRICS["token_bucket_counts_fallbacks"] += 1
+    return _token_bucket_counts_py(sentence_df)
+
+
+def _manifest_counts_py(summary_rows: list[dict[str, Any]], summary_df: pl.DataFrame) -> dict[str, int]:
+    return {
+        "year_count": len(summary_rows),
+        "processed_year_count": sum(1 for row in summary_rows if row["status"] == "processed"),
+        "reused_year_count": sum(1 for row in summary_rows if row["status"] == "reused_existing"),
+        "sentence_rows": int(summary_df["sentence_rows"].sum()) if summary_df.height else 0,
+        "oversize_section_rows": int(summary_df["oversize_section_rows"].sum()) if summary_df.height else 0,
+        "chunked_section_rows": int(summary_df["chunked_section_rows"].sum()) if summary_df.height else 0,
+        "warning_split_rows": int(summary_df["warning_split_rows"].sum()) if summary_df.height else 0,
+        "cleaned_scope_rows": int(summary_df["cleaned_scope_rows"].sum()) if summary_df.height else 0,
+        "cleaning_dropped_rows": int(summary_df["cleaning_dropped_rows"].sum()) if summary_df.height else 0,
+        "cleaning_flagged_rows": int(summary_df["cleaning_flagged_rows"].sum()) if summary_df.height else 0,
+    }
+
+
+def _manifest_counts(summary_rows: list[dict[str, Any]], summary_df: pl.DataFrame) -> dict[str, int]:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.finbert_preprocessing_manifest_count_columns(
+                summary_df.columns,
+                [summary_df.get_column(column).to_list() for column in summary_df.columns],
+            )
+            _FINBERT_PREPROCESSING_RUST_METRICS["manifest_counts_column_fast_success"] += 1
+            return {str(key): int(value) for key, value in dict(out).items()}
+        except Exception:
+            _FINBERT_PREPROCESSING_RUST_METRICS["manifest_counts_column_fast_failures"] += 1
+            _FINBERT_PREPROCESSING_RUST_METRICS["manifest_counts_column_fallbacks"] += 1
+        try:
+            out = _lm2011_rust.finbert_preprocessing_manifest_counts(summary_rows)
+            _FINBERT_PREPROCESSING_RUST_METRICS["manifest_counts_fast_success"] += 1
+            return {str(key): int(value) for key, value in dict(out).items()}
+        except Exception:
+            _FINBERT_PREPROCESSING_RUST_METRICS["manifest_counts_fast_failures"] += 1
+    _FINBERT_PREPROCESSING_RUST_METRICS["manifest_counts_fallbacks"] += 1
+    return _manifest_counts_py(summary_rows, summary_df)
+
+
+def _fallback_split_warning_payload_py(split_audit_df: pl.DataFrame) -> tuple[int, str]:
     warning_split_df = split_audit_df.filter(pl.col("warning_boundary_used"))
     if warning_split_df.is_empty():
-        return
-
+        return 0, ""
     affected_row_count = int(warning_split_df["benchmark_row_id"].n_unique())
     reason_counts = warning_split_df.group_by("split_reason").agg(pl.len().alias("split_count")).sort("split_reason")
     counts_text = ", ".join(
         f"{row['split_reason']}={int(row['split_count'])}"
         for row in reason_counts.to_dicts()
     )
+    return affected_row_count, counts_text
+
+
+def _fallback_split_warning_payload(split_audit_df: pl.DataFrame) -> tuple[int, str]:
+    if split_audit_df.is_empty():
+        return 0, ""
+    if _lm2011_rust is not None:
+        try:
+            affected_row_count, reason_counts = _lm2011_rust.finbert_fallback_split_warning_payload(
+                split_audit_df["benchmark_row_id"].to_list(),
+                split_audit_df["warning_boundary_used"].to_list(),
+                split_audit_df["split_reason"].to_list(),
+            )
+            _FINBERT_PREPROCESSING_RUST_METRICS["fallback_split_warning_fast_success"] += 1
+            counts_text = ", ".join(
+                f"{reason}={int(split_count)}"
+                for reason, split_count in reason_counts
+            )
+            return int(affected_row_count), counts_text
+        except Exception:
+            _FINBERT_PREPROCESSING_RUST_METRICS["fallback_split_warning_fast_failures"] += 1
+    _FINBERT_PREPROCESSING_RUST_METRICS["fallback_split_warning_fallbacks"] += 1
+    return _fallback_split_warning_payload_py(split_audit_df)
+
+
+def _warn_on_fallback_split_boundaries(filing_year: int, split_audit_df: pl.DataFrame) -> None:
+    warning_split_df = split_audit_df.filter(pl.col("warning_boundary_used"))
+    if warning_split_df.is_empty():
+        return
+
+    affected_row_count, counts_text = _fallback_split_warning_payload(split_audit_df)
     warnings.warn(
         (
             f"Sentence preprocessing for filing year {filing_year} chunked {affected_row_count} oversized "
@@ -331,16 +496,7 @@ def _summary_row(
     accepted_universe_contract_fingerprint: str | None = None,
     target_doc_universe_fingerprint: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    bucket_counts = (
-        {
-            row[FINBERT_TOKEN_BUCKET_COLUMN]: int(row["sentence_rows"])
-            for row in sentence_df.group_by(FINBERT_TOKEN_BUCKET_COLUMN)
-            .agg(pl.len().alias("sentence_rows"))
-            .to_dicts()
-        }
-        if not sentence_df.is_empty()
-        else {}
-    )
+    bucket_counts = _token_bucket_counts(sentence_df) if not sentence_df.is_empty() else {}
     split_metrics = _split_metrics(split_audit_df if split_audit_df is not None else _empty_split_audit_frame())
     if sections_df is not None and sections_df.height:
         max_section_char_count = int(sections_df["char_count"].max()) if "char_count" in sections_df.columns else None
@@ -962,18 +1118,7 @@ def run_finbert_sentence_preprocessing(
                 else None
             ),
         },
-        "counts": {
-            "year_count": len(summary_rows),
-            "processed_year_count": sum(1 for row in summary_rows if row["status"] == "processed"),
-            "reused_year_count": sum(1 for row in summary_rows if row["status"] == "reused_existing"),
-            "sentence_rows": int(summary_df["sentence_rows"].sum()) if summary_df.height else 0,
-            "oversize_section_rows": int(summary_df["oversize_section_rows"].sum()) if summary_df.height else 0,
-            "chunked_section_rows": int(summary_df["chunked_section_rows"].sum()) if summary_df.height else 0,
-            "warning_split_rows": int(summary_df["warning_split_rows"].sum()) if summary_df.height else 0,
-            "cleaned_scope_rows": int(summary_df["cleaned_scope_rows"].sum()) if summary_df.height else 0,
-            "cleaning_dropped_rows": int(summary_df["cleaning_dropped_rows"].sum()) if summary_df.height else 0,
-            "cleaning_flagged_rows": int(summary_df["cleaning_flagged_rows"].sum()) if summary_df.height else 0,
-        },
+        "counts": _manifest_counts(summary_rows, summary_df),
         "artifacts": {
             "run_dir": write_manifest_path_value(
                 run_dir,

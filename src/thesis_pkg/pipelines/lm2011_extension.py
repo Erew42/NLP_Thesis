@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 import datetime as dt
@@ -7,6 +7,14 @@ import math
 from pathlib import Path
 
 import polars as pl
+
+try:
+    from thesis_native import _lm2011_rust
+except Exception as exc:  # pragma: no cover - optional native extension
+    _lm2011_rust = None
+    _LM2011_EXTENSION_RUST_IMPORT_ERROR: str | None = f"{type(exc).__name__}: {exc}"
+else:
+    _LM2011_EXTENSION_RUST_IMPORT_ERROR = None
 
 from thesis_pkg.core.sec.lm2011_text import build_lm2011_text_features_mda
 from thesis_pkg.core.sec.lm2011_text import RAW_ITEM_TEXT_CLEANING_POLICY_ID
@@ -69,6 +77,54 @@ EXTENSION_BASE_CONTROL_COLUMNS: tuple[str, ...] = (
     "nasdaq_dummy",
 )
 EXTENSION_OWNERSHIP_CONTROL = "institutional_ownership_proxy_refinitiv"
+
+_LM2011_EXTENSION_RUST_METRICS: dict[str, int] = {
+    "text_scope_fast_success": 0,
+    "text_scope_fast_failures": 0,
+    "text_scope_fallbacks": 0,
+    "normal_p_value_fast_success": 0,
+    "normal_p_value_fast_failures": 0,
+    "normal_p_value_fallbacks": 0,
+    "result_rows_column_fast_success": 0,
+    "result_rows_column_fast_failures": 0,
+    "result_rows_column_fallbacks": 0,
+    "result_rows_fast_success": 0,
+    "result_rows_fast_failures": 0,
+    "result_rows_fallbacks": 0,
+    "quarterly_fit_rows_column_fast_success": 0,
+    "quarterly_fit_rows_column_fast_failures": 0,
+    "quarterly_fit_rows_column_fallbacks": 0,
+    "quarterly_fit_rows_fast_success": 0,
+    "quarterly_fit_rows_fast_failures": 0,
+    "quarterly_fit_rows_fallbacks": 0,
+    "skipped_quarter_rows_column_fast_success": 0,
+    "skipped_quarter_rows_column_fast_failures": 0,
+    "skipped_quarter_rows_column_fallbacks": 0,
+    "skipped_quarter_rows_fast_success": 0,
+    "skipped_quarter_rows_fast_failures": 0,
+    "skipped_quarter_rows_fallbacks": 0,
+    "quarterly_difference_rows_fast_success": 0,
+    "quarterly_difference_rows_fast_failures": 0,
+    "quarterly_difference_rows_fallbacks": 0,
+    "fit_summary_row_fast_success": 0,
+    "fit_summary_row_fast_failures": 0,
+    "fit_summary_row_fallbacks": 0,
+    "fit_comparison_row_fast_success": 0,
+    "fit_comparison_row_fast_failures": 0,
+    "fit_comparison_row_fallbacks": 0,
+}
+
+
+def get_lm2011_extension_rust_accel_metrics() -> dict[str, int | str | bool | None]:
+    metrics: dict[str, int | str | bool | None] = dict(_LM2011_EXTENSION_RUST_METRICS)
+    metrics["rust_accel_available"] = _lm2011_rust is not None
+    metrics["rust_accel_import_error"] = _LM2011_EXTENSION_RUST_IMPORT_ERROR
+    return metrics
+
+
+def reset_lm2011_extension_rust_accel_metrics() -> None:
+    for key in _LM2011_EXTENSION_RUST_METRICS:
+        _LM2011_EXTENSION_RUST_METRICS[key] = 0
 
 
 @dataclass(frozen=True)
@@ -415,7 +471,7 @@ def _specification_names_for_text_scope(
     )
 
 
-def _normalize_scope_value(value: str) -> str:
+def _normalize_scope_value_py(value: str) -> str:
     raw = value.strip().casefold().replace("-", "_")
     if raw in {"full_10k", "full_10_k", "10k", "10_k", "full_filing"}:
         return EXTENSION_FULL_10K_SCOPE
@@ -437,6 +493,18 @@ def _normalize_scope_value(value: str) -> str:
     if raw in {"items_1_1a_7_concat", "item_1_item_1a_item_7_concat"}:
         return "items_1_1a_7_concat"
     return raw
+
+
+def _normalize_scope_value(value: str) -> str:
+    if _lm2011_rust is not None and value.isascii():
+        try:
+            out = str(_lm2011_rust.lm2011_extension_text_scope_value(value))
+            _LM2011_EXTENSION_RUST_METRICS["text_scope_fast_success"] += 1
+            return out
+        except Exception:
+            _LM2011_EXTENSION_RUST_METRICS["text_scope_fast_failures"] += 1
+    _LM2011_EXTENSION_RUST_METRICS["text_scope_fallbacks"] += 1
+    return _normalize_scope_value_py(value)
 
 
 def normalize_lm2011_extension_text_scope_expr(expr: pl.Expr) -> pl.Expr:
@@ -1338,13 +1406,30 @@ def build_lm2011_extension_sample_loss_table(
     )
 
 
-def _normal_approx_two_sided_p_value(t_stat: object) -> float | None:
+def _normal_approx_two_sided_p_value_py(t_stat: object) -> float | None:
     if t_stat is None:
         return None
     value = float(t_stat)
     if not math.isfinite(value):
         return None
     return math.erfc(abs(value) / math.sqrt(2.0))
+
+
+def _normal_approx_two_sided_p_value(t_stat: object) -> float | None:
+    if t_stat is None:
+        return None
+    value = float(t_stat)
+    if not math.isfinite(value):
+        return None
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.lm2011_extension_normal_approx_two_sided_p_value(value)
+            _LM2011_EXTENSION_RUST_METRICS["normal_p_value_fast_success"] += 1
+            return None if out is None else float(out)
+        except Exception:
+            _LM2011_EXTENSION_RUST_METRICS["normal_p_value_fast_failures"] += 1
+    _LM2011_EXTENSION_RUST_METRICS["normal_p_value_fallbacks"] += 1
+    return _normal_approx_two_sided_p_value_py(value)
 
 
 def _extension_result_status_row(
@@ -1385,7 +1470,7 @@ def _extension_result_status_row(
     }
 
 
-def _convert_lm2011_table_results_to_extension_rows(
+def _convert_lm2011_table_results_to_extension_rows_py(
     result_df: pl.DataFrame,
     *,
     run_id: str,
@@ -1429,6 +1514,61 @@ def _convert_lm2011_table_results_to_extension_rows(
             }
         )
     return rows
+
+
+def _convert_lm2011_table_results_to_extension_rows(
+    result_df: pl.DataFrame,
+    *,
+    run_id: str,
+    sample_window: str,
+    outcome_name: str,
+    comparison_spec: Lm2011ExtensionComparisonSpec,
+    control_set: Lm2011ExtensionControlSet,
+) -> list[dict[str, object]]:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.lm2011_extension_result_columns(
+                result_df.columns,
+                [result_df.get_column(column).to_list() for column in result_df.columns],
+                run_id,
+                sample_window,
+                outcome_name,
+                comparison_spec.feature_family,
+                control_set.control_set_id,
+                control_set.spec_alias,
+                comparison_spec.specification_name,
+                ",".join(comparison_spec.signal_inputs),
+            )
+            _LM2011_EXTENSION_RUST_METRICS["result_rows_column_fast_success"] += 1
+            return [dict(row) for row in out]
+        except Exception:
+            _LM2011_EXTENSION_RUST_METRICS["result_rows_column_fast_failures"] += 1
+            _LM2011_EXTENSION_RUST_METRICS["result_rows_column_fallbacks"] += 1
+        try:
+            out = _lm2011_rust.lm2011_extension_result_rows(
+                result_df.to_dicts(),
+                run_id,
+                sample_window,
+                outcome_name,
+                comparison_spec.feature_family,
+                control_set.control_set_id,
+                control_set.spec_alias,
+                comparison_spec.specification_name,
+                ",".join(comparison_spec.signal_inputs),
+            )
+            _LM2011_EXTENSION_RUST_METRICS["result_rows_fast_success"] += 1
+            return [dict(row) for row in out]
+        except Exception:
+            _LM2011_EXTENSION_RUST_METRICS["result_rows_fast_failures"] += 1
+    _LM2011_EXTENSION_RUST_METRICS["result_rows_fallbacks"] += 1
+    return _convert_lm2011_table_results_to_extension_rows_py(
+        result_df,
+        run_id=run_id,
+        sample_window=sample_window,
+        outcome_name=outcome_name,
+        comparison_spec=comparison_spec,
+        control_set=control_set,
+    )
 
 
 def run_lm2011_extension_estimation_scaffold(
@@ -1615,6 +1755,536 @@ def _extension_fit_comparison_status_row(
     }
 
 
+_EXTENSION_QUARTERLY_FIT_COLUMNS: tuple[str, ...] = (
+    "quarter_start",
+    "n_obs",
+    "industry_count",
+    "industry_dummy_count",
+    "visible_regressor_count",
+    "full_regressor_count",
+    "rank",
+    "df_model",
+    "df_resid",
+    "condition_number",
+    "raw_r2",
+    "adj_r2",
+    "ssr",
+    "centered_tss",
+    "weight",
+    "weighting_rule",
+)
+
+
+_EXTENSION_SKIPPED_QUARTER_COLUMNS: tuple[str, ...] = (
+    "quarter_start",
+    "skip_reason",
+    "n_obs",
+    "industry_count",
+    "rank",
+    "column_count",
+    "condition_number",
+    "regressors",
+    "duplicate_regressor_pairs",
+    "restoring_drop_candidates",
+)
+
+
+def _extension_quarterly_fit_rows_py(
+    quarter_fit_df: pl.DataFrame,
+    *,
+    run_id: str,
+    sample_window: str,
+    text_scope: str,
+    outcome_name: str,
+    comparison_spec: Lm2011ExtensionComparisonSpec,
+    control_set: Lm2011ExtensionControlSet,
+) -> list[dict[str, object]]:
+    return [
+        {
+            "run_id": run_id,
+            "sample_window": sample_window,
+            "text_scope": text_scope,
+            "outcome_name": outcome_name,
+            "feature_family": comparison_spec.feature_family,
+            "control_set_id": control_set.control_set_id,
+            "control_set_alias": control_set.spec_alias,
+            "specification_name": comparison_spec.specification_name,
+            "signal_name": _comparison_signal_name(comparison_spec.signal_inputs),
+            "signal_inputs": list(comparison_spec.signal_inputs),
+            "quarter_start": row["quarter_start"],
+            "n_obs": row["n_obs"],
+            "industry_count": row["industry_count"],
+            "industry_dummy_count": row["industry_dummy_count"],
+            "visible_regressor_count": row["visible_regressor_count"],
+            "full_regressor_count": row["full_regressor_count"],
+            "rank": row["rank"],
+            "df_model": row["df_model"],
+            "df_resid": row["df_resid"],
+            "condition_number": row["condition_number"],
+            "raw_r2": row["raw_r2"],
+            "adj_r2": row["adj_r2"],
+            "ssr": row["ssr"],
+            "centered_tss": row["centered_tss"],
+            "weight": row["weight"],
+            "weighting_rule": row["weighting_rule"],
+            "common_row_sample_policy": _EXTENSION_COMMON_ROW_SAMPLE_POLICY,
+        }
+        for row in quarter_fit_df.to_dicts()
+    ]
+
+
+def _extension_quarterly_fit_rows(
+    quarter_fit_df: pl.DataFrame,
+    *,
+    run_id: str,
+    sample_window: str,
+    text_scope: str,
+    outcome_name: str,
+    comparison_spec: Lm2011ExtensionComparisonSpec,
+    control_set: Lm2011ExtensionControlSet,
+) -> list[dict[str, object]]:
+    if _lm2011_rust is not None:
+        try:
+            selected = quarter_fit_df.select(*_EXTENSION_QUARTERLY_FIT_COLUMNS)
+            out = _lm2011_rust.lm2011_extension_quarterly_fit_columns(
+                selected.columns,
+                [selected.get_column(column).to_list() for column in selected.columns],
+                run_id,
+                sample_window,
+                text_scope,
+                outcome_name,
+                comparison_spec.feature_family,
+                control_set.control_set_id,
+                control_set.spec_alias,
+                comparison_spec.specification_name,
+                _comparison_signal_name(comparison_spec.signal_inputs),
+                list(comparison_spec.signal_inputs),
+                _EXTENSION_COMMON_ROW_SAMPLE_POLICY,
+            )
+            _LM2011_EXTENSION_RUST_METRICS["quarterly_fit_rows_column_fast_success"] += 1
+            return [dict(row) for row in out]
+        except Exception:
+            _LM2011_EXTENSION_RUST_METRICS["quarterly_fit_rows_column_fast_failures"] += 1
+            _LM2011_EXTENSION_RUST_METRICS["quarterly_fit_rows_column_fallbacks"] += 1
+        try:
+            out = _lm2011_rust.lm2011_extension_quarterly_fit_rows(
+                quarter_fit_df.to_dicts(),
+                run_id,
+                sample_window,
+                text_scope,
+                outcome_name,
+                comparison_spec.feature_family,
+                control_set.control_set_id,
+                control_set.spec_alias,
+                comparison_spec.specification_name,
+                _comparison_signal_name(comparison_spec.signal_inputs),
+                list(comparison_spec.signal_inputs),
+                _EXTENSION_COMMON_ROW_SAMPLE_POLICY,
+            )
+            _LM2011_EXTENSION_RUST_METRICS["quarterly_fit_rows_fast_success"] += 1
+            return [dict(row) for row in out]
+        except Exception:
+            _LM2011_EXTENSION_RUST_METRICS["quarterly_fit_rows_fast_failures"] += 1
+    _LM2011_EXTENSION_RUST_METRICS["quarterly_fit_rows_fallbacks"] += 1
+    return _extension_quarterly_fit_rows_py(
+        quarter_fit_df,
+        run_id=run_id,
+        sample_window=sample_window,
+        text_scope=text_scope,
+        outcome_name=outcome_name,
+        comparison_spec=comparison_spec,
+        control_set=control_set,
+    )
+
+
+def _extension_skipped_quarter_rows_py(
+    skipped_quarters_df: pl.DataFrame,
+    *,
+    run_id: str,
+    sample_window: str,
+    text_scope: str,
+    outcome_name: str,
+    comparison_spec: Lm2011ExtensionComparisonSpec,
+    control_set: Lm2011ExtensionControlSet,
+) -> list[dict[str, object]]:
+    return [
+        {
+            "run_id": run_id,
+            "sample_window": sample_window,
+            "text_scope": text_scope,
+            "outcome_name": outcome_name,
+            "feature_family": comparison_spec.feature_family,
+            "control_set_id": control_set.control_set_id,
+            "control_set_alias": control_set.spec_alias,
+            "specification_name": comparison_spec.specification_name,
+            "signal_name": _comparison_signal_name(comparison_spec.signal_inputs),
+            "signal_inputs": list(comparison_spec.signal_inputs),
+            "quarter_start": row["quarter_start"],
+            "skip_reason": row["skip_reason"],
+            "n_obs": row["n_obs"],
+            "industry_count": row["industry_count"],
+            "rank": row["rank"],
+            "column_count": row["column_count"],
+            "condition_number": row["condition_number"],
+            "regressors": row["regressors"],
+            "duplicate_regressor_pairs": row["duplicate_regressor_pairs"],
+            "restoring_drop_candidates": row["restoring_drop_candidates"],
+        }
+        for row in skipped_quarters_df.to_dicts()
+    ]
+
+
+def _extension_skipped_quarter_rows(
+    skipped_quarters_df: pl.DataFrame,
+    *,
+    run_id: str,
+    sample_window: str,
+    text_scope: str,
+    outcome_name: str,
+    comparison_spec: Lm2011ExtensionComparisonSpec,
+    control_set: Lm2011ExtensionControlSet,
+) -> list[dict[str, object]]:
+    if _lm2011_rust is not None:
+        try:
+            selected = skipped_quarters_df.select(*_EXTENSION_SKIPPED_QUARTER_COLUMNS)
+            out = _lm2011_rust.lm2011_extension_skipped_quarter_columns(
+                selected.columns,
+                [selected.get_column(column).to_list() for column in selected.columns],
+                run_id,
+                sample_window,
+                text_scope,
+                outcome_name,
+                comparison_spec.feature_family,
+                control_set.control_set_id,
+                control_set.spec_alias,
+                comparison_spec.specification_name,
+                _comparison_signal_name(comparison_spec.signal_inputs),
+                list(comparison_spec.signal_inputs),
+            )
+            _LM2011_EXTENSION_RUST_METRICS["skipped_quarter_rows_column_fast_success"] += 1
+            return [dict(row) for row in out]
+        except Exception:
+            _LM2011_EXTENSION_RUST_METRICS["skipped_quarter_rows_column_fast_failures"] += 1
+            _LM2011_EXTENSION_RUST_METRICS["skipped_quarter_rows_column_fallbacks"] += 1
+        try:
+            out = _lm2011_rust.lm2011_extension_skipped_quarter_rows(
+                skipped_quarters_df.to_dicts(),
+                run_id,
+                sample_window,
+                text_scope,
+                outcome_name,
+                comparison_spec.feature_family,
+                control_set.control_set_id,
+                control_set.spec_alias,
+                comparison_spec.specification_name,
+                _comparison_signal_name(comparison_spec.signal_inputs),
+                list(comparison_spec.signal_inputs),
+            )
+            _LM2011_EXTENSION_RUST_METRICS["skipped_quarter_rows_fast_success"] += 1
+            return [dict(row) for row in out]
+        except Exception:
+            _LM2011_EXTENSION_RUST_METRICS["skipped_quarter_rows_fast_failures"] += 1
+    _LM2011_EXTENSION_RUST_METRICS["skipped_quarter_rows_fallbacks"] += 1
+    return _extension_skipped_quarter_rows_py(
+        skipped_quarters_df,
+        run_id=run_id,
+        sample_window=sample_window,
+        text_scope=text_scope,
+        outcome_name=outcome_name,
+        comparison_spec=comparison_spec,
+        control_set=control_set,
+    )
+
+
+def _extension_quarterly_difference_rows_py(
+    left_rows: Sequence[Mapping[str, object]],
+    right_rows: Sequence[Mapping[str, object]],
+    *,
+    run_id: str,
+    sample_window: str,
+    text_scope: str,
+    outcome_name: str,
+    control_set: Lm2011ExtensionControlSet,
+    comparison_name: str,
+    left_spec: Lm2011ExtensionComparisonSpec,
+    right_spec: Lm2011ExtensionComparisonSpec,
+) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for left_row, right_row in zip(left_rows, right_rows, strict=True):
+        delta_raw = float(left_row["raw_r2"]) - float(right_row["raw_r2"])
+        delta_adj = float(left_row["adj_r2"]) - float(right_row["adj_r2"])
+        rows.append(
+            {
+                "run_id": run_id,
+                "sample_window": sample_window,
+                "text_scope": text_scope,
+                "outcome_name": outcome_name,
+                "control_set_id": control_set.control_set_id,
+                "control_set_alias": control_set.spec_alias,
+                "comparison_name": comparison_name,
+                "left_specification_name": left_spec.specification_name,
+                "left_signal_name": _comparison_signal_name(left_spec.signal_inputs),
+                "left_signal_inputs": list(left_spec.signal_inputs),
+                "right_specification_name": right_spec.specification_name,
+                "right_signal_name": _comparison_signal_name(right_spec.signal_inputs),
+                "right_signal_inputs": list(right_spec.signal_inputs),
+                "quarter_start": left_row["quarter_start"],
+                "n_obs": int(left_row["n_obs"]),
+                "weight": float(left_row["n_obs"]),
+                "left_raw_r2": left_row["raw_r2"],
+                "right_raw_r2": right_row["raw_r2"],
+                "delta_raw_r2": delta_raw,
+                "left_adj_r2": left_row["adj_r2"],
+                "right_adj_r2": right_row["adj_r2"],
+                "delta_adj_r2": delta_adj,
+                "weighting_rule": "quarter_observation_count",
+                "common_success_policy": _EXTENSION_COMMON_SUCCESS_POLICY,
+            }
+        )
+    return rows
+
+
+def _extension_quarterly_difference_rows(
+    left_rows: Sequence[Mapping[str, object]],
+    right_rows: Sequence[Mapping[str, object]],
+    *,
+    run_id: str,
+    sample_window: str,
+    text_scope: str,
+    outcome_name: str,
+    control_set: Lm2011ExtensionControlSet,
+    comparison_name: str,
+    left_spec: Lm2011ExtensionComparisonSpec,
+    right_spec: Lm2011ExtensionComparisonSpec,
+) -> list[dict[str, object]]:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.lm2011_extension_quarterly_difference_rows(
+                list(left_rows),
+                list(right_rows),
+                run_id,
+                sample_window,
+                text_scope,
+                outcome_name,
+                control_set.control_set_id,
+                control_set.spec_alias,
+                comparison_name,
+                left_spec.specification_name,
+                _comparison_signal_name(left_spec.signal_inputs),
+                list(left_spec.signal_inputs),
+                right_spec.specification_name,
+                _comparison_signal_name(right_spec.signal_inputs),
+                list(right_spec.signal_inputs),
+                _EXTENSION_COMMON_SUCCESS_POLICY,
+            )
+            _LM2011_EXTENSION_RUST_METRICS["quarterly_difference_rows_fast_success"] += 1
+            return [dict(row) for row in out]
+        except Exception:
+            _LM2011_EXTENSION_RUST_METRICS["quarterly_difference_rows_fast_failures"] += 1
+    _LM2011_EXTENSION_RUST_METRICS["quarterly_difference_rows_fallbacks"] += 1
+    return _extension_quarterly_difference_rows_py(
+        left_rows,
+        right_rows,
+        run_id=run_id,
+        sample_window=sample_window,
+        text_scope=text_scope,
+        outcome_name=outcome_name,
+        control_set=control_set,
+        comparison_name=comparison_name,
+        left_spec=left_spec,
+        right_spec=right_spec,
+    )
+
+
+def _extension_fit_summary_estimated_row_py(
+    common_rows: Sequence[Mapping[str, object]],
+    *,
+    run_id: str,
+    sample_window: str,
+    text_scope: str,
+    outcome_name: str,
+    comparison_spec: Lm2011ExtensionComparisonSpec,
+    control_set: Lm2011ExtensionControlSet,
+) -> dict[str, object]:
+    weights = [float(row["n_obs"]) for row in common_rows]
+    raw_values = [float(row["raw_r2"]) for row in common_rows]
+    adj_values = [float(row["adj_r2"]) for row in common_rows]
+    return {
+        "run_id": run_id,
+        "sample_window": sample_window,
+        "text_scope": text_scope,
+        "outcome_name": outcome_name,
+        "feature_family": comparison_spec.feature_family,
+        "control_set_id": control_set.control_set_id,
+        "control_set_alias": control_set.spec_alias,
+        "specification_name": comparison_spec.specification_name,
+        "signal_name": _comparison_signal_name(comparison_spec.signal_inputs),
+        "signal_inputs": list(comparison_spec.signal_inputs),
+        "n_quarters": len(common_rows),
+        "total_n_obs": int(sum(weights)),
+        "mean_quarter_n": sum(weights) / float(len(weights)),
+        "weighted_avg_raw_r2": _weighted_mean(raw_values, weights),
+        "weighted_avg_adj_r2": _weighted_mean(adj_values, weights),
+        "equal_quarter_avg_raw_r2": sum(raw_values) / float(len(raw_values)),
+        "equal_quarter_avg_adj_r2": sum(adj_values) / float(len(adj_values)),
+        "weighting_rule": "quarter_observation_count",
+        "common_success_policy": _EXTENSION_COMMON_SUCCESS_POLICY,
+        "estimator_status": "estimated",
+        "failure_reason": None,
+    }
+
+
+def _extension_fit_summary_estimated_row(
+    common_rows: Sequence[Mapping[str, object]],
+    *,
+    run_id: str,
+    sample_window: str,
+    text_scope: str,
+    outcome_name: str,
+    comparison_spec: Lm2011ExtensionComparisonSpec,
+    control_set: Lm2011ExtensionControlSet,
+) -> dict[str, object]:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.lm2011_extension_fit_summary_estimated_row(
+                list(common_rows),
+                run_id,
+                sample_window,
+                text_scope,
+                outcome_name,
+                comparison_spec.feature_family,
+                control_set.control_set_id,
+                control_set.spec_alias,
+                comparison_spec.specification_name,
+                _comparison_signal_name(comparison_spec.signal_inputs),
+                list(comparison_spec.signal_inputs),
+                _EXTENSION_COMMON_SUCCESS_POLICY,
+            )
+            _LM2011_EXTENSION_RUST_METRICS["fit_summary_row_fast_success"] += 1
+            return dict(out)
+        except Exception:
+            _LM2011_EXTENSION_RUST_METRICS["fit_summary_row_fast_failures"] += 1
+    _LM2011_EXTENSION_RUST_METRICS["fit_summary_row_fallbacks"] += 1
+    return _extension_fit_summary_estimated_row_py(
+        common_rows,
+        run_id=run_id,
+        sample_window=sample_window,
+        text_scope=text_scope,
+        outcome_name=outcome_name,
+        comparison_spec=comparison_spec,
+        control_set=control_set,
+    )
+
+
+def _extension_fit_comparison_estimated_row_py(
+    difference_rows: Sequence[Mapping[str, object]],
+    *,
+    run_id: str,
+    sample_window: str,
+    text_scope: str,
+    outcome_name: str,
+    control_set: Lm2011ExtensionControlSet,
+    comparison_name: str,
+    left_spec: Lm2011ExtensionComparisonSpec,
+    right_spec: Lm2011ExtensionComparisonSpec,
+    nw_lags: int,
+) -> dict[str, object]:
+    weights = [float(row["weight"]) for row in difference_rows]
+    delta_raw_values = [float(row["delta_raw_r2"]) for row in difference_rows]
+    delta_adj_values = [float(row["delta_adj_r2"]) for row in difference_rows]
+    nw_se = None
+    nw_t_stat = None
+    nw_p_value = None
+    if len(delta_adj_values) >= 3:
+        nw_se = _newey_west_standard_error(delta_adj_values, weights, nw_lags=nw_lags)
+        weighted_delta_adj = _weighted_mean(delta_adj_values, weights)
+        if weighted_delta_adj is not None and nw_se is not None and nw_se > 0:
+            nw_t_stat = weighted_delta_adj / nw_se
+            nw_p_value = _normal_approx_two_sided_p_value(nw_t_stat)
+    return {
+        "run_id": run_id,
+        "sample_window": sample_window,
+        "text_scope": text_scope,
+        "outcome_name": outcome_name,
+        "control_set_id": control_set.control_set_id,
+        "control_set_alias": control_set.spec_alias,
+        "comparison_name": comparison_name,
+        "left_specification_name": left_spec.specification_name,
+        "left_signal_name": _comparison_signal_name(left_spec.signal_inputs),
+        "left_signal_inputs": list(left_spec.signal_inputs),
+        "right_specification_name": right_spec.specification_name,
+        "right_signal_name": _comparison_signal_name(right_spec.signal_inputs),
+        "right_signal_inputs": list(right_spec.signal_inputs),
+        "n_quarters": len(difference_rows),
+        "total_n_obs": int(sum(weights)),
+        "mean_quarter_n": sum(weights) / float(len(weights)),
+        "weighted_avg_delta_raw_r2": _weighted_mean(delta_raw_values, weights),
+        "weighted_avg_delta_adj_r2": _weighted_mean(delta_adj_values, weights),
+        "equal_quarter_avg_delta_raw_r2": sum(delta_raw_values) / float(len(delta_raw_values)),
+        "equal_quarter_avg_delta_adj_r2": sum(delta_adj_values) / float(len(delta_adj_values)),
+        "nw_lags": nw_lags,
+        "nw_se_delta_adj_r2": nw_se,
+        "nw_t_stat_delta_adj_r2": nw_t_stat,
+        "nw_p_value_delta_adj_r2": nw_p_value,
+        "weighting_rule": "quarter_observation_count",
+        "common_success_policy": _EXTENSION_COMMON_SUCCESS_POLICY,
+        "estimator_status": "estimated",
+        "failure_reason": None,
+    }
+
+
+def _extension_fit_comparison_estimated_row(
+    difference_rows: Sequence[Mapping[str, object]],
+    *,
+    run_id: str,
+    sample_window: str,
+    text_scope: str,
+    outcome_name: str,
+    control_set: Lm2011ExtensionControlSet,
+    comparison_name: str,
+    left_spec: Lm2011ExtensionComparisonSpec,
+    right_spec: Lm2011ExtensionComparisonSpec,
+    nw_lags: int,
+) -> dict[str, object]:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.lm2011_extension_fit_comparison_estimated_row(
+                list(difference_rows),
+                run_id,
+                sample_window,
+                text_scope,
+                outcome_name,
+                control_set.control_set_id,
+                control_set.spec_alias,
+                comparison_name,
+                left_spec.specification_name,
+                _comparison_signal_name(left_spec.signal_inputs),
+                list(left_spec.signal_inputs),
+                right_spec.specification_name,
+                _comparison_signal_name(right_spec.signal_inputs),
+                list(right_spec.signal_inputs),
+                nw_lags,
+                _EXTENSION_COMMON_SUCCESS_POLICY,
+            )
+            _LM2011_EXTENSION_RUST_METRICS["fit_comparison_row_fast_success"] += 1
+            return dict(out)
+        except Exception:
+            _LM2011_EXTENSION_RUST_METRICS["fit_comparison_row_fast_failures"] += 1
+    _LM2011_EXTENSION_RUST_METRICS["fit_comparison_row_fallbacks"] += 1
+    return _extension_fit_comparison_estimated_row_py(
+        difference_rows,
+        run_id=run_id,
+        sample_window=sample_window,
+        text_scope=text_scope,
+        outcome_name=outcome_name,
+        control_set=control_set,
+        comparison_name=comparison_name,
+        left_spec=left_spec,
+        right_spec=right_spec,
+        nw_lags=nw_lags,
+    )
+
+
 def run_lm2011_extension_fit_comparison_scaffold(
     panel_lf: pl.LazyFrame,
     *,
@@ -1724,38 +2394,15 @@ def run_lm2011_extension_fit_comparison_scaffold(
                         spec_failure_reasons[comparison_spec.specification_name] = str(exc)
                         continue
 
-                    fit_rows = [
-                        {
-                            "run_id": run_id,
-                            "sample_window": sample_window,
-                            "text_scope": normalized_text_scope,
-                            "outcome_name": outcome_name,
-                            "feature_family": comparison_spec.feature_family,
-                            "control_set_id": control_set.control_set_id,
-                            "control_set_alias": control_set.spec_alias,
-                            "specification_name": comparison_spec.specification_name,
-                            "signal_name": _comparison_signal_name(comparison_spec.signal_inputs),
-                            "signal_inputs": list(comparison_spec.signal_inputs),
-                            "quarter_start": row["quarter_start"],
-                            "n_obs": row["n_obs"],
-                            "industry_count": row["industry_count"],
-                            "industry_dummy_count": row["industry_dummy_count"],
-                            "visible_regressor_count": row["visible_regressor_count"],
-                            "full_regressor_count": row["full_regressor_count"],
-                            "rank": row["rank"],
-                            "df_model": row["df_model"],
-                            "df_resid": row["df_resid"],
-                            "condition_number": row["condition_number"],
-                            "raw_r2": row["raw_r2"],
-                            "adj_r2": row["adj_r2"],
-                            "ssr": row["ssr"],
-                            "centered_tss": row["centered_tss"],
-                            "weight": row["weight"],
-                            "weighting_rule": row["weighting_rule"],
-                            "common_row_sample_policy": _EXTENSION_COMMON_ROW_SAMPLE_POLICY,
-                        }
-                        for row in bundle.quarter_fit_df.to_dicts()
-                    ]
+                    fit_rows = _extension_quarterly_fit_rows(
+                        bundle.quarter_fit_df,
+                        run_id=run_id,
+                        sample_window=sample_window,
+                        text_scope=normalized_text_scope,
+                        outcome_name=outcome_name,
+                        comparison_spec=comparison_spec,
+                        control_set=control_set,
+                    )
                     spec_quarter_fit_df = (
                         pl.DataFrame(fit_rows, schema_overrides=_EXTENSION_FIT_QUARTERLY_SCHEMA)
                         if fit_rows
@@ -1765,29 +2412,15 @@ def run_lm2011_extension_fit_comparison_scaffold(
                     quarterly_fit_rows.extend(fit_rows)
 
                     skipped_quarter_rows.extend(
-                        {
-                            "run_id": run_id,
-                            "sample_window": sample_window,
-                            "text_scope": normalized_text_scope,
-                            "outcome_name": outcome_name,
-                            "feature_family": comparison_spec.feature_family,
-                            "control_set_id": control_set.control_set_id,
-                            "control_set_alias": control_set.spec_alias,
-                            "specification_name": comparison_spec.specification_name,
-                            "signal_name": _comparison_signal_name(comparison_spec.signal_inputs),
-                            "signal_inputs": list(comparison_spec.signal_inputs),
-                            "quarter_start": row["quarter_start"],
-                            "skip_reason": row["skip_reason"],
-                            "n_obs": row["n_obs"],
-                            "industry_count": row["industry_count"],
-                            "rank": row["rank"],
-                            "column_count": row["column_count"],
-                            "condition_number": row["condition_number"],
-                            "regressors": row["regressors"],
-                            "duplicate_regressor_pairs": row["duplicate_regressor_pairs"],
-                            "restoring_drop_candidates": row["restoring_drop_candidates"],
-                        }
-                        for row in bundle.skipped_quarters_df.to_dicts()
+                        _extension_skipped_quarter_rows(
+                            bundle.skipped_quarters_df,
+                            run_id=run_id,
+                            sample_window=sample_window,
+                            text_scope=normalized_text_scope,
+                            outcome_name=outcome_name,
+                            comparison_spec=comparison_spec,
+                            control_set=control_set,
+                        )
                     )
 
                 common_quarters: list[dt.date] = []
@@ -1918,134 +2551,58 @@ def run_lm2011_extension_fit_comparison_scaffold(
                         )
                     continue
 
-                common_weights = [
-                    float(
-                        quarter_row_maps[
-                            comparison_specs[0].specification_name
-                        ][quarter_start]["n_obs"]
-                    )
-                    for quarter_start in common_quarters
-                ]
-                total_n_obs = int(sum(common_weights))
-                mean_quarter_n = sum(common_weights) / float(len(common_weights))
-
                 for comparison_spec in comparison_specs:
                     common_rows = [
                         quarter_row_maps[comparison_spec.specification_name][quarter_start]
                         for quarter_start in common_quarters
                     ]
-                    raw_values = [float(row["raw_r2"]) for row in common_rows]
-                    adj_values = [float(row["adj_r2"]) for row in common_rows]
                     summary_rows.append(
-                        {
-                            "run_id": run_id,
-                            "sample_window": sample_window,
-                            "text_scope": normalized_text_scope,
-                            "outcome_name": outcome_name,
-                            "feature_family": comparison_spec.feature_family,
-                            "control_set_id": control_set.control_set_id,
-                            "control_set_alias": control_set.spec_alias,
-                            "specification_name": comparison_spec.specification_name,
-                            "signal_name": _comparison_signal_name(comparison_spec.signal_inputs),
-                            "signal_inputs": list(comparison_spec.signal_inputs),
-                            "n_quarters": len(common_quarters),
-                            "total_n_obs": total_n_obs,
-                            "mean_quarter_n": mean_quarter_n,
-                            "weighted_avg_raw_r2": _weighted_mean(raw_values, common_weights),
-                            "weighted_avg_adj_r2": _weighted_mean(adj_values, common_weights),
-                            "equal_quarter_avg_raw_r2": sum(raw_values) / float(len(raw_values)),
-                            "equal_quarter_avg_adj_r2": sum(adj_values) / float(len(adj_values)),
-                            "weighting_rule": "quarter_observation_count",
-                            "common_success_policy": _EXTENSION_COMMON_SUCCESS_POLICY,
-                            "estimator_status": "estimated",
-                            "failure_reason": None,
-                        }
+                        _extension_fit_summary_estimated_row(
+                            common_rows,
+                            run_id=run_id,
+                            sample_window=sample_window,
+                            text_scope=normalized_text_scope,
+                            outcome_name=outcome_name,
+                            comparison_spec=comparison_spec,
+                            control_set=control_set,
+                        )
                     )
 
                 for comparison_name, left_name, right_name in comparison_pairs:
                     left_spec = comparison_spec_by_name[left_name]
                     right_spec = comparison_spec_by_name[right_name]
-                    delta_raw_values: list[float] = []
-                    delta_adj_values: list[float] = []
-                    for quarter_start in common_quarters:
-                        left_row = quarter_row_maps[left_name][quarter_start]
-                        right_row = quarter_row_maps[right_name][quarter_start]
-                        delta_raw = float(left_row["raw_r2"]) - float(right_row["raw_r2"])
-                        delta_adj = float(left_row["adj_r2"]) - float(right_row["adj_r2"])
-                        delta_raw_values.append(delta_raw)
-                        delta_adj_values.append(delta_adj)
-                        quarterly_difference_rows.append(
-                            {
-                                "run_id": run_id,
-                                "sample_window": sample_window,
-                                "text_scope": normalized_text_scope,
-                                "outcome_name": outcome_name,
-                                "control_set_id": control_set.control_set_id,
-                                "control_set_alias": control_set.spec_alias,
-                                "comparison_name": comparison_name,
-                                "left_specification_name": left_name,
-                                "left_signal_name": _comparison_signal_name(left_spec.signal_inputs),
-                                "left_signal_inputs": list(left_spec.signal_inputs),
-                                "right_specification_name": right_name,
-                                "right_signal_name": _comparison_signal_name(right_spec.signal_inputs),
-                                "right_signal_inputs": list(right_spec.signal_inputs),
-                                "quarter_start": quarter_start,
-                                "n_obs": int(left_row["n_obs"]),
-                                "weight": float(left_row["n_obs"]),
-                                "left_raw_r2": left_row["raw_r2"],
-                                "right_raw_r2": right_row["raw_r2"],
-                                "delta_raw_r2": delta_raw,
-                                "left_adj_r2": left_row["adj_r2"],
-                                "right_adj_r2": right_row["adj_r2"],
-                                "delta_adj_r2": delta_adj,
-                                "weighting_rule": "quarter_observation_count",
-                                "common_success_policy": _EXTENSION_COMMON_SUCCESS_POLICY,
-                            }
-                        )
-                    nw_se = None
-                    nw_t_stat = None
-                    nw_p_value = None
-                    if len(delta_adj_values) >= 3:
-                        nw_se = _newey_west_standard_error(delta_adj_values, common_weights, nw_lags=nw_lags)
-                        weighted_delta_adj = _weighted_mean(delta_adj_values, common_weights)
-                        if (
-                            weighted_delta_adj is not None
-                            and nw_se is not None
-                            and nw_se > 0
-                        ):
-                            nw_t_stat = weighted_delta_adj / nw_se
-                            nw_p_value = _normal_approx_two_sided_p_value(nw_t_stat)
+                    pair_difference_rows = _extension_quarterly_difference_rows(
+                        [
+                            quarter_row_maps[left_name][quarter_start]
+                            for quarter_start in common_quarters
+                        ],
+                        [
+                            quarter_row_maps[right_name][quarter_start]
+                            for quarter_start in common_quarters
+                        ],
+                        run_id=run_id,
+                        sample_window=sample_window,
+                        text_scope=normalized_text_scope,
+                        outcome_name=outcome_name,
+                        control_set=control_set,
+                        comparison_name=comparison_name,
+                        left_spec=left_spec,
+                        right_spec=right_spec,
+                    )
+                    quarterly_difference_rows.extend(pair_difference_rows)
                     comparison_rows.append(
-                        {
-                            "run_id": run_id,
-                            "sample_window": sample_window,
-                            "text_scope": normalized_text_scope,
-                            "outcome_name": outcome_name,
-                            "control_set_id": control_set.control_set_id,
-                            "control_set_alias": control_set.spec_alias,
-                            "comparison_name": comparison_name,
-                            "left_specification_name": left_name,
-                            "left_signal_name": _comparison_signal_name(left_spec.signal_inputs),
-                            "left_signal_inputs": list(left_spec.signal_inputs),
-                            "right_specification_name": right_name,
-                            "right_signal_name": _comparison_signal_name(right_spec.signal_inputs),
-                            "right_signal_inputs": list(right_spec.signal_inputs),
-                            "n_quarters": len(common_quarters),
-                            "total_n_obs": total_n_obs,
-                            "mean_quarter_n": mean_quarter_n,
-                            "weighted_avg_delta_raw_r2": _weighted_mean(delta_raw_values, common_weights),
-                            "weighted_avg_delta_adj_r2": _weighted_mean(delta_adj_values, common_weights),
-                            "equal_quarter_avg_delta_raw_r2": sum(delta_raw_values) / float(len(delta_raw_values)),
-                            "equal_quarter_avg_delta_adj_r2": sum(delta_adj_values) / float(len(delta_adj_values)),
-                            "nw_lags": nw_lags,
-                            "nw_se_delta_adj_r2": nw_se,
-                            "nw_t_stat_delta_adj_r2": nw_t_stat,
-                            "nw_p_value_delta_adj_r2": nw_p_value,
-                            "weighting_rule": "quarter_observation_count",
-                            "common_success_policy": _EXTENSION_COMMON_SUCCESS_POLICY,
-                            "estimator_status": "estimated",
-                            "failure_reason": None,
-                        }
+                        _extension_fit_comparison_estimated_row(
+                            pair_difference_rows,
+                            run_id=run_id,
+                            sample_window=sample_window,
+                            text_scope=normalized_text_scope,
+                            outcome_name=outcome_name,
+                            control_set=control_set,
+                            comparison_name=comparison_name,
+                            left_spec=left_spec,
+                            right_spec=right_spec,
+                            nw_lags=nw_lags,
+                        )
                     )
 
     return Lm2011ExtensionFitComparisonArtifacts(

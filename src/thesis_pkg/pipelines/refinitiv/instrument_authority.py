@@ -4,7 +4,7 @@ from pathlib import Path
 
 import polars as pl
 
-from thesis_pkg.pipelines.refinitiv_bridge_pipeline import (
+from thesis_refinitiv.bridge import (
     _cast_df_to_schema,
     _read_resolution_artifact_parquet,
 )

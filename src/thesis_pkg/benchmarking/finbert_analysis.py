@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 from dataclasses import asdict
@@ -16,6 +16,14 @@ from thesis_pkg.benchmarking.contracts import FinbertSentencePreprocessingRunCon
 from thesis_pkg.benchmarking.run_logging import utc_timestamp
 from thesis_pkg.benchmarking.finbert_sentence_preprocessing import run_finbert_sentence_preprocessing
 from thesis_pkg.benchmarking.token_lengths import FINBERT_TOKEN_COUNT_COLUMN
+
+try:
+    from thesis_native import _lm2011_rust
+except Exception as exc:  # pragma: no cover - optional native extension
+    _lm2011_rust = None
+    _FINBERT_ANALYSIS_RUST_IMPORT_ERROR: str | None = f"{type(exc).__name__}: {exc}"
+else:
+    _FINBERT_ANALYSIS_RUST_IMPORT_ERROR = None
 
 
 ITEM_FEATURE_METRIC_COLUMNS: tuple[str, ...] = (
@@ -38,6 +46,24 @@ ITEM_FEATURE_METRIC_COLUMNS: tuple[str, ...] = (
 TARGET_SENTIMENT_LABELS: tuple[str, ...] = ("negative", "neutral", "positive")
 RUNNER_NAME = "finbert_item_analysis"
 FINBERT_SEGMENT_POLICY_ID = "sentence_dataset_v1_finbert_token_512"
+
+_FINBERT_ANALYSIS_RUST_METRICS: dict[str, int] = {
+    "coverage_report_fast_success": 0,
+    "coverage_report_fast_failures": 0,
+    "coverage_report_fallbacks": 0,
+}
+
+
+def get_finbert_analysis_rust_accel_metrics() -> dict[str, int | str | bool | None]:
+    metrics: dict[str, int | str | bool | None] = dict(_FINBERT_ANALYSIS_RUST_METRICS)
+    metrics["rust_accel_available"] = _lm2011_rust is not None
+    metrics["rust_accel_import_error"] = _FINBERT_ANALYSIS_RUST_IMPORT_ERROR
+    return metrics
+
+
+def reset_finbert_analysis_rust_accel_metrics() -> None:
+    for key in _FINBERT_ANALYSIS_RUST_METRICS:
+        _FINBERT_ANALYSIS_RUST_METRICS[key] = 0
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -320,7 +346,7 @@ def pivot_item_features_to_doc_wide(item_features_df: pl.DataFrame) -> pl.DataFr
     return doc_wide
 
 
-def build_coverage_report(
+def _build_coverage_report_py(
     item_features_df: pl.DataFrame,
     backbone_df: pl.DataFrame,
 ) -> tuple[pl.DataFrame, dict[str, int]]:
@@ -392,6 +418,62 @@ def build_coverage_report(
         "covered_item_7_doc_count": int(coverage["has_item_7"].sum()),
     }
     return coverage, summary
+
+
+def build_coverage_report(
+    item_features_df: pl.DataFrame,
+    backbone_df: pl.DataFrame,
+) -> tuple[pl.DataFrame, dict[str, int]]:
+    """Compare FinBERT item-feature coverage against a document backbone."""
+    if "doc_id" not in backbone_df.columns:
+        raise ValueError("Backbone parquet must contain a doc_id column for coverage reporting.")
+
+    backbone_docs = (
+        backbone_df.select(pl.col("doc_id").cast(pl.Utf8, strict=False).alias("doc_id"))
+        .filter(pl.col("doc_id").is_not_null())
+        .unique(maintain_order=True)
+        .sort("doc_id")
+    )
+    if backbone_docs.is_empty() or item_features_df.is_empty():
+        return _build_coverage_report_py(item_features_df, backbone_df)
+
+    if _lm2011_rust is not None:
+        try:
+            feature_doc_ids = item_features_df.select(
+                pl.col("doc_id").cast(pl.Utf8, strict=False).alias("doc_id")
+            )["doc_id"].to_list()
+            feature_item_codes = item_features_df.select(
+                pl.col("benchmark_item_code").cast(pl.Utf8, strict=False).alias("benchmark_item_code")
+            )["benchmark_item_code"].to_list()
+            coverage_rows, summary_values = _lm2011_rust.finbert_coverage_report(
+                backbone_docs["doc_id"].to_list(),
+                feature_doc_ids,
+                feature_item_codes,
+            )
+            coverage = pl.DataFrame(
+                coverage_rows,
+                schema=_empty_coverage_report_frame().schema,
+                orient="row",
+            ).select(_empty_coverage_report_frame().columns)
+            (
+                backbone_doc_count,
+                covered_doc_count,
+                covered_item_1_doc_count,
+                covered_item_1a_doc_count,
+                covered_item_7_doc_count,
+            ) = summary_values
+            _FINBERT_ANALYSIS_RUST_METRICS["coverage_report_fast_success"] += 1
+            return coverage, {
+                "backbone_doc_count": int(backbone_doc_count),
+                "covered_doc_count": int(covered_doc_count),
+                "covered_item_1_doc_count": int(covered_item_1_doc_count),
+                "covered_item_1a_doc_count": int(covered_item_1a_doc_count),
+                "covered_item_7_doc_count": int(covered_item_7_doc_count),
+            }
+        except Exception:
+            _FINBERT_ANALYSIS_RUST_METRICS["coverage_report_fast_failures"] += 1
+    _FINBERT_ANALYSIS_RUST_METRICS["coverage_report_fallbacks"] += 1
+    return _build_coverage_report_py(item_features_df, backbone_df)
 
 
 def _align_frame_to_schema(df: pl.DataFrame, schema: pl.Schema) -> pl.DataFrame:

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import dataclass
 import json
@@ -8,13 +8,21 @@ from typing import Any
 
 import polars as pl
 
-from thesis_pkg.benchmarking.sentences import _ends_with_generic_reference_no
-from thesis_pkg.benchmarking.sentences import _ends_with_reference_stub
-from thesis_pkg.benchmarking.sentences import _is_citation_prefix_only_line
-from thesis_pkg.benchmarking.sentences import _is_header_like_line
-from thesis_pkg.benchmarking.sentences import _is_separator_line
-from thesis_pkg.benchmarking.sentences import _looks_like_citation_continuation_v3
+from thesis_pkg.benchmarking.sentences import _ends_with_generic_reference_no_py
+from thesis_pkg.benchmarking.sentences import _ends_with_reference_stub_py
+from thesis_pkg.benchmarking.sentences import _is_citation_prefix_only_line_py
+from thesis_pkg.benchmarking.sentences import _is_header_like_line_py
+from thesis_pkg.benchmarking.sentences import _is_separator_line as _py_is_separator_line
+from thesis_pkg.benchmarking.sentences import _looks_like_citation_continuation_v3_py
 from thesis_pkg.benchmarking.sentences import _normalize_sentence_key
+
+try:
+    from thesis_native import _lm2011_rust
+except Exception as exc:  # pragma: no cover - optional native extension
+    _lm2011_rust = None
+    _SENTENCE_RUST_IMPORT_ERROR: str | None = f"{type(exc).__name__}: {exc}"
+else:
+    _SENTENCE_RUST_IMPORT_ERROR = None
 
 
 SENTENCE_QUALITY_REQUIRED_COLUMNS: tuple[str, ...] = (
@@ -38,6 +46,44 @@ _NUMERIC_ONLY_RE = re.compile(
 _TABLE_NUMERIC_TOKEN_RE = re.compile(r"\b\d[\d,().%-]*\b")
 _UPPERCASE_TOKEN_RE = re.compile(r"\b[A-Z][A-Z/&-]{2,}\b")
 _YEAR_TOKEN_RE = re.compile(r"\b(?:19|20)\d{2}\b")
+_SENTENCE_RUST_METRICS: dict[str, int] = {
+    "separator_fast_success": 0,
+    "separator_fallbacks": 0,
+    "numeric_only_fast_success": 0,
+    "numeric_only_fallbacks": 0,
+    "short_fragment_fast_success": 0,
+    "short_fragment_fallbacks": 0,
+    "very_short_fragment_fast_success": 0,
+    "very_short_fragment_fallbacks": 0,
+    "lower_fragment_fast_success": 0,
+    "lower_fragment_fallbacks": 0,
+    "one_word_fast_success": 0,
+    "one_word_fallbacks": 0,
+    "terminal_punct_fast_success": 0,
+    "terminal_punct_fallbacks": 0,
+    "table_like_fast_success": 0,
+    "table_like_fallbacks": 0,
+    "generic_no_continuation_fast_success": 0,
+    "generic_no_continuation_fallbacks": 0,
+    "ordered_item_codes_fast_success": 0,
+    "ordered_item_codes_fast_failures": 0,
+    "ordered_item_codes_fallbacks": 0,
+    "batch_flags_fast_success": 0,
+    "batch_flags_fast_failures": 0,
+    "batch_flags_fallbacks": 0,
+}
+
+
+def get_sentence_quality_rust_accel_metrics() -> dict[str, int | str | bool | None]:
+    metrics: dict[str, int | str | bool | None] = dict(_SENTENCE_RUST_METRICS)
+    metrics["rust_accel_available"] = _lm2011_rust is not None
+    metrics["rust_accel_import_error"] = _SENTENCE_RUST_IMPORT_ERROR
+    return metrics
+
+
+def reset_sentence_quality_rust_accel_metrics() -> None:
+    for key in _SENTENCE_RUST_METRICS:
+        _SENTENCE_RUST_METRICS[key] = 0
 
 
 @dataclass(frozen=True)
@@ -102,39 +148,116 @@ def _resolve_cleaning_row_audit_path(
     return None
 
 
-def _numeric_only_fragment(text: str) -> bool:
+def _is_separator_line(line: str) -> bool:
+    if _lm2011_rust is not None:
+        try:
+            out = bool(_lm2011_rust.sentence_is_separator_line(str(line or "")))
+            _SENTENCE_RUST_METRICS["separator_fast_success"] += 1
+            return out
+        except Exception:
+            _SENTENCE_RUST_METRICS["separator_fallbacks"] += 1
+    else:
+        _SENTENCE_RUST_METRICS["separator_fallbacks"] += 1
+    return _py_is_separator_line(line)
+
+
+def _numeric_only_fragment_py(text: str) -> bool:
     stripped = _normalize_sentence_key(text)
     if not stripped:
         return False
-    if _is_separator_line(stripped):
+    if _py_is_separator_line(stripped):
         return False
     if _NUMERIC_ONLY_RE.fullmatch(stripped):
         return True
     return bool(stripped in {".", ",", ";", ":"})
 
 
-def _short_fragment(text: str, token_count: int, char_count: int) -> bool:
+def _numeric_only_fragment(text: str) -> bool:
+    if _lm2011_rust is not None:
+        try:
+            out = bool(_lm2011_rust.sentence_numeric_only_fragment(str(text or "")))
+            _SENTENCE_RUST_METRICS["numeric_only_fast_success"] += 1
+            return out
+        except Exception:
+            _SENTENCE_RUST_METRICS["numeric_only_fallbacks"] += 1
+    else:
+        _SENTENCE_RUST_METRICS["numeric_only_fallbacks"] += 1
+    return _numeric_only_fragment_py(text)
+
+
+def _short_fragment_py(text: str, token_count: int, char_count: int) -> bool:
     normalized = _normalize_sentence_key(text)
     if not normalized:
         return False
-    if _numeric_only_fragment(normalized) or _is_separator_line(normalized):
+    if _numeric_only_fragment_py(normalized) or _py_is_separator_line(normalized):
         return True
     return token_count <= 10 and char_count <= 48
 
 
-def _very_short_fragment(text: str, token_count: int, char_count: int) -> bool:
+def _short_fragment(text: str, token_count: int, char_count: int) -> bool:
+    if _lm2011_rust is not None:
+        try:
+            out = bool(
+                _lm2011_rust.sentence_short_fragment(
+                    str(text or ""),
+                    int(token_count or 0),
+                    int(char_count or 0),
+                )
+            )
+            _SENTENCE_RUST_METRICS["short_fragment_fast_success"] += 1
+            return out
+        except Exception:
+            _SENTENCE_RUST_METRICS["short_fragment_fallbacks"] += 1
+    else:
+        _SENTENCE_RUST_METRICS["short_fragment_fallbacks"] += 1
+    return _short_fragment_py(text, token_count, char_count)
+
+
+def _very_short_fragment_py(text: str, token_count: int, char_count: int) -> bool:
     normalized = _normalize_sentence_key(text)
     if not normalized:
         return False
     return token_count <= 4 and char_count <= 16
 
 
-def _one_word_fragment(text: str) -> bool:
+def _very_short_fragment(text: str, token_count: int, char_count: int) -> bool:
+    if _lm2011_rust is not None:
+        try:
+            out = bool(
+                _lm2011_rust.sentence_very_short_fragment(
+                    str(text or ""),
+                    int(token_count or 0),
+                    int(char_count or 0),
+                )
+            )
+            _SENTENCE_RUST_METRICS["very_short_fragment_fast_success"] += 1
+            return out
+        except Exception:
+            _SENTENCE_RUST_METRICS["very_short_fragment_fallbacks"] += 1
+    else:
+        _SENTENCE_RUST_METRICS["very_short_fragment_fallbacks"] += 1
+    return _very_short_fragment_py(text, token_count, char_count)
+
+
+def _one_word_fragment_py(text: str) -> bool:
     words = re.findall(r"[A-Za-z]+", _normalize_sentence_key(text))
     return len(words) == 1
 
 
-def _lower_fragment(text: str, token_count: int, char_count: int) -> bool:
+def _one_word_fragment(text: str) -> bool:
+    if _lm2011_rust is not None:
+        try:
+            out = bool(_lm2011_rust.sentence_one_word_fragment(str(text or "")))
+            _SENTENCE_RUST_METRICS["one_word_fast_success"] += 1
+            return out
+        except Exception:
+            _SENTENCE_RUST_METRICS["one_word_fallbacks"] += 1
+    else:
+        _SENTENCE_RUST_METRICS["one_word_fallbacks"] += 1
+    return _one_word_fragment_py(text)
+
+
+def _lower_fragment_py(text: str, token_count: int, char_count: int) -> bool:
     normalized = _normalize_sentence_key(text)
     if not normalized:
         return False
@@ -143,11 +266,43 @@ def _lower_fragment(text: str, token_count: int, char_count: int) -> bool:
     return bool(_LOWER_FRAGMENT_RE.fullmatch(normalized))
 
 
-def _has_terminal_punct(text: str) -> bool:
+def _lower_fragment(text: str, token_count: int, char_count: int) -> bool:
+    if _lm2011_rust is not None:
+        try:
+            out = bool(
+                _lm2011_rust.sentence_lower_fragment(
+                    str(text or ""),
+                    int(token_count or 0),
+                    int(char_count or 0),
+                )
+            )
+            _SENTENCE_RUST_METRICS["lower_fragment_fast_success"] += 1
+            return out
+        except Exception:
+            _SENTENCE_RUST_METRICS["lower_fragment_fallbacks"] += 1
+    else:
+        _SENTENCE_RUST_METRICS["lower_fragment_fallbacks"] += 1
+    return _lower_fragment_py(text, token_count, char_count)
+
+
+def _has_terminal_punct_py(text: str) -> bool:
     return bool(_TERMINAL_PUNCT_RE.search(_normalize_sentence_key(text)))
 
 
-def _table_like_sentence(text: str, token_count: int) -> bool:
+def _has_terminal_punct(text: str) -> bool:
+    if _lm2011_rust is not None:
+        try:
+            out = bool(_lm2011_rust.sentence_has_terminal_punct(str(text or "")))
+            _SENTENCE_RUST_METRICS["terminal_punct_fast_success"] += 1
+            return out
+        except Exception:
+            _SENTENCE_RUST_METRICS["terminal_punct_fallbacks"] += 1
+    else:
+        _SENTENCE_RUST_METRICS["terminal_punct_fallbacks"] += 1
+    return _has_terminal_punct_py(text)
+
+
+def _table_like_sentence_py(text: str, token_count: int) -> bool:
     normalized = str(text)
     compact = _normalize_sentence_key(normalized)
     line_count = max(normalized.count("\n") + 1, 1)
@@ -171,11 +326,125 @@ def _table_like_sentence(text: str, token_count: int) -> bool:
     return compact.upper() == compact and line_count >= 3 and len(compact) >= 80
 
 
-def _ordered_item_codes(codes: list[str]) -> list[str]:
+def _table_like_sentence(text: str, token_count: int) -> bool:
+    if _lm2011_rust is not None:
+        try:
+            out = bool(_lm2011_rust.sentence_table_like(str(text or ""), int(token_count or 0)))
+            _SENTENCE_RUST_METRICS["table_like_fast_success"] += 1
+            return out
+        except Exception:
+            _SENTENCE_RUST_METRICS["table_like_fallbacks"] += 1
+    else:
+        _SENTENCE_RUST_METRICS["table_like_fallbacks"] += 1
+    return _table_like_sentence_py(text, token_count)
+
+
+def _generic_no_with_continuation_py(text: str, next_text: str) -> bool:
+    return _ends_with_generic_reference_no_py(str(text or "")) and _looks_like_citation_continuation_v3_py(
+        str(next_text or "")
+    )
+
+
+def _generic_no_with_continuation(text: str, next_text: str) -> bool:
+    if _lm2011_rust is not None:
+        try:
+            out = bool(
+                _lm2011_rust.sentence_generic_no_with_continuation(
+                    str(text or ""),
+                    str(next_text or ""),
+                )
+            )
+            _SENTENCE_RUST_METRICS["generic_no_continuation_fast_success"] += 1
+            return out
+        except Exception:
+            _SENTENCE_RUST_METRICS["generic_no_continuation_fallbacks"] += 1
+    else:
+        _SENTENCE_RUST_METRICS["generic_no_continuation_fallbacks"] += 1
+    return _generic_no_with_continuation_py(text, next_text)
+
+
+SENTENCE_QUALITY_BATCH_FLAG_COLUMNS: tuple[str, ...] = (
+    "short_fragment",
+    "very_short",
+    "one_word",
+    "numeric_only",
+    "separator_only",
+    "citation_stub",
+    "generic_no_end",
+    "generic_no_with_continuation",
+    "citation_prefix_only",
+    "header_like",
+    "table_like",
+    "lower_fragment",
+    "no_terminal_punct",
+)
+
+
+def _sentence_quality_flag_rows_py(rows: list[dict[str, Any]]) -> list[dict[str, bool]]:
+    out: list[dict[str, bool]] = []
+    for row in rows:
+        text = str(row.get("sentence_text") or "")
+        next_text = str(row.get("next_sentence_text") or "")
+        token_count = int(row.get("finbert_token_count_512") or 0)
+        char_count = int(row.get("sentence_char_count") or 0)
+        out.append(
+            {
+                "short_fragment": _short_fragment_py(text, token_count, char_count),
+                "very_short": _very_short_fragment_py(text, token_count, char_count),
+                "one_word": _one_word_fragment_py(text),
+                "numeric_only": _numeric_only_fragment_py(text),
+                "separator_only": _py_is_separator_line(text),
+                "citation_stub": _ends_with_reference_stub_py(text),
+                "generic_no_end": _ends_with_generic_reference_no_py(text),
+                "generic_no_with_continuation": _generic_no_with_continuation_py(text, next_text),
+                "citation_prefix_only": _is_citation_prefix_only_line_py(text),
+                "header_like": _is_header_like_line_py(text),
+                "table_like": _table_like_sentence_py(text, token_count),
+                "lower_fragment": _lower_fragment_py(text, token_count, char_count),
+                "no_terminal_punct": not _has_terminal_punct_py(text),
+            }
+        )
+    return out
+
+
+def _sentence_quality_flag_frame(rows: list[dict[str, Any]]) -> pl.DataFrame:
+    if _lm2011_rust is not None:
+        try:
+            raw_rows = _lm2011_rust.sentence_quality_batch_flags(rows)
+            _SENTENCE_RUST_METRICS["batch_flags_fast_success"] += 1
+            return pl.DataFrame(
+                [
+                    dict(zip(SENTENCE_QUALITY_BATCH_FLAG_COLUMNS, flag_row, strict=True))
+                    for flag_row in raw_rows
+                ],
+                schema={name: pl.Boolean for name in SENTENCE_QUALITY_BATCH_FLAG_COLUMNS},
+            ).select(SENTENCE_QUALITY_BATCH_FLAG_COLUMNS)
+        except Exception:
+            _SENTENCE_RUST_METRICS["batch_flags_fast_failures"] += 1
+    _SENTENCE_RUST_METRICS["batch_flags_fallbacks"] += 1
+    return pl.DataFrame(
+        _sentence_quality_flag_rows_py(rows),
+        schema={name: pl.Boolean for name in SENTENCE_QUALITY_BATCH_FLAG_COLUMNS},
+    ).select(SENTENCE_QUALITY_BATCH_FLAG_COLUMNS)
+
+
+def _ordered_item_codes_py(codes: list[str]) -> list[str]:
     seen = set(codes)
     ordered = [code for code in DEFAULT_ITEM_ORDER if code in seen]
     ordered.extend(code for code in codes if code not in DEFAULT_ITEM_ORDER)
     return ordered
+
+
+def _ordered_item_codes(codes: list[str]) -> list[str]:
+    if _lm2011_rust is not None:
+        try:
+            out = list(_lm2011_rust.sentence_length_ordered_item_codes(codes, DEFAULT_ITEM_ORDER))
+            _SENTENCE_RUST_METRICS["ordered_item_codes_fast_success"] += 1
+            return [str(code) for code in out]
+        except Exception:
+            _SENTENCE_RUST_METRICS["ordered_item_codes_fast_failures"] += 1
+    _SENTENCE_RUST_METRICS["ordered_item_codes_fallbacks"] += 1
+    return _ordered_item_codes_py(codes)
 
 
 def _empty_split_summary() -> pl.DataFrame:
@@ -210,78 +479,20 @@ def analyze_sentence_split_quality(
             pl.col("sentence_text").shift(-1).over("benchmark_row_id").alias("next_sentence_text"),
         ]
     )
+    sentence_df = sentence_df.hstack(
+        _sentence_quality_flag_frame(
+            sentence_df.select(
+                [
+                    "sentence_text",
+                    "next_sentence_text",
+                    "finbert_token_count_512",
+                    "sentence_char_count",
+                ]
+            ).to_dicts()
+        )
+    )
     sentence_df = sentence_df.with_columns(
         [
-            pl.struct(["sentence_text", "finbert_token_count_512", "sentence_char_count"])
-            .map_elements(
-                lambda row: _short_fragment(
-                    str(row["sentence_text"] or ""),
-                    int(row["finbert_token_count_512"] or 0),
-                    int(row["sentence_char_count"] or 0),
-                ),
-                return_dtype=pl.Boolean,
-            )
-            .alias("short_fragment"),
-            pl.struct(["sentence_text", "finbert_token_count_512", "sentence_char_count"])
-            .map_elements(
-                lambda row: _very_short_fragment(
-                    str(row["sentence_text"] or ""),
-                    int(row["finbert_token_count_512"] or 0),
-                    int(row["sentence_char_count"] or 0),
-                ),
-                return_dtype=pl.Boolean,
-            )
-            .alias("very_short"),
-            pl.col("sentence_text")
-            .map_elements(lambda text: _one_word_fragment(str(text or "")), return_dtype=pl.Boolean)
-            .alias("one_word"),
-            pl.col("sentence_text")
-            .map_elements(lambda text: _numeric_only_fragment(str(text or "")), return_dtype=pl.Boolean)
-            .alias("numeric_only"),
-            pl.col("sentence_text")
-            .map_elements(lambda text: _is_separator_line(str(text or "")), return_dtype=pl.Boolean)
-            .alias("separator_only"),
-            pl.col("sentence_text")
-            .map_elements(lambda text: _ends_with_reference_stub(str(text or "")), return_dtype=pl.Boolean)
-            .alias("citation_stub"),
-            pl.col("sentence_text")
-            .map_elements(lambda text: _ends_with_generic_reference_no(str(text or "")), return_dtype=pl.Boolean)
-            .alias("generic_no_end"),
-            pl.struct(["sentence_text", "next_sentence_text"])
-            .map_elements(
-                lambda row: _ends_with_generic_reference_no(str(row["sentence_text"] or ""))
-                and _looks_like_citation_continuation_v3(str(row["next_sentence_text"] or "")),
-                return_dtype=pl.Boolean,
-            )
-            .alias("generic_no_with_continuation"),
-            pl.col("sentence_text")
-            .map_elements(lambda text: _is_citation_prefix_only_line(str(text or "")), return_dtype=pl.Boolean)
-            .alias("citation_prefix_only"),
-            pl.col("sentence_text")
-            .map_elements(lambda text: _is_header_like_line(str(text or "")), return_dtype=pl.Boolean)
-            .alias("header_like"),
-            pl.struct(["sentence_text", "finbert_token_count_512"])
-            .map_elements(
-                lambda row: _table_like_sentence(
-                    str(row["sentence_text"] or ""),
-                    int(row["finbert_token_count_512"] or 0),
-                ),
-                return_dtype=pl.Boolean,
-            )
-            .alias("table_like"),
-            pl.struct(["sentence_text", "finbert_token_count_512", "sentence_char_count"])
-            .map_elements(
-                lambda row: _lower_fragment(
-                    str(row["sentence_text"] or ""),
-                    int(row["finbert_token_count_512"] or 0),
-                    int(row["sentence_char_count"] or 0),
-                ),
-                return_dtype=pl.Boolean,
-            )
-            .alias("lower_fragment"),
-            pl.col("sentence_text")
-            .map_elements(lambda text: not _has_terminal_punct(str(text or "")), return_dtype=pl.Boolean)
-            .alias("no_terminal_punct"),
             (pl.col("finbert_token_count_512") >= 128).alias("long_sentence"),
             (pl.col("finbert_token_count_512") >= 256).alias("long_very"),
         ]

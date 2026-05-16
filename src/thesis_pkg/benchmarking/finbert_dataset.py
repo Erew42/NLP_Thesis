@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import csv
 import datetime as dt
@@ -29,14 +29,70 @@ from thesis_pkg.benchmarking.sentences import materialize_sentence_benchmark_dat
 from thesis_pkg.benchmarking.token_lengths import FINBERT_TOKEN_BUCKET_COLUMN
 from thesis_pkg.benchmarking.token_lengths import annotate_finbert_token_lengths
 from thesis_pkg.benchmarking.token_lengths import annotate_finbert_token_lengths_in_batches
-from thesis_pkg.core.ccm.lm2011 import _normalize_sec_raw_form_value
-from thesis_pkg.core.ccm.lm2011 import normalize_lm2011_form_value
+from thesis_pkg.core.ccm.lm2011 import _normalize_sec_raw_form_expr
+from thesis_pkg.core.ccm.lm2011 import normalize_lm2011_form_expr
+
+try:
+    from thesis_native import _lm2011_rust
+except Exception as exc:  # pragma: no cover - optional native extension
+    _lm2011_rust = None
+    _FINBERT_DATASET_RUST_IMPORT_ERROR: str | None = f"{type(exc).__name__}: {exc}"
+else:
+    _FINBERT_DATASET_RUST_IMPORT_ERROR = None
 
 
 BENCHMARK_MANIFEST_FILENAME = "benchmark_manifest.json"
 SECTION_DATASET_FILENAME = "finbert_10k_item_sections.parquet"
 SENTENCE_DATASET_FILENAME = "finbert_10k_item_sentences.parquet"
 UNIVERSE_SUMMARY_FILENAME = "universe_summary.json"
+
+_FINBERT_DATASET_RUST_METRICS: dict[str, int] = {
+    "selection_key_fast_success": 0,
+    "selection_key_fast_failures": 0,
+    "selection_key_fallbacks": 0,
+    "text_sha256_fast_success": 0,
+    "text_sha256_fast_failures": 0,
+    "text_sha256_fallbacks": 0,
+    "ranked_select_fast_success": 0,
+    "ranked_select_fast_failures": 0,
+    "ranked_select_fallbacks": 0,
+    "hamilton_apportion_fast_success": 0,
+    "hamilton_apportion_fast_failures": 0,
+    "hamilton_apportion_fallbacks": 0,
+    "capacity_year_fast_success": 0,
+    "capacity_year_fast_failures": 0,
+    "capacity_year_fallbacks": 0,
+    "capacity_year_item_fast_success": 0,
+    "capacity_year_item_fast_failures": 0,
+    "capacity_year_item_fallbacks": 0,
+    "year_alloc_fast_success": 0,
+    "year_alloc_fast_failures": 0,
+    "year_alloc_fallbacks": 0,
+    "allocation_targets_fast_success": 0,
+    "allocation_targets_fast_failures": 0,
+    "allocation_targets_fallbacks": 0,
+    "year_item_alloc_fast_success": 0,
+    "year_item_alloc_fast_failures": 0,
+    "year_item_alloc_fallbacks": 0,
+    "share_rows_column_fast_success": 0,
+    "share_rows_column_fast_failures": 0,
+    "share_rows_column_fallbacks": 0,
+    "share_rows_fast_success": 0,
+    "share_rows_fast_failures": 0,
+    "share_rows_fallbacks": 0,
+}
+
+
+def get_finbert_dataset_rust_accel_metrics() -> dict[str, int | str | bool | None]:
+    metrics: dict[str, int | str | bool | None] = dict(_FINBERT_DATASET_RUST_METRICS)
+    metrics["rust_accel_available"] = _lm2011_rust is not None
+    metrics["rust_accel_import_error"] = _FINBERT_DATASET_RUST_IMPORT_ERROR
+    return metrics
+
+
+def reset_finbert_dataset_rust_accel_metrics() -> None:
+    for key in _FINBERT_DATASET_RUST_METRICS:
+        _FINBERT_DATASET_RUST_METRICS[key] = 0
 
 
 def _resolve_section_universe(
@@ -272,17 +328,8 @@ def _document_type_exprs(schema_names: set[str]) -> list[pl.Expr]:
     if source_col not in schema_names:
         raise ValueError("items_analysis files must contain document_type_filename or document_type.")
     return [
-        pl.col(source_col)
-        .cast(pl.Utf8, strict=False)
-        .map_elements(_normalize_sec_raw_form_value, return_dtype=pl.Utf8)
-        .alias("document_type_raw"),
-        pl.col(source_col)
-        .cast(pl.Utf8, strict=False)
-        .map_elements(
-            lambda value: normalize_lm2011_form_value(value, other_value="Other"),
-            return_dtype=pl.Utf8,
-        )
-        .alias("document_type_normalized"),
+        _normalize_sec_raw_form_expr(source_col).alias("document_type_raw"),
+        normalize_lm2011_form_expr(source_col, other_value="Other").alias("document_type_normalized"),
     ]
 
 
@@ -507,7 +554,7 @@ def _fractional_sort_key(index: int, exact: Decimal, weight: int) -> tuple[Decim
     return (exact - int(exact), weight, -index)
 
 
-def _constrained_hamilton_apportion(
+def _constrained_hamilton_apportion_py(
     keys: list[Any],
     weights: list[int],
     capacities: list[int],
@@ -583,6 +630,51 @@ def _constrained_hamilton_apportion(
     return {key: allocations[idx] for idx, key in enumerate(keys)}
 
 
+def _constrained_hamilton_apportion(
+    keys: list[Any],
+    weights: list[int],
+    capacities: list[int],
+    target_rows: int,
+    *,
+    ensure_min_one: bool = False,
+) -> dict[Any, int]:
+    if len(keys) != len(weights) or len(keys) != len(capacities):
+        raise ValueError("keys, weights, and capacities must have the same length.")
+    if target_rows < 0:
+        raise ValueError("target_rows must be non-negative.")
+    if any(weight < 0 for weight in weights):
+        raise ValueError("weights must be non-negative.")
+    if any(capacity < 0 for capacity in capacities):
+        raise ValueError("capacities must be non-negative.")
+    if target_rows > sum(capacities):
+        raise ValueError("target_rows cannot exceed total capacity.")
+
+    if _lm2011_rust is not None:
+        try:
+            allocations = list(
+                _lm2011_rust.finbert_constrained_hamilton_allocations(
+                    [int(weight) for weight in weights],
+                    [int(capacity) for capacity in capacities],
+                    int(target_rows),
+                    bool(ensure_min_one),
+                )
+            )
+            if len(allocations) != len(keys):
+                raise ValueError("Rust allocation length did not match keys length.")
+            _FINBERT_DATASET_RUST_METRICS["hamilton_apportion_fast_success"] += 1
+            return {key: int(allocations[idx]) for idx, key in enumerate(keys)}
+        except (TypeError, ValueError, OverflowError, RuntimeError):
+            _FINBERT_DATASET_RUST_METRICS["hamilton_apportion_fast_failures"] += 1
+    _FINBERT_DATASET_RUST_METRICS["hamilton_apportion_fallbacks"] += 1
+    return _constrained_hamilton_apportion_py(
+        keys,
+        weights,
+        capacities,
+        target_rows,
+        ensure_min_one=ensure_min_one,
+    )
+
+
 def _counts_by_year(df: pl.DataFrame) -> pl.DataFrame:
     return df.group_by("filing_year").agg(pl.len().alias("eligible_rows")).sort("filing_year")
 
@@ -595,7 +687,7 @@ def _counts_by_year_item(df: pl.DataFrame) -> pl.DataFrame:
     )
 
 
-def _compute_year_allocations_for_target(
+def _compute_year_allocations_for_target_py(
     universe_counts_by_year: pl.DataFrame,
     target_rows: int,
     *,
@@ -637,6 +729,55 @@ def _compute_year_allocations_for_target(
     )
 
 
+def _compute_year_allocations_for_target(
+    universe_counts_by_year: pl.DataFrame,
+    target_rows: int,
+    *,
+    ensure_all_years_present: bool,
+    capacity_rows_by_year: dict[int, int] | None = None,
+) -> pl.DataFrame:
+    counts_df = universe_counts_by_year.sort("filing_year")
+    years = [int(value) for value in counts_df["filing_year"].to_list()]
+    weights = [int(value) for value in counts_df["eligible_rows"].to_list()]
+    capacities = [
+        int(capacity_rows_by_year.get(year, weight)) if capacity_rows_by_year is not None else weight
+        for year, weight in zip(years, weights)
+    ]
+    if _lm2011_rust is not None:
+        try:
+            rows = list(
+                _lm2011_rust.finbert_year_allocation_rows(
+                    years,
+                    weights,
+                    int(target_rows),
+                    bool(ensure_all_years_present),
+                    capacities,
+                )
+            )
+            selected = [int(row[3]) for row in rows]
+            eligible_shares = [float(row[4]) for row in rows]
+            target_shares = [float(row[5]) for row in rows]
+            capacity_rows = [int(row[2]) for row in rows]
+            _FINBERT_DATASET_RUST_METRICS["year_alloc_fast_success"] += 1
+            return counts_df.with_columns(
+                [
+                    pl.Series("target_rows", selected, dtype=pl.Int32),
+                    pl.Series("eligible_share", eligible_shares, dtype=pl.Float64),
+                    pl.Series("target_share", target_shares, dtype=pl.Float64),
+                    pl.Series("capacity_rows", capacity_rows, dtype=pl.Int32),
+                ]
+            )
+        except Exception:
+            _FINBERT_DATASET_RUST_METRICS["year_alloc_fast_failures"] += 1
+    _FINBERT_DATASET_RUST_METRICS["year_alloc_fallbacks"] += 1
+    return _compute_year_allocations_for_target_py(
+        universe_counts_by_year,
+        target_rows,
+        ensure_all_years_present=ensure_all_years_present,
+        capacity_rows_by_year=capacity_rows_by_year,
+    )
+
+
 def compute_year_allocations(
     universe_counts_by_year: pl.DataFrame,
     sample_spec: BenchmarkSampleSpec,
@@ -652,7 +793,7 @@ def compute_year_allocations(
     )
 
 
-def _compute_year_item_allocations_internal(
+def _compute_year_item_allocations_internal_py(
     universe_counts_by_year_item: pl.DataFrame,
     year_allocations: pl.DataFrame,
     *,
@@ -704,6 +845,58 @@ def _compute_year_item_allocations_internal(
     return pl.DataFrame(rows).sort(["filing_year", "benchmark_item_code"])
 
 
+def _compute_year_item_allocations_internal(
+    universe_counts_by_year_item: pl.DataFrame,
+    year_allocations: pl.DataFrame,
+    *,
+    capacity_rows_by_year_item: dict[tuple[int, str], int] | None = None,
+) -> pl.DataFrame:
+    counts_df = universe_counts_by_year_item.sort(["filing_year", "benchmark_item_code"])
+    if _lm2011_rust is not None:
+        try:
+            target_frame = year_allocations.select(["filing_year", "target_rows"])
+            if capacity_rows_by_year_item is None:
+                capacity_years = None
+                capacity_item_codes = None
+                capacity_rows = None
+            else:
+                capacity_years = [int(key[0]) for key in capacity_rows_by_year_item]
+                capacity_item_codes = [str(key[1]) for key in capacity_rows_by_year_item]
+                capacity_rows = [int(value) for value in capacity_rows_by_year_item.values()]
+            rust_rows = _lm2011_rust.finbert_year_item_allocation_rows(
+                [int(value) for value in counts_df["filing_year"].to_list()],
+                [str(value) for value in counts_df["benchmark_item_code"].to_list()],
+                [int(value) for value in counts_df["eligible_rows"].to_list()],
+                [int(value) for value in target_frame["filing_year"].to_list()],
+                [int(value) for value in target_frame["target_rows"].to_list()],
+                capacity_years,
+                capacity_item_codes,
+                capacity_rows,
+            )
+            _FINBERT_DATASET_RUST_METRICS["year_item_alloc_fast_success"] += 1
+            rows = [
+                {
+                    "filing_year": int(row[0]),
+                    "benchmark_item_code": str(row[1]),
+                    "eligible_rows": int(row[2]),
+                    "capacity_rows": int(row[3]),
+                    "target_rows": int(row[4]),
+                    "eligible_share_within_year": float(row[5]),
+                    "target_share_within_year": float(row[6]),
+                }
+                for row in rust_rows
+            ]
+            return pl.DataFrame(rows).sort(["filing_year", "benchmark_item_code"])
+        except Exception:
+            _FINBERT_DATASET_RUST_METRICS["year_item_alloc_fast_failures"] += 1
+    _FINBERT_DATASET_RUST_METRICS["year_item_alloc_fallbacks"] += 1
+    return _compute_year_item_allocations_internal_py(
+        universe_counts_by_year_item,
+        year_allocations,
+        capacity_rows_by_year_item=capacity_rows_by_year_item,
+    )
+
+
 def compute_year_item_allocations(
     universe_counts_by_year_item: pl.DataFrame,
     year_allocations: pl.DataFrame,
@@ -714,20 +907,83 @@ def compute_year_item_allocations(
     )
 
 
-def _selection_key(doc_id: str, benchmark_item_code: str, seed: int) -> str:
+def _selection_key_py(doc_id: str, benchmark_item_code: str, seed: int) -> str:
     payload = f"{seed}|{doc_id}|{benchmark_item_code}".encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
 
 
-def _annotate_selection_keys(df: pl.DataFrame, seed: int) -> pl.DataFrame:
-    keys = [
-        _selection_key(doc_id, benchmark_item_code, seed)
-        for doc_id, benchmark_item_code in zip(
-            df["doc_id"].to_list(),
-            df["benchmark_item_code"].to_list(),
-        )
+def _selection_key(doc_id: str, benchmark_item_code: str, seed: int) -> str:
+    if _lm2011_rust is not None:
+        try:
+            out = str(_lm2011_rust.finbert_selection_key_value(doc_id, benchmark_item_code, int(seed)))
+            _FINBERT_DATASET_RUST_METRICS["selection_key_fast_success"] += 1
+            return out
+        except Exception:
+            _FINBERT_DATASET_RUST_METRICS["selection_key_fast_failures"] += 1
+    _FINBERT_DATASET_RUST_METRICS["selection_key_fallbacks"] += 1
+    return _selection_key_py(doc_id, benchmark_item_code, seed)
+
+
+def _selection_keys_py(doc_ids: list[str], benchmark_item_codes: list[str], seed: int) -> list[str]:
+    return [
+        _selection_key_py(doc_id, benchmark_item_code, seed)
+        for doc_id, benchmark_item_code in zip(doc_ids, benchmark_item_codes)
     ]
+
+
+def _selection_keys(doc_ids: list[str], benchmark_item_codes: list[str], seed: int) -> list[str]:
+    row_count = len(doc_ids)
+    if _lm2011_rust is not None:
+        try:
+            keys = list(_lm2011_rust.finbert_selection_keys(doc_ids, benchmark_item_codes, int(seed)))
+            _FINBERT_DATASET_RUST_METRICS["selection_key_fast_success"] += len(keys)
+            return keys
+        except Exception:
+            _FINBERT_DATASET_RUST_METRICS["selection_key_fast_failures"] += row_count
+    _FINBERT_DATASET_RUST_METRICS["selection_key_fallbacks"] += row_count
+    return _selection_keys_py(doc_ids, benchmark_item_codes, seed)
+
+
+def _annotate_selection_keys(df: pl.DataFrame, seed: int) -> pl.DataFrame:
+    keys = _selection_keys(
+        df["doc_id"].to_list(),
+        df["benchmark_item_code"].to_list(),
+        seed,
+    )
     return df.with_columns(pl.Series("selection_key_hex", keys, dtype=pl.Utf8))
+
+
+def _text_sha256_hex_py(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _text_sha256_hex(text: str) -> str:
+    if _lm2011_rust is not None:
+        try:
+            out = str(_lm2011_rust.sha256_hex_value(text))
+            _FINBERT_DATASET_RUST_METRICS["text_sha256_fast_success"] += 1
+            return out
+        except Exception:
+            _FINBERT_DATASET_RUST_METRICS["text_sha256_fast_failures"] += 1
+    _FINBERT_DATASET_RUST_METRICS["text_sha256_fallbacks"] += 1
+    return _text_sha256_hex_py(text)
+
+
+def _text_sha256_hex_values_py(values: list[str]) -> list[str]:
+    return [_text_sha256_hex_py(text) for text in values]
+
+
+def _text_sha256_hex_values(values: list[str]) -> list[str]:
+    row_count = len(values)
+    if _lm2011_rust is not None:
+        try:
+            hashes = list(_lm2011_rust.sha256_hex_values(values))
+            _FINBERT_DATASET_RUST_METRICS["text_sha256_fast_success"] += len(hashes)
+            return hashes
+        except Exception:
+            _FINBERT_DATASET_RUST_METRICS["text_sha256_fast_failures"] += row_count
+    _FINBERT_DATASET_RUST_METRICS["text_sha256_fallbacks"] += row_count
+    return _text_sha256_hex_values_py(values)
 
 
 def _annotate_selected_metadata(
@@ -739,10 +995,7 @@ def _annotate_selected_metadata(
 
     chunks: list[pl.DataFrame] = []
     for chunk in df.iter_slices(n_rows=1024):
-        text_hashes = [
-            hashlib.sha256(text.encode("utf-8")).hexdigest()
-            for text in chunk["full_text"].to_list()
-        ]
+        text_hashes = _text_sha256_hex_values(chunk["full_text"].to_list())
         output = chunk.with_columns(
             [
                 pl.concat_str(
@@ -762,7 +1015,7 @@ def _annotate_selected_metadata(
     return pl.concat(chunks, how="vertical_relaxed")
 
 
-def _select_ranked_from_df(source_df: pl.DataFrame, allocations_df: pl.DataFrame) -> pl.DataFrame:
+def _select_ranked_from_df_py(source_df: pl.DataFrame, allocations_df: pl.DataFrame) -> pl.DataFrame:
     if "selection_key_hex" not in source_df.columns:
         raise ValueError("source_df must contain selection_key_hex before selection.")
 
@@ -804,7 +1057,57 @@ def _select_ranked_from_df(source_df: pl.DataFrame, allocations_df: pl.DataFrame
     )
 
 
-def _allocation_targets(allocations_df: pl.DataFrame) -> list[dict[str, Any]]:
+def _select_ranked_from_df(source_df: pl.DataFrame, allocations_df: pl.DataFrame) -> pl.DataFrame:
+    if "selection_key_hex" not in source_df.columns:
+        raise ValueError("source_df must contain selection_key_hex before selection.")
+
+    sorted_source = source_df.sort(
+        by=["filing_year", "benchmark_item_code", "selection_key_hex", "doc_id"],
+        descending=[False, False, False, False],
+    )
+    if _lm2011_rust is not None:
+        try:
+            selected_indices = list(
+                _lm2011_rust.finbert_ranked_selection_indices(
+                    [int(value) for value in sorted_source["filing_year"].to_list()],
+                    [str(value) for value in sorted_source["benchmark_item_code"].to_list()],
+                    [int(value) for value in allocations_df["filing_year"].to_list()],
+                    [str(value) for value in allocations_df["benchmark_item_code"].to_list()],
+                    [int(value) for value in allocations_df["target_rows"].to_list()],
+                )
+            )
+            _FINBERT_DATASET_RUST_METRICS["ranked_select_fast_success"] += 1
+            if not selected_indices:
+                return sorted_source.head(0)
+            selected_index_df = pl.DataFrame(
+                {
+                    "_selection_source_index": pl.Series(
+                        "_selection_source_index",
+                        [int(value) for value in selected_indices],
+                        dtype=pl.UInt32,
+                    ),
+                    "selection_order": pl.Series(
+                        "selection_order",
+                        list(range(1, len(selected_indices) + 1)),
+                        dtype=pl.UInt32,
+                    ),
+                }
+            )
+            return (
+                selected_index_df.join(
+                    sorted_source.with_row_index("_selection_source_index"),
+                    on="_selection_source_index",
+                    how="inner",
+                )
+                .drop("_selection_source_index")
+            )
+        except Exception:
+            _FINBERT_DATASET_RUST_METRICS["ranked_select_fast_failures"] += 1
+    _FINBERT_DATASET_RUST_METRICS["ranked_select_fallbacks"] += 1
+    return _select_ranked_from_df_py(source_df, allocations_df)
+
+
+def _allocation_targets_py(allocations_df: pl.DataFrame) -> list[dict[str, Any]]:
     return [
         {
             "filing_year": int(row["filing_year"]),
@@ -814,6 +1117,30 @@ def _allocation_targets(allocations_df: pl.DataFrame) -> list[dict[str, Any]]:
         for row in allocations_df.sort(["filing_year", "benchmark_item_code"]).to_dicts()
         if int(row["target_rows"]) > 0
     ]
+
+
+def _allocation_targets(allocations_df: pl.DataFrame) -> list[dict[str, Any]]:
+    sorted_df = allocations_df.sort(["filing_year", "benchmark_item_code"])
+    if _lm2011_rust is not None:
+        try:
+            rows = _lm2011_rust.finbert_allocation_targets(
+                [int(value) for value in sorted_df["filing_year"].to_list()],
+                [str(value) for value in sorted_df["benchmark_item_code"].to_list()],
+                [int(value) for value in sorted_df["target_rows"].to_list()],
+            )
+            _FINBERT_DATASET_RUST_METRICS["allocation_targets_fast_success"] += 1
+            return [
+                {
+                    "filing_year": int(row[0]),
+                    "benchmark_item_code": str(row[1]),
+                    "target_rows": int(row[2]),
+                }
+                for row in rows
+            ]
+        except Exception:
+            _FINBERT_DATASET_RUST_METRICS["allocation_targets_fast_failures"] += 1
+    _FINBERT_DATASET_RUST_METRICS["allocation_targets_fallbacks"] += 1
+    return _allocation_targets_py(allocations_df)
 
 
 def _select_ranked_from_planning_path(
@@ -951,6 +1278,106 @@ def _write_inventory(dataset_dir: Path, cfg: FinbertBenchmarkSuiteConfig) -> Non
     _write_csv(inventory_dir / "source_items_files.csv", rows)
 
 
+def _share_rows_from_sorted_groups_py(
+    groups: list[tuple[list[dict[str, Any]], int, int]],
+) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for rows, eligible_total, selected_total in groups:
+        for row in rows:
+            eligible_share = (row["eligible_rows"] / eligible_total) if eligible_total else 0.0
+            selected_share = (row["selected_rows"] / selected_total) if selected_total else 0.0
+            records.append(
+                {
+                    **row,
+                    "eligible_share": eligible_share,
+                    "selected_share": selected_share,
+                    "share_diff": selected_share - eligible_share,
+                }
+            )
+    return records
+
+
+def _share_rows_from_sorted_groups(
+    groups: list[tuple[list[dict[str, Any]], int, int]],
+) -> list[dict[str, Any]]:
+    if _lm2011_rust is not None:
+        try:
+            records = list(_lm2011_rust.finbert_dataset_share_rows(groups))
+            _FINBERT_DATASET_RUST_METRICS["share_rows_fast_success"] += 1
+            return records
+        except Exception:
+            _FINBERT_DATASET_RUST_METRICS["share_rows_fast_failures"] += 1
+    _FINBERT_DATASET_RUST_METRICS["share_rows_fallbacks"] += 1
+    return _share_rows_from_sorted_groups_py(groups)
+
+
+def _share_rows_from_sorted_frames(
+    groups: list[tuple[pl.DataFrame, int, int]],
+) -> list[dict[str, Any]]:
+    if _lm2011_rust is not None:
+        try:
+            column_groups = [
+                (
+                    frame.columns,
+                    [frame.get_column(column).to_list() for column in frame.columns],
+                    eligible_total,
+                    selected_total,
+                )
+                for frame, eligible_total, selected_total in groups
+            ]
+            records = list(_lm2011_rust.finbert_dataset_share_row_columns(column_groups))
+            _FINBERT_DATASET_RUST_METRICS["share_rows_column_fast_success"] += 1
+            return [dict(row) for row in records]
+        except Exception:
+            _FINBERT_DATASET_RUST_METRICS["share_rows_column_fast_failures"] += 1
+            _FINBERT_DATASET_RUST_METRICS["share_rows_column_fallbacks"] += 1
+    row_groups = [
+        (frame.to_dicts(), eligible_total, selected_total)
+        for frame, eligible_total, selected_total in groups
+    ]
+    return _share_rows_from_sorted_groups(row_groups)
+
+
+def _share_rows_py(
+    eligible_df: pl.DataFrame,
+    selected_df: pl.DataFrame,
+    keys: list[str],
+    *,
+    total_keys: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    if "eligible_rows" in eligible_df.columns:
+        eligible_counts = eligible_df.select([*keys, "eligible_rows"])
+    else:
+        eligible_counts = eligible_df.group_by(keys).agg(pl.len().alias("eligible_rows"))
+
+    if "selected_rows" in selected_df.columns:
+        selected_counts = selected_df.select([*keys, "selected_rows"])
+    else:
+        selected_counts = selected_df.group_by(keys).agg(pl.len().alias("selected_rows"))
+    merged = eligible_counts.join(selected_counts, on=keys, how="full").fill_null(0)
+    if not total_keys:
+        eligible_total = (
+            int(eligible_counts["eligible_rows"].sum())
+            if "eligible_rows" in eligible_counts.columns
+            else int(eligible_df.height)
+        )
+        selected_total = (
+            int(selected_counts["selected_rows"].sum())
+            if "selected_rows" in selected_counts.columns
+            else int(selected_df.height)
+        )
+        return _share_rows_from_sorted_groups_py(
+            [(merged.sort(keys).to_dicts(), eligible_total, selected_total)]
+        )
+
+    groups: list[tuple[list[dict[str, Any]], int, int]] = []
+    for group in merged.partition_by(total_keys, maintain_order=True):
+        eligible_total = int(group["eligible_rows"].sum())
+        selected_total = int(group["selected_rows"].sum())
+        groups.append((group.sort(keys).to_dicts(), eligible_total, selected_total))
+    return _share_rows_from_sorted_groups_py(groups)
+
+
 def _share_rows(
     eligible_df: pl.DataFrame,
     selected_df: pl.DataFrame,
@@ -979,36 +1406,14 @@ def _share_rows(
             if "selected_rows" in selected_counts.columns
             else int(selected_df.height)
         )
-        records: list[dict[str, Any]] = []
-        for row in merged.sort(keys).to_dicts():
-            eligible_share = (row["eligible_rows"] / eligible_total) if eligible_total else 0.0
-            selected_share = (row["selected_rows"] / selected_total) if selected_total else 0.0
-            records.append(
-                {
-                    **row,
-                    "eligible_share": eligible_share,
-                    "selected_share": selected_share,
-                    "share_diff": selected_share - eligible_share,
-                }
-            )
-        return records
+        return _share_rows_from_sorted_frames([(merged.sort(keys), eligible_total, selected_total)])
 
-    records: list[dict[str, Any]] = []
+    groups: list[tuple[pl.DataFrame, int, int]] = []
     for group in merged.partition_by(total_keys, maintain_order=True):
         eligible_total = int(group["eligible_rows"].sum())
         selected_total = int(group["selected_rows"].sum())
-        for row in group.sort(keys).to_dicts():
-            eligible_share = (row["eligible_rows"] / eligible_total) if eligible_total else 0.0
-            selected_share = (row["selected_rows"] / selected_total) if selected_total else 0.0
-            records.append(
-                {
-                    **row,
-                    "eligible_share": eligible_share,
-                    "selected_share": selected_share,
-                    "share_diff": selected_share - eligible_share,
-                }
-            )
-    return records
+        groups.append((group.sort(keys), eligible_total, selected_total))
+    return _share_rows_from_sorted_frames(groups)
 
 
 def _write_universe_summary(
@@ -1233,18 +1638,54 @@ def _coerce_output_columns(sample_df: pl.DataFrame) -> pl.DataFrame:
     return sample_df.select(ordered_columns)
 
 
-def _capacity_rows_by_year(year_allocations: pl.DataFrame) -> dict[int, int]:
+def _capacity_rows_by_year_py(year_allocations: pl.DataFrame) -> dict[int, int]:
     return {
         int(row["filing_year"]): int(row["target_rows"])
         for row in year_allocations.select(["filing_year", "target_rows"]).to_dicts()
     }
 
 
-def _capacity_rows_by_year_item(year_item_allocations: pl.DataFrame) -> dict[tuple[int, str], int]:
+def _capacity_rows_by_year(year_allocations: pl.DataFrame) -> dict[int, int]:
+    frame = year_allocations.select(["filing_year", "target_rows"])
+    if _lm2011_rust is not None:
+        try:
+            pairs = _lm2011_rust.finbert_capacity_rows_by_year(
+                [int(value) for value in frame["filing_year"].to_list()],
+                [int(value) for value in frame["target_rows"].to_list()],
+            )
+            _FINBERT_DATASET_RUST_METRICS["capacity_year_fast_success"] += 1
+            return {int(year): int(target_rows) for year, target_rows in pairs}
+        except Exception:
+            _FINBERT_DATASET_RUST_METRICS["capacity_year_fast_failures"] += 1
+    _FINBERT_DATASET_RUST_METRICS["capacity_year_fallbacks"] += 1
+    return _capacity_rows_by_year_py(year_allocations)
+
+
+def _capacity_rows_by_year_item_py(year_item_allocations: pl.DataFrame) -> dict[tuple[int, str], int]:
     return {
         (int(row["filing_year"]), str(row["benchmark_item_code"])): int(row["target_rows"])
         for row in year_item_allocations.select(["filing_year", "benchmark_item_code", "target_rows"]).to_dicts()
     }
+
+
+def _capacity_rows_by_year_item(year_item_allocations: pl.DataFrame) -> dict[tuple[int, str], int]:
+    frame = year_item_allocations.select(["filing_year", "benchmark_item_code", "target_rows"])
+    if _lm2011_rust is not None:
+        try:
+            rows = _lm2011_rust.finbert_capacity_rows_by_year_item(
+                [int(value) for value in frame["filing_year"].to_list()],
+                [str(value) for value in frame["benchmark_item_code"].to_list()],
+                [int(value) for value in frame["target_rows"].to_list()],
+            )
+            _FINBERT_DATASET_RUST_METRICS["capacity_year_item_fast_success"] += 1
+            return {
+                (int(filing_year), str(item_code)): int(target_rows)
+                for filing_year, item_code, target_rows in rows
+            }
+        except Exception:
+            _FINBERT_DATASET_RUST_METRICS["capacity_year_item_fast_failures"] += 1
+    _FINBERT_DATASET_RUST_METRICS["capacity_year_item_fallbacks"] += 1
+    return _capacity_rows_by_year_item_py(year_item_allocations)
 
 
 def _tmp_build_root(cfg: FinbertBenchmarkSuiteConfig) -> Path:

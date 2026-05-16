@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import io
 import math
@@ -12,8 +12,37 @@ import polars as pl
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+try:
+    from thesis_native import _lm2011_rust
+except Exception as exc:  # pragma: no cover - optional native extension
+    _lm2011_rust = None
+    _PARQUET_RUST_IMPORT_ERROR: str | None = f"{type(exc).__name__}: {exc}"
+else:
+    _PARQUET_RUST_IMPORT_ERROR = None
+
 
 PARQUET_MAGIC = b"PAR1"
+
+_PARQUET_RUST_METRICS: dict[str, int] = {
+    "magic_probe_fast_success": 0,
+    "magic_probe_fast_failures": 0,
+    "magic_probe_fallbacks": 0,
+    "copy_file_stream_fast_success": 0,
+    "copy_file_stream_fast_failures": 0,
+    "copy_file_stream_fallbacks": 0,
+}
+
+
+def get_parquet_rust_accel_metrics() -> dict[str, int | str | bool | None]:
+    metrics: dict[str, int | str | bool | None] = dict(_PARQUET_RUST_METRICS)
+    metrics["rust_accel_available"] = _lm2011_rust is not None
+    metrics["rust_accel_import_error"] = _PARQUET_RUST_IMPORT_ERROR
+    return metrics
+
+
+def reset_parquet_rust_accel_metrics() -> None:
+    for key in _PARQUET_RUST_METRICS:
+        _PARQUET_RUST_METRICS[key] = 0
 
 
 def load_tables(base_dirs: Iterable[Path], wanted: Iterable[str]) -> dict[str, pl.LazyFrame]:
@@ -71,7 +100,17 @@ def sink_exact_firm_sample_from_parquet(
     return sampled
 
 
-def _assert_parquet_magic(path: Path) -> None:
+def _assert_parquet_magic_parts(path: Path, *, size: int, start: bytes, end: bytes) -> None:
+    if size < 8:
+        raise OSError(f"Parquet file too small to be valid ({size} bytes): {path}")
+
+    if start != PARQUET_MAGIC:
+        raise OSError(f"Parquet magic header missing for {path} (got {start!r})")
+    if end != PARQUET_MAGIC:
+        raise OSError(f"Parquet magic footer missing for {path} (got {end!r})")
+
+
+def _assert_parquet_magic_py(path: Path) -> None:
     """
     Quick integrity check for common truncation/corruption cases:
     parquet files must start and end with the magic bytes PAR1.
@@ -82,19 +121,41 @@ def _assert_parquet_magic(path: Path) -> None:
         raise OSError(f"Parquet file not found: {path}") from exc
 
     if size < 8:
-        raise OSError(f"Parquet file too small to be valid ({size} bytes): {path}")
+        _assert_parquet_magic_parts(path, size=size, start=b"", end=b"")
 
     with path.open("rb") as f:
         start = f.read(4)
-        if start != PARQUET_MAGIC:
-            raise OSError(f"Parquet magic header missing for {path} (got {start!r})")
         f.seek(-4, io.SEEK_END)
         end = f.read(4)
-        if end != PARQUET_MAGIC:
-            raise OSError(f"Parquet magic footer missing for {path} (got {end!r})")
+
+    _assert_parquet_magic_parts(path, size=size, start=start, end=end)
 
 
-def _copy_file_stream(src: Path, dst: Path, buffer_size: int = 16 * 1024 * 1024) -> None:
+def _assert_parquet_magic(path: Path) -> None:
+    """
+    Quick integrity check for common truncation/corruption cases:
+    parquet files must start and end with the magic bytes PAR1.
+    """
+    if _lm2011_rust is not None:
+        try:
+            size, start_raw, end_raw = _lm2011_rust.parquet_magic_probe(str(path))
+        except Exception:
+            _PARQUET_RUST_METRICS["magic_probe_fast_failures"] += 1
+        else:
+            _PARQUET_RUST_METRICS["magic_probe_fast_success"] += 1
+            _assert_parquet_magic_parts(
+                path,
+                size=int(size),
+                start=bytes(start_raw),
+                end=bytes(end_raw),
+            )
+            return
+
+    _PARQUET_RUST_METRICS["magic_probe_fallbacks"] += 1
+    _assert_parquet_magic_py(path)
+
+
+def _copy_file_stream_py(src: Path, dst: Path, buffer_size: int = 16 * 1024 * 1024) -> None:
     """
     Stream copy with explicit flush/fsync for stability on network/remote mounts.
     """
@@ -106,6 +167,23 @@ def _copy_file_stream(src: Path, dst: Path, buffer_size: int = 16 * 1024 * 1024)
         except OSError:
             # Some filesystems (e.g., FUSE mounts) may not support fsync reliably.
             pass
+
+
+def _copy_file_stream(src: Path, dst: Path, buffer_size: int = 16 * 1024 * 1024) -> None:
+    """
+    Stream copy with explicit flush/fsync for stability on network/remote mounts.
+    """
+    if _lm2011_rust is not None and buffer_size > 0:
+        try:
+            _lm2011_rust.copy_file_stream(str(src), str(dst), int(buffer_size))
+        except Exception:
+            _PARQUET_RUST_METRICS["copy_file_stream_fast_failures"] += 1
+        else:
+            _PARQUET_RUST_METRICS["copy_file_stream_fast_success"] += 1
+            return
+
+    _PARQUET_RUST_METRICS["copy_file_stream_fallbacks"] += 1
+    _copy_file_stream_py(src, dst, buffer_size=buffer_size)
 
 
 def _validate_parquet_quick(path: Path) -> None:

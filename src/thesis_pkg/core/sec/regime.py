@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import re
@@ -6,6 +6,14 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from importlib import resources
 from pathlib import Path
+
+try:
+    from thesis_native import _lm2011_rust
+except Exception as exc:  # pragma: no cover - optional native extension
+    _lm2011_rust = None
+    _REGIME_RUST_IMPORT_ERROR: str | None = f"{type(exc).__name__}: {exc}"
+else:
+    _REGIME_RUST_IMPORT_ERROR = None
 
 
 ITEM_TITLES_10K = {
@@ -142,6 +150,24 @@ if _ITEM_REGIME_SPEC:
             continue
         _ITEM_REGIME_BY_ID.setdefault(item_id, []).append((key, entry))
 
+_REGIME_RUST_METRICS: dict[str, int] = {
+    "form_normalize_fast_success": 0,
+    "form_normalize_fast_failures": 0,
+    "form_normalize_fallbacks": 0,
+}
+
+
+def get_regime_rust_accel_metrics() -> dict[str, int | str | bool | None]:
+    metrics: dict[str, int | str | bool | None] = dict(_REGIME_RUST_METRICS)
+    metrics["rust_accel_available"] = _lm2011_rust is not None
+    metrics["rust_accel_import_error"] = _REGIME_RUST_IMPORT_ERROR
+    return metrics
+
+
+def reset_regime_rust_accel_metrics() -> None:
+    for key in _REGIME_RUST_METRICS:
+        _REGIME_RUST_METRICS[key] = 0
+
 
 @dataclass(frozen=True)
 class RegimeSpec:
@@ -191,7 +217,7 @@ def _is_amendment_form(form: str) -> bool:
     return False
 
 
-def normalize_form_type(form_type: str | None) -> str | None:
+def normalize_form_type_py(form_type: str | None) -> str | None:
     """
     Normalize SEC form labels for regime lookup.
 
@@ -216,6 +242,18 @@ def normalize_form_type(form_type: str | None) -> str | None:
     if form.startswith("10-Q") or form.startswith("10Q"):
         return "10-Q"
     return None
+
+
+def normalize_form_type(form_type: str | None) -> str | None:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.normalize_regime_form_type(form_type)
+            _REGIME_RUST_METRICS["form_normalize_fast_success"] += 1
+            return out
+        except Exception:
+            _REGIME_RUST_METRICS["form_normalize_fast_failures"] += 1
+    _REGIME_RUST_METRICS["form_normalize_fallbacks"] += 1
+    return normalize_form_type_py(form_type)
 
 
 def load_regime_spec(form: str) -> dict | None:

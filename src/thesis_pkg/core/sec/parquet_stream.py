@@ -1,12 +1,38 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from collections.abc import Iterator
 from pathlib import Path
 import re
+from typing import Any
 
 import polars as pl
-import pyarrow as pa
 import pyarrow.parquet as pq
+
+try:
+    from thesis_native import _lm2011_rust
+except Exception as exc:  # pragma: no cover - optional native extension
+    _lm2011_rust = None
+    _PARQUET_STREAM_RUST_IMPORT_ERROR: str | None = f"{type(exc).__name__}: {exc}"
+else:
+    _PARQUET_STREAM_RUST_IMPORT_ERROR = None
+
+_PARQUET_STREAM_RUST_METRICS: dict[str, int] = {
+    "selected_indices_fast_success": 0,
+    "selected_indices_fast_failures": 0,
+    "selected_indices_fallbacks": 0,
+}
+
+
+def get_parquet_stream_rust_accel_metrics() -> dict[str, int | str | bool | None]:
+    metrics: dict[str, int | str | bool | None] = dict(_PARQUET_STREAM_RUST_METRICS)
+    metrics["rust_accel_available"] = _lm2011_rust is not None
+    metrics["rust_accel_import_error"] = _PARQUET_STREAM_RUST_IMPORT_ERROR
+    return metrics
+
+
+def reset_parquet_stream_rust_accel_metrics() -> None:
+    for key in _PARQUET_STREAM_RUST_METRICS:
+        _PARQUET_STREAM_RUST_METRICS[key] = 0
 
 
 def discover_input_parquet_files(parquet_dir: Path) -> list[Path]:
@@ -33,6 +59,53 @@ def discover_input_parquet_files(parquet_dir: Path) -> list[Path]:
         if p.is_file() and re.fullmatch(r"\d{4}", p.stem)
     )
     return files_year
+
+
+def _normalize_doc_id_value(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value)
+
+
+def _select_filing_text_indices_py(
+    remaining_doc_ids: set[str],
+    doc_id_values: list[Any],
+) -> list[tuple[int, str]]:
+    wanted = {str(doc_id) for doc_id in remaining_doc_ids if doc_id}
+    selected: list[tuple[int, str]] = []
+    for index, value in enumerate(doc_id_values):
+        if not wanted:
+            break
+        doc_id = _normalize_doc_id_value(value)
+        if doc_id and doc_id in wanted:
+            selected.append((index, doc_id))
+            wanted.remove(doc_id)
+    return selected
+
+
+def _select_filing_text_indices(
+    remaining_doc_ids: set[str],
+    doc_id_values: list[Any],
+) -> list[tuple[int, str]]:
+    if _lm2011_rust is not None:
+        try:
+            raw_indices = _lm2011_rust.parquet_stream_selected_doc_indices(
+                [str(doc_id) for doc_id in remaining_doc_ids if doc_id],
+                [_normalize_doc_id_value(value) or None for value in doc_id_values],
+            )
+            _PARQUET_STREAM_RUST_METRICS["selected_indices_fast_success"] += 1
+            return [(int(index), str(doc_id)) for index, doc_id in raw_indices]
+        except Exception:
+            _PARQUET_STREAM_RUST_METRICS["selected_indices_fast_failures"] += 1
+    _PARQUET_STREAM_RUST_METRICS["selected_indices_fallbacks"] += 1
+    return _select_filing_text_indices_py(remaining_doc_ids, doc_id_values)
+
+
+def _array_value_to_text(array: Any | None, index: int) -> str:
+    if array is None:
+        return ""
+    value = array[index].as_py()
+    return str(value or "")
 
 
 def iter_parquet_filing_texts(
@@ -81,21 +154,26 @@ def iter_parquet_filing_texts(
                 for batch in pf.iter_batches(batch_size=batch_size, columns=columns):
                     if not remaining:
                         break
-                    tbl = pa.Table.from_batches([batch])
-                    df = pl.from_arrow(tbl)
-                    if "doc_id" not in df.columns:
+                    batch_columns = list(batch.schema.names)
+                    if "doc_id" not in batch_columns or "full_text" not in batch_columns:
                         continue
-                    filtered = df.filter(pl.col("doc_id").cast(pl.Utf8).is_in(remaining))
-                    if filtered.is_empty():
+                    doc_id_values = batch.column(batch_columns.index("doc_id")).to_pylist()
+                    selected_indices = _select_filing_text_indices(remaining, doc_id_values)
+                    if not selected_indices:
                         continue
-                    for row in filtered.iter_rows(named=True):
-                        doc_id = str(row.get("doc_id") or "")
+                    accession_array = (
+                        batch.column(batch_columns.index("accession_number"))
+                        if "accession_number" in batch_columns
+                        else None
+                    )
+                    full_text_array = batch.column(batch_columns.index("full_text"))
+                    for row_index, doc_id in selected_indices:
                         if doc_id and doc_id in remaining:
                             remaining.remove(doc_id)
                             yield {
                                 "doc_id": doc_id,
-                                "accession": str(row.get("accession_number") or ""),
-                                "full_text": str(row.get("full_text") or ""),
+                                "accession": _array_value_to_text(accession_array, row_index),
+                                "full_text": _array_value_to_text(full_text_array, row_index),
                             }
             finally:
                 if pf is not None:
@@ -107,4 +185,9 @@ def iter_parquet_filing_texts(
     return _iterator()
 
 
-__all__ = ["discover_input_parquet_files", "iter_parquet_filing_texts"]
+__all__ = [
+    "discover_input_parquet_files",
+    "get_parquet_stream_rust_accel_metrics",
+    "iter_parquet_filing_texts",
+    "reset_parquet_stream_rust_accel_metrics",
+]

@@ -1,8 +1,16 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from collections.abc import Sequence
 
 import polars as pl
+
+try:
+    from thesis_native import _lm2011_rust
+except Exception as exc:  # pragma: no cover - optional native extension
+    _lm2011_rust = None
+    _FINBERT_TAIL_RUST_IMPORT_ERROR: str | None = f"{type(exc).__name__}: {exc}"
+else:
+    _FINBERT_TAIL_RUST_IMPORT_ERROR = None
 
 from thesis_pkg.pipelines.lm2011_extension import normalize_lm2011_extension_text_scope_expr
 
@@ -14,6 +22,7 @@ TAIL_FEATURE_COLUMNS: tuple[str, ...] = (
     "tail_share_tau_0_70",
     "top_10pct_neg_mean",
     "top_20pct_neg_mean",
+    "top_5_sentences_neg_mean",
     "neg_prob_dispersion",
 )
 TAIL_DOC_SURFACE_SCHEMA: dict[str, pl.DataType] = {
@@ -30,6 +39,7 @@ TAIL_DOC_SURFACE_SCHEMA: dict[str, pl.DataType] = {
     "tail_share_tau_0_70": pl.Float64,
     "top_10pct_neg_mean": pl.Float64,
     "top_20pct_neg_mean": pl.Float64,
+    "top_5_sentences_neg_mean": pl.Float64,
     "neg_prob_dispersion": pl.Float64,
 }
 _TAIL_METADATA_COLUMNS: tuple[str, ...] = (
@@ -43,9 +53,46 @@ _TAIL_METADATA_COLUMNS: tuple[str, ...] = (
 )
 _TAIL_TOKEN_WEIGHT_COLUMN = "finbert_token_count_512"
 
+_FINBERT_TAIL_RUST_METRICS: dict[str, int] = {
+    "text_scope_fast_success": 0,
+    "text_scope_fast_failures": 0,
+    "text_scope_fallbacks": 0,
+    "doc_surface_column_fast_success": 0,
+    "doc_surface_column_fast_failures": 0,
+    "doc_surface_column_fallbacks": 0,
+    "doc_surface_fast_success": 0,
+    "doc_surface_fast_failures": 0,
+    "doc_surface_fallbacks": 0,
+}
+
+
+def get_finbert_tail_rust_accel_metrics() -> dict[str, int | str | bool | None]:
+    metrics: dict[str, int | str | bool | None] = dict(_FINBERT_TAIL_RUST_METRICS)
+    metrics["rust_accel_available"] = _lm2011_rust is not None
+    metrics["rust_accel_import_error"] = _FINBERT_TAIL_RUST_IMPORT_ERROR
+    return metrics
+
+
+def reset_finbert_tail_rust_accel_metrics() -> None:
+    for key in _FINBERT_TAIL_RUST_METRICS:
+        _FINBERT_TAIL_RUST_METRICS[key] = 0
+
 
 def _empty_tail_doc_surface() -> pl.DataFrame:
     return pl.DataFrame(schema=TAIL_DOC_SURFACE_SCHEMA)
+
+
+def _align_tail_doc_surface(df: pl.DataFrame) -> pl.DataFrame:
+    return df.select(
+        [
+            (
+                pl.col(column).cast(dtype, strict=False)
+                if column in df.columns
+                else pl.lit(None, dtype=dtype)
+            ).alias(column)
+            for column, dtype in TAIL_DOC_SURFACE_SCHEMA.items()
+        ]
+    )
 
 
 def _require_columns(lf: pl.LazyFrame, columns: Sequence[str], *, label: str) -> None:
@@ -79,7 +126,7 @@ def _optional_int64_expr(schema: pl.Schema, column: str) -> pl.Expr:
     return pl.lit(None, dtype=pl.Int64)
 
 
-def _normalize_text_scope_value(value: str) -> str:
+def _normalize_text_scope_value_py(value: str) -> str:
     raw = value.strip().casefold().replace("-", "_")
     if raw in {"7", "item_7", "mda_item_7", "item_7_mda"}:
         return "item_7_mda"
@@ -90,6 +137,18 @@ def _normalize_text_scope_value(value: str) -> str:
     if raw in {"items_1_1a_7_concat", "item_1_item_1a_item_7_concat"}:
         return "items_1_1a_7_concat"
     return raw
+
+
+def _normalize_text_scope_value(value: str) -> str:
+    if _lm2011_rust is not None and value.isascii():
+        try:
+            out = str(_lm2011_rust.finbert_tail_text_scope_value(value))
+            _FINBERT_TAIL_RUST_METRICS["text_scope_fast_success"] += 1
+            return out
+        except Exception:
+            _FINBERT_TAIL_RUST_METRICS["text_scope_fast_failures"] += 1
+    _FINBERT_TAIL_RUST_METRICS["text_scope_fallbacks"] += 1
+    return _normalize_text_scope_value_py(value)
 
 
 def _top_fraction_cutoff(sentence_count_expr: pl.Expr, fraction: float) -> pl.Expr:
@@ -261,6 +320,23 @@ def build_finbert_tail_doc_surface_lf(
                 group_keys=group_keys,
                 alias="top_20pct_neg_mean",
             ),
+            _weighted_group_mean(
+                pl.when(pl.col("_negative_rank") <= 5)
+                .then(pl.col("negative_prob"))
+                .otherwise(pl.lit(0.0)),
+                weight_expr=pl.when(pl.col("_negative_rank") <= 5)
+                .then(pl.col("_token_weight"))
+                .otherwise(pl.lit(0.0)),
+                denominator_expr=(
+                    pl.when(pl.col("_negative_rank") <= 5)
+                    .then(pl.col("_token_weight"))
+                    .otherwise(pl.lit(0.0))
+                    .sum()
+                    .over(group_keys)
+                ),
+                group_keys=group_keys,
+                alias="top_5_sentences_neg_mean",
+            ),
             (
                 pl.when(denominator_expr > 0.0)
                 .then(
@@ -287,7 +363,7 @@ def build_finbert_tail_doc_surface_lf(
     )
 
 
-def build_finbert_tail_doc_surface(
+def _build_finbert_tail_doc_surface_py(
     sentence_scores_df: pl.DataFrame,
     *,
     text_scopes: Sequence[str],
@@ -298,6 +374,50 @@ def build_finbert_tail_doc_surface(
         sentence_scores_df.lazy(),
         text_scopes=text_scopes,
     ).collect()
+
+
+def build_finbert_tail_doc_surface(
+    sentence_scores_df: pl.DataFrame,
+    *,
+    text_scopes: Sequence[str],
+) -> pl.DataFrame:
+    if sentence_scores_df.is_empty():
+        return _empty_tail_doc_surface()
+    _require_columns(
+        sentence_scores_df.lazy(),
+        ("doc_id", "negative_prob", "sentence_index", _TAIL_TOKEN_WEIGHT_COLUMN),
+        label="sentence_scores",
+    )
+    if _lm2011_rust is not None:
+        try:
+            rows = _lm2011_rust.finbert_tail_doc_surface_columns(
+                sentence_scores_df.columns,
+                [sentence_scores_df.get_column(column).to_list() for column in sentence_scores_df.columns],
+                [str(scope) for scope in text_scopes],
+            )
+            _FINBERT_TAIL_RUST_METRICS["doc_surface_column_fast_success"] += 1
+            if not rows:
+                return _empty_tail_doc_surface()
+            return _align_tail_doc_surface(pl.DataFrame([dict(row) for row in rows]))
+        except Exception:
+            _FINBERT_TAIL_RUST_METRICS["doc_surface_column_fast_failures"] += 1
+            _FINBERT_TAIL_RUST_METRICS["doc_surface_column_fallbacks"] += 1
+        try:
+            rows = _lm2011_rust.finbert_tail_doc_surface_rows(
+                sentence_scores_df.to_dicts(),
+                [str(scope) for scope in text_scopes],
+            )
+            _FINBERT_TAIL_RUST_METRICS["doc_surface_fast_success"] += 1
+            if not rows:
+                return _empty_tail_doc_surface()
+            return _align_tail_doc_surface(pl.DataFrame([dict(row) for row in rows]))
+        except Exception:
+            _FINBERT_TAIL_RUST_METRICS["doc_surface_fast_failures"] += 1
+    _FINBERT_TAIL_RUST_METRICS["doc_surface_fallbacks"] += 1
+    return _build_finbert_tail_doc_surface_py(
+        sentence_scores_df,
+        text_scopes=text_scopes,
+    )
 
 
 __all__ = [

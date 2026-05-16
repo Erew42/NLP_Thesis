@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
@@ -9,6 +9,14 @@ from typing import Any
 
 import polars as pl
 import pyarrow.parquet as pq
+
+try:
+    from thesis_native import _lm2011_rust
+except Exception as exc:  # pragma: no cover - optional native extension
+    _lm2011_rust = None
+    _SENTENCE_EXAMPLES_RUST_IMPORT_ERROR: str | None = f"{type(exc).__name__}: {exc}"
+else:
+    _SENTENCE_EXAMPLES_RUST_IMPORT_ERROR = None
 
 
 BENCHMARK_SENTENCE_ID_COLUMN = "benchmark_sentence_id"
@@ -90,6 +98,60 @@ SAMPLE_OUTPUT_SCHEMA: dict[str, pl.DataType] = {
     PREDICTED_LABEL_COLUMN: pl.Utf8,
 }
 
+_SENTENCE_EXAMPLES_RUST_METRICS: dict[str, int] = {
+    "item_codes_fast_success": 0,
+    "item_codes_fast_failures": 0,
+    "item_codes_fallbacks": 0,
+    "ordered_item_codes_fast_success": 0,
+    "ordered_item_codes_fast_failures": 0,
+    "ordered_item_codes_fallbacks": 0,
+    "sample_key_fast_success": 0,
+    "sample_key_fast_failures": 0,
+    "sample_key_fallbacks": 0,
+    "sample_keys_fast_success": 0,
+    "sample_keys_fast_failures": 0,
+    "sample_keys_fallbacks": 0,
+    "normalized_text_fast_success": 0,
+    "normalized_text_fast_failures": 0,
+    "normalized_text_fallbacks": 0,
+    "normalized_texts_fast_success": 0,
+    "normalized_texts_fast_failures": 0,
+    "normalized_texts_fallbacks": 0,
+    "consider_sample_fast_success": 0,
+    "consider_sample_fast_failures": 0,
+    "consider_sample_fallbacks": 0,
+    "update_accumulators_fast_success": 0,
+    "update_accumulators_fast_failures": 0,
+    "update_accumulators_fallbacks": 0,
+    "sample_candidate_rows_fast_success": 0,
+    "sample_candidate_rows_fast_failures": 0,
+    "sample_candidate_rows_fallbacks": 0,
+    "item_sentiment_count_rows_fast_success": 0,
+    "item_sentiment_count_rows_fast_failures": 0,
+    "item_sentiment_count_rows_fallbacks": 0,
+    "year_item_sentiment_count_rows_fast_success": 0,
+    "year_item_sentiment_count_rows_fast_failures": 0,
+    "year_item_sentiment_count_rows_fallbacks": 0,
+    "render_markdown_column_fast_success": 0,
+    "render_markdown_column_fast_failures": 0,
+    "render_markdown_column_fallbacks": 0,
+    "render_markdown_fast_success": 0,
+    "render_markdown_fast_failures": 0,
+    "render_markdown_fallbacks": 0,
+}
+
+
+def get_sentence_examples_rust_accel_metrics() -> dict[str, int | str | bool | None]:
+    metrics: dict[str, int | str | bool | None] = dict(_SENTENCE_EXAMPLES_RUST_METRICS)
+    metrics["rust_accel_available"] = _lm2011_rust is not None
+    metrics["rust_accel_import_error"] = _SENTENCE_EXAMPLES_RUST_IMPORT_ERROR
+    return metrics
+
+
+def reset_sentence_examples_rust_accel_metrics() -> None:
+    for key in _SENTENCE_EXAMPLES_RUST_METRICS:
+        _SENTENCE_EXAMPLES_RUST_METRICS[key] = 0
+
 
 @dataclass(frozen=True)
 class HighConfidenceSentenceExampleArtifacts:
@@ -134,7 +196,7 @@ def sentence_score_paths(sentence_scores_dir: Path) -> tuple[Path, ...]:
     return tuple(sorted(path for path in by_year_dir.glob("*.parquet") if path.is_file()))
 
 
-def _normalize_item_codes(item_codes: tuple[str, ...] | None) -> tuple[str, ...]:
+def _normalize_item_codes_py(item_codes: tuple[str, ...] | None) -> tuple[str, ...]:
     if item_codes is None:
         return DEFAULT_ITEM_CODES
     normalized = tuple(
@@ -143,11 +205,35 @@ def _normalize_item_codes(item_codes: tuple[str, ...] | None) -> tuple[str, ...]
     return normalized or DEFAULT_ITEM_CODES
 
 
-def _ordered_item_codes(item_codes: tuple[str, ...]) -> list[str]:
+def _normalize_item_codes(item_codes: tuple[str, ...] | None) -> tuple[str, ...]:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.normalize_item_codes_optional_value(item_codes)
+            _SENTENCE_EXAMPLES_RUST_METRICS["item_codes_fast_success"] += 1
+            return DEFAULT_ITEM_CODES if out is None else tuple(str(value) for value in out)
+        except Exception:
+            _SENTENCE_EXAMPLES_RUST_METRICS["item_codes_fast_failures"] += 1
+    _SENTENCE_EXAMPLES_RUST_METRICS["item_codes_fallbacks"] += 1
+    return _normalize_item_codes_py(item_codes)
+
+
+def _ordered_item_codes_py(item_codes: tuple[str, ...]) -> list[str]:
     seen = set(item_codes)
     ordered = [code for code in DEFAULT_ITEM_ORDER if code in seen]
     ordered.extend(code for code in item_codes if code not in DEFAULT_ITEM_ORDER)
     return ordered
+
+
+def _ordered_item_codes(item_codes: tuple[str, ...]) -> list[str]:
+    if _lm2011_rust is not None:
+        try:
+            out = list(_lm2011_rust.sentence_length_ordered_item_codes(item_codes, DEFAULT_ITEM_ORDER))
+            _SENTENCE_EXAMPLES_RUST_METRICS["ordered_item_codes_fast_success"] += 1
+            return [str(code) for code in out]
+        except Exception:
+            _SENTENCE_EXAMPLES_RUST_METRICS["ordered_item_codes_fast_failures"] += 1
+    _SENTENCE_EXAMPLES_RUST_METRICS["ordered_item_codes_fallbacks"] += 1
+    return _ordered_item_codes_py(item_codes)
 
 
 def _item_label(item_code: str) -> str:
@@ -266,7 +352,7 @@ def _filter_candidate_batch(
     return filtered_df
 
 
-def _stable_sample_key(seed: int, benchmark_sentence_id: str) -> int:
+def _stable_sample_key_py(seed: int, benchmark_sentence_id: str) -> int:
     digest = hashlib.blake2b(
         f"{seed}|{benchmark_sentence_id}".encode("utf-8"),
         digest_size=8,
@@ -274,19 +360,87 @@ def _stable_sample_key(seed: int, benchmark_sentence_id: str) -> int:
     return int.from_bytes(digest, byteorder="big", signed=False)
 
 
-def _normalized_sample_text(sentence_text: str) -> str:
+def _stable_sample_key(seed: int, benchmark_sentence_id: str) -> int:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.finbert_sentence_sample_key_value(int(seed), str(benchmark_sentence_id))
+            _SENTENCE_EXAMPLES_RUST_METRICS["sample_key_fast_success"] += 1
+            return int(out)
+        except Exception:
+            _SENTENCE_EXAMPLES_RUST_METRICS["sample_key_fast_failures"] += 1
+    _SENTENCE_EXAMPLES_RUST_METRICS["sample_key_fallbacks"] += 1
+    return _stable_sample_key_py(seed, benchmark_sentence_id)
+
+
+def _stable_sample_keys_py(seed: int, benchmark_sentence_ids: list[str]) -> list[int]:
+    return [_stable_sample_key_py(seed, benchmark_sentence_id) for benchmark_sentence_id in benchmark_sentence_ids]
+
+
+def _stable_sample_keys(seed: int, benchmark_sentence_ids: list[str]) -> list[int]:
+    row_count = len(benchmark_sentence_ids)
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.finbert_sentence_sample_key_values(int(seed), benchmark_sentence_ids)
+            _SENTENCE_EXAMPLES_RUST_METRICS["sample_keys_fast_success"] += row_count
+            return [int(value) for value in out]
+        except Exception:
+            _SENTENCE_EXAMPLES_RUST_METRICS["sample_keys_fast_failures"] += row_count
+    _SENTENCE_EXAMPLES_RUST_METRICS["sample_keys_fallbacks"] += row_count
+    return _stable_sample_keys_py(seed, benchmark_sentence_ids)
+
+
+def _normalized_sample_text_py(sentence_text: str) -> str:
     return " ".join(sentence_text.split()).casefold()
 
 
-def _consider_sample(
+def _normalized_sample_text(sentence_text: str) -> str:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.normalize_ascii_sample_text_value(str(sentence_text))
+            if out is not None:
+                _SENTENCE_EXAMPLES_RUST_METRICS["normalized_text_fast_success"] += 1
+                return str(out)
+        except Exception:
+            _SENTENCE_EXAMPLES_RUST_METRICS["normalized_text_fast_failures"] += 1
+        _SENTENCE_EXAMPLES_RUST_METRICS["normalized_text_fallbacks"] += 1
+    else:
+        _SENTENCE_EXAMPLES_RUST_METRICS["normalized_text_fallbacks"] += 1
+    return _normalized_sample_text_py(sentence_text)
+
+
+def _normalized_sample_texts_py(sentence_texts: list[str]) -> list[str]:
+    return [_normalized_sample_text_py(sentence_text) for sentence_text in sentence_texts]
+
+
+def _normalized_sample_texts(sentence_texts: list[str]) -> list[str]:
+    row_count = len(sentence_texts)
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.normalize_ascii_sample_text_values(sentence_texts)
+            if out is not None:
+                _SENTENCE_EXAMPLES_RUST_METRICS["normalized_texts_fast_success"] += row_count
+                return [str(value) for value in out]
+        except Exception:
+            _SENTENCE_EXAMPLES_RUST_METRICS["normalized_texts_fast_failures"] += row_count
+        _SENTENCE_EXAMPLES_RUST_METRICS["normalized_texts_fallbacks"] += row_count
+    else:
+        _SENTENCE_EXAMPLES_RUST_METRICS["normalized_texts_fallbacks"] += row_count
+    return _normalized_sample_texts_py(sentence_texts)
+
+
+def _consider_sample_py(
     selected_rows: list[dict[str, Any]],
     candidate_row: dict[str, Any],
     *,
     sample_size_per_group: int,
     seed: int,
+    sample_key: int | None = None,
+    normalized_text: str | None = None,
 ) -> None:
-    sample_key = _stable_sample_key(seed, str(candidate_row[BENCHMARK_SENTENCE_ID_COLUMN]))
-    normalized_text = _normalized_sample_text(str(candidate_row[SENTENCE_TEXT_COLUMN]))
+    if sample_key is None:
+        sample_key = _stable_sample_key(seed, str(candidate_row[BENCHMARK_SENTENCE_ID_COLUMN]))
+    if normalized_text is None:
+        normalized_text = _normalized_sample_text(str(candidate_row[SENTENCE_TEXT_COLUMN]))
     candidate = dict(candidate_row)
     candidate["_sample_key"] = sample_key
     candidate["_normalized_text"] = normalized_text
@@ -314,7 +468,45 @@ def _consider_sample(
         selected_rows[largest_index] = candidate
 
 
-def _update_accumulators(
+def _consider_sample(
+    selected_rows: list[dict[str, Any]],
+    candidate_row: dict[str, Any],
+    *,
+    sample_size_per_group: int,
+    seed: int,
+    sample_key: int | None = None,
+    normalized_text: str | None = None,
+) -> None:
+    if sample_key is None:
+        sample_key = _stable_sample_key(seed, str(candidate_row[BENCHMARK_SENTENCE_ID_COLUMN]))
+    if normalized_text is None:
+        normalized_text = _normalized_sample_text(str(candidate_row[SENTENCE_TEXT_COLUMN]))
+    if sample_size_per_group > 0 and _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.finbert_sentence_consider_sample_rows(
+                selected_rows,
+                candidate_row,
+                sample_size_per_group,
+                int(sample_key),
+                normalized_text,
+            )
+            selected_rows[:] = [dict(row) for row in out]
+            _SENTENCE_EXAMPLES_RUST_METRICS["consider_sample_fast_success"] += 1
+            return
+        except Exception:
+            _SENTENCE_EXAMPLES_RUST_METRICS["consider_sample_fast_failures"] += 1
+    _SENTENCE_EXAMPLES_RUST_METRICS["consider_sample_fallbacks"] += 1
+    _consider_sample_py(
+        selected_rows,
+        candidate_row,
+        sample_size_per_group=sample_size_per_group,
+        seed=seed,
+        sample_key=sample_key,
+        normalized_text=normalized_text,
+    )
+
+
+def _update_accumulators_py(
     filtered_df: pl.DataFrame,
     *,
     counts_by_item_sentiment: dict[tuple[str, str], dict[str, Any]],
@@ -324,7 +516,15 @@ def _update_accumulators(
     seed: int,
     all_doc_ids: set[str],
 ) -> None:
-    for row in filtered_df.iter_rows(named=True):
+    rows = filtered_df.to_dicts()
+    sample_keys = _stable_sample_keys(
+        seed,
+        [str(row[BENCHMARK_SENTENCE_ID_COLUMN]) for row in rows],
+    )
+    normalized_texts = _normalized_sample_texts(
+        [str(row[SENTENCE_TEXT_COLUMN]) for row in rows],
+    )
+    for row, sample_key, normalized_text in zip(rows, sample_keys, normalized_texts, strict=True):
         item_code = str(row[BENCHMARK_ITEM_CODE_COLUMN])
         sentiment = str(row[SENTIMENT_COLUMN])
         filing_year = int(row[FILING_YEAR_COLUMN])
@@ -353,14 +553,56 @@ def _update_accumulators(
             row,
             sample_size_per_group=sample_size_per_group,
             seed=seed,
+            sample_key=sample_key,
+            normalized_text=normalized_text,
         )
 
 
-def _counts_by_item_sentiment_frame(
+def _update_accumulators(
+    filtered_df: pl.DataFrame,
+    *,
+    counts_by_item_sentiment: dict[tuple[str, str], dict[str, Any]],
+    counts_by_year_item_sentiment: dict[tuple[int, str, str], dict[str, Any]],
+    selected_samples: dict[tuple[str, str], list[dict[str, Any]]],
+    sample_size_per_group: int,
+    seed: int,
+    all_doc_ids: set[str],
+) -> None:
+    if _lm2011_rust is not None and sample_size_per_group > 0:
+        rows = filtered_df.to_dicts()
+        try:
+            _lm2011_rust.finbert_sentence_update_accumulators(
+                rows,
+                counts_by_item_sentiment,
+                counts_by_year_item_sentiment,
+                selected_samples,
+                sample_size_per_group,
+                seed,
+                all_doc_ids,
+            )
+            _SENTENCE_EXAMPLES_RUST_METRICS["update_accumulators_fast_success"] += 1
+            return
+        except Exception:
+            _SENTENCE_EXAMPLES_RUST_METRICS["update_accumulators_fast_failures"] += 1
+            _SENTENCE_EXAMPLES_RUST_METRICS["update_accumulators_fallbacks"] += 1
+    else:
+        _SENTENCE_EXAMPLES_RUST_METRICS["update_accumulators_fallbacks"] += 1
+    _update_accumulators_py(
+        filtered_df,
+        counts_by_item_sentiment=counts_by_item_sentiment,
+        counts_by_year_item_sentiment=counts_by_year_item_sentiment,
+        selected_samples=selected_samples,
+        sample_size_per_group=sample_size_per_group,
+        seed=seed,
+        all_doc_ids=all_doc_ids,
+    )
+
+
+def _counts_by_item_sentiment_rows_py(
     counts_by_item_sentiment: dict[tuple[str, str], dict[str, Any]],
     *,
     ordered_items: tuple[str, ...],
-) -> pl.DataFrame:
+) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for item_code in ordered_items:
         for sentiment in DEFAULT_SENTIMENT_ORDER:
@@ -375,14 +617,45 @@ def _counts_by_item_sentiment_frame(
                     "doc_count": len(acc["doc_ids"]),
                 }
             )
-    return pl.DataFrame(rows)
+    return rows
 
 
-def _counts_by_year_item_sentiment_frame(
-    counts_by_year_item_sentiment: dict[tuple[int, str, str], dict[str, Any]],
+def _counts_by_item_sentiment_rows(
+    counts_by_item_sentiment: dict[tuple[str, str], dict[str, Any]],
+    *,
+    ordered_items: tuple[str, ...],
+) -> list[dict[str, Any]]:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.finbert_sentence_item_sentiment_count_rows(
+                counts_by_item_sentiment,
+                list(ordered_items),
+                list(DEFAULT_SENTIMENT_ORDER),
+            )
+            _SENTENCE_EXAMPLES_RUST_METRICS["item_sentiment_count_rows_fast_success"] += 1
+            return [dict(row) for row in out]
+        except Exception:
+            _SENTENCE_EXAMPLES_RUST_METRICS["item_sentiment_count_rows_fast_failures"] += 1
+    _SENTENCE_EXAMPLES_RUST_METRICS["item_sentiment_count_rows_fallbacks"] += 1
+    return _counts_by_item_sentiment_rows_py(
+        counts_by_item_sentiment,
+        ordered_items=ordered_items,
+    )
+
+
+def _counts_by_item_sentiment_frame(
+    counts_by_item_sentiment: dict[tuple[str, str], dict[str, Any]],
     *,
     ordered_items: tuple[str, ...],
 ) -> pl.DataFrame:
+    return pl.DataFrame(_counts_by_item_sentiment_rows(counts_by_item_sentiment, ordered_items=ordered_items))
+
+
+def _counts_by_year_item_sentiment_rows_py(
+    counts_by_year_item_sentiment: dict[tuple[int, str, str], dict[str, Any]],
+    *,
+    ordered_items: tuple[str, ...],
+) -> list[dict[str, Any]]:
     item_order = {item_code: index for index, item_code in enumerate(ordered_items)}
     sentiment_order = {
         sentiment: index for index, sentiment in enumerate(DEFAULT_SENTIMENT_ORDER)
@@ -400,15 +673,52 @@ def _counts_by_year_item_sentiment_frame(
                 "_sentiment_order": sentiment_order.get(sentiment, len(sentiment_order)),
             }
         )
-    if not rows:
-        return pl.DataFrame(rows)
-    return (
-        pl.DataFrame(rows)
-        .sort(
-            [FILING_YEAR_COLUMN, "_item_order", "_sentiment_order"],
-            descending=[False, False, False],
+    rows.sort(
+        key=lambda row: (
+            int(row[FILING_YEAR_COLUMN]),
+            int(row["_item_order"]),
+            int(row["_sentiment_order"]),
         )
-        .drop(["_item_order", "_sentiment_order"])
+    )
+    for row in rows:
+        row.pop("_item_order", None)
+        row.pop("_sentiment_order", None)
+    return rows
+
+
+def _counts_by_year_item_sentiment_rows(
+    counts_by_year_item_sentiment: dict[tuple[int, str, str], dict[str, Any]],
+    *,
+    ordered_items: tuple[str, ...],
+) -> list[dict[str, Any]]:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.finbert_sentence_year_item_sentiment_count_rows(
+                counts_by_year_item_sentiment,
+                list(ordered_items),
+                list(DEFAULT_SENTIMENT_ORDER),
+            )
+            _SENTENCE_EXAMPLES_RUST_METRICS["year_item_sentiment_count_rows_fast_success"] += 1
+            return [dict(row) for row in out]
+        except Exception:
+            _SENTENCE_EXAMPLES_RUST_METRICS["year_item_sentiment_count_rows_fast_failures"] += 1
+    _SENTENCE_EXAMPLES_RUST_METRICS["year_item_sentiment_count_rows_fallbacks"] += 1
+    return _counts_by_year_item_sentiment_rows_py(
+        counts_by_year_item_sentiment,
+        ordered_items=ordered_items,
+    )
+
+
+def _counts_by_year_item_sentiment_frame(
+    counts_by_year_item_sentiment: dict[tuple[int, str, str], dict[str, Any]],
+    *,
+    ordered_items: tuple[str, ...],
+) -> pl.DataFrame:
+    return pl.DataFrame(
+        _counts_by_year_item_sentiment_rows(
+            counts_by_year_item_sentiment,
+            ordered_items=ordered_items,
+        )
     )
 
 
@@ -416,11 +726,11 @@ def _empty_sample_candidates_frame() -> pl.DataFrame:
     return pl.DataFrame(schema=SAMPLE_OUTPUT_SCHEMA)
 
 
-def _sample_candidates_frame(
+def _sample_candidate_rows_py(
     selected_samples: dict[tuple[str, str], list[dict[str, Any]]],
     *,
     ordered_items: tuple[str, ...],
-) -> pl.DataFrame:
+) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for item_code in ordered_items:
         for sentiment in DEFAULT_SENTIMENT_ORDER:
@@ -444,6 +754,37 @@ def _sample_candidates_frame(
                         for column in SAMPLE_OUTPUT_COLUMNS
                     }
                 )
+    return rows
+
+
+def _sample_candidate_rows(
+    selected_samples: dict[tuple[str, str], list[dict[str, Any]]],
+    *,
+    ordered_items: tuple[str, ...],
+) -> list[dict[str, Any]]:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.finbert_sentence_sample_candidate_rows(
+                selected_samples,
+                list(ordered_items),
+                list(DEFAULT_SENTIMENT_ORDER),
+                list(SAMPLE_OUTPUT_COLUMNS),
+                FILING_DATE_COLUMN,
+            )
+            _SENTENCE_EXAMPLES_RUST_METRICS["sample_candidate_rows_fast_success"] += 1
+            return [dict(row) for row in out]
+        except Exception:
+            _SENTENCE_EXAMPLES_RUST_METRICS["sample_candidate_rows_fast_failures"] += 1
+    _SENTENCE_EXAMPLES_RUST_METRICS["sample_candidate_rows_fallbacks"] += 1
+    return _sample_candidate_rows_py(selected_samples, ordered_items=ordered_items)
+
+
+def _sample_candidates_frame(
+    selected_samples: dict[tuple[str, str], list[dict[str, Any]]],
+    *,
+    ordered_items: tuple[str, ...],
+) -> pl.DataFrame:
+    rows = _sample_candidate_rows(selected_samples, ordered_items=ordered_items)
     if not rows:
         return _empty_sample_candidates_frame()
     return pl.DataFrame(rows, schema_overrides=SAMPLE_OUTPUT_SCHEMA)
@@ -461,7 +802,7 @@ def _row_to_jsonable(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _render_sample_markdown(
+def _render_sample_markdown_py(
     sample_candidates: pl.DataFrame,
     counts_by_item_sentiment: pl.DataFrame,
     metadata: dict[str, Any],
@@ -515,6 +856,41 @@ def _render_sample_markdown(
                 )
             lines.append("")
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _render_sample_markdown(
+    sample_candidates: pl.DataFrame,
+    counts_by_item_sentiment: pl.DataFrame,
+    metadata: dict[str, Any],
+) -> str:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.finbert_sentence_render_sample_markdown_columns(
+                sample_candidates.columns,
+                [sample_candidates.get_column(column).to_list() for column in sample_candidates.columns],
+                counts_by_item_sentiment.columns,
+                [counts_by_item_sentiment.get_column(column).to_list() for column in counts_by_item_sentiment.columns],
+                metadata,
+                list(DEFAULT_SENTIMENT_ORDER),
+            )
+            _SENTENCE_EXAMPLES_RUST_METRICS["render_markdown_column_fast_success"] += 1
+            return str(out)
+        except Exception:
+            _SENTENCE_EXAMPLES_RUST_METRICS["render_markdown_column_fast_failures"] += 1
+            _SENTENCE_EXAMPLES_RUST_METRICS["render_markdown_column_fallbacks"] += 1
+        try:
+            out = _lm2011_rust.finbert_sentence_render_sample_markdown(
+                sample_candidates.to_dicts(),
+                counts_by_item_sentiment.to_dicts(),
+                metadata,
+                list(DEFAULT_SENTIMENT_ORDER),
+            )
+            _SENTENCE_EXAMPLES_RUST_METRICS["render_markdown_fast_success"] += 1
+            return str(out)
+        except Exception:
+            _SENTENCE_EXAMPLES_RUST_METRICS["render_markdown_fast_failures"] += 1
+    _SENTENCE_EXAMPLES_RUST_METRICS["render_markdown_fallbacks"] += 1
+    return _render_sample_markdown_py(sample_candidates, counts_by_item_sentiment, metadata)
 
 
 def build_high_confidence_sentence_example_pack(

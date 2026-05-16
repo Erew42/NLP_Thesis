@@ -27,6 +27,7 @@ from .extraction import (
 )
 from .extraction_utils import EmbeddedHeadingHit
 from .heuristics import (
+    _line_has_compound_items,
     _looks_like_toc_heading_line,
     _prefix_is_part_only,
     _prefix_looks_like_cross_ref,
@@ -1036,9 +1037,7 @@ def _prefix_metadata(
 
 
 def _compound_item_heading(heading_line: str) -> bool:
-    if not heading_line:
-        return False
-    return len(ITEM_MENTION_PATTERN.findall(heading_line)) >= 2
+    return _line_has_compound_items(heading_line)
 
 
 def _split_flags(flag_field: str | None) -> list[str]:

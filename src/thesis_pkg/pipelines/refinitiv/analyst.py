@@ -9,14 +9,22 @@ from typing import Any
 import polars as pl
 
 from thesis_pkg.core.ccm.lm2011 import attach_eligible_quarterly_accounting
+try:
+    from thesis_native import _lm2011_rust
+except Exception as exc:  # pragma: no cover - optional native extension
+    _lm2011_rust = None
+    _ANALYST_RUST_IMPORT_ERROR: str | None = f"{type(exc).__name__}: {exc}"
+else:
+    _ANALYST_RUST_IMPORT_ERROR = None
+
 from thesis_pkg.pipelines.refinitiv.instrument_authority import (
     INSTRUMENT_AUTHORITY_COLUMNS,
 )
-from thesis_pkg.pipelines.refinitiv.lseg_batching import stable_hash_id
+from thesis_refinitiv.lseg_client.batching import stable_hash_id
 from thesis_pkg.pipelines.refinitiv.doc_ownership import (
     _normalize_float_value,
 )
-from thesis_pkg.pipelines.refinitiv_bridge_pipeline import (
+from thesis_refinitiv.bridge import (
     _build_explicit_schema_df,
     _cast_df_to_schema,
 )
@@ -133,6 +141,48 @@ DOC_ANALYST_SELECTED_COLUMNS: tuple[str, ...] = (
     "forecast_revision_1m",
     "analyst_match_status",
 )
+
+_ANALYST_RUST_METRICS: dict[str, int] = {
+    "request_group_id_fast_success": 0,
+    "request_group_id_fast_failures": 0,
+    "request_group_id_fallbacks": 0,
+    "request_group_ids_fast_success": 0,
+    "request_group_ids_fast_failures": 0,
+    "request_group_ids_fallbacks": 0,
+    "shift_months_fast_success": 0,
+    "shift_months_fast_failures": 0,
+    "shift_months_fallbacks": 0,
+    "latest_date_fast_success": 0,
+    "latest_date_fast_failures": 0,
+    "latest_date_fallbacks": 0,
+    "freeze_date_index_fast_success": 0,
+    "freeze_date_index_fast_failures": 0,
+    "freeze_date_index_fallbacks": 0,
+    "estimate_snapshot_fast_success": 0,
+    "estimate_snapshot_fast_failures": 0,
+    "estimate_snapshot_fallbacks": 0,
+    "actual_event_fast_success": 0,
+    "actual_event_fast_failures": 0,
+    "actual_event_fallbacks": 0,
+    "group_list_fast_success": 0,
+    "group_list_fast_failures": 0,
+    "group_list_fallbacks": 0,
+    "normalized_event_rows_fast_success": 0,
+    "normalized_event_rows_fast_failures": 0,
+    "normalized_event_rows_fallbacks": 0,
+}
+
+
+def get_refinitiv_analyst_rust_accel_metrics() -> dict[str, int | str | bool | None]:
+    metrics: dict[str, int | str | bool | None] = dict(_ANALYST_RUST_METRICS)
+    metrics["rust_accel_available"] = _lm2011_rust is not None
+    metrics["rust_accel_import_error"] = _ANALYST_RUST_IMPORT_ERROR
+    return metrics
+
+
+def reset_refinitiv_analyst_rust_accel_metrics() -> None:
+    for key in _ANALYST_RUST_METRICS:
+        _ANALYST_RUST_METRICS[key] = 0
 
 
 def _request_group_membership_schema() -> dict[str, pl.DataType]:
@@ -271,20 +321,50 @@ def _empty_df(columns: tuple[str, ...], schema: dict[str, pl.DataType]) -> pl.Da
     return _cast_df_to_schema(pl.DataFrame(schema=schema), schema).select(columns)
 
 
-def _shift_months(value: dt.date, months: int) -> dt.date:
+def _shift_months_py(value: dt.date, months: int) -> dt.date:
     month_index = (value.year * 12 + value.month - 1) + months
     year = month_index // 12
     month = month_index % 12 + 1
     return dt.date(year, month, monthrange(year, month)[1])
 
 
-def _freeze_sorted_date_index(
+def _shift_months(value: dt.date, months: int) -> dt.date:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.refinitiv_analyst_shift_months(value, int(months))
+            _ANALYST_RUST_METRICS["shift_months_fast_success"] += 1
+            return out
+        except Exception:
+            _ANALYST_RUST_METRICS["shift_months_fast_failures"] += 1
+            _ANALYST_RUST_METRICS["shift_months_fallbacks"] += 1
+    else:
+        _ANALYST_RUST_METRICS["shift_months_fallbacks"] += 1
+    return _shift_months_py(value, months)
+
+
+def _freeze_sorted_date_index_py(
     index: dict[Any, set[dt.date]],
 ) -> dict[Any, list[dt.date]]:
     return {key: sorted(values) for key, values in index.items() if values}
 
 
-def _latest_date_on_or_before(
+def _freeze_sorted_date_index(
+    index: dict[Any, set[dt.date]],
+) -> dict[Any, list[dt.date]]:
+    if _lm2011_rust is not None:
+        try:
+            pairs = _lm2011_rust.refinitiv_analyst_freeze_sorted_date_index(index)
+            _ANALYST_RUST_METRICS["freeze_date_index_fast_success"] += 1
+            return {key: list(values) for key, values in pairs}
+        except Exception:
+            _ANALYST_RUST_METRICS["freeze_date_index_fast_failures"] += 1
+            _ANALYST_RUST_METRICS["freeze_date_index_fallbacks"] += 1
+    else:
+        _ANALYST_RUST_METRICS["freeze_date_index_fallbacks"] += 1
+    return _freeze_sorted_date_index_py(index)
+
+
+def _latest_date_on_or_before_py(
     sorted_dates: list[dt.date] | None,
     cutoff: dt.date,
 ) -> dt.date | None:
@@ -296,12 +376,87 @@ def _latest_date_on_or_before(
     return sorted_dates[position - 1]
 
 
-def _normalize_request_group_id(gvkey_int: int, effective_collection_ric: str) -> str:
+def _latest_date_on_or_before(
+    sorted_dates: list[dt.date] | None,
+    cutoff: dt.date,
+) -> dt.date | None:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.refinitiv_analyst_latest_date_on_or_before(sorted_dates, cutoff)
+            _ANALYST_RUST_METRICS["latest_date_fast_success"] += 1
+            return out
+        except Exception:
+            _ANALYST_RUST_METRICS["latest_date_fast_failures"] += 1
+            _ANALYST_RUST_METRICS["latest_date_fallbacks"] += 1
+    else:
+        _ANALYST_RUST_METRICS["latest_date_fallbacks"] += 1
+    return _latest_date_on_or_before_py(sorted_dates, cutoff)
+
+
+def _normalize_request_group_id_py(gvkey_int: int, effective_collection_ric: str) -> str:
     return stable_hash_id("analyst_request_group", gvkey_int, effective_collection_ric, prefix="group")
 
 
-def _normalize_group_list(values: set[str]) -> list[str]:
+def _normalize_request_group_id(gvkey_int: int, effective_collection_ric: str) -> str:
+    if _lm2011_rust is not None:
+        try:
+            out = str(_lm2011_rust.normalize_analyst_request_group_id(gvkey_int, effective_collection_ric))
+            _ANALYST_RUST_METRICS["request_group_id_fast_success"] += 1
+            return out
+        except Exception:
+            _ANALYST_RUST_METRICS["request_group_id_fast_failures"] += 1
+            _ANALYST_RUST_METRICS["request_group_id_fallbacks"] += 1
+    else:
+        _ANALYST_RUST_METRICS["request_group_id_fallbacks"] += 1
+    return _normalize_request_group_id_py(gvkey_int, effective_collection_ric)
+
+
+def _normalize_request_group_ids_py(rows: list[dict[str, Any]]) -> list[str | None]:
+    out: list[str | None] = []
+    for row in rows:
+        gvkey_int = row.get("gvkey_int")
+        effective_collection_ric = row.get("effective_collection_ric")
+        if gvkey_int is None or effective_collection_ric is None:
+            out.append(None)
+            continue
+        out.append(_normalize_request_group_id_py(int(gvkey_int), str(effective_collection_ric)))
+    return out
+
+
+def _normalize_request_group_ids(rows: list[dict[str, Any]]) -> list[str | None]:
+    row_count = len(rows)
+    if _lm2011_rust is not None:
+        try:
+            out = [
+                None if value is None else str(value)
+                for value in _lm2011_rust.normalize_analyst_request_group_ids(rows)
+            ]
+            _ANALYST_RUST_METRICS["request_group_ids_fast_success"] += len(out)
+            return out
+        except Exception:
+            _ANALYST_RUST_METRICS["request_group_ids_fast_failures"] += row_count
+            _ANALYST_RUST_METRICS["request_group_ids_fallbacks"] += row_count
+    else:
+        _ANALYST_RUST_METRICS["request_group_ids_fallbacks"] += row_count
+    return _normalize_request_group_ids_py(rows)
+
+
+def _normalize_group_list_py(values: set[str]) -> list[str]:
     return sorted(value for value in values if value)
+
+
+def _normalize_group_list(values: set[str]) -> list[str]:
+    if _lm2011_rust is not None:
+        try:
+            out = list(_lm2011_rust.normalize_analyst_group_list_values(values))
+            _ANALYST_RUST_METRICS["group_list_fast_success"] += 1
+            return [str(value) for value in out]
+        except Exception:
+            _ANALYST_RUST_METRICS["group_list_fast_failures"] += 1
+            _ANALYST_RUST_METRICS["group_list_fallbacks"] += 1
+    else:
+        _ANALYST_RUST_METRICS["group_list_fallbacks"] += 1
+    return _normalize_group_list_py(values)
 
 
 def _clip_start_expr(column_name: str, bound: dt.date | None) -> pl.Expr:
@@ -349,13 +504,12 @@ def build_refinitiv_step1_analyst_request_groups(
         authority_schema,
     ).select(INSTRUMENT_AUTHORITY_COLUMNS)
 
-    eligible = authority.filter(pl.col("authority_eligible").fill_null(False)).with_columns(
-        pl.struct("gvkey_int", "effective_collection_ric").map_elements(
-            lambda row: None
-            if row["gvkey_int"] is None or row["effective_collection_ric"] is None
-            else _normalize_request_group_id(int(row["gvkey_int"]), str(row["effective_collection_ric"])),
-            return_dtype=pl.Utf8,
-        ).alias("request_group_id")
+    eligible = authority.filter(pl.col("authority_eligible").fill_null(False))
+    request_group_ids = _normalize_request_group_ids(
+        eligible.select("gvkey_int", "effective_collection_ric").to_dicts()
+    )
+    eligible = eligible.with_columns(
+        pl.Series("request_group_id", request_group_ids, dtype=pl.Utf8)
     )
 
     membership_df = _cast_df_to_schema(
@@ -724,7 +878,7 @@ def run_refinitiv_lm2011_doc_analyst_select_pipeline(
     return {"refinitiv_doc_analyst_selected_parquet": output_path}
 
 
-def _canonicalize_actual_event(
+def _canonicalize_actual_event_py(
     rows: list[dict[str, Any]],
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     actual_eps_values = {row["actual_eps"] for row in rows}
@@ -762,7 +916,56 @@ def _canonicalize_actual_event(
     }, None
 
 
-def _canonicalize_estimate_snapshot(
+def _canonicalize_actual_event(
+    rows: list[dict[str, Any]],
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    if _lm2011_rust is not None:
+        try:
+            canonical_values, conflict, source_request_group_ids = (
+                _lm2011_rust.refinitiv_analyst_canonicalize_actual_event(rows)
+            )
+            _ANALYST_RUST_METRICS["actual_event_fast_success"] += 1
+            fiscal_period_end = rows[0].get("fiscal_period_end")
+            announcement_date = rows[0].get("announcement_date")
+            gvkey_int = rows[0].get("gvkey_int")
+            if conflict:
+                return None, {
+                    "rejection_case_id": stable_hash_id(
+                        "analyst_rejection",
+                        gvkey_int,
+                        announcement_date,
+                        fiscal_period_end,
+                        "conflicting_duplicate_actuals",
+                        prefix="reject",
+                    ),
+                    "gvkey_int": gvkey_int,
+                    "announcement_date": announcement_date,
+                    "fiscal_period_end": fiscal_period_end,
+                    "selected_calc_date": None,
+                    "rejection_status": "CONFLICTING_DUPLICATE_ACTUALS",
+                    "rejection_reason": "conflicting duplicate actual EPS values for the same event key",
+                    "source_request_group_ids": [str(value) for value in source_request_group_ids],
+                }
+            if canonical_values is None:
+                return None, None
+            actual_eps, effective_collection_ric, source_request_group_ids = canonical_values
+            return {
+                "gvkey_int": gvkey_int,
+                "announcement_date": announcement_date,
+                "fiscal_period_end": fiscal_period_end,
+                "actual_eps": actual_eps,
+                "effective_collection_ric": effective_collection_ric,
+                "source_request_group_ids": [str(value) for value in source_request_group_ids],
+            }, None
+        except Exception:
+            _ANALYST_RUST_METRICS["actual_event_fast_failures"] += 1
+            _ANALYST_RUST_METRICS["actual_event_fallbacks"] += 1
+    else:
+        _ANALYST_RUST_METRICS["actual_event_fallbacks"] += 1
+    return _canonicalize_actual_event_py(rows)
+
+
+def _canonicalize_estimate_snapshot_py(
     gvkey_int: int,
     fiscal_period_end: dt.date,
     calc_date: dt.date,
@@ -793,75 +996,54 @@ def _canonicalize_estimate_snapshot(
     }, False
 
 
-def build_refinitiv_analyst_normalized_outputs(
-    actuals_raw_df: pl.DataFrame,
-    estimates_raw_df: pl.DataFrame,
-) -> tuple[pl.DataFrame, pl.DataFrame]:
-    actuals = _cast_df_to_schema(
-        actuals_raw_df.select(ANALYST_ACTUALS_RAW_COLUMNS),
-        _actuals_raw_schema(),
-    ).select(ANALYST_ACTUALS_RAW_COLUMNS)
-    estimates = _cast_df_to_schema(
-        estimates_raw_df.select(ANALYST_ESTIMATES_MONTHLY_RAW_COLUMNS),
-        _estimates_raw_schema(),
-    ).select(ANALYST_ESTIMATES_MONTHLY_RAW_COLUMNS)
+def _canonicalize_estimate_snapshot(
+    gvkey_int: int,
+    fiscal_period_end: dt.date,
+    calc_date: dt.date,
+    rows: list[dict[str, Any]],
+) -> tuple[dict[str, Any] | None, bool]:
+    if _lm2011_rust is not None:
+        try:
+            canonical_values, conflict = _lm2011_rust.refinitiv_analyst_canonicalize_estimate_snapshot(rows)
+            _ANALYST_RUST_METRICS["estimate_snapshot_fast_success"] += 1
+            if conflict:
+                return None, True
+            if canonical_values is None:
+                return None, False
+            (
+                forecast_consensus_mean,
+                forecast_dispersion,
+                estimate_count,
+                effective_collection_ric,
+                source_request_group_ids,
+            ) = canonical_values
+            return {
+                "gvkey_int": gvkey_int,
+                "fiscal_period_end": fiscal_period_end,
+                "calc_date": calc_date,
+                "forecast_consensus_mean": forecast_consensus_mean,
+                "forecast_dispersion": forecast_dispersion,
+                "estimate_count": estimate_count,
+                "effective_collection_ric": effective_collection_ric,
+                "source_request_group_ids": [str(value) for value in source_request_group_ids],
+            }, False
+        except Exception:
+            _ANALYST_RUST_METRICS["estimate_snapshot_fast_failures"] += 1
+            _ANALYST_RUST_METRICS["estimate_snapshot_fallbacks"] += 1
+    else:
+            _ANALYST_RUST_METRICS["estimate_snapshot_fallbacks"] += 1
+    return _canonicalize_estimate_snapshot_py(gvkey_int, fiscal_period_end, calc_date, rows)
 
-    actual_groups: dict[tuple[Any, Any, Any], list[dict[str, Any]]] = {}
-    filtered_actuals = actuals.filter(
-        pl.col("announcement_date").is_not_null() & pl.col("actual_eps").is_not_null()
-    )
-    for row in filtered_actuals.to_dicts():
-        key = (row.get("gvkey_int"), row.get("announcement_date"), row.get("fiscal_period_end"))
-        actual_groups.setdefault(key, []).append(row)
 
-    canonical_actuals: list[dict[str, Any]] = []
+def _build_normalized_event_rows_py(
+    canonical_actuals: list[dict[str, Any]],
+    canonical_estimates: dict[tuple[int, dt.date, dt.date], dict[str, Any]],
+    conflicting_estimate_keys: set[tuple[int, dt.date, dt.date]],
+    estimate_calc_dates_by_snapshot_key: dict[tuple[int, dt.date], list[dt.date]],
+    estimate_calc_dates_by_gvkey: dict[int, list[dt.date]],
+    estimate_fiscal_period_ends_by_gvkey_calc_date: dict[tuple[int, dt.date], list[dt.date]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     rejection_rows: list[dict[str, Any]] = []
-    for rows in actual_groups.values():
-        canonical, rejection = _canonicalize_actual_event(rows)
-        if rejection is not None:
-            rejection_rows.append(rejection)
-            continue
-        if canonical is not None:
-            canonical_actuals.append(canonical)
-
-    estimate_group_map: dict[tuple[int, dt.date, dt.date], list[dict[str, Any]]] = {}
-    estimate_calc_dates_by_snapshot_key_raw: dict[tuple[int, dt.date], set[dt.date]] = {}
-    estimate_calc_dates_by_gvkey_raw: dict[int, set[dt.date]] = {}
-    estimate_fiscal_period_ends_by_gvkey_calc_date_raw: dict[tuple[int, dt.date], set[dt.date]] = {}
-    filtered_estimates = estimates.filter(
-        pl.col("gvkey_int").is_not_null()
-        & pl.col("calc_date").is_not_null()
-        & pl.col("fiscal_period_end").is_not_null()
-    )
-    for row in filtered_estimates.to_dicts():
-        gvkey_int = row.get("gvkey_int")
-        calc_date = row.get("calc_date")
-        fiscal_period_end = row.get("fiscal_period_end")
-        estimate_group_map.setdefault((gvkey_int, fiscal_period_end, calc_date), []).append(row)
-        estimate_calc_dates_by_snapshot_key_raw.setdefault((gvkey_int, fiscal_period_end), set()).add(calc_date)
-        estimate_calc_dates_by_gvkey_raw.setdefault(gvkey_int, set()).add(calc_date)
-        estimate_fiscal_period_ends_by_gvkey_calc_date_raw.setdefault((gvkey_int, calc_date), set()).add(
-            fiscal_period_end
-        )
-
-    canonical_estimates: dict[tuple[int, dt.date, dt.date], dict[str, Any]] = {}
-    conflicting_estimate_keys: set[tuple[int, dt.date, dt.date]] = set()
-    for key, rows in estimate_group_map.items():
-        canonical, conflict = _canonicalize_estimate_snapshot(key[0], key[1], key[2], rows)
-        if conflict:
-            conflicting_estimate_keys.add(key)
-            continue
-        if canonical is not None:
-            canonical_estimates[key] = canonical
-
-    estimate_calc_dates_by_snapshot_key = _freeze_sorted_date_index(estimate_calc_dates_by_snapshot_key_raw)
-    estimate_calc_dates_by_gvkey = _freeze_sorted_date_index(estimate_calc_dates_by_gvkey_raw)
-    estimate_fiscal_period_ends_by_gvkey_calc_date = {
-        key: sorted(values)
-        for key, values in estimate_fiscal_period_ends_by_gvkey_calc_date_raw.items()
-        if values
-    }
-
     provisional_rows: list[dict[str, Any]] = []
     for event in canonical_actuals:
         gvkey_int = int(event["gvkey_int"])
@@ -1162,6 +1344,122 @@ def build_refinitiv_analyst_normalized_outputs(
             }
         )
         normalized_rows.append(merged)
+    return normalized_rows, rejection_rows
+
+
+def _build_normalized_event_rows(
+    canonical_actuals: list[dict[str, Any]],
+    canonical_estimates: dict[tuple[int, dt.date, dt.date], dict[str, Any]],
+    conflicting_estimate_keys: set[tuple[int, dt.date, dt.date]],
+    estimate_calc_dates_by_snapshot_key: dict[tuple[int, dt.date], list[dt.date]],
+    estimate_calc_dates_by_gvkey: dict[int, list[dt.date]],
+    estimate_fiscal_period_ends_by_gvkey_calc_date: dict[tuple[int, dt.date], list[dt.date]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    if _lm2011_rust is not None:
+        try:
+            normalized_rows, rejection_rows = _lm2011_rust.refinitiv_analyst_build_normalized_event_rows(
+                canonical_actuals,
+                list(canonical_estimates.values()),
+                list(conflicting_estimate_keys),
+                estimate_calc_dates_by_snapshot_key,
+                estimate_calc_dates_by_gvkey,
+                estimate_fiscal_period_ends_by_gvkey_calc_date,
+            )
+            _ANALYST_RUST_METRICS["normalized_event_rows_fast_success"] += 1
+            return [dict(row) for row in normalized_rows], [dict(row) for row in rejection_rows]
+        except Exception:
+            _ANALYST_RUST_METRICS["normalized_event_rows_fast_failures"] += 1
+            _ANALYST_RUST_METRICS["normalized_event_rows_fallbacks"] += 1
+    else:
+        _ANALYST_RUST_METRICS["normalized_event_rows_fallbacks"] += 1
+    return _build_normalized_event_rows_py(
+        canonical_actuals,
+        canonical_estimates,
+        conflicting_estimate_keys,
+        estimate_calc_dates_by_snapshot_key,
+        estimate_calc_dates_by_gvkey,
+        estimate_fiscal_period_ends_by_gvkey_calc_date,
+    )
+
+
+def build_refinitiv_analyst_normalized_outputs(
+    actuals_raw_df: pl.DataFrame,
+    estimates_raw_df: pl.DataFrame,
+) -> tuple[pl.DataFrame, pl.DataFrame]:
+    actuals = _cast_df_to_schema(
+        actuals_raw_df.select(ANALYST_ACTUALS_RAW_COLUMNS),
+        _actuals_raw_schema(),
+    ).select(ANALYST_ACTUALS_RAW_COLUMNS)
+    estimates = _cast_df_to_schema(
+        estimates_raw_df.select(ANALYST_ESTIMATES_MONTHLY_RAW_COLUMNS),
+        _estimates_raw_schema(),
+    ).select(ANALYST_ESTIMATES_MONTHLY_RAW_COLUMNS)
+
+    actual_groups: dict[tuple[Any, Any, Any], list[dict[str, Any]]] = {}
+    filtered_actuals = actuals.filter(
+        pl.col("announcement_date").is_not_null() & pl.col("actual_eps").is_not_null()
+    )
+    for row in filtered_actuals.to_dicts():
+        key = (row.get("gvkey_int"), row.get("announcement_date"), row.get("fiscal_period_end"))
+        actual_groups.setdefault(key, []).append(row)
+
+    canonical_actuals: list[dict[str, Any]] = []
+    rejection_rows: list[dict[str, Any]] = []
+    for rows in actual_groups.values():
+        canonical, rejection = _canonicalize_actual_event(rows)
+        if rejection is not None:
+            rejection_rows.append(rejection)
+            continue
+        if canonical is not None:
+            canonical_actuals.append(canonical)
+
+    estimate_group_map: dict[tuple[int, dt.date, dt.date], list[dict[str, Any]]] = {}
+    estimate_calc_dates_by_snapshot_key_raw: dict[tuple[int, dt.date], set[dt.date]] = {}
+    estimate_calc_dates_by_gvkey_raw: dict[int, set[dt.date]] = {}
+    estimate_fiscal_period_ends_by_gvkey_calc_date_raw: dict[tuple[int, dt.date], set[dt.date]] = {}
+    filtered_estimates = estimates.filter(
+        pl.col("gvkey_int").is_not_null()
+        & pl.col("calc_date").is_not_null()
+        & pl.col("fiscal_period_end").is_not_null()
+    )
+    for row in filtered_estimates.to_dicts():
+        gvkey_int = row.get("gvkey_int")
+        calc_date = row.get("calc_date")
+        fiscal_period_end = row.get("fiscal_period_end")
+        estimate_group_map.setdefault((gvkey_int, fiscal_period_end, calc_date), []).append(row)
+        estimate_calc_dates_by_snapshot_key_raw.setdefault((gvkey_int, fiscal_period_end), set()).add(calc_date)
+        estimate_calc_dates_by_gvkey_raw.setdefault(gvkey_int, set()).add(calc_date)
+        estimate_fiscal_period_ends_by_gvkey_calc_date_raw.setdefault((gvkey_int, calc_date), set()).add(
+            fiscal_period_end
+        )
+
+    canonical_estimates: dict[tuple[int, dt.date, dt.date], dict[str, Any]] = {}
+    conflicting_estimate_keys: set[tuple[int, dt.date, dt.date]] = set()
+    for key, rows in estimate_group_map.items():
+        canonical, conflict = _canonicalize_estimate_snapshot(key[0], key[1], key[2], rows)
+        if conflict:
+            conflicting_estimate_keys.add(key)
+            continue
+        if canonical is not None:
+            canonical_estimates[key] = canonical
+
+    estimate_calc_dates_by_snapshot_key = _freeze_sorted_date_index(estimate_calc_dates_by_snapshot_key_raw)
+    estimate_calc_dates_by_gvkey = _freeze_sorted_date_index(estimate_calc_dates_by_gvkey_raw)
+    estimate_fiscal_period_ends_by_gvkey_calc_date = {
+        key: sorted(values)
+        for key, values in estimate_fiscal_period_ends_by_gvkey_calc_date_raw.items()
+        if values
+    }
+
+    normalized_rows, additional_rejection_rows = _build_normalized_event_rows(
+        canonical_actuals,
+        canonical_estimates,
+        conflicting_estimate_keys,
+        estimate_calc_dates_by_snapshot_key,
+        estimate_calc_dates_by_gvkey,
+        estimate_fiscal_period_ends_by_gvkey_calc_date,
+    )
+    rejection_rows.extend(additional_rejection_rows)
 
     normalized_df = _cast_df_to_schema(
         _build_explicit_schema_df(normalized_rows, _normalized_panel_schema()),

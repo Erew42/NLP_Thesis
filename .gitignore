@@ -2,6 +2,8 @@ __pycache__/
 *.py[cod]
 *.c
 *.zip
+*.pyd
+*.dll
 
 .venv/
 dist/
@@ -37,6 +39,10 @@ repo_review/
 output/
 .codex_spreadsheet_work/
 submission_Ewen_10060297/
+archive/
+src_rust_migration/
+rust/**/target/
+# Agent ephemeral state and memory
 .agent/
 .agents/
 .claude/

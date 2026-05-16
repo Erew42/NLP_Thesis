@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import datetime as dt
 import re
@@ -9,6 +9,14 @@ from pathlib import Path
 import polars as pl
 
 from thesis_pkg.core.ccm.sec_ccm_contracts import event_market_equity_millions
+
+try:
+    from thesis_native import _lm2011_rust
+except Exception as exc:  # pragma: no cover - optional native extension
+    _lm2011_rust = None
+    _LM2011_FORM_RUST_IMPORT_ERROR: str | None = f"{type(exc).__name__}: {exc}"
+else:
+    _LM2011_FORM_RUST_IMPORT_ERROR = None
 
 
 GVKEY_DTYPE = pl.Int32
@@ -67,6 +75,41 @@ _LM2011_SEC_EXCLUDED_RAW_FORMS = {
 _LM2011_CCM_INCLUDED_RAW_FORMS = {"10K"}
 _LM2011_CCM_EXCLUDED_RAW_FORMS = {"10K/A"}
 _FISCAL_MARKET_SHARE_COLUMNS = ("CSHO", "CSHOC", "CSHPRI", "SHROUT", "CSHOQ")
+_LM2011_FORM_RUST_METRICS: dict[str, int] = {
+    "canonical_form_fast_success": 0,
+    "canonical_form_fast_failures": 0,
+    "canonical_form_fallbacks": 0,
+    "canonical_form_batch_fast_success": 0,
+    "canonical_form_batch_fast_failures": 0,
+    "canonical_form_batch_fallbacks": 0,
+    "sec_raw_form_fast_success": 0,
+    "sec_raw_form_fast_failures": 0,
+    "sec_raw_form_fallbacks": 0,
+    "sec_raw_form_batch_fast_success": 0,
+    "sec_raw_form_batch_fast_failures": 0,
+    "sec_raw_form_batch_fallbacks": 0,
+    "ccm_raw_form_fast_success": 0,
+    "ccm_raw_form_fast_failures": 0,
+    "ccm_raw_form_fallbacks": 0,
+    "ccm_raw_form_batch_fast_success": 0,
+    "ccm_raw_form_batch_fast_failures": 0,
+    "ccm_raw_form_batch_fallbacks": 0,
+    "ff48_sic_mapping_fast_success": 0,
+    "ff48_sic_mapping_fast_failures": 0,
+    "ff48_sic_mapping_fallbacks": 0,
+}
+
+
+def get_lm2011_form_rust_accel_metrics() -> dict[str, int | str | bool | None]:
+    metrics: dict[str, int | str | bool | None] = dict(_LM2011_FORM_RUST_METRICS)
+    metrics["rust_accel_available"] = _lm2011_rust is not None
+    metrics["rust_accel_import_error"] = _LM2011_FORM_RUST_IMPORT_ERROR
+    return metrics
+
+
+def reset_lm2011_form_rust_accel_metrics() -> None:
+    for key in _LM2011_FORM_RUST_METRICS:
+        _LM2011_FORM_RUST_METRICS[key] = 0
 
 
 def _require_columns(lf: pl.LazyFrame, required: tuple[str, ...], label: str) -> None:
@@ -174,21 +217,67 @@ def _clean_form_token(value: str | None) -> str | None:
     return cleaned or None
 
 
-def normalize_lm2011_form_value(value: str | None, *, other_value: str | None = "Other") -> str | None:
+def _normalize_lm2011_form_value_py(value: str | None, *, other_value: str | None = "Other") -> str | None:
     cleaned = _clean_form_token(value)
     if cleaned is None:
         return None
     return _LM2011_FORM_CANONICAL_MAP.get(cleaned, other_value)
 
 
+def normalize_lm2011_form_value(value: str | None, *, other_value: str | None = "Other") -> str | None:
+    if _lm2011_rust is not None and (value is None or isinstance(value, str)):
+        try:
+            out = _lm2011_rust.normalize_lm2011_form_value(value, other_value)
+            _LM2011_FORM_RUST_METRICS["canonical_form_fast_success"] += 1
+            return out if out is None else str(out)
+        except Exception:
+            _LM2011_FORM_RUST_METRICS["canonical_form_fast_failures"] += 1
+            _LM2011_FORM_RUST_METRICS["canonical_form_fallbacks"] += 1
+    else:
+        _LM2011_FORM_RUST_METRICS["canonical_form_fallbacks"] += 1
+    return _normalize_lm2011_form_value_py(value, other_value=other_value)
+
+
+def _normalize_lm2011_form_values_py(
+    values: list[str | None],
+    *,
+    other_value: str | None = "Other",
+) -> list[str | None]:
+    return [_normalize_lm2011_form_value_py(value, other_value=other_value) for value in values]
+
+
+def _normalize_lm2011_form_values(
+    values: list[str | None],
+    *,
+    other_value: str | None = "Other",
+) -> list[str | None]:
+    if _lm2011_rust is not None and all(value is None or isinstance(value, str) for value in values):
+        try:
+            out = _lm2011_rust.normalize_lm2011_form_values(values, other_value)
+            _LM2011_FORM_RUST_METRICS["canonical_form_batch_fast_success"] += 1
+            return [None if value is None else str(value) for value in out]
+        except Exception:
+            _LM2011_FORM_RUST_METRICS["canonical_form_batch_fast_failures"] += 1
+    _LM2011_FORM_RUST_METRICS["canonical_form_batch_fallbacks"] += 1
+    return _normalize_lm2011_form_values_py(values, other_value=other_value)
+
+
+def _utf8_series_from_values(series: pl.Series, values: list[str | None]) -> pl.Series:
+    return pl.Series(series.name, values, dtype=pl.Utf8)
+
+
 def normalize_lm2011_form_expr(col_name: str, *, other_value: str | None = "Other") -> pl.Expr:
-    return pl.col(col_name).map_elements(
-        lambda value: normalize_lm2011_form_value(value, other_value=other_value),
+    return pl.col(col_name).cast(pl.Utf8, strict=False).map_batches(
+        lambda series: _utf8_series_from_values(
+            series,
+            _normalize_lm2011_form_values(series.to_list(), other_value=other_value),
+        ),
         return_dtype=pl.Utf8,
+        is_elementwise=True,
     )
 
 
-def _normalize_sec_raw_form_value(value: str | None) -> str | None:
+def _normalize_sec_raw_form_value_py(value: str | None) -> str | None:
     cleaned = _clean_form_token(value)
     if cleaned is None:
         return None
@@ -219,7 +308,45 @@ def _normalize_sec_raw_form_value(value: str | None) -> str | None:
     return cleaned
 
 
-def _normalize_ccm_raw_form_value(value: str | None) -> str | None:
+def _normalize_sec_raw_form_value(value: str | None) -> str | None:
+    if _lm2011_rust is not None and (value is None or isinstance(value, str)):
+        try:
+            out = _lm2011_rust.normalize_sec_raw_form_value(value)
+            _LM2011_FORM_RUST_METRICS["sec_raw_form_fast_success"] += 1
+            return out if out is None else str(out)
+        except Exception:
+            _LM2011_FORM_RUST_METRICS["sec_raw_form_fast_failures"] += 1
+            _LM2011_FORM_RUST_METRICS["sec_raw_form_fallbacks"] += 1
+    else:
+        _LM2011_FORM_RUST_METRICS["sec_raw_form_fallbacks"] += 1
+    return _normalize_sec_raw_form_value_py(value)
+
+
+def _normalize_sec_raw_form_values_py(values: list[str | None]) -> list[str | None]:
+    return [_normalize_sec_raw_form_value_py(value) for value in values]
+
+
+def _normalize_sec_raw_form_values(values: list[str | None]) -> list[str | None]:
+    if _lm2011_rust is not None and all(value is None or isinstance(value, str) for value in values):
+        try:
+            out = _lm2011_rust.normalize_sec_raw_form_values(values)
+            _LM2011_FORM_RUST_METRICS["sec_raw_form_batch_fast_success"] += 1
+            return [None if value is None else str(value) for value in out]
+        except Exception:
+            _LM2011_FORM_RUST_METRICS["sec_raw_form_batch_fast_failures"] += 1
+    _LM2011_FORM_RUST_METRICS["sec_raw_form_batch_fallbacks"] += 1
+    return _normalize_sec_raw_form_values_py(values)
+
+
+def _normalize_sec_raw_form_expr(col_name: str) -> pl.Expr:
+    return pl.col(col_name).cast(pl.Utf8, strict=False).map_batches(
+        lambda series: _utf8_series_from_values(series, _normalize_sec_raw_form_values(series.to_list())),
+        return_dtype=pl.Utf8,
+        is_elementwise=True,
+    )
+
+
+def _normalize_ccm_raw_form_value_py(value: str | None) -> str | None:
     cleaned = _clean_form_token(value)
     if cleaned is None:
         return None
@@ -237,6 +364,44 @@ def _normalize_ccm_raw_form_value(value: str | None) -> str | None:
     if normalized == "40FA":
         return "40F/A"
     return normalized
+
+
+def _normalize_ccm_raw_form_value(value: str | None) -> str | None:
+    if _lm2011_rust is not None and (value is None or isinstance(value, str)):
+        try:
+            out = _lm2011_rust.normalize_ccm_raw_form_value(value)
+            _LM2011_FORM_RUST_METRICS["ccm_raw_form_fast_success"] += 1
+            return out if out is None else str(out)
+        except Exception:
+            _LM2011_FORM_RUST_METRICS["ccm_raw_form_fast_failures"] += 1
+            _LM2011_FORM_RUST_METRICS["ccm_raw_form_fallbacks"] += 1
+    else:
+        _LM2011_FORM_RUST_METRICS["ccm_raw_form_fallbacks"] += 1
+    return _normalize_ccm_raw_form_value_py(value)
+
+
+def _normalize_ccm_raw_form_values_py(values: list[str | None]) -> list[str | None]:
+    return [_normalize_ccm_raw_form_value_py(value) for value in values]
+
+
+def _normalize_ccm_raw_form_values(values: list[str | None]) -> list[str | None]:
+    if _lm2011_rust is not None and all(value is None or isinstance(value, str) for value in values):
+        try:
+            out = _lm2011_rust.normalize_ccm_raw_form_values(values)
+            _LM2011_FORM_RUST_METRICS["ccm_raw_form_batch_fast_success"] += 1
+            return [None if value is None else str(value) for value in out]
+        except Exception:
+            _LM2011_FORM_RUST_METRICS["ccm_raw_form_batch_fast_failures"] += 1
+    _LM2011_FORM_RUST_METRICS["ccm_raw_form_batch_fallbacks"] += 1
+    return _normalize_ccm_raw_form_values_py(values)
+
+
+def _normalize_ccm_raw_form_expr(col_name: str) -> pl.Expr:
+    return pl.col(col_name).cast(pl.Utf8, strict=False).map_batches(
+        lambda series: _utf8_series_from_values(series, _normalize_ccm_raw_form_values(series.to_list())),
+        return_dtype=pl.Utf8,
+        is_elementwise=True,
+    )
 
 
 def build_lm2011_normalized_filing_feeds(
@@ -298,9 +463,7 @@ def _build_lm2011_sample_backbone_stage_frames(
             pl.col("accession_nodash").cast(pl.Utf8, strict=False),
             pl.col("filing_date").cast(pl.Date, strict=False),
             pl.col(sec_form_col).cast(pl.Utf8, strict=False),
-            pl.col(sec_form_col)
-            .map_elements(_normalize_sec_raw_form_value, return_dtype=pl.Utf8)
-            .alias("_sec_raw_form"),
+            _normalize_sec_raw_form_expr(sec_form_col).alias("_sec_raw_form"),
             normalize_lm2011_form_expr(sec_form_col).alias("normalized_form"),
         )
         .filter(
@@ -368,9 +531,7 @@ def _build_lm2011_sample_backbone_stage_frames(
 
     if "SRCTYPE" in joined_schema:
         joined = joined.with_columns(
-            pl.col("SRCTYPE")
-            .map_elements(_normalize_ccm_raw_form_value, return_dtype=pl.Utf8)
-            .alias("_ccm_raw_form")
+            _normalize_ccm_raw_form_expr("SRCTYPE").alias("_ccm_raw_form")
         ).filter(
             pl.col("_ccm_raw_form").is_in(sorted(_LM2011_CCM_INCLUDED_RAW_FORMS))
             & pl.col("_ccm_raw_form").is_in(sorted(_LM2011_CCM_EXCLUDED_RAW_FORMS)).not_()
@@ -387,9 +548,7 @@ def _build_lm2011_sample_backbone_stage_frames(
             ccm_filingdates_lf.select(
                 pl.col("LPERMNO").cast(pl.Int32, strict=False).alias("_ccm_permno"),
                 pl.col("FILEDATE").cast(pl.Date, strict=False).alias("_ccm_filing_date"),
-                pl.col("SRCTYPE")
-                .map_elements(_normalize_ccm_raw_form_value, return_dtype=pl.Utf8)
-                .alias("_ccm_raw_form"),
+                _normalize_ccm_raw_form_expr("SRCTYPE").alias("_ccm_raw_form"),
             )
             .drop_nulls(subset=["_ccm_permno", "_ccm_filing_date", "_ccm_raw_form"])
             .group_by("_ccm_permno", "_ccm_filing_date")
@@ -485,11 +644,8 @@ def _mask_payload_columns(
 
 
 @lru_cache(maxsize=4)
-def _load_ff48_sic_mapping(ff48_siccodes_path: str) -> tuple[dict[str, object], ...]:
+def _load_ff48_sic_mapping_py(ff48_siccodes_path: str) -> tuple[dict[str, object], ...]:
     path = Path(ff48_siccodes_path)
-    if not path.exists():
-        raise FileNotFoundError(f"FF48 SIC mapping file not found: {path}")
-
     rows: list[dict[str, object]] = []
     current_id: int | None = None
     current_short: str | None = None
@@ -520,6 +676,41 @@ def _load_ff48_sic_mapping(ff48_siccodes_path: str) -> tuple[dict[str, object], 
     if not rows:
         raise ValueError(f"FF48 SIC mapping file did not yield any ranges: {path}")
     return tuple(rows)
+
+
+def _ff48_sic_mapping_rows_from_rust(raw_rows: object) -> tuple[dict[str, object], ...]:
+    return tuple(
+        {
+            "ff48_industry_id": int(industry_id),
+            "ff48_industry_short": str(industry_short),
+            "ff48_industry_name": str(industry_name),
+            "sic_start": int(sic_start),
+            "sic_end": int(sic_end),
+        }
+        for industry_id, industry_short, industry_name, sic_start, sic_end in raw_rows  # type: ignore[misc]
+    )
+
+
+@lru_cache(maxsize=4)
+def _load_ff48_sic_mapping(ff48_siccodes_path: str) -> tuple[dict[str, object], ...]:
+    path = Path(ff48_siccodes_path)
+    if not path.exists():
+        raise FileNotFoundError(f"FF48 SIC mapping file not found: {path}")
+
+    text = path.read_text(encoding="utf-8")
+    if _lm2011_rust is not None:
+        try:
+            rows = _ff48_sic_mapping_rows_from_rust(_lm2011_rust.parse_ff48_sic_mapping_rows(text))
+            _LM2011_FORM_RUST_METRICS["ff48_sic_mapping_fast_success"] += 1
+            if not rows:
+                raise ValueError(f"FF48 SIC mapping file did not yield any ranges: {path}")
+            return rows
+        except Exception:
+            _LM2011_FORM_RUST_METRICS["ff48_sic_mapping_fast_failures"] += 1
+            _LM2011_FORM_RUST_METRICS["ff48_sic_mapping_fallbacks"] += 1
+    else:
+        _LM2011_FORM_RUST_METRICS["ff48_sic_mapping_fallbacks"] += 1
+    return _load_ff48_sic_mapping_py(ff48_siccodes_path)
 
 
 def _ff48_mapping_expr(

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import asdict
 from importlib import metadata
@@ -47,6 +47,14 @@ from thesis_pkg.benchmarking.token_lengths import FINBERT_TOKEN_BUCKET_COLUMN
 from thesis_pkg.benchmarking.token_lengths import FINBERT_TOKEN_COUNT_COLUMN
 from thesis_pkg.benchmarking.token_lengths import load_finbert_tokenizer
 
+try:
+    from thesis_native import _lm2011_rust
+except Exception as exc:  # pragma: no cover - optional native extension
+    _lm2011_rust = None
+    _FINBERT_STAGED_RUST_IMPORT_ERROR: str | None = f"{type(exc).__name__}: {exc}"
+else:
+    _FINBERT_STAGED_RUST_IMPORT_ERROR = None
+
 
 TOKENIZER_PROFILE_RUNS = 3
 TOKENIZER_PROFILE_RUNNER_NAME = "finbert_tokenizer_profile"
@@ -72,6 +80,24 @@ _OPTIONAL_SENTENCE_METADATA_COLUMNS: tuple[str, ...] = (
     "segment_policy_id",
 )
 _STREAMING_PARQUET_COMPRESSION = "zstd"
+
+_FINBERT_STAGED_RUST_METRICS: dict[str, int] = {
+    "bucket_summary_fast_success": 0,
+    "bucket_summary_fast_failures": 0,
+    "bucket_summary_fallbacks": 0,
+}
+
+
+def get_finbert_staged_rust_accel_metrics() -> dict[str, int | str | bool | None]:
+    metrics: dict[str, int | str | bool | None] = dict(_FINBERT_STAGED_RUST_METRICS)
+    metrics["rust_accel_available"] = _lm2011_rust is not None
+    metrics["rust_accel_import_error"] = _FINBERT_STAGED_RUST_IMPORT_ERROR
+    return metrics
+
+
+def reset_finbert_staged_rust_accel_metrics() -> None:
+    for key in _FINBERT_STAGED_RUST_METRICS:
+        _FINBERT_STAGED_RUST_METRICS[key] = 0
 
 
 def _empty_tokenizer_bucket_summary_frame() -> pl.DataFrame:
@@ -348,6 +374,46 @@ def _sample_bucket_frame(
 
 
 def _build_bucket_summary(
+    sentence_df: pl.DataFrame,
+    *,
+    filing_year: int,
+    source_path: Path,
+) -> pl.DataFrame:
+    if _lm2011_rust is not None:
+        try:
+            bucket_values = [
+                None if value is None else str(value)
+                for value in sentence_df[FINBERT_TOKEN_BUCKET_COLUMN].to_list()
+            ]
+            token_counts = [
+                None if value is None else float(value)
+                for value in sentence_df[FINBERT_TOKEN_COUNT_COLUMN].to_list()
+            ]
+            rust_rows = _lm2011_rust.finbert_staged_bucket_summary_rows(
+                bucket_values,
+                token_counts,
+                int(filing_year),
+            )
+            _FINBERT_STAGED_RUST_METRICS["bucket_summary_fast_success"] += 1
+            rows = [
+                {
+                    "filing_year": int(row[0]),
+                    "bucket": str(row[1]),
+                    "sentence_rows": int(row[2]),
+                    "token_count_mean": None if row[3] is None else float(row[3]),
+                    "token_count_median": None if row[4] is None else float(row[4]),
+                    "sentence_dataset_path": None,
+                }
+                for row in rust_rows
+            ]
+            return pl.DataFrame(rows).select(_empty_tokenizer_bucket_summary_frame().columns)
+        except Exception:
+            _FINBERT_STAGED_RUST_METRICS["bucket_summary_fast_failures"] += 1
+    _FINBERT_STAGED_RUST_METRICS["bucket_summary_fallbacks"] += 1
+    return _build_bucket_summary_py(sentence_df, filing_year=filing_year, source_path=source_path)
+
+
+def _build_bucket_summary_py(
     sentence_df: pl.DataFrame,
     *,
     filing_year: int,

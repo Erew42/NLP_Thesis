@@ -8,7 +8,15 @@ from typing import Any, Callable
 
 import polars as pl
 
-from thesis_pkg.pipelines.refinitiv.lseg_api_common import (
+try:
+    from thesis_native import _lm2011_rust
+except Exception as exc:  # pragma: no cover - optional native extension
+    _lm2011_rust = None
+    _LSEG_OWNERSHIP_RUST_IMPORT_ERROR: str | None = f"{type(exc).__name__}: {exc}"
+else:
+    _LSEG_OWNERSHIP_RUST_IMPORT_ERROR = None
+
+from thesis_refinitiv.lseg_client.api_common import (
     candidate_output_path as _candidate_output_path,
     promote_candidate_output as _promote_candidate_output,
     retry_delay_seconds as _retry_delay_seconds,
@@ -16,7 +24,7 @@ from thesis_pkg.pipelines.refinitiv.lseg_api_common import (
     write_parquet_atomic as _write_parquet_atomic,
 )
 from thesis_pkg.pipelines.refinitiv.lseg_api_execution import run_api_batches
-from thesis_pkg.pipelines.refinitiv.lseg_batching import (
+from thesis_refinitiv.lseg_client.batching import (
     IntervalBatchPlan,
     IntervalBatchPlannerConfig,
     RequestItem,
@@ -27,8 +35,8 @@ from thesis_pkg.pipelines.refinitiv.lseg_batching import (
     request_signature,
     stable_hash_id,
 )
-from thesis_pkg.pipelines.refinitiv.lseg_ledger import LsegResumeCompatibilityError, RequestLedger
-from thesis_pkg.pipelines.refinitiv.lseg_stage_audit import (
+from thesis_refinitiv.lseg_client.ledger import LsegResumeCompatibilityError, RequestLedger
+from thesis_refinitiv.lseg_client.stage_audit import (
     audit_api_stage,
     default_stage_fetch_manifest_path,
     default_stage_manifest_path,
@@ -53,7 +61,7 @@ from thesis_pkg.pipelines.refinitiv.doc_ownership import (
     _normalize_float_value,
     build_refinitiv_lm2011_doc_ownership_requests,
 )
-from thesis_pkg.pipelines.refinitiv_bridge_pipeline import (
+from thesis_refinitiv.bridge import (
     OWNERSHIP_UNIVERSE_HANDOFF_COLUMNS,
     OWNERSHIP_UNIVERSE_RESULTS_COLUMNS,
     OWNERSHIP_UNIVERSE_ROW_SUMMARY_COLUMNS,
@@ -76,6 +84,66 @@ _OWNERSHIP_INTERVAL_SIGNATURE_EXCLUDED_PARAMETER_KEYS = ("SDate", "EDate")
 OWNERSHIP_UNIVERSE_DEFAULT_ROW_DENSITY_ROWS_PER_DAY = 1.0 / 91.0
 OWNERSHIP_UNIVERSE_DEFAULT_MAX_EXTRA_ROWS_ABS = 120.0
 OWNERSHIP_UNIVERSE_DEFAULT_MAX_EXTRA_ROWS_RATIO = 0.25
+
+_LSEG_OWNERSHIP_RUST_METRICS: dict[str, int] = {
+    "ownership_universe_items_column_fast_success": 0,
+    "ownership_universe_items_column_fast_failures": 0,
+    "ownership_universe_items_column_fallbacks": 0,
+    "ownership_universe_items_fast_success": 0,
+    "ownership_universe_items_fast_failures": 0,
+    "ownership_universe_items_fallbacks": 0,
+    "doc_exact_items_column_fast_success": 0,
+    "doc_exact_items_column_fast_failures": 0,
+    "doc_exact_items_column_fallbacks": 0,
+    "doc_exact_items_fast_success": 0,
+    "doc_exact_items_fast_failures": 0,
+    "doc_exact_items_fallbacks": 0,
+    "doc_fallback_items_column_fast_success": 0,
+    "doc_fallback_items_column_fast_failures": 0,
+    "doc_fallback_items_column_fallbacks": 0,
+    "doc_fallback_items_fast_success": 0,
+    "doc_fallback_items_fast_failures": 0,
+    "doc_fallback_items_fallbacks": 0,
+    "ownership_universe_response_column_fast_success": 0,
+    "ownership_universe_response_column_fast_failures": 0,
+    "ownership_universe_response_column_fallbacks": 0,
+    "ownership_universe_response_fast_success": 0,
+    "ownership_universe_response_fast_failures": 0,
+    "ownership_universe_response_fallbacks": 0,
+    "doc_exact_response_column_fast_success": 0,
+    "doc_exact_response_column_fast_failures": 0,
+    "doc_exact_response_column_fallbacks": 0,
+    "doc_exact_response_fast_success": 0,
+    "doc_exact_response_fast_failures": 0,
+    "doc_exact_response_fallbacks": 0,
+    "doc_fallback_response_column_fast_success": 0,
+    "doc_fallback_response_column_fast_failures": 0,
+    "doc_fallback_response_column_fallbacks": 0,
+    "doc_fallback_response_fast_success": 0,
+    "doc_fallback_response_fast_failures": 0,
+    "doc_fallback_response_fallbacks": 0,
+    "month_boundaries_fast_success": 0,
+    "month_boundaries_fast_failures": 0,
+    "month_boundaries_fallbacks": 0,
+    "item_window_fast_success": 0,
+    "item_window_fast_failures": 0,
+    "item_window_fallbacks": 0,
+    "request_log_event_count_fast_success": 0,
+    "request_log_event_count_fast_failures": 0,
+    "request_log_event_count_fallbacks": 0,
+}
+
+
+def get_lseg_ownership_rust_accel_metrics() -> dict[str, int | str | bool | None]:
+    metrics: dict[str, int | str | bool | None] = dict(_LSEG_OWNERSHIP_RUST_METRICS)
+    metrics["rust_accel_available"] = _lm2011_rust is not None
+    metrics["rust_accel_import_error"] = _LSEG_OWNERSHIP_RUST_IMPORT_ERROR
+    return metrics
+
+
+def reset_lseg_ownership_rust_accel_metrics() -> None:
+    for key in _LSEG_OWNERSHIP_RUST_METRICS:
+        _LSEG_OWNERSHIP_RUST_METRICS[key] = 0
 
 OWNERSHIP_UNIVERSE_FIELDS: tuple[str, ...] = (
     "TR.CategoryOwnershipPct.Date",
@@ -1088,7 +1156,7 @@ def _scan_stage_outputs(
     return pl.concat([pl.scan_parquet(path) for path in staging_paths], how="vertical_relaxed")
 
 
-def _count_request_log_events(request_log_path: Path, event_name: str) -> int:
+def _count_request_log_events_py(request_log_path: Path, event_name: str) -> int:
     if not request_log_path.exists():
         return 0
     count = 0
@@ -1101,7 +1169,45 @@ def _count_request_log_events(request_log_path: Path, event_name: str) -> int:
     return count
 
 
-def _build_ownership_universe_items(handoff_df: pl.DataFrame) -> list[RequestItem]:
+def _count_request_log_events(request_log_path: Path, event_name: str) -> int:
+    if not request_log_path.exists():
+        return 0
+    if _lm2011_rust is not None:
+        try:
+            count = int(_lm2011_rust.lseg_count_request_log_events(str(request_log_path), event_name))
+            _LSEG_OWNERSHIP_RUST_METRICS["request_log_event_count_fast_success"] += 1
+            return count
+        except Exception:
+            _LSEG_OWNERSHIP_RUST_METRICS["request_log_event_count_fast_failures"] += 1
+            _LSEG_OWNERSHIP_RUST_METRICS["request_log_event_count_fallbacks"] += 1
+    else:
+        _LSEG_OWNERSHIP_RUST_METRICS["request_log_event_count_fallbacks"] += 1
+    return _count_request_log_events_py(request_log_path, event_name)
+
+
+def _ownership_universe_item_rows_to_request_items(
+    source_rows: list[dict[str, Any]],
+    item_rows: list[tuple[int, str, str, str, str]],
+) -> list[RequestItem]:
+    return [
+        RequestItem(
+            item_id=item_id,
+            stage=OWNERSHIP_UNIVERSE_STAGE,
+            instrument=instrument,
+            batch_key=f"{start_text}|{end_text}",
+            fields=OWNERSHIP_UNIVERSE_FIELDS,
+            parameters={
+                "StatType": 7,
+                "SDate": start_text,
+                "EDate": end_text,
+            },
+            payload={"handoff_row": source_rows[int(row_index)]},
+        )
+        for row_index, item_id, instrument, start_text, end_text in item_rows
+    ]
+
+
+def _build_ownership_universe_items_py(handoff_df: pl.DataFrame) -> list[RequestItem]:
     items: list[RequestItem] = []
     for row in handoff_df.filter(pl.col("retrieval_eligible").fill_null(False)).to_dicts():
         ownership_lookup_row_id = _normalize_lookup_text(row.get("ownership_lookup_row_id"))
@@ -1130,6 +1236,56 @@ def _build_ownership_universe_items(handoff_df: pl.DataFrame) -> list[RequestIte
             )
         )
     return items
+
+
+def _build_ownership_universe_items(handoff_df: pl.DataFrame) -> list[RequestItem]:
+    if _lm2011_rust is not None:
+        source_rows: list[dict[str, Any]] | None = None
+        try:
+            raw_rows = _lm2011_rust.build_ownership_universe_item_row_columns(
+                handoff_df.columns,
+                [handoff_df.get_column(column).to_list() for column in handoff_df.columns],
+            )
+            _LSEG_OWNERSHIP_RUST_METRICS["ownership_universe_items_column_fast_success"] += 1
+            source_rows = handoff_df.to_dicts()
+            return _ownership_universe_item_rows_to_request_items(
+                source_rows,
+                [
+                    (
+                        int(row_index),
+                        str(item_id),
+                        str(instrument),
+                        str(start_text),
+                        str(end_text),
+                    )
+                    for row_index, item_id, instrument, start_text, end_text in raw_rows
+                ],
+            )
+        except Exception:
+            _LSEG_OWNERSHIP_RUST_METRICS["ownership_universe_items_column_fast_failures"] += 1
+            _LSEG_OWNERSHIP_RUST_METRICS["ownership_universe_items_column_fallbacks"] += 1
+        try:
+            if source_rows is None:
+                source_rows = handoff_df.to_dicts()
+            raw_rows = _lm2011_rust.build_ownership_universe_item_rows_value(source_rows)
+            _LSEG_OWNERSHIP_RUST_METRICS["ownership_universe_items_fast_success"] += 1
+            return _ownership_universe_item_rows_to_request_items(
+                source_rows,
+                [
+                    (
+                        int(row_index),
+                        str(item_id),
+                        str(instrument),
+                        str(start_text),
+                        str(end_text),
+                    )
+                    for row_index, item_id, instrument, start_text, end_text in raw_rows
+                ],
+            )
+        except Exception:
+            _LSEG_OWNERSHIP_RUST_METRICS["ownership_universe_items_fast_failures"] += 1
+    _LSEG_OWNERSHIP_RUST_METRICS["ownership_universe_items_fallbacks"] += 1
+    return _build_ownership_universe_items_py(handoff_df)
 
 
 def _resolve_interval_batch_config(
@@ -1190,21 +1346,56 @@ def _ownership_universe_interval_signature(item: RequestItem) -> str:
     )
 
 
+def _item_window_py(item: Any) -> tuple[dt.date, dt.date]:
+    start_text = item.parameters.get("SDate")
+    end_text = item.parameters.get("EDate")
+    if not start_text or not end_text:
+        raise ValueError(f"missing interval parameters for item_id={item.item_id}")
+    return (
+        dt.date.fromisoformat(str(start_text)),
+        dt.date.fromisoformat(str(end_text)),
+    )
+
+
 def _item_window(item: Any) -> tuple[dt.date, dt.date]:
     start_text = item.parameters.get("SDate")
     end_text = item.parameters.get("EDate")
     if not start_text or not end_text:
         raise ValueError(f"missing interval parameters for item_id={item.item_id}")
-    return (dt.date.fromisoformat(str(start_text)), dt.date.fromisoformat(str(end_text)))
+    if _lm2011_rust is not None:
+        try:
+            start_out, end_out = _lm2011_rust.lseg_item_window_dates(str(start_text), str(end_text))
+            _LSEG_OWNERSHIP_RUST_METRICS["item_window_fast_success"] += 1
+            return start_out, end_out
+        except Exception:
+            _LSEG_OWNERSHIP_RUST_METRICS["item_window_fast_failures"] += 1
+            _LSEG_OWNERSHIP_RUST_METRICS["item_window_fallbacks"] += 1
+    else:
+        _LSEG_OWNERSHIP_RUST_METRICS["item_window_fallbacks"] += 1
+    return _item_window_py(item)
 
 
-def _normalize_to_month_boundaries(start_text: str, end_text: str) -> tuple[str, str]:
+def _normalize_to_month_boundaries_py(start_text: str, end_text: str) -> tuple[str, str]:
     start_date = dt.date.fromisoformat(start_text)
     end_date = dt.date.fromisoformat(end_text)
     floored_start = start_date.replace(day=1)
     _, last_day = calendar.monthrange(end_date.year, end_date.month)
     ceiled_end = end_date.replace(day=last_day)
     return floored_start.isoformat(), ceiled_end.isoformat()
+
+
+def _normalize_to_month_boundaries(start_text: str, end_text: str) -> tuple[str, str]:
+    if _lm2011_rust is not None:
+        try:
+            start_out, end_out = _lm2011_rust.normalize_lseg_month_boundaries(start_text, end_text)
+            _LSEG_OWNERSHIP_RUST_METRICS["month_boundaries_fast_success"] += 1
+            return str(start_out), str(end_out)
+        except Exception:
+            _LSEG_OWNERSHIP_RUST_METRICS["month_boundaries_fast_failures"] += 1
+            _LSEG_OWNERSHIP_RUST_METRICS["month_boundaries_fallbacks"] += 1
+    else:
+        _LSEG_OWNERSHIP_RUST_METRICS["month_boundaries_fallbacks"] += 1
+    return _normalize_to_month_boundaries_py(start_text, end_text)
 
 
 def _build_ownership_universe_interval_batch(
@@ -1221,7 +1412,25 @@ def _build_ownership_universe_interval_batch(
     )
 
 
-def _build_doc_ownership_exact_items(request_df: pl.DataFrame) -> list[RequestItem]:
+def _doc_ownership_exact_item_rows_to_request_items(
+    source_rows: list[dict[str, Any]],
+    item_rows: list[tuple[int, str, str, str, str]],
+) -> list[RequestItem]:
+    return [
+        RequestItem(
+            item_id=item_id,
+            stage=DOC_EXACT_STAGE,
+            instrument=instrument,
+            batch_key=start_text,
+            fields=DOC_EXACT_FIELDS,
+            parameters={"StatType": 7, "SDate": start_text, "EDate": end_text},
+            payload={"request_row": source_rows[int(row_index)]},
+        )
+        for row_index, item_id, instrument, start_text, end_text in item_rows
+    ]
+
+
+def _build_doc_ownership_exact_items_py(request_df: pl.DataFrame) -> list[RequestItem]:
     items: list[RequestItem] = []
     for row in request_df.filter(pl.col("retrieval_eligible").fill_null(False)).to_dicts():
         doc_id = _normalize_lookup_text(row.get("doc_id"))
@@ -1244,7 +1453,75 @@ def _build_doc_ownership_exact_items(request_df: pl.DataFrame) -> list[RequestIt
     return items
 
 
-def _build_doc_ownership_fallback_items(request_df: pl.DataFrame) -> list[RequestItem]:
+def _build_doc_ownership_exact_items(request_df: pl.DataFrame) -> list[RequestItem]:
+    if _lm2011_rust is not None:
+        source_rows: list[dict[str, Any]] | None = None
+        try:
+            raw_rows = _lm2011_rust.build_doc_ownership_exact_item_row_columns(
+                request_df.columns,
+                [request_df.get_column(column).to_list() for column in request_df.columns],
+            )
+            _LSEG_OWNERSHIP_RUST_METRICS["doc_exact_items_column_fast_success"] += 1
+            source_rows = request_df.to_dicts()
+            return _doc_ownership_exact_item_rows_to_request_items(
+                source_rows,
+                [
+                    (
+                        int(row_index),
+                        str(item_id),
+                        str(instrument),
+                        str(start_text),
+                        str(end_text),
+                    )
+                    for row_index, item_id, instrument, start_text, end_text in raw_rows
+                ],
+            )
+        except Exception:
+            _LSEG_OWNERSHIP_RUST_METRICS["doc_exact_items_column_fast_failures"] += 1
+            _LSEG_OWNERSHIP_RUST_METRICS["doc_exact_items_column_fallbacks"] += 1
+        try:
+            if source_rows is None:
+                source_rows = request_df.to_dicts()
+            raw_rows = _lm2011_rust.build_doc_ownership_exact_item_rows_value(source_rows)
+            _LSEG_OWNERSHIP_RUST_METRICS["doc_exact_items_fast_success"] += 1
+            return _doc_ownership_exact_item_rows_to_request_items(
+                source_rows,
+                [
+                    (
+                        int(row_index),
+                        str(item_id),
+                        str(instrument),
+                        str(start_text),
+                        str(end_text),
+                    )
+                    for row_index, item_id, instrument, start_text, end_text in raw_rows
+                ],
+            )
+        except Exception:
+            _LSEG_OWNERSHIP_RUST_METRICS["doc_exact_items_fast_failures"] += 1
+    _LSEG_OWNERSHIP_RUST_METRICS["doc_exact_items_fallbacks"] += 1
+    return _build_doc_ownership_exact_items_py(request_df)
+
+
+def _doc_ownership_fallback_item_rows_to_request_items(
+    source_rows: list[dict[str, Any]],
+    item_rows: list[tuple[int, str, str, str, str]],
+) -> list[RequestItem]:
+    return [
+        RequestItem(
+            item_id=item_id,
+            stage=DOC_FALLBACK_STAGE,
+            instrument=instrument,
+            batch_key=f"{start_text}|{end_text}",
+            fields=DOC_FALLBACK_FIELDS,
+            parameters={"StatType": 7, "SDate": start_text, "EDate": end_text},
+            payload={"request_row": source_rows[int(row_index)]},
+        )
+        for row_index, item_id, instrument, start_text, end_text in item_rows
+    ]
+
+
+def _build_doc_ownership_fallback_items_py(request_df: pl.DataFrame) -> list[RequestItem]:
     items: list[RequestItem] = []
     for row in request_df.filter(pl.col("retrieval_eligible").fill_null(False)).to_dicts():
         doc_id = _normalize_lookup_text(row.get("doc_id"))
@@ -1269,7 +1546,57 @@ def _build_doc_ownership_fallback_items(request_df: pl.DataFrame) -> list[Reques
     return items
 
 
-def _normalize_ownership_universe_batch_response(items: list[Any], frame: pl.DataFrame) -> pl.DataFrame:
+def _build_doc_ownership_fallback_items(request_df: pl.DataFrame) -> list[RequestItem]:
+    if _lm2011_rust is not None:
+        source_rows: list[dict[str, Any]] | None = None
+        try:
+            raw_rows = _lm2011_rust.build_doc_ownership_fallback_item_row_columns(
+                request_df.columns,
+                [request_df.get_column(column).to_list() for column in request_df.columns],
+            )
+            _LSEG_OWNERSHIP_RUST_METRICS["doc_fallback_items_column_fast_success"] += 1
+            source_rows = request_df.to_dicts()
+            return _doc_ownership_fallback_item_rows_to_request_items(
+                source_rows,
+                [
+                    (
+                        int(row_index),
+                        str(item_id),
+                        str(instrument),
+                        str(start_text),
+                        str(end_text),
+                    )
+                    for row_index, item_id, instrument, start_text, end_text in raw_rows
+                ],
+            )
+        except Exception:
+            _LSEG_OWNERSHIP_RUST_METRICS["doc_fallback_items_column_fast_failures"] += 1
+            _LSEG_OWNERSHIP_RUST_METRICS["doc_fallback_items_column_fallbacks"] += 1
+        try:
+            if source_rows is None:
+                source_rows = request_df.to_dicts()
+            raw_rows = _lm2011_rust.build_doc_ownership_fallback_item_rows_value(source_rows)
+            _LSEG_OWNERSHIP_RUST_METRICS["doc_fallback_items_fast_success"] += 1
+            return _doc_ownership_fallback_item_rows_to_request_items(
+                source_rows,
+                [
+                    (
+                        int(row_index),
+                        str(item_id),
+                        str(instrument),
+                        str(start_text),
+                        str(end_text),
+                    )
+                    for row_index, item_id, instrument, start_text, end_text in raw_rows
+                ],
+            )
+        except Exception:
+            _LSEG_OWNERSHIP_RUST_METRICS["doc_fallback_items_fast_failures"] += 1
+    _LSEG_OWNERSHIP_RUST_METRICS["doc_fallback_items_fallbacks"] += 1
+    return _build_doc_ownership_fallback_items_py(request_df)
+
+
+def _normalize_ownership_universe_batch_response_py(items: list[Any], frame: pl.DataFrame) -> pl.DataFrame:
     normalized_frame = _standardize_field_frame(
         frame,
         expected_fields=OWNERSHIP_UNIVERSE_FIELDS,
@@ -1313,7 +1640,103 @@ def _normalize_ownership_universe_batch_response(items: list[Any], frame: pl.Dat
     return _build_ownership_results_with_item_id_df(rows)
 
 
-def _normalize_doc_exact_batch_response(items: list[Any], frame: pl.DataFrame) -> pl.DataFrame:
+def _ownership_universe_response_rows_to_frame(
+    items: list[Any],
+    response_rows: list[tuple[int, str, str, str | None, float | None]],
+) -> pl.DataFrame:
+    rows: list[dict[str, Any]] = []
+    for item_index, returned_ric, returned_date, returned_category, returned_value in response_rows:
+        item = items[int(item_index)]
+        handoff_row = dict(item.payload["handoff_row"])
+        rows.append(
+            {
+                "item_id": item.item_id,
+                **{name: handoff_row.get(name) for name in OWNERSHIP_UNIVERSE_HANDOFF_COLUMNS},
+                "returned_ric": returned_ric,
+                "returned_date": returned_date,
+                "returned_category": returned_category,
+                "returned_value": returned_value,
+            }
+        )
+    if not rows:
+        return pl.DataFrame(schema={"item_id": pl.Utf8, **_ownership_universe_results_schema()})
+    return _build_ownership_results_with_item_id_df(rows)
+
+
+def _normalize_ownership_universe_batch_response(items: list[Any], frame: pl.DataFrame) -> pl.DataFrame:
+    if _lm2011_rust is not None:
+        normalized_frame: pl.DataFrame | None = None
+        try:
+            normalized_frame = _standardize_field_frame(
+                frame,
+                expected_fields=OWNERSHIP_UNIVERSE_FIELDS,
+                field_aliases=OWNERSHIP_FIELD_ALIASES,
+            )
+            raw_rows = _lm2011_rust.normalize_ownership_universe_batch_response_columns(
+                [item.instrument for item in items],
+                [item.parameters.get("SDate") for item in items],
+                [item.parameters.get("EDate") for item in items],
+                normalized_frame.columns,
+                [normalized_frame.get_column(column).to_list() for column in normalized_frame.columns],
+            )
+            _LSEG_OWNERSHIP_RUST_METRICS["ownership_universe_response_column_fast_success"] += 1
+            return _ownership_universe_response_rows_to_frame(
+                items,
+                [
+                    (
+                        int(item_index),
+                        str(returned_ric),
+                        str(returned_date),
+                        None if returned_category is None else str(returned_category),
+                        None if returned_value is None else float(returned_value),
+                    )
+                    for item_index, returned_ric, returned_date, returned_category, returned_value in raw_rows
+                ],
+            )
+        except Exception:
+            _LSEG_OWNERSHIP_RUST_METRICS["ownership_universe_response_column_fast_failures"] += 1
+            _LSEG_OWNERSHIP_RUST_METRICS["ownership_universe_response_column_fallbacks"] += 1
+        try:
+            if normalized_frame is None:
+                normalized_frame = _standardize_field_frame(
+                    frame,
+                    expected_fields=OWNERSHIP_UNIVERSE_FIELDS,
+                    field_aliases=OWNERSHIP_FIELD_ALIASES,
+                )
+            item_rows = [
+                {
+                    "item_index": item_index,
+                    "instrument": item.instrument,
+                    "start_text": item.parameters.get("SDate"),
+                    "end_text": item.parameters.get("EDate"),
+                }
+                for item_index, item in enumerate(items)
+            ]
+            raw_rows = _lm2011_rust.normalize_ownership_universe_batch_response_rows_value(
+                item_rows,
+                normalized_frame.to_dicts(),
+            )
+            _LSEG_OWNERSHIP_RUST_METRICS["ownership_universe_response_fast_success"] += 1
+            return _ownership_universe_response_rows_to_frame(
+                items,
+                [
+                    (
+                        int(item_index),
+                        str(returned_ric),
+                        str(returned_date),
+                        None if returned_category is None else str(returned_category),
+                        None if returned_value is None else float(returned_value),
+                    )
+                    for item_index, returned_ric, returned_date, returned_category, returned_value in raw_rows
+                ],
+            )
+        except Exception:
+            _LSEG_OWNERSHIP_RUST_METRICS["ownership_universe_response_fast_failures"] += 1
+    _LSEG_OWNERSHIP_RUST_METRICS["ownership_universe_response_fallbacks"] += 1
+    return _normalize_ownership_universe_batch_response_py(items, frame)
+
+
+def _normalize_doc_exact_batch_response_py(items: list[Any], frame: pl.DataFrame) -> pl.DataFrame:
     normalized_frame = _standardize_field_frame(
         frame,
         expected_fields=DOC_EXACT_FIELDS,
@@ -1354,7 +1777,127 @@ def _normalize_doc_exact_batch_response(items: list[Any], frame: pl.DataFrame) -
     return _build_doc_raw_with_item_id_df(rows)
 
 
-def _normalize_doc_fallback_batch_response(items: list[Any], frame: pl.DataFrame) -> pl.DataFrame:
+def _doc_ownership_response_rows_to_frame(
+    items: list[Any],
+    response_rows: list[tuple[int, str | None, str | None, float | None, bool]],
+    *,
+    request_stage: str,
+) -> pl.DataFrame:
+    rows: list[dict[str, Any]] = []
+    for item_index, response_date, returned_category, returned_value, is_institutional_category in response_rows:
+        item = items[int(item_index)]
+        request_row = dict(item.payload["request_row"])
+        rows.append(
+            {
+                "item_id": item.item_id,
+                **{name: request_row.get(name) for name in DOC_OWNERSHIP_REQUEST_COLUMNS},
+                "request_stage": request_stage,
+                "response_date": response_date,
+                "response_date_is_imputed": False,
+                "returned_category": returned_category,
+                "returned_category_normalized": returned_category,
+                "returned_value": returned_value,
+                "is_institutional_category": is_institutional_category,
+            }
+        )
+    if not rows:
+        return pl.DataFrame(schema={"item_id": pl.Utf8, **_doc_ownership_raw_schema()})
+    return _build_doc_raw_with_item_id_df(rows)
+
+
+def _normalize_doc_ownership_response_fast(
+    items: list[Any],
+    frame: pl.DataFrame,
+    *,
+    expected_fields: tuple[str, ...],
+    request_stage: str,
+    metric_prefix: str,
+) -> pl.DataFrame | None:
+    if _lm2011_rust is None:
+        return None
+    normalized_frame: pl.DataFrame | None = None
+    try:
+        normalized_frame = _standardize_field_frame(
+            frame,
+            expected_fields=expected_fields,
+            field_aliases=OWNERSHIP_FIELD_ALIASES,
+        )
+        raw_rows = _lm2011_rust.normalize_doc_ownership_batch_response_columns(
+            [item.instrument for item in items],
+            normalized_frame.columns,
+            [normalized_frame.get_column(column).to_list() for column in normalized_frame.columns],
+        )
+        _LSEG_OWNERSHIP_RUST_METRICS[f"{metric_prefix}_column_fast_success"] += 1
+        return _doc_ownership_response_rows_to_frame(
+            items,
+            [
+                (
+                    int(item_index),
+                    None if response_date is None else str(response_date),
+                    None if returned_category is None else str(returned_category),
+                    None if returned_value is None else float(returned_value),
+                    bool(is_institutional_category),
+                )
+                for item_index, response_date, returned_category, returned_value, is_institutional_category in raw_rows
+            ],
+            request_stage=request_stage,
+        )
+    except Exception:
+        _LSEG_OWNERSHIP_RUST_METRICS[f"{metric_prefix}_column_fast_failures"] += 1
+        _LSEG_OWNERSHIP_RUST_METRICS[f"{metric_prefix}_column_fallbacks"] += 1
+    try:
+        if normalized_frame is None:
+            normalized_frame = _standardize_field_frame(
+                frame,
+                expected_fields=expected_fields,
+                field_aliases=OWNERSHIP_FIELD_ALIASES,
+            )
+        item_rows = [
+            {
+                "item_index": item_index,
+                "instrument": item.instrument,
+            }
+            for item_index, item in enumerate(items)
+        ]
+        raw_rows = _lm2011_rust.normalize_doc_ownership_batch_response_rows_value(
+            item_rows,
+            normalized_frame.to_dicts(),
+        )
+        _LSEG_OWNERSHIP_RUST_METRICS[f"{metric_prefix}_fast_success"] += 1
+        return _doc_ownership_response_rows_to_frame(
+            items,
+            [
+                (
+                    int(item_index),
+                    None if response_date is None else str(response_date),
+                    None if returned_category is None else str(returned_category),
+                    None if returned_value is None else float(returned_value),
+                    bool(is_institutional_category),
+                )
+                for item_index, response_date, returned_category, returned_value, is_institutional_category in raw_rows
+            ],
+            request_stage=request_stage,
+        )
+    except Exception:
+        _LSEG_OWNERSHIP_RUST_METRICS[f"{metric_prefix}_fast_failures"] += 1
+        return None
+
+
+def _normalize_doc_exact_batch_response(items: list[Any], frame: pl.DataFrame) -> pl.DataFrame:
+    fast_frame = _normalize_doc_ownership_response_fast(
+        items,
+        frame,
+        expected_fields=DOC_EXACT_FIELDS,
+        request_stage=DOC_OWNERSHIP_EXACT_STAGE,
+        metric_prefix="doc_exact_response",
+    )
+    if fast_frame is not None:
+        return fast_frame
+    _LSEG_OWNERSHIP_RUST_METRICS["doc_exact_response_fallbacks"] += 1
+    return _normalize_doc_exact_batch_response_py(items, frame)
+
+
+def _normalize_doc_fallback_batch_response_py(items: list[Any], frame: pl.DataFrame) -> pl.DataFrame:
     normalized_frame = _standardize_field_frame(
         frame,
         expected_fields=DOC_FALLBACK_FIELDS,
@@ -1393,6 +1936,20 @@ def _normalize_doc_fallback_batch_response(items: list[Any], frame: pl.DataFrame
     if not rows:
         return pl.DataFrame(schema={"item_id": pl.Utf8, **_doc_ownership_raw_schema()})
     return _build_doc_raw_with_item_id_df(rows)
+
+
+def _normalize_doc_fallback_batch_response(items: list[Any], frame: pl.DataFrame) -> pl.DataFrame:
+    fast_frame = _normalize_doc_ownership_response_fast(
+        items,
+        frame,
+        expected_fields=DOC_FALLBACK_FIELDS,
+        request_stage=DOC_OWNERSHIP_FALLBACK_STAGE,
+        metric_prefix="doc_fallback_response",
+    )
+    if fast_frame is not None:
+        return fast_frame
+    _LSEG_OWNERSHIP_RUST_METRICS["doc_fallback_response_fallbacks"] += 1
+    return _normalize_doc_fallback_batch_response_py(items, frame)
 
 
 def _empty_ownership_universe_results_df() -> pl.DataFrame:

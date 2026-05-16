@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from thesis_pkg.pipelines.refinitiv_bridge_pipeline import (
+from thesis_refinitiv.bridge import (
     build_refinitiv_ownership_universe_row_summary,
     build_refinitiv_step1_ownership_universe_handoff,
     run_refinitiv_step1_ownership_universe_handoff_pipeline,

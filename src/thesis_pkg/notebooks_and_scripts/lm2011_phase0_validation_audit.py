@@ -33,8 +33,15 @@ def _resolve_repo_root() -> Path:
     raise RuntimeError("Could not resolve repository root containing src/thesis_pkg/pipeline.py")
 
 
+def _resolve_source_root(repo_root: Path) -> Path:
+    copied_source_root = Path(__file__).resolve().parents[2]
+    if (copied_source_root / "thesis_pkg" / "pipeline.py").exists():
+        return copied_source_root
+    return repo_root / "src"
+
+
 ROOT = _resolve_repo_root()
-SRC = ROOT / "src"
+SRC = _resolve_source_root(ROOT)
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 

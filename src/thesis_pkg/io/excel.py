@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import datetime as dt
 import json
@@ -8,6 +8,50 @@ from typing import Any
 import polars as pl
 import xlsxwriter
 from xlsxwriter.utility import xl_rowcol_to_cell
+
+try:
+    from thesis_native import _lm2011_rust
+except Exception as exc:  # pragma: no cover - optional native extension
+    _lm2011_rust = None
+    _EXCEL_RUST_IMPORT_ERROR: str | None = f"{type(exc).__name__}: {exc}"
+else:
+    _EXCEL_RUST_IMPORT_ERROR = None
+
+_EXCEL_RUST_METRICS: dict[str, int] = {
+    "ownership_universe_block_payloads_fast_success": 0,
+    "ownership_universe_block_payloads_fast_failures": 0,
+    "ownership_universe_block_payloads_fallbacks": 0,
+    "resolution_diagnostic_block_payloads_fast_success": 0,
+    "resolution_diagnostic_block_payloads_fast_failures": 0,
+    "resolution_diagnostic_block_payloads_fallbacks": 0,
+    "ownership_smoke_block_payloads_fast_success": 0,
+    "ownership_smoke_block_payloads_fast_failures": 0,
+    "ownership_smoke_block_payloads_fallbacks": 0,
+    "ownership_validation_sheet_payloads_fast_success": 0,
+    "ownership_validation_sheet_payloads_fast_failures": 0,
+    "ownership_validation_sheet_payloads_fallbacks": 0,
+    "extended_summary_formula_payloads_fast_success": 0,
+    "extended_summary_formula_payloads_fast_failures": 0,
+    "extended_summary_formula_payloads_fallbacks": 0,
+    "extended_lookup_formula_payloads_fast_success": 0,
+    "extended_lookup_formula_payloads_fast_failures": 0,
+    "extended_lookup_formula_payloads_fallbacks": 0,
+    "doc_ownership_block_payloads_fast_success": 0,
+    "doc_ownership_block_payloads_fast_failures": 0,
+    "doc_ownership_block_payloads_fallbacks": 0,
+}
+
+
+def get_excel_rust_accel_metrics() -> dict[str, int | str | bool | None]:
+    metrics: dict[str, int | str | bool | None] = dict(_EXCEL_RUST_METRICS)
+    metrics["rust_accel_available"] = _lm2011_rust is not None
+    metrics["rust_accel_import_error"] = _EXCEL_RUST_IMPORT_ERROR
+    return metrics
+
+
+def reset_excel_rust_accel_metrics() -> None:
+    for key in _EXCEL_RUST_METRICS:
+        _EXCEL_RUST_METRICS[key] = 0
 
 
 def _write_table_sheet(
@@ -64,119 +108,356 @@ def _sheet_range_ref(sheet_name: str, first_row: int, last_row: int, col_idx: in
     return f"'{sheet_name}'!{first_cell}:{last_cell}"
 
 
-def _prefill_refinitiv_extended_lookup_formulas(
-    worksheet: xlsxwriter.worksheet.Worksheet,
+def _ownership_universe_block_payloads_py(
+    eligible_df: pl.DataFrame,
     *,
-    column_names: tuple[str, ...],
-    row_count: int,
-) -> None:
-    if row_count <= 0:
-        return
+    input_field_order: tuple[str, ...],
+    block_headers: tuple[str, ...],
+) -> list[dict[str, Any]]:
+    candidate_ric_offset = input_field_order.index("candidate_ric") + 1
+    request_start_offset = input_field_order.index("request_start_date") + 1
+    request_end_offset = input_field_order.index("request_end_date") + 1
+    block_width = len(block_headers)
+    payloads: list[dict[str, Any]] = []
 
-    column_map = {name: idx for idx, name in enumerate(column_names)}
-    required_columns = {
-        "all_successful_attempts_consistent",
-        "ISIN_lookup_input",
-        "CUSIP_lookup_input",
-        "TICKER_lookup_input",
-    }
-    missing = sorted(required_columns - set(column_map))
-    if missing:
-        raise ValueError(f"extended lookup worksheet missing required columns: {missing}")
+    for block_index, row in enumerate(eligible_df.iter_rows(named=True)):
+        base_col = block_index * block_width
+        candidate_ric_ref = _sheet_cell_ref(candidate_ric_offset, base_col)
+        request_start_ref = _sheet_cell_ref(request_start_offset, base_col)
+        request_end_ref = _sheet_cell_ref(request_end_offset, base_col)
+        payloads.append(
+            {
+                "base_col": base_col,
+                "input_values": [
+                    "" if row.get(field_name) is None else str(row.get(field_name))
+                    for field_name in input_field_order
+                ],
+                "formula": (
+                    f'=@RDP.Data({candidate_ric_ref},'
+                    '"TR.CategoryOwnershipPct.Date;TR.CategoryOwnershipPct;TR.InstrStatTypeValue",'
+                    f'"StatType=7 SDate="&{request_start_ref}&" EDate="&{request_end_ref}&" CH=Fd RH=IN")'
+                ),
+            }
+        )
+    return payloads
 
-    lookup_fields = {
-        "returned_ric": "TR.RIC",
-        "returned_name": "TR.CommonName",
-        "returned_isin": "TR.ISIN",
-        "returned_cusip": "TR.CUSIP",
-    }
-    identifier_types = ("ISIN", "CUSIP", "TICKER")
-    identifier_pairs = (
-        ("ISIN", "CUSIP"),
-        ("ISIN", "TICKER"),
-        ("CUSIP", "TICKER"),
+
+def _ownership_universe_block_payloads(
+    eligible_df: pl.DataFrame,
+    *,
+    input_field_order: tuple[str, ...],
+    block_headers: tuple[str, ...],
+) -> list[dict[str, Any]]:
+    if _lm2011_rust is not None:
+        try:
+            raw_payloads = _lm2011_rust.refinitiv_excel_ownership_universe_block_payloads(
+                eligible_df.to_dicts(),
+                input_field_order,
+                len(block_headers),
+            )
+            _EXCEL_RUST_METRICS["ownership_universe_block_payloads_fast_success"] += 1
+            return [dict(payload) for payload in raw_payloads]
+        except Exception:
+            _EXCEL_RUST_METRICS["ownership_universe_block_payloads_fast_failures"] += 1
+    _EXCEL_RUST_METRICS["ownership_universe_block_payloads_fallbacks"] += 1
+    return _ownership_universe_block_payloads_py(
+        eligible_df,
+        input_field_order=input_field_order,
+        block_headers=block_headers,
     )
 
-    for row_idx in range(1, row_count + 1):
-        for identifier_type in identifier_types:
-            lookup_input_ref = _sheet_cell_ref(row_idx, column_map[f"{identifier_type}_lookup_input"])
-            for target_suffix, tr_field in lookup_fields.items():
-                target_col = column_map[f"{identifier_type}_{target_suffix}"]
-                worksheet.write_formula(
-                    row_idx,
-                    target_col,
-                    f'=IF({lookup_input_ref}="","",_xll.TR({lookup_input_ref},"{tr_field}"))',
-                    None,
-                    "",
-                )
 
-            returned_ric_ref = _sheet_cell_ref(row_idx, column_map[f"{identifier_type}_returned_ric"])
-            worksheet.write_formula(
-                row_idx,
-                column_map[f"{identifier_type}_attempted"],
-                f'=LEN({lookup_input_ref})>0',
-                None,
-                False,
-            )
-            worksheet.write_formula(
-                row_idx,
-                column_map[f"{identifier_type}_success"],
-                f'=IFERROR({returned_ric_ref}<>"",FALSE)',
-                None,
-                False,
-            )
-
-        for left_type, right_type in identifier_pairs:
-            for field_name in ("ric", "isin", "cusip"):
-                left_ref = _sheet_cell_ref(row_idx, column_map[f"{left_type}_returned_{field_name}"])
-                right_ref = _sheet_cell_ref(row_idx, column_map[f"{right_type}_returned_{field_name}"])
-                target_col = column_map[f"{left_type}_vs_{right_type}_same_{field_name}"]
-                worksheet.write_formula(
-                    row_idx,
-                    target_col,
-                    (
-                        f'=IF(AND(IFERROR({left_ref}<>"",FALSE),IFERROR({right_ref}<>"",FALSE)),'
-                        f'IFERROR({left_ref}={right_ref},FALSE),"")'
-                    ),
-                    None,
-                    "",
-                )
-
-        success_refs = [
-            _sheet_cell_ref(row_idx, column_map[f"{identifier_type}_success"])
-            for identifier_type in identifier_types
-        ]
-        pairwise_refs = [
-            _sheet_cell_ref(row_idx, column_map[f"{left_type}_vs_{right_type}_same_{field_name}"])
-            for left_type, right_type in identifier_pairs
-            for field_name in ("ric", "isin", "cusip")
-        ]
-        success_count_expr = "+".join(f"N({cell_ref})" for cell_ref in success_refs)
-        pairwise_and_terms = ",".join(f'IF({cell_ref}="",TRUE,{cell_ref})' for cell_ref in pairwise_refs)
-        worksheet.write_formula(
-            row_idx,
-            column_map["all_successful_attempts_consistent"],
-            f'=IF(({success_count_expr})<2,"",AND({pairwise_and_terms}))',
-            None,
-            "",
-        )
-
-
-def _prefill_refinitiv_extended_summary_formulas(
-    worksheet: xlsxwriter.worksheet.Worksheet,
+def _lm2011_doc_ownership_block_payloads_py(
+    chunk_df: pl.DataFrame,
     *,
+    input_field_order: tuple[str, ...],
+    block_headers: tuple[str, ...],
+    request_stage: str,
+) -> list[dict[str, Any]]:
+    block_width = len(block_headers)
+    authoritative_ric_offset = input_field_order.index("authoritative_ric") + 1
+    target_effective_date_offset = input_field_order.index("target_effective_date") + 1
+    fallback_window_start_offset = input_field_order.index("fallback_window_start") + 1
+    fallback_window_end_offset = input_field_order.index("fallback_window_end") + 1
+    payloads: list[dict[str, Any]] = []
+
+    for block_index, row in enumerate(chunk_df.iter_rows(named=True)):
+        base_col = block_index * block_width
+        authoritative_ric_ref = _sheet_cell_ref(authoritative_ric_offset, base_col)
+        target_effective_date_ref = _sheet_cell_ref(target_effective_date_offset, base_col)
+        fallback_window_start_ref = _sheet_cell_ref(fallback_window_start_offset, base_col)
+        fallback_window_end_ref = _sheet_cell_ref(fallback_window_end_offset, base_col)
+        if request_stage == "EXACT":
+            data_formula = (
+                f'=@RDP.Data({authoritative_ric_ref},'
+                '"TR.CategoryOwnershipPct.Date;TR.CategoryOwnershipPct;TR.InstrStatTypeValue",'
+                f'"StatType=7 SDate="&TEXT({target_effective_date_ref},"yyyy-mm-dd")&'
+                f'" EDate="&TEXT({target_effective_date_ref},"yyyy-mm-dd")&" CH=Fd RH=IN")'
+            )
+        elif request_stage == "FALLBACK":
+            data_formula = (
+                f'=@RDP.Data({authoritative_ric_ref},'
+                '"TR.CategoryOwnershipPct.Date;TR.CategoryOwnershipPct;TR.InstrStatTypeValue",'
+                f'"StatType=7 SDate="&TEXT({fallback_window_start_ref},"yyyy-mm-dd")&'
+                f'" EDate="&TEXT({fallback_window_end_ref},"yyyy-mm-dd")&" CH=Fd RH=IN")'
+            )
+        else:
+            raise ValueError(f"unsupported doc ownership request stage: {request_stage}")
+        payloads.append(
+            {
+                "base_col": base_col,
+                "input_values": [row.get(field_name) for field_name in input_field_order],
+                "authoritative_ric_formula": f"={authoritative_ric_ref}",
+                "data_formula": data_formula,
+            }
+        )
+    return payloads
+
+
+def _lm2011_doc_ownership_block_payloads(
+    chunk_df: pl.DataFrame,
+    *,
+    input_field_order: tuple[str, ...],
+    block_headers: tuple[str, ...],
+    request_stage: str,
+) -> list[dict[str, Any]]:
+    if _lm2011_rust is not None:
+        try:
+            raw_payloads = _lm2011_rust.refinitiv_excel_lm2011_doc_ownership_block_payloads(
+                chunk_df.to_dicts(),
+                input_field_order,
+                len(block_headers),
+                request_stage,
+            )
+            _EXCEL_RUST_METRICS["doc_ownership_block_payloads_fast_success"] += 1
+            return [dict(payload) for payload in raw_payloads]
+        except Exception:
+            _EXCEL_RUST_METRICS["doc_ownership_block_payloads_fast_failures"] += 1
+    _EXCEL_RUST_METRICS["doc_ownership_block_payloads_fallbacks"] += 1
+    return _lm2011_doc_ownership_block_payloads_py(
+        chunk_df,
+        input_field_order=input_field_order,
+        block_headers=block_headers,
+        request_stage=request_stage,
+    )
+
+
+def _resolution_diagnostic_retrieval_block_payloads_py(
+    df: pl.DataFrame,
+    *,
+    input_field_order: tuple[str, ...],
+    block_headers: tuple[str, ...],
+) -> list[dict[str, Any]]:
+    lookup_input_row = input_field_order.index("lookup_input") + 1
+    request_start_row = input_field_order.index("request_start_date") + 1
+    request_end_row = input_field_order.index("request_end_date") + 1
+    block_width = len(block_headers)
+    payloads: list[dict[str, Any]] = []
+
+    for block_idx, row in enumerate(df.iter_rows(named=True)):
+        base_col = block_idx * block_width
+        lookup_input_ref = _sheet_cell_ref(lookup_input_row, base_col)
+        request_start_ref = _sheet_cell_ref(request_start_row, base_col)
+        request_end_ref = _sheet_cell_ref(request_end_row, base_col)
+        payloads.append(
+            {
+                "base_col": base_col,
+                "input_values": [
+                    "" if row.get(field_name) is None else str(row.get(field_name))
+                    for field_name in input_field_order
+                ],
+                "formula": (
+                    f'=IF({lookup_input_ref}="","",'
+                    f'_xll.RDP.Data({lookup_input_ref},'
+                    '"TR.CategoryOwnershipPct.Date;TR.CategoryOwnershipPct;TR.InstrStatTypeValue",'
+                    f'"StatType=7 SDate="&{request_start_ref}&" EDate="&{request_end_ref}&" CH=Fd RH=IN"))'
+                ),
+            }
+        )
+    return payloads
+
+
+def _resolution_diagnostic_retrieval_block_payloads(
+    df: pl.DataFrame,
+    *,
+    input_field_order: tuple[str, ...],
+    block_headers: tuple[str, ...],
+) -> list[dict[str, Any]]:
+    if _lm2011_rust is not None:
+        try:
+            raw_payloads = _lm2011_rust.refinitiv_excel_resolution_diagnostic_retrieval_block_payloads(
+                df.to_dicts(),
+                input_field_order,
+                len(block_headers),
+            )
+            _EXCEL_RUST_METRICS["resolution_diagnostic_block_payloads_fast_success"] += 1
+            return [dict(payload) for payload in raw_payloads]
+        except Exception:
+            _EXCEL_RUST_METRICS["resolution_diagnostic_block_payloads_fast_failures"] += 1
+    _EXCEL_RUST_METRICS["resolution_diagnostic_block_payloads_fallbacks"] += 1
+    return _resolution_diagnostic_retrieval_block_payloads_py(
+        df,
+        input_field_order=input_field_order,
+        block_headers=block_headers,
+    )
+
+
+def _ownership_smoke_block_payloads_py(
+    df: pl.DataFrame,
+    *,
+    input_field_order: tuple[str, ...],
+    block_headers: tuple[str, ...],
+) -> list[dict[str, Any]]:
+    block_width = len(block_headers)
+    return [
+        {
+            "base_col": block_idx * block_width,
+            "input_values": [
+                "" if row.get(field_name) is None else str(row.get(field_name))
+                for field_name in input_field_order
+            ],
+        }
+        for block_idx, row in enumerate(df.iter_rows(named=True))
+    ]
+
+
+def _ownership_smoke_block_payloads(
+    df: pl.DataFrame,
+    *,
+    input_field_order: tuple[str, ...],
+    block_headers: tuple[str, ...],
+) -> list[dict[str, Any]]:
+    if _lm2011_rust is not None:
+        try:
+            raw_payloads = _lm2011_rust.refinitiv_excel_ownership_smoke_block_payloads(
+                df.to_dicts(),
+                input_field_order,
+                len(block_headers),
+            )
+            _EXCEL_RUST_METRICS["ownership_smoke_block_payloads_fast_success"] += 1
+            return [dict(payload) for payload in raw_payloads]
+        except Exception:
+            _EXCEL_RUST_METRICS["ownership_smoke_block_payloads_fast_failures"] += 1
+    _EXCEL_RUST_METRICS["ownership_smoke_block_payloads_fallbacks"] += 1
+    return _ownership_smoke_block_payloads_py(
+        df,
+        input_field_order=input_field_order,
+        block_headers=block_headers,
+    )
+
+
+def _ownership_validation_sheet_payloads_py(
+    df: pl.DataFrame,
+    *,
+    input_field_order: tuple[str, ...],
+    block_slot_roles: tuple[str, ...],
+    block_headers: tuple[str, ...],
+) -> list[dict[str, Any]]:
+    role_to_row = {
+        (str(row["diagnostic_case_id"]), str(row["block_slot_role"])): row
+        for row in df.iter_rows(named=True)
+    }
+    case_rows = (
+        df.select(
+            "sheet_name",
+            "sheet_case_index",
+            "case_band_row_start",
+            "diagnostic_case_id",
+        )
+        .unique()
+        .sort("sheet_name", "sheet_case_index")
+        .to_dicts()
+    )
+    cases_by_sheet: dict[str, list[dict[str, Any]]] = {}
+    for row in case_rows:
+        cases_by_sheet.setdefault(str(row["sheet_name"]), []).append(row)
+
+    block_width = len(block_headers)
+    lookup_input_offset = input_field_order.index("lookup_input") + 1
+    request_start_offset = input_field_order.index("request_start_date") + 1
+    request_end_offset = input_field_order.index("request_end_date") + 1
+    sheet_payloads: list[dict[str, Any]] = []
+
+    for sheet_name, sheet_cases in cases_by_sheet.items():
+        case_payloads: list[dict[str, Any]] = []
+        for case_row in sheet_cases:
+            case_id = str(case_row["diagnostic_case_id"])
+            start_row = int(case_row["case_band_row_start"]) - 1
+            slot_payloads: list[dict[str, Any]] = []
+            for slot_idx, slot_role in enumerate(block_slot_roles):
+                row = role_to_row.get((case_id, slot_role))
+                if row is None:
+                    continue
+                base_col = 1 + (slot_idx * block_width)
+                lookup_input_ref = _sheet_cell_ref(start_row + lookup_input_offset, base_col)
+                request_start_ref = _sheet_cell_ref(start_row + request_start_offset, base_col)
+                request_end_ref = _sheet_cell_ref(start_row + request_end_offset, base_col)
+                slot_payloads.append(
+                    {
+                        "slot_index": slot_idx,
+                        "base_col": base_col,
+                        "input_values": [
+                            "" if row.get(field_name) is None else str(row.get(field_name))
+                            for field_name in input_field_order
+                        ],
+                        "formula": (
+                            f'=@RDP.Data({lookup_input_ref},'
+                            '"TR.CategoryOwnershipPct.Date;TR.CategoryOwnershipPct;TR.InstrStatTypeValue",'
+                            f'"StatType=7 SDate="&{request_start_ref}&" EDate="&{request_end_ref}&" CH=Fd RH=IN")'
+                        ),
+                    }
+                )
+            case_payloads.append(
+                {
+                    "diagnostic_case_id": case_id,
+                    "start_row": start_row,
+                    "slots": slot_payloads,
+                }
+            )
+        sheet_payloads.append({"sheet_name": sheet_name, "cases": case_payloads})
+    return sheet_payloads
+
+
+def _ownership_validation_sheet_payloads(
+    df: pl.DataFrame,
+    *,
+    input_field_order: tuple[str, ...],
+    block_slot_roles: tuple[str, ...],
+    block_headers: tuple[str, ...],
+) -> list[dict[str, Any]]:
+    if _lm2011_rust is not None:
+        try:
+            raw_payloads = _lm2011_rust.refinitiv_excel_ownership_validation_sheet_payloads(
+                df.to_dicts(),
+                input_field_order,
+                block_slot_roles,
+                len(block_headers),
+            )
+            _EXCEL_RUST_METRICS["ownership_validation_sheet_payloads_fast_success"] += 1
+            return [dict(payload) for payload in raw_payloads]
+        except Exception:
+            _EXCEL_RUST_METRICS["ownership_validation_sheet_payloads_fast_failures"] += 1
+    _EXCEL_RUST_METRICS["ownership_validation_sheet_payloads_fallbacks"] += 1
+    return _ownership_validation_sheet_payloads_py(
+        df,
+        input_field_order=input_field_order,
+        block_slot_roles=block_slot_roles,
+        block_headers=block_headers,
+    )
+
+
+def _extended_summary_formula_payloads_py(
     summary_df: pl.DataFrame,
+    *,
     lookup_sheet_name: str,
     lookup_column_names: tuple[str, ...],
     lookup_row_count: int,
-) -> None:
-    if summary_df.height <= 0 or lookup_row_count <= 0:
-        return
-
+) -> list[dict[str, Any]]:
     lookup_columns = {name: idx for idx, name in enumerate(lookup_column_names)}
     value_col_idx = summary_df.columns.index("value")
     identifier_types = ("ISIN", "CUSIP", "TICKER")
     single_success_summary_rows: dict[str, int] = {}
+    payloads: list[dict[str, Any]] = []
 
     def _lookup_range(column_name: str) -> str:
         return _sheet_range_ref(lookup_sheet_name, 1, lookup_row_count, lookup_columns[column_name])
@@ -218,7 +499,203 @@ def _prefill_refinitiv_extended_summary_formulas(
                 formula = f'=SUM({",".join(row_refs)})'
 
         if formula is not None:
-            worksheet.write_formula(row_idx, value_col_idx, formula, None, row["value"])
+            payloads.append({"row_idx": row_idx, "formula": formula, "value": row["value"]})
+    return payloads
+
+
+def _extended_summary_formula_payloads(
+    summary_df: pl.DataFrame,
+    *,
+    lookup_sheet_name: str,
+    lookup_column_names: tuple[str, ...],
+    lookup_row_count: int,
+) -> list[dict[str, Any]]:
+    if _lm2011_rust is not None:
+        try:
+            raw_payloads = _lm2011_rust.refinitiv_excel_extended_summary_formula_payloads(
+                summary_df.to_dicts(),
+                summary_df.columns,
+                lookup_sheet_name,
+                lookup_column_names,
+                lookup_row_count,
+            )
+            _EXCEL_RUST_METRICS["extended_summary_formula_payloads_fast_success"] += 1
+            return [dict(payload) for payload in raw_payloads]
+        except Exception:
+            _EXCEL_RUST_METRICS["extended_summary_formula_payloads_fast_failures"] += 1
+    _EXCEL_RUST_METRICS["extended_summary_formula_payloads_fallbacks"] += 1
+    return _extended_summary_formula_payloads_py(
+        summary_df,
+        lookup_sheet_name=lookup_sheet_name,
+        lookup_column_names=lookup_column_names,
+        lookup_row_count=lookup_row_count,
+    )
+
+
+def _extended_lookup_formula_payloads_py(
+    *,
+    column_names: tuple[str, ...],
+    row_count: int,
+) -> list[dict[str, Any]]:
+    column_map = {name: idx for idx, name in enumerate(column_names)}
+    required_columns = {
+        "all_successful_attempts_consistent",
+        "ISIN_lookup_input",
+        "CUSIP_lookup_input",
+        "TICKER_lookup_input",
+    }
+    missing = sorted(required_columns - set(column_map))
+    if missing:
+        raise ValueError(f"extended lookup worksheet missing required columns: {missing}")
+
+    lookup_fields = {
+        "returned_ric": "TR.RIC",
+        "returned_name": "TR.CommonName",
+        "returned_isin": "TR.ISIN",
+        "returned_cusip": "TR.CUSIP",
+    }
+    identifier_types = ("ISIN", "CUSIP", "TICKER")
+    identifier_pairs = (
+        ("ISIN", "CUSIP"),
+        ("ISIN", "TICKER"),
+        ("CUSIP", "TICKER"),
+    )
+    payloads: list[dict[str, Any]] = []
+
+    for row_idx in range(1, row_count + 1):
+        for identifier_type in identifier_types:
+            lookup_input_ref = _sheet_cell_ref(row_idx, column_map[f"{identifier_type}_lookup_input"])
+            for target_suffix, tr_field in lookup_fields.items():
+                target_col = column_map[f"{identifier_type}_{target_suffix}"]
+                payloads.append(
+                    {
+                        "row_idx": row_idx,
+                        "col_idx": target_col,
+                        "formula": f'=IF({lookup_input_ref}="","",_xll.TR({lookup_input_ref},"{tr_field}"))',
+                        "value": "",
+                    }
+                )
+
+            returned_ric_ref = _sheet_cell_ref(row_idx, column_map[f"{identifier_type}_returned_ric"])
+            payloads.append(
+                {
+                    "row_idx": row_idx,
+                    "col_idx": column_map[f"{identifier_type}_attempted"],
+                    "formula": f"=LEN({lookup_input_ref})>0",
+                    "value": False,
+                }
+            )
+            payloads.append(
+                {
+                    "row_idx": row_idx,
+                    "col_idx": column_map[f"{identifier_type}_success"],
+                    "formula": f'=IFERROR({returned_ric_ref}<>"",FALSE)',
+                    "value": False,
+                }
+            )
+
+        for left_type, right_type in identifier_pairs:
+            for field_name in ("ric", "isin", "cusip"):
+                left_ref = _sheet_cell_ref(row_idx, column_map[f"{left_type}_returned_{field_name}"])
+                right_ref = _sheet_cell_ref(row_idx, column_map[f"{right_type}_returned_{field_name}"])
+                target_col = column_map[f"{left_type}_vs_{right_type}_same_{field_name}"]
+                payloads.append(
+                    {
+                        "row_idx": row_idx,
+                        "col_idx": target_col,
+                        "formula": (
+                            f'=IF(AND(IFERROR({left_ref}<>"",FALSE),IFERROR({right_ref}<>"",FALSE)),'
+                            f'IFERROR({left_ref}={right_ref},FALSE),"")'
+                        ),
+                        "value": "",
+                    }
+                )
+
+        success_refs = [
+            _sheet_cell_ref(row_idx, column_map[f"{identifier_type}_success"])
+            for identifier_type in identifier_types
+        ]
+        pairwise_refs = [
+            _sheet_cell_ref(row_idx, column_map[f"{left_type}_vs_{right_type}_same_{field_name}"])
+            for left_type, right_type in identifier_pairs
+            for field_name in ("ric", "isin", "cusip")
+        ]
+        success_count_expr = "+".join(f"N({cell_ref})" for cell_ref in success_refs)
+        pairwise_and_terms = ",".join(f'IF({cell_ref}="",TRUE,{cell_ref})' for cell_ref in pairwise_refs)
+        payloads.append(
+            {
+                "row_idx": row_idx,
+                "col_idx": column_map["all_successful_attempts_consistent"],
+                "formula": f'=IF(({success_count_expr})<2,"",AND({pairwise_and_terms}))',
+                "value": "",
+            }
+        )
+    return payloads
+
+
+def _extended_lookup_formula_payloads(
+    *,
+    column_names: tuple[str, ...],
+    row_count: int,
+) -> list[dict[str, Any]]:
+    if _lm2011_rust is not None:
+        try:
+            raw_payloads = _lm2011_rust.refinitiv_excel_extended_lookup_formula_payloads(
+                column_names,
+                row_count,
+            )
+            _EXCEL_RUST_METRICS["extended_lookup_formula_payloads_fast_success"] += 1
+            return [dict(payload) for payload in raw_payloads]
+        except Exception:
+            _EXCEL_RUST_METRICS["extended_lookup_formula_payloads_fast_failures"] += 1
+    _EXCEL_RUST_METRICS["extended_lookup_formula_payloads_fallbacks"] += 1
+    return _extended_lookup_formula_payloads_py(column_names=column_names, row_count=row_count)
+
+
+def _prefill_refinitiv_extended_lookup_formulas(
+    worksheet: xlsxwriter.worksheet.Worksheet,
+    *,
+    column_names: tuple[str, ...],
+    row_count: int,
+) -> None:
+    if row_count <= 0:
+        return
+
+    for payload in _extended_lookup_formula_payloads(column_names=column_names, row_count=row_count):
+        worksheet.write_formula(
+            int(payload["row_idx"]),
+            int(payload["col_idx"]),
+            str(payload["formula"]),
+            None,
+            payload.get("value"),
+        )
+
+
+def _prefill_refinitiv_extended_summary_formulas(
+    worksheet: xlsxwriter.worksheet.Worksheet,
+    *,
+    summary_df: pl.DataFrame,
+    lookup_sheet_name: str,
+    lookup_column_names: tuple[str, ...],
+    lookup_row_count: int,
+) -> None:
+    if summary_df.height <= 0 or lookup_row_count <= 0:
+        return
+
+    value_col_idx = summary_df.columns.index("value")
+    for payload in _extended_summary_formula_payloads(
+        summary_df,
+        lookup_sheet_name=lookup_sheet_name,
+        lookup_column_names=lookup_column_names,
+        lookup_row_count=lookup_row_count,
+    ):
+        worksheet.write_formula(
+            int(payload["row_idx"]),
+            value_col_idx,
+            str(payload["formula"]),
+            None,
+            payload.get("value"),
+        )
 
 
 def _write_readme_sheet(
@@ -518,35 +995,26 @@ def _write_refinitiv_resolution_diagnostic_retrieval_sheet(
         worksheet.set_column(4, 4, 36)
         return
 
-    lookup_input_row = input_field_order.index("lookup_input") + 1
-    request_start_row = input_field_order.index("request_start_date") + 1
-    request_end_row = input_field_order.index("request_end_date") + 1
-
-    for block_idx, row in enumerate(df.iter_rows(named=True)):
-        base_col = block_idx * 5
+    for payload in _resolution_diagnostic_retrieval_block_payloads(
+        df,
+        input_field_order=input_field_order,
+        block_headers=block_headers,
+    ):
+        base_col = int(payload["base_col"])
         for offset, header in enumerate(block_headers):
             worksheet.write(0, base_col + offset, header, header_fmt)
 
-        for row_offset, field_name in enumerate(input_field_order, start=1):
-            value = row.get(field_name)
+        for row_offset, value in enumerate(payload["input_values"], start=1):
             worksheet.write_string(
                 row_offset,
                 base_col,
-                "" if value is None else str(value),
+                str(value),
             )
 
-        lookup_input_ref = _sheet_cell_ref(lookup_input_row, base_col)
-        request_start_ref = _sheet_cell_ref(request_start_row, base_col)
-        request_end_ref = _sheet_cell_ref(request_end_row, base_col)
         worksheet.write_formula(
             1,
             base_col + 1,
-            (
-                f'=IF({lookup_input_ref}="","",'
-                f'_xll.RDP.Data({lookup_input_ref},'
-                '"TR.CategoryOwnershipPct.Date;TR.CategoryOwnershipPct;TR.InstrStatTypeValue",'
-                f'"StatType=7 SDate="&{request_start_ref}&" EDate="&{request_end_ref}&" CH=Fd RH=IN"))'
-            ),
+            str(payload["formula"]),
             None,
             "",
         )
@@ -636,10 +1104,6 @@ def _write_refinitiv_ownership_validation_sheet(
         "returned_value",
         "returned_category",
     )
-    role_to_row = {
-        (str(row["diagnostic_case_id"]), str(row["block_slot_role"])): row
-        for row in df.iter_rows(named=True)
-    }
 
     if df.height <= 0:
         worksheet = workbook.add_worksheet("ownership_validation_001")
@@ -654,66 +1118,40 @@ def _write_refinitiv_ownership_validation_sheet(
         worksheet.set_column(5, 5, 36)
         return
 
-    case_rows = (
-        df.select(
-            "sheet_name",
-            "sheet_case_index",
-            "case_band_row_start",
-            "diagnostic_case_id",
-        )
-        .unique()
-        .sort("sheet_name", "sheet_case_index")
-        .to_dicts()
-    )
-    cases_by_sheet: dict[str, list[dict[str, Any]]] = {}
-    for row in case_rows:
-        cases_by_sheet.setdefault(str(row["sheet_name"]), []).append(row)
-
-    lookup_input_offset = input_field_order.index("lookup_input") + 1
-    request_start_offset = input_field_order.index("request_start_date") + 1
-    request_end_offset = input_field_order.index("request_end_date") + 1
-
-    for sheet_name, sheet_cases in cases_by_sheet.items():
+    for sheet_payload in _ownership_validation_sheet_payloads(
+        df,
+        input_field_order=input_field_order,
+        block_slot_roles=block_slot_roles,
+        block_headers=block_headers,
+    ):
+        sheet_name = str(sheet_payload["sheet_name"])
         worksheet = workbook.add_worksheet(sheet_name)
         worksheet.freeze_panes(1, 1)
         worksheet.set_column(0, 0, 34)
         for slot_idx in range(len(block_slot_roles)):
-            base_col = 1 + (slot_idx * 5)
+            base_col = 1 + (slot_idx * len(block_headers))
             worksheet.set_column(base_col, base_col, 28)
             worksheet.set_column(base_col + 1, base_col + 3, 18)
             worksheet.set_column(base_col + 4, base_col + 4, 36)
 
-        for case_row in sheet_cases:
-            case_id = str(case_row["diagnostic_case_id"])
-            start_row = int(case_row["case_band_row_start"]) - 1
+        for case_payload in sheet_payload["cases"]:
+            start_row = int(case_payload["start_row"])
             worksheet.write(start_row, 0, "field", header_fmt)
             for slot_idx, _slot_role in enumerate(block_slot_roles):
-                base_col = 1 + (slot_idx * 5)
+                base_col = 1 + (slot_idx * len(block_headers))
                 for offset, header in enumerate(block_headers):
                     worksheet.write(start_row, base_col + offset, header, header_fmt)
             for field_offset, field_name in enumerate(input_field_order, start=1):
                 worksheet.write_string(start_row + field_offset, 0, field_name, label_fmt)
 
-            for slot_idx, slot_role in enumerate(block_slot_roles):
-                row = role_to_row.get((case_id, slot_role))
-                if row is None:
-                    continue
-                base_col = 1 + (slot_idx * 5)
-                for field_offset, field_name in enumerate(input_field_order, start=1):
-                    value = row.get(field_name)
-                    worksheet.write_string(start_row + field_offset, base_col, "" if value is None else str(value))
-
-                lookup_input_ref = _sheet_cell_ref(start_row + lookup_input_offset, base_col)
-                request_start_ref = _sheet_cell_ref(start_row + request_start_offset, base_col)
-                request_end_ref = _sheet_cell_ref(start_row + request_end_offset, base_col)
+            for slot_payload in case_payload["slots"]:
+                base_col = int(slot_payload["base_col"])
+                for field_offset, value in enumerate(slot_payload["input_values"], start=1):
+                    worksheet.write_string(start_row + field_offset, base_col, value)
                 worksheet.write_formula(
                     start_row + 1,
                     base_col + 1,
-                    (
-                        f'=@RDP.Data({lookup_input_ref},'
-                        '"TR.CategoryOwnershipPct.Date;TR.CategoryOwnershipPct;TR.InstrStatTypeValue",'
-                        f'"StatType=7 SDate="&{request_start_ref}&" EDate="&{request_end_ref}&" CH=Fd RH=IN")'
-                    ),
+                    str(slot_payload["formula"]),
                     None,
                     "",
                 )
@@ -790,13 +1228,14 @@ def _write_refinitiv_ownership_universe_sheet(
         worksheet.set_column(4, 4, 36)
         return
 
-    candidate_ric_offset = input_field_order.index("candidate_ric") + 1
-    request_start_offset = input_field_order.index("request_start_date") + 1
-    request_end_offset = input_field_order.index("request_end_date") + 1
     block_width = len(block_headers)
 
-    for block_index, row in enumerate(eligible_df.iter_rows(named=True)):
-        base_col = block_index * block_width
+    for payload in _ownership_universe_block_payloads(
+        eligible_df,
+        input_field_order=input_field_order,
+        block_headers=block_headers,
+    ):
+        base_col = int(payload["base_col"])
         worksheet.set_column(base_col, base_col, 34)
         worksheet.set_column(base_col + 1, base_col + 3, 18)
         worksheet.set_column(base_col + 4, base_col + 4, 36)
@@ -804,21 +1243,13 @@ def _write_refinitiv_ownership_universe_sheet(
         for offset, header in enumerate(block_headers):
             worksheet.write(0, base_col + offset, header, header_fmt)
 
-        for field_offset, field_name in enumerate(input_field_order, start=1):
-            value = row.get(field_name)
-            worksheet.write_string(field_offset, base_col, "" if value is None else str(value))
+        for field_offset, value in enumerate(payload["input_values"], start=1):
+            worksheet.write_string(field_offset, base_col, str(value))
 
-        candidate_ric_ref = _sheet_cell_ref(candidate_ric_offset, base_col)
-        request_start_ref = _sheet_cell_ref(request_start_offset, base_col)
-        request_end_ref = _sheet_cell_ref(request_end_offset, base_col)
         worksheet.write_formula(
             1,
             base_col + 1,
-            (
-                f'=@RDP.Data({candidate_ric_ref},'
-                '"TR.CategoryOwnershipPct.Date;TR.CategoryOwnershipPct;TR.InstrStatTypeValue",'
-                f'"StatType=7 SDate="&{request_start_ref}&" EDate="&{request_end_ref}&" CH=Fd RH=IN")'
-            ),
+            str(payload["formula"]),
             None,
             "",
         )
@@ -899,10 +1330,6 @@ def _write_refinitiv_lm2011_doc_ownership_sheet(
         return written_sheet_names
 
     block_width = len(block_headers)
-    authoritative_ric_offset = input_field_order.index("authoritative_ric") + 1
-    target_effective_date_offset = input_field_order.index("target_effective_date") + 1
-    fallback_window_start_offset = input_field_order.index("fallback_window_start") + 1
-    fallback_window_end_offset = input_field_order.index("fallback_window_end") + 1
     date_fields = {
         "filing_date",
         "target_quarter_end",
@@ -922,16 +1349,20 @@ def _write_refinitiv_lm2011_doc_ownership_sheet(
         written_sheet_names.append(sheet_name)
         worksheet.freeze_panes(1, 0)
 
-        for block_index, row in enumerate(chunk_df.iter_rows(named=True)):
-            base_col = block_index * block_width
+        for payload in _lm2011_doc_ownership_block_payloads(
+            chunk_df,
+            input_field_order=input_field_order,
+            block_headers=block_headers,
+            request_stage=request_stage,
+        ):
+            base_col = int(payload["base_col"])
             worksheet.set_column(base_col, base_col, 30)
             worksheet.set_column(base_col + 1, base_col + 4, 18)
 
             for offset, header in enumerate(block_headers):
                 worksheet.write(0, base_col + offset, header, header_fmt)
 
-            for field_offset, field_name in enumerate(input_field_order, start=1):
-                value = row.get(field_name)
+            for field_offset, (field_name, value) in enumerate(zip(input_field_order, payload["input_values"]), start=1):
                 if value is None:
                     continue
                 if field_name in date_fields and isinstance(value, (dt.date, dt.datetime)):
@@ -939,40 +1370,8 @@ def _write_refinitiv_lm2011_doc_ownership_sheet(
                 else:
                     worksheet.write_string(field_offset, base_col, str(value))
 
-            authoritative_ric_ref = _sheet_cell_ref(authoritative_ric_offset, base_col)
-            target_effective_date_ref = _sheet_cell_ref(target_effective_date_offset, base_col)
-            fallback_window_start_ref = _sheet_cell_ref(fallback_window_start_offset, base_col)
-            fallback_window_end_ref = _sheet_cell_ref(fallback_window_end_offset, base_col)
-            worksheet.write_formula(1, base_col + 1, f"={authoritative_ric_ref}", None, "")
-
-            if request_stage == "EXACT":
-                worksheet.write_formula(
-                    1,
-                    base_col + 2,
-                    (
-                        f'=@RDP.Data({authoritative_ric_ref},'
-                        '"TR.CategoryOwnershipPct.Date;TR.CategoryOwnershipPct;TR.InstrStatTypeValue",'
-                        f'"StatType=7 SDate="&TEXT({target_effective_date_ref},"yyyy-mm-dd")&'
-                        f'" EDate="&TEXT({target_effective_date_ref},"yyyy-mm-dd")&" CH=Fd RH=IN")'
-                    ),
-                    None,
-                    "",
-                )
-            elif request_stage == "FALLBACK":
-                worksheet.write_formula(
-                    1,
-                    base_col + 2,
-                    (
-                        f'=@RDP.Data({authoritative_ric_ref},'
-                        '"TR.CategoryOwnershipPct.Date;TR.CategoryOwnershipPct;TR.InstrStatTypeValue",'
-                        f'"StatType=7 SDate="&TEXT({fallback_window_start_ref},"yyyy-mm-dd")&'
-                        f'" EDate="&TEXT({fallback_window_end_ref},"yyyy-mm-dd")&" CH=Fd RH=IN")'
-                    ),
-                    None,
-                    "",
-                )
-            else:
-                raise ValueError(f"unsupported doc ownership request stage: {request_stage}")
+            worksheet.write_formula(1, base_col + 1, str(payload["authoritative_ric_formula"]), None, "")
+            worksheet.write_formula(1, base_col + 2, str(payload["data_formula"]), None, "")
 
     return written_sheet_names
 
@@ -1079,17 +1478,20 @@ def write_refinitiv_ownership_smoke_testing_workbook(
             "sample_category",
         )
 
-        for block_idx, row in enumerate(df.iter_rows(named=True)):
-            base_col = block_idx * 5
+        for payload in _ownership_smoke_block_payloads(
+            df,
+            input_field_order=input_field_order,
+            block_headers=block_headers,
+        ):
+            base_col = int(payload["base_col"])
             for offset, header in enumerate(block_headers):
                 worksheet.write(0, base_col + offset, header, header_fmt)
 
-            for row_offset, field_name in enumerate(input_field_order, start=1):
-                value = row.get(field_name)
+            for row_offset, value in enumerate(payload["input_values"], start=1):
                 worksheet.write_string(
                     row_offset,
                     base_col,
-                    "" if value is None else str(value),
+                    str(value),
                 )
 
             worksheet.set_column(base_col, base_col, 28)

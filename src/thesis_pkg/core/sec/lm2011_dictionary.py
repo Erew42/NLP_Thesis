@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import csv
 import json
@@ -8,6 +8,11 @@ from pathlib import Path
 from typing import Any
 
 import polars as pl
+
+try:
+    from thesis_native import _lm2011_rust
+except Exception:  # pragma: no cover - optional local extension
+    _lm2011_rust = None
 
 
 REPO_LOCAL_OPERATIVE_INPUT = "repo-local operative replication input"
@@ -35,6 +40,30 @@ REPLICATION_DICTIONARY_FAMILY_NAME = "replication"
 EXTENDED_DICTIONARY_FAMILY_NAME = "extended"
 PAPER_ERA_SENTIMENT_YEAR = "2009"
 PAPER_ERA_MASTER_SOURCES: tuple[str, ...] = ("12of12inf", "10K_2008", "10K_2009")
+
+_LM2011_DICTIONARY_RUST_METRICS: dict[str, int] = {
+    "normalize_cell_fast_success": 0,
+    "normalize_cell_fast_failures": 0,
+    "normalize_cell_fallbacks": 0,
+    "unique_preserve_order_fast_success": 0,
+    "unique_preserve_order_fast_failures": 0,
+    "unique_preserve_order_fallbacks": 0,
+    "active_membership_fast_success": 0,
+    "active_membership_fast_failures": 0,
+    "active_membership_fallbacks": 0,
+}
+
+
+def get_lm2011_dictionary_rust_accel_metrics() -> dict[str, int | str | bool | None]:
+    metrics: dict[str, int | str | bool | None] = dict(_LM2011_DICTIONARY_RUST_METRICS)
+    metrics["rust_accel_available"] = _lm2011_rust is not None
+    metrics["rust_module"] = getattr(_lm2011_rust, "__name__", None)
+    return metrics
+
+
+def reset_lm2011_dictionary_rust_accel_metrics() -> None:
+    for key in _LM2011_DICTIONARY_RUST_METRICS:
+        _LM2011_DICTIONARY_RUST_METRICS[key] = 0
 
 
 @dataclass(frozen=True)
@@ -166,13 +195,25 @@ def _require_existing_nonempty_path(path: Path, *, label: str) -> Path:
     return path
 
 
-def _normalize_cell(value: str | None) -> str:
+def _normalize_cell_py(value: str | None) -> str:
     if value is None:
         return ""
     return value.strip()
 
 
-def _unique_preserve_order(values: list[str]) -> list[str]:
+def _normalize_cell(value: str | None) -> str:
+    if _lm2011_rust is not None and (value is None or isinstance(value, str)):
+        try:
+            out = str(_lm2011_rust.lm2011_dictionary_normalize_cell_value(value))
+            _LM2011_DICTIONARY_RUST_METRICS["normalize_cell_fast_success"] += 1
+            return out
+        except Exception:
+            _LM2011_DICTIONARY_RUST_METRICS["normalize_cell_fast_failures"] += 1
+    _LM2011_DICTIONARY_RUST_METRICS["normalize_cell_fallbacks"] += 1
+    return _normalize_cell_py(value)
+
+
+def _unique_preserve_order_py(values: list[str]) -> list[str]:
     seen: set[str] = set()
     unique_values: list[str] = []
     for value in values:
@@ -181,6 +222,18 @@ def _unique_preserve_order(values: list[str]) -> list[str]:
         seen.add(value)
         unique_values.append(value)
     return unique_values
+
+
+def _unique_preserve_order(values: list[str]) -> list[str]:
+    if _lm2011_rust is not None and all(isinstance(value, str) for value in values):
+        try:
+            out = list(_lm2011_rust.lm2011_dictionary_unique_preserve_order(values))
+            _LM2011_DICTIONARY_RUST_METRICS["unique_preserve_order_fast_success"] += 1
+            return out
+        except Exception:
+            _LM2011_DICTIONARY_RUST_METRICS["unique_preserve_order_fast_failures"] += 1
+    _LM2011_DICTIONARY_RUST_METRICS["unique_preserve_order_fallbacks"] += 1
+    return _unique_preserve_order_py(values)
 
 
 def _require_csv_columns(
@@ -252,11 +305,23 @@ def _select_equal_match_words(
     return _unique_preserve_order(selected_words)
 
 
-def _is_active_extended_membership(value: str | None) -> bool:
-    normalized = _normalize_cell(value)
+def _is_active_extended_membership_py(value: str | None) -> bool:
+    normalized = _normalize_cell_py(value)
     if not normalized or normalized == "0":
         return False
     return not normalized.startswith("-")
+
+
+def _is_active_extended_membership(value: str | None) -> bool:
+    if _lm2011_rust is not None and (value is None or isinstance(value, str)):
+        try:
+            out = bool(_lm2011_rust.lm2011_dictionary_active_membership_value(value))
+            _LM2011_DICTIONARY_RUST_METRICS["active_membership_fast_success"] += 1
+            return out
+        except Exception:
+            _LM2011_DICTIONARY_RUST_METRICS["active_membership_fast_failures"] += 1
+    _LM2011_DICTIONARY_RUST_METRICS["active_membership_fallbacks"] += 1
+    return _is_active_extended_membership_py(value)
 
 
 def _select_active_words(

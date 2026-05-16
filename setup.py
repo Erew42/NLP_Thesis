@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from setuptools import Extension, setup
+from setuptools import Extension, find_packages, setup
+from setuptools_rust import Binding, RustExtension, Strip
 
 
 def _build_extensions() -> list[Extension]:
@@ -33,6 +34,17 @@ def _cythonize_extensions() -> list[Extension]:
 
 
 setup(
-    ext_modules=_cythonize_extensions(),
+    packages=find_packages(where="src"),
     package_dir={"": "src"},
+    ext_modules=_cythonize_extensions(),
+    rust_extensions=[
+        RustExtension(
+            "thesis_native._lm2011_rust",
+            "rust/lm2011_rust/Cargo.toml",
+            binding=Binding.PyO3,
+            debug=False,
+            strip=Strip.Debug,
+        )
+    ],
+    zip_safe=False,
 )

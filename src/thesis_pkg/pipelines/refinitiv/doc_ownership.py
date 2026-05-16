@@ -8,13 +8,21 @@ from typing import Any
 import polars as pl
 
 from thesis_pkg.io.excel import write_refinitiv_lm2011_doc_ownership_workbook
-from thesis_pkg.pipelines.refinitiv_bridge_pipeline import (
+from thesis_refinitiv.bridge import (
     _build_explicit_schema_df,
     _cast_df_to_schema,
     _normalize_lookup_text,
     _normalize_workbook_scalar,
     _write_workbook_or_reuse_locked_output,
 )
+
+try:
+    from thesis_native import _lm2011_rust
+except Exception as exc:  # pragma: no cover - optional native extension
+    _lm2011_rust = None
+    _DOC_OWNERSHIP_RUST_IMPORT_ERROR: str | None = f"{type(exc).__name__}: {exc}"
+else:
+    _DOC_OWNERSHIP_RUST_IMPORT_ERROR = None
 
 
 DOC_OWNERSHIP_REQUEST_COLUMNS: tuple[str, ...] = (
@@ -83,6 +91,90 @@ DOC_OWNERSHIP_BLOCK_HEADERS: tuple[str, ...] = (
     "returned_category",
 )
 
+_DOC_OWNERSHIP_RUST_METRICS: dict[str, int] = {
+    "kypermno_fast_success": 0,
+    "kypermno_fast_failures": 0,
+    "kypermno_fallbacks": 0,
+    "kypermno_batch_fast_success": 0,
+    "kypermno_batch_fast_failures": 0,
+    "kypermno_batch_fallbacks": 0,
+    "lookup_text_batch_fast_success": 0,
+    "lookup_text_batch_fast_failures": 0,
+    "lookup_text_batch_fallbacks": 0,
+    "float_value_fast_success": 0,
+    "float_value_fast_failures": 0,
+    "float_value_fallbacks": 0,
+    "date_value_fast_success": 0,
+    "date_value_fast_failures": 0,
+    "date_value_fallbacks": 0,
+    "institutional_value_fast_success": 0,
+    "institutional_value_fast_failures": 0,
+    "institutional_value_fallbacks": 0,
+    "category_fast_success": 0,
+    "category_fast_failures": 0,
+    "category_fallbacks": 0,
+    "institutional_category_fast_success": 0,
+    "institutional_category_fast_failures": 0,
+    "institutional_category_fallbacks": 0,
+    "quarter_end_fast_success": 0,
+    "quarter_end_fast_failures": 0,
+    "quarter_end_fallbacks": 0,
+    "target_effective_date_fast_success": 0,
+    "target_effective_date_fast_failures": 0,
+    "target_effective_date_fallbacks": 0,
+    "date_clip_fast_success": 0,
+    "date_clip_fast_failures": 0,
+    "date_clip_fallbacks": 0,
+    "request_row_build_column_fast_success": 0,
+    "request_row_build_column_fast_failures": 0,
+    "request_row_build_column_fallbacks": 0,
+    "request_row_build_fast_success": 0,
+    "request_row_build_fast_failures": 0,
+    "request_row_build_fallbacks": 0,
+    "retrieval_sheet_fast_success": 0,
+    "retrieval_sheet_fast_failures": 0,
+    "retrieval_sheet_fallbacks": 0,
+    "exact_hit_selection_column_fast_success": 0,
+    "exact_hit_selection_column_fast_failures": 0,
+    "exact_hit_selection_column_fallbacks": 0,
+    "exact_hit_selection_fast_success": 0,
+    "exact_hit_selection_fast_failures": 0,
+    "exact_hit_selection_fallbacks": 0,
+    "fallback_hit_selection_column_fast_success": 0,
+    "fallback_hit_selection_column_fast_failures": 0,
+    "fallback_hit_selection_column_fallbacks": 0,
+    "fallback_hit_selection_fast_success": 0,
+    "fallback_hit_selection_fast_failures": 0,
+    "fallback_hit_selection_fallbacks": 0,
+    "fallback_request_selection_column_fast_success": 0,
+    "fallback_request_selection_column_fast_failures": 0,
+    "fallback_request_selection_column_fallbacks": 0,
+    "fallback_request_selection_fast_success": 0,
+    "fallback_request_selection_fast_failures": 0,
+    "fallback_request_selection_fallbacks": 0,
+    "final_row_build_fast_success": 0,
+    "final_row_build_fast_failures": 0,
+    "final_row_build_fallbacks": 0,
+    "universe_summary_column_fast_success": 0,
+    "universe_summary_column_fast_failures": 0,
+    "universe_summary_column_fallbacks": 0,
+    "universe_summary_fast_success": 0,
+    "universe_summary_fast_failures": 0,
+    "universe_summary_fallbacks": 0,
+}
+
+
+def get_doc_ownership_rust_accel_metrics() -> dict[str, int | str | bool | None]:
+    metrics: dict[str, int | str | bool | None] = dict(_DOC_OWNERSHIP_RUST_METRICS)
+    metrics["rust_accel_available"] = _lm2011_rust is not None
+    metrics["rust_accel_import_error"] = _DOC_OWNERSHIP_RUST_IMPORT_ERROR
+    return metrics
+
+
+def reset_doc_ownership_rust_accel_metrics() -> None:
+    for key in _DOC_OWNERSHIP_RUST_METRICS:
+        _DOC_OWNERSHIP_RUST_METRICS[key] = 0
+
 DOC_OWNERSHIP_RETRIEVAL_SHEET_PREFIX = "ownership_retrieval"
 DOC_OWNERSHIP_EXACT_STAGE = "EXACT"
 DOC_OWNERSHIP_FALLBACK_STAGE = "FALLBACK"
@@ -147,7 +239,7 @@ def _empty_df(columns: tuple[str, ...], schema: dict[str, pl.DataType]) -> pl.Da
     )
 
 
-def _normalize_date_value(value: Any) -> dt.date | None:
+def _normalize_date_value_py(value: Any) -> dt.date | None:
     if value is None:
         return None
     if isinstance(value, dt.datetime):
@@ -173,7 +265,19 @@ def _normalize_date_value(value: Any) -> dt.date | None:
     return None
 
 
-def _normalize_float_value(value: Any) -> float | None:
+def _normalize_date_value(value: Any) -> dt.date | None:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.normalize_doc_ownership_date_value(value)
+            _DOC_OWNERSHIP_RUST_METRICS["date_value_fast_success"] += 1
+            return out
+        except Exception:
+            _DOC_OWNERSHIP_RUST_METRICS["date_value_fast_failures"] += 1
+    _DOC_OWNERSHIP_RUST_METRICS["date_value_fallbacks"] += 1
+    return _normalize_date_value_py(value)
+
+
+def _normalize_float_value_py(value: Any) -> float | None:
     if value is None:
         return None
     if isinstance(value, bool):
@@ -189,18 +293,54 @@ def _normalize_float_value(value: Any) -> float | None:
         return None
 
 
-def _normalize_category(value: Any) -> str | None:
+def _normalize_float_value(value: Any) -> float | None:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.normalize_doc_ownership_float_value(value)
+            _DOC_OWNERSHIP_RUST_METRICS["float_value_fast_success"] += 1
+            return None if out is None else float(out)
+        except Exception:
+            _DOC_OWNERSHIP_RUST_METRICS["float_value_fast_failures"] += 1
+    _DOC_OWNERSHIP_RUST_METRICS["float_value_fallbacks"] += 1
+    return _normalize_float_value_py(value)
+
+
+def _normalize_category_py(value: Any) -> str | None:
     normalized = _normalize_lookup_text(_normalize_workbook_scalar(value))
     if normalized is None:
         return None
     return " ".join(normalized.split())
 
 
-def _is_institutional_category(value: str | None) -> bool:
+def _normalize_category(value: Any) -> str | None:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.normalize_doc_ownership_category_value(value)
+            _DOC_OWNERSHIP_RUST_METRICS["category_fast_success"] += 1
+            return out
+        except Exception:
+            _DOC_OWNERSHIP_RUST_METRICS["category_fast_failures"] += 1
+    _DOC_OWNERSHIP_RUST_METRICS["category_fallbacks"] += 1
+    return _normalize_category_py(value)
+
+
+def _is_institutional_category_py(value: str | None) -> bool:
     return value is not None and value.casefold() == "Holdings by Institutions".casefold()
 
 
-def _clean_institutional_value(value: float | None) -> float | None:
+def _is_institutional_category(value: str | None) -> bool:
+    if _lm2011_rust is not None:
+        try:
+            out = bool(_lm2011_rust.is_doc_ownership_institutional_category(value))
+            _DOC_OWNERSHIP_RUST_METRICS["institutional_category_fast_success"] += 1
+            return out
+        except Exception:
+            _DOC_OWNERSHIP_RUST_METRICS["institutional_category_fast_failures"] += 1
+    _DOC_OWNERSHIP_RUST_METRICS["institutional_category_fallbacks"] += 1
+    return _is_institutional_category_py(value)
+
+
+def _clean_institutional_value_py(value: float | None) -> float | None:
     if value is None:
         return None
     if value < 0:
@@ -208,7 +348,19 @@ def _clean_institutional_value(value: float | None) -> float | None:
     return min(float(value), 100.0)
 
 
-def _normalize_kypermno(value: Any) -> str | None:
+def _clean_institutional_value(value: float | None) -> float | None:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.clean_doc_ownership_institutional_value(value)
+            _DOC_OWNERSHIP_RUST_METRICS["institutional_value_fast_success"] += 1
+            return None if out is None else float(out)
+        except Exception:
+            _DOC_OWNERSHIP_RUST_METRICS["institutional_value_fast_failures"] += 1
+    _DOC_OWNERSHIP_RUST_METRICS["institutional_value_fallbacks"] += 1
+    return _clean_institutional_value_py(value)
+
+
+def _normalize_kypermno_py(value: Any) -> str | None:
     if value is None:
         return None
     if isinstance(value, str):
@@ -220,26 +372,86 @@ def _normalize_kypermno(value: Any) -> str | None:
     return _normalize_lookup_text(str(value))
 
 
-def _most_recent_quarter_end_before(filing_date: dt.date) -> dt.date:
+def _normalize_kypermno(value: Any) -> str | None:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.normalize_kypermno_value(value)
+            _DOC_OWNERSHIP_RUST_METRICS["kypermno_fast_success"] += 1
+            return out
+        except Exception:
+            _DOC_OWNERSHIP_RUST_METRICS["kypermno_fast_failures"] += 1
+    _DOC_OWNERSHIP_RUST_METRICS["kypermno_fallbacks"] += 1
+    return _normalize_kypermno_py(value)
+
+
+def _most_recent_quarter_end_before_py(filing_date: dt.date) -> dt.date:
     quarter_start_month = ((filing_date.month - 1) // 3) * 3 + 1
     quarter_start = dt.date(filing_date.year, quarter_start_month, 1)
     return quarter_start - dt.timedelta(days=1)
 
 
-def _target_effective_date_for_quarter_end(target_quarter_end: dt.date) -> dt.date:
+def _most_recent_quarter_end_before(filing_date: dt.date) -> dt.date:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.doc_ownership_most_recent_quarter_end_before(filing_date)
+            _DOC_OWNERSHIP_RUST_METRICS["quarter_end_fast_success"] += 1
+            return out
+        except Exception:
+            _DOC_OWNERSHIP_RUST_METRICS["quarter_end_fast_failures"] += 1
+    _DOC_OWNERSHIP_RUST_METRICS["quarter_end_fallbacks"] += 1
+    return _most_recent_quarter_end_before_py(filing_date)
+
+
+def _target_effective_date_for_quarter_end_py(target_quarter_end: dt.date) -> dt.date:
     return target_quarter_end + dt.timedelta(days=1)
 
 
-def _clip_date_lower(value: dt.date | None, lower_bound: dt.date | None) -> dt.date | None:
+def _target_effective_date_for_quarter_end(target_quarter_end: dt.date) -> dt.date:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.doc_ownership_target_effective_date_for_quarter_end(target_quarter_end)
+            _DOC_OWNERSHIP_RUST_METRICS["target_effective_date_fast_success"] += 1
+            return out
+        except Exception:
+            _DOC_OWNERSHIP_RUST_METRICS["target_effective_date_fast_failures"] += 1
+    _DOC_OWNERSHIP_RUST_METRICS["target_effective_date_fallbacks"] += 1
+    return _target_effective_date_for_quarter_end_py(target_quarter_end)
+
+
+def _clip_date_lower_py(value: dt.date | None, lower_bound: dt.date | None) -> dt.date | None:
     if value is None or lower_bound is None:
         return value
     return max(value, lower_bound)
 
 
-def _clip_date_upper(value: dt.date | None, upper_bound: dt.date | None) -> dt.date | None:
+def _clip_date_lower(value: dt.date | None, lower_bound: dt.date | None) -> dt.date | None:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.doc_ownership_clip_date_lower(value, lower_bound)
+            _DOC_OWNERSHIP_RUST_METRICS["date_clip_fast_success"] += 1
+            return out
+        except Exception:
+            _DOC_OWNERSHIP_RUST_METRICS["date_clip_fast_failures"] += 1
+    _DOC_OWNERSHIP_RUST_METRICS["date_clip_fallbacks"] += 1
+    return _clip_date_lower_py(value, lower_bound)
+
+
+def _clip_date_upper_py(value: dt.date | None, upper_bound: dt.date | None) -> dt.date | None:
     if value is None or upper_bound is None:
         return value
     return min(value, upper_bound)
+
+
+def _clip_date_upper(value: dt.date | None, upper_bound: dt.date | None) -> dt.date | None:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.doc_ownership_clip_date_upper(value, upper_bound)
+            _DOC_OWNERSHIP_RUST_METRICS["date_clip_fast_success"] += 1
+            return out
+        except Exception:
+            _DOC_OWNERSHIP_RUST_METRICS["date_clip_fast_failures"] += 1
+    _DOC_OWNERSHIP_RUST_METRICS["date_clip_fallbacks"] += 1
+    return _clip_date_upper_py(value, upper_bound)
 
 
 def _read_doc_filing_artifact(parquet_path: Path | str) -> pl.DataFrame:
@@ -263,9 +475,7 @@ def _read_doc_filing_artifact(parquet_path: Path | str) -> pl.DataFrame:
             pl.col("filing_date").cast(pl.Date, strict=False).alias("filing_date"),
             pl.col(permno_column).alias("_kypermno_raw"),
         )
-        .with_columns(
-            pl.col("_kypermno_raw").map_elements(_normalize_kypermno, return_dtype=pl.Utf8).alias("KYPERMNO")
-        )
+        .with_columns(_normalize_kypermno_expr("_kypermno_raw").alias("KYPERMNO"))
         .drop("_kypermno_raw")
     )
     duplicate_doc_ids = (
@@ -331,28 +541,21 @@ def _read_authority_exceptions_artifact(parquet_path: Path | str) -> pl.DataFram
     )
 
 
-def build_refinitiv_lm2011_doc_ownership_requests(
-    doc_filing_df: pl.DataFrame,
-    authority_decisions_df: pl.DataFrame,
-    authority_exceptions_df: pl.DataFrame,
+def _build_doc_ownership_request_rows_py(
+    doc_filing_rows: list[dict[str, Any]],
+    authority_decision_rows: list[dict[str, Any]],
+    authority_exception_rows: list[dict[str, Any]],
     *,
-    request_min_date: dt.date | None = None,
-    request_max_date: dt.date | None = None,
-) -> pl.DataFrame:
-    if (
-        request_min_date is not None
-        and request_max_date is not None
-        and request_min_date > request_max_date
-    ):
-        raise ValueError("request_min_date must be <= request_max_date")
-
+    request_min_date: dt.date | None,
+    request_max_date: dt.date | None,
+) -> list[dict[str, Any]]:
     decisions_by_permno = {
         _normalize_kypermno(row["KYPERMNO"]): row
-        for row in authority_decisions_df.to_dicts()
+        for row in authority_decision_rows
         if _normalize_kypermno(row.get("KYPERMNO")) is not None
     }
     exceptions_by_permno: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for row in authority_exceptions_df.to_dicts():
+    for row in authority_exception_rows:
         kypermno = _normalize_kypermno(row.get("KYPERMNO"))
         if kypermno is None:
             continue
@@ -367,10 +570,12 @@ def build_refinitiv_lm2011_doc_ownership_requests(
         )
 
     rows: list[dict[str, Any]] = []
-    for record in doc_filing_df.to_dicts():
+    for record in doc_filing_rows:
         doc_id = _normalize_lookup_text(record.get("doc_id"))
         filing_date = _normalize_date_value(record.get("filing_date"))
-        kypermno = _normalize_kypermno(record.get("KYPERMNO") if "KYPERMNO" in record else record.get("kypermno"))
+        kypermno = _normalize_kypermno(record.get("KYPERMNO"))
+        if kypermno is None:
+            kypermno = _normalize_kypermno(record.get("kypermno"))
         target_quarter_end = None if filing_date is None else _most_recent_quarter_end_before(filing_date)
         target_effective_date = (
             None if target_quarter_end is None else _target_effective_date_for_quarter_end(target_quarter_end)
@@ -452,6 +657,98 @@ def build_refinitiv_lm2011_doc_ownership_requests(
                 "retrieval_exclusion_reason": retrieval_exclusion_reason,
             }
         )
+    return rows
+
+
+def _build_doc_ownership_request_rows(
+    doc_filing_rows: list[dict[str, Any]],
+    authority_decision_rows: list[dict[str, Any]],
+    authority_exception_rows: list[dict[str, Any]],
+    *,
+    request_min_date: dt.date | None,
+    request_max_date: dt.date | None,
+) -> list[dict[str, Any]]:
+    if _lm2011_rust is not None:
+        try:
+            raw_rows = _lm2011_rust.doc_ownership_request_rows(
+                doc_filing_rows,
+                authority_decision_rows,
+                authority_exception_rows,
+                request_min_date,
+                request_max_date,
+                DOC_OWNERSHIP_MAX_FALLBACK_DAYS,
+            )
+            _DOC_OWNERSHIP_RUST_METRICS["request_row_build_fast_success"] += 1
+            return [dict(row) for row in raw_rows]
+        except Exception:
+            _DOC_OWNERSHIP_RUST_METRICS["request_row_build_fast_failures"] += 1
+    _DOC_OWNERSHIP_RUST_METRICS["request_row_build_fallbacks"] += 1
+    return _build_doc_ownership_request_rows_py(
+        doc_filing_rows,
+        authority_decision_rows,
+        authority_exception_rows,
+        request_min_date=request_min_date,
+        request_max_date=request_max_date,
+    )
+
+
+def _build_doc_ownership_request_rows_from_frames(
+    doc_filing_df: pl.DataFrame,
+    authority_decisions_df: pl.DataFrame,
+    authority_exceptions_df: pl.DataFrame,
+    *,
+    request_min_date: dt.date | None,
+    request_max_date: dt.date | None,
+) -> list[dict[str, Any]]:
+    if _lm2011_rust is not None:
+        try:
+            raw_rows = _lm2011_rust.doc_ownership_request_rows_columns(
+                doc_filing_df.columns,
+                [doc_filing_df.get_column(column).to_list() for column in doc_filing_df.columns],
+                authority_decisions_df.columns,
+                [authority_decisions_df.get_column(column).to_list() for column in authority_decisions_df.columns],
+                authority_exceptions_df.columns,
+                [authority_exceptions_df.get_column(column).to_list() for column in authority_exceptions_df.columns],
+                request_min_date,
+                request_max_date,
+                DOC_OWNERSHIP_MAX_FALLBACK_DAYS,
+            )
+            _DOC_OWNERSHIP_RUST_METRICS["request_row_build_column_fast_success"] += 1
+            return [dict(row) for row in raw_rows]
+        except Exception:
+            _DOC_OWNERSHIP_RUST_METRICS["request_row_build_column_fast_failures"] += 1
+            _DOC_OWNERSHIP_RUST_METRICS["request_row_build_column_fallbacks"] += 1
+    return _build_doc_ownership_request_rows(
+        doc_filing_df.to_dicts(),
+        authority_decisions_df.to_dicts(),
+        authority_exceptions_df.to_dicts(),
+        request_min_date=request_min_date,
+        request_max_date=request_max_date,
+    )
+
+
+def build_refinitiv_lm2011_doc_ownership_requests(
+    doc_filing_df: pl.DataFrame,
+    authority_decisions_df: pl.DataFrame,
+    authority_exceptions_df: pl.DataFrame,
+    *,
+    request_min_date: dt.date | None = None,
+    request_max_date: dt.date | None = None,
+) -> pl.DataFrame:
+    if (
+        request_min_date is not None
+        and request_max_date is not None
+        and request_min_date > request_max_date
+    ):
+        raise ValueError("request_min_date must be <= request_max_date")
+
+    rows = _build_doc_ownership_request_rows_from_frames(
+        doc_filing_df,
+        authority_decisions_df,
+        authority_exceptions_df,
+        request_min_date=request_min_date,
+        request_max_date=request_max_date,
+    )
 
     return _build_explicit_schema_df(rows, _doc_ownership_request_schema()).select(DOC_OWNERSHIP_REQUEST_COLUMNS)
 
@@ -504,10 +801,58 @@ def _assert_unique_doc_id_membership(df: pl.DataFrame, *, label: str) -> None:
         raise ValueError(f"{label} must be unique on doc_id: {duplicate_doc_ids[:10]}")
 
 
+def _utf8_series_from_values(series: pl.Series, values: list[str | None]) -> pl.Series:
+    return pl.Series(series.name, values, dtype=pl.Utf8)
+
+
+def _normalize_lookup_text_values_py(values: list[Any]) -> list[str | None]:
+    return [_normalize_lookup_text(None if value is None else str(value)) for value in values]
+
+
+def _normalize_lookup_text_values(values: list[Any]) -> list[str | None]:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.normalize_lookup_text_any_values(values)
+            _DOC_OWNERSHIP_RUST_METRICS["lookup_text_batch_fast_success"] += 1
+            return [None if value is None else str(value) for value in out]
+        except Exception:
+            _DOC_OWNERSHIP_RUST_METRICS["lookup_text_batch_fast_failures"] += 1
+    _DOC_OWNERSHIP_RUST_METRICS["lookup_text_batch_fallbacks"] += 1
+    return _normalize_lookup_text_values_py(values)
+
+
+def _normalize_kypermno_values_py(values: list[Any]) -> list[str | None]:
+    return [_normalize_kypermno_py(value) for value in values]
+
+
+def _normalize_kypermno_values(values: list[Any]) -> list[str | None]:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.normalize_kypermno_values(values)
+            _DOC_OWNERSHIP_RUST_METRICS["kypermno_batch_fast_success"] += 1
+            return [None if value is None else str(value) for value in out]
+        except Exception:
+            _DOC_OWNERSHIP_RUST_METRICS["kypermno_batch_fast_failures"] += 1
+    _DOC_OWNERSHIP_RUST_METRICS["kypermno_batch_fallbacks"] += 1
+    return _normalize_kypermno_values_py(values)
+
+
 def _normalize_optional_text_expr(column_name: str, *, enabled: bool) -> pl.Expr:
     if not enabled:
         return pl.lit(None, dtype=pl.Utf8)
-    return pl.col(column_name).cast(pl.Utf8, strict=False).map_elements(_normalize_lookup_text, return_dtype=pl.Utf8)
+    return pl.col(column_name).cast(pl.Utf8, strict=False).map_batches(
+        lambda series: _utf8_series_from_values(series, _normalize_lookup_text_values(series.to_list())),
+        return_dtype=pl.Utf8,
+        is_elementwise=True,
+    )
+
+
+def _normalize_kypermno_expr(column_name: str) -> pl.Expr:
+    return pl.col(column_name).map_batches(
+        lambda series: _utf8_series_from_values(series, _normalize_kypermno_values(series.to_list())),
+        return_dtype=pl.Utf8,
+        is_elementwise=True,
+    )
 
 
 def _prepare_backbone_membership_df(backbone_df: pl.DataFrame) -> pl.DataFrame:
@@ -527,8 +872,7 @@ def _prepare_backbone_membership_df(backbone_df: pl.DataFrame) -> pl.DataFrame:
             ).alias("filing_date"),
             _normalize_optional_text_expr(form_column, enabled=form_column is not None).alias("normalized_form"),
             (
-                pl.col(permno_column)
-                .map_elements(_normalize_kypermno, return_dtype=pl.Utf8)
+                _normalize_kypermno_expr(permno_column)
                 if permno_column is not None
                 else pl.lit(None, dtype=pl.Utf8)
             ).alias("KYPERMNO"),
@@ -554,8 +898,7 @@ def _prepare_request_membership_df(request_df: pl.DataFrame) -> pl.DataFrame:
                 else pl.lit(None, dtype=pl.Date)
             ).alias("request_filing_date"),
             (
-                pl.col(permno_column)
-                .map_elements(_normalize_kypermno, return_dtype=pl.Utf8)
+                _normalize_kypermno_expr(permno_column)
                 if permno_column is not None
                 else pl.lit(None, dtype=pl.Utf8)
             ).alias("request_KYPERMNO"),
@@ -594,8 +937,7 @@ def _prepare_final_membership_df(final_df: pl.DataFrame) -> pl.DataFrame:
                 else pl.lit(None, dtype=pl.Date)
             ).alias("final_filing_date"),
             (
-                pl.col(permno_column)
-                .map_elements(_normalize_kypermno, return_dtype=pl.Utf8)
+                _normalize_kypermno_expr(permno_column)
                 if permno_column is not None
                 else pl.lit(None, dtype=pl.Utf8)
             ).alias("final_KYPERMNO"),
@@ -643,6 +985,164 @@ def _top_doc_mismatch_cik_counts(
         .rename({"len": "doc_count"})
         .to_dicts()
     )
+
+
+def _top_doc_mismatch_cik_counts_from_rows(
+    detail_rows: list[dict[str, Any]],
+    *,
+    left_flag: str,
+    right_flag: str,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    counts: dict[str, int] = {}
+    for row in detail_rows:
+        cik_10 = _normalize_lookup_text(row.get("cik_10"))
+        if cik_10 is None:
+            continue
+        if bool(row.get(left_flag)) == bool(row.get(right_flag)):
+            continue
+        counts[cik_10] = counts.get(cik_10, 0) + 1
+    return [
+        {"cik_10": cik_10, "doc_count": count}
+        for cik_10, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:limit]
+    ]
+
+
+def _doc_ownership_universe_summary_py(
+    detail_rows: list[dict[str, Any]],
+    *,
+    final_present: bool,
+) -> dict[str, Any]:
+    backbone_doc_count = sum(1 for row in detail_rows if bool(row.get("in_backbone")))
+    request_doc_count = sum(1 for row in detail_rows if bool(row.get("in_request")))
+    final_doc_count_raw = sum(1 for row in detail_rows if bool(row.get("in_final")))
+    backbone_request_overlap = sum(
+        1 for row in detail_rows if bool(row.get("in_backbone")) and bool(row.get("in_request"))
+    )
+    backbone_only_doc_count = sum(
+        1 for row in detail_rows if bool(row.get("in_backbone")) and not bool(row.get("in_request"))
+    )
+    request_only_doc_count = sum(
+        1 for row in detail_rows if bool(row.get("in_request")) and not bool(row.get("in_backbone"))
+    )
+    backbone_request_doc_sets_equal = backbone_only_doc_count == 0 and request_only_doc_count == 0
+
+    final_backbone_overlap = None
+    final_request_overlap = None
+    backbone_final_doc_sets_equal = None
+    request_final_doc_sets_equal = None
+    final_only_doc_count = None
+    request_missing_from_final_doc_count = None
+    backbone_missing_from_final_doc_count = None
+    final_missing_from_backbone_doc_count = None
+    final_nonnull_ownership_doc_count = None
+    all_doc_sets_equal = None
+    retrieval_status_counts: dict[str, int] | None = None
+    if final_present:
+        final_backbone_overlap = sum(
+            1 for row in detail_rows if bool(row.get("in_backbone")) and bool(row.get("in_final"))
+        )
+        final_request_overlap = sum(
+            1 for row in detail_rows if bool(row.get("in_request")) and bool(row.get("in_final"))
+        )
+        request_missing_from_final_doc_count = sum(
+            1 for row in detail_rows if bool(row.get("in_request")) and not bool(row.get("in_final"))
+        )
+        final_only_doc_count = sum(
+            1 for row in detail_rows if bool(row.get("in_final")) and not bool(row.get("in_request"))
+        )
+        backbone_missing_from_final_doc_count = sum(
+            1 for row in detail_rows if bool(row.get("in_backbone")) and not bool(row.get("in_final"))
+        )
+        final_missing_from_backbone_doc_count = sum(
+            1 for row in detail_rows if bool(row.get("in_final")) and not bool(row.get("in_backbone"))
+        )
+        final_nonnull_ownership_doc_count = sum(
+            1 for row in detail_rows if bool(row.get("final_has_nonnull_ownership"))
+        )
+        backbone_final_doc_sets_equal = (
+            backbone_missing_from_final_doc_count == 0 and final_missing_from_backbone_doc_count == 0
+        )
+        request_final_doc_sets_equal = request_missing_from_final_doc_count == 0 and final_only_doc_count == 0
+        all_doc_sets_equal = bool(
+            backbone_request_doc_sets_equal and backbone_final_doc_sets_equal and request_final_doc_sets_equal
+        )
+        retrieval_status_counts = {}
+        for row in detail_rows:
+            status = _normalize_lookup_text(row.get("final_retrieval_status"))
+            if status is not None:
+                retrieval_status_counts[status] = retrieval_status_counts.get(status, 0) + 1
+
+    return {
+        "backbone_doc_count": backbone_doc_count,
+        "request_doc_count": request_doc_count,
+        "final_doc_count": final_doc_count_raw if final_present else None,
+        "backbone_request_overlap_doc_count": backbone_request_overlap,
+        "backbone_request_overlap_rate_of_backbone": _safe_rate(backbone_request_overlap, backbone_doc_count),
+        "backbone_request_overlap_rate_of_request": _safe_rate(backbone_request_overlap, request_doc_count),
+        "backbone_only_doc_count": backbone_only_doc_count,
+        "request_only_doc_count": request_only_doc_count,
+        "backbone_request_doc_sets_equal": backbone_request_doc_sets_equal,
+        "final_backbone_overlap_doc_count": final_backbone_overlap,
+        "final_request_overlap_doc_count": final_request_overlap,
+        "request_missing_from_final_doc_count": request_missing_from_final_doc_count,
+        "final_only_doc_count": final_only_doc_count,
+        "backbone_missing_from_final_doc_count": backbone_missing_from_final_doc_count,
+        "final_missing_from_backbone_doc_count": final_missing_from_backbone_doc_count,
+        "final_nonnull_ownership_doc_count": final_nonnull_ownership_doc_count,
+        "backbone_final_doc_sets_equal": backbone_final_doc_sets_equal,
+        "request_final_doc_sets_equal": request_final_doc_sets_equal,
+        "all_doc_sets_equal": all_doc_sets_equal,
+        "retrieval_status_counts": retrieval_status_counts,
+        "backbone_request_mismatch_cik_counts_top": _top_doc_mismatch_cik_counts_from_rows(
+            detail_rows,
+            left_flag="in_backbone",
+            right_flag="in_request",
+        ),
+        "request_final_mismatch_cik_counts_top": (
+            _top_doc_mismatch_cik_counts_from_rows(detail_rows, left_flag="in_request", right_flag="in_final")
+            if final_present
+            else []
+        ),
+    }
+
+
+def _doc_ownership_universe_summary(
+    detail_rows: list[dict[str, Any]],
+    *,
+    final_present: bool,
+) -> dict[str, Any]:
+    if _lm2011_rust is not None:
+        try:
+            summary = dict(_lm2011_rust.doc_ownership_universe_summary_values(detail_rows, bool(final_present)))
+            _DOC_OWNERSHIP_RUST_METRICS["universe_summary_fast_success"] += 1
+            return summary
+        except Exception:
+            _DOC_OWNERSHIP_RUST_METRICS["universe_summary_fast_failures"] += 1
+    _DOC_OWNERSHIP_RUST_METRICS["universe_summary_fallbacks"] += 1
+    return _doc_ownership_universe_summary_py(detail_rows, final_present=final_present)
+
+
+def _doc_ownership_universe_summary_from_frame(
+    detail_df: pl.DataFrame,
+    *,
+    final_present: bool,
+) -> dict[str, Any]:
+    if _lm2011_rust is not None:
+        try:
+            summary = dict(
+                _lm2011_rust.doc_ownership_universe_summary_column_values(
+                    detail_df.columns,
+                    [detail_df.get_column(column).to_list() for column in detail_df.columns],
+                    bool(final_present),
+                )
+            )
+            _DOC_OWNERSHIP_RUST_METRICS["universe_summary_column_fast_success"] += 1
+            return summary
+        except Exception:
+            _DOC_OWNERSHIP_RUST_METRICS["universe_summary_column_fast_failures"] += 1
+            _DOC_OWNERSHIP_RUST_METRICS["universe_summary_column_fallbacks"] += 1
+    return _doc_ownership_universe_summary(detail_df.to_dicts(), final_present=final_present)
 
 
 def _build_lm2011_doc_ownership_universe_diagnostics(
@@ -753,84 +1253,7 @@ def _build_lm2011_doc_ownership_universe_diagnostics(
         _doc_ownership_universe_breakdown_schema(),
     ).select(tuple(_doc_ownership_universe_breakdown_schema()))
 
-    backbone_doc_count = int(backbone_docs.height)
-    request_doc_count = int(request_docs.height)
-    final_doc_count = int(final_docs.height) if final_df is not None else None
-    backbone_request_overlap = int(detail_df.filter(pl.col("in_backbone") & pl.col("in_request")).height)
-    backbone_only_doc_count = int(detail_df.filter(pl.col("in_backbone") & pl.col("in_request").not_()).height)
-    request_only_doc_count = int(detail_df.filter(pl.col("in_request") & pl.col("in_backbone").not_()).height)
-    backbone_request_doc_sets_equal = backbone_only_doc_count == 0 and request_only_doc_count == 0
-
-    final_backbone_overlap = None
-    final_request_overlap = None
-    backbone_final_doc_sets_equal = None
-    request_final_doc_sets_equal = None
-    final_only_doc_count = None
-    request_missing_from_final_doc_count = None
-    backbone_missing_from_final_doc_count = None
-    final_missing_from_backbone_doc_count = None
-    final_nonnull_ownership_doc_count = None
-    all_doc_sets_equal = None
-    retrieval_status_counts: dict[str, int] | None = None
-    if final_df is not None:
-        final_backbone_overlap = int(detail_df.filter(pl.col("in_backbone") & pl.col("in_final")).height)
-        final_request_overlap = int(detail_df.filter(pl.col("in_request") & pl.col("in_final")).height)
-        request_missing_from_final_doc_count = int(
-            detail_df.filter(pl.col("in_request") & pl.col("in_final").not_()).height
-        )
-        final_only_doc_count = int(detail_df.filter(pl.col("in_final") & pl.col("in_request").not_()).height)
-        backbone_missing_from_final_doc_count = int(
-            detail_df.filter(pl.col("in_backbone") & pl.col("in_final").not_()).height
-        )
-        final_missing_from_backbone_doc_count = int(
-            detail_df.filter(pl.col("in_final") & pl.col("in_backbone").not_()).height
-        )
-        final_nonnull_ownership_doc_count = int(detail_df.filter(pl.col("final_has_nonnull_ownership")).height)
-        backbone_final_doc_sets_equal = (
-            backbone_missing_from_final_doc_count == 0 and final_missing_from_backbone_doc_count == 0
-        )
-        request_final_doc_sets_equal = request_missing_from_final_doc_count == 0 and final_only_doc_count == 0
-        all_doc_sets_equal = bool(backbone_request_doc_sets_equal and backbone_final_doc_sets_equal and request_final_doc_sets_equal)
-        retrieval_status_counts = {
-            str(row["final_retrieval_status"]): int(row["len"])
-            for row in detail_df.filter(pl.col("final_retrieval_status").is_not_null())
-            .group_by("final_retrieval_status")
-            .len()
-            .to_dicts()
-        }
-
-    summary = {
-        "backbone_doc_count": backbone_doc_count,
-        "request_doc_count": request_doc_count,
-        "final_doc_count": final_doc_count,
-        "backbone_request_overlap_doc_count": backbone_request_overlap,
-        "backbone_request_overlap_rate_of_backbone": _safe_rate(backbone_request_overlap, backbone_doc_count),
-        "backbone_request_overlap_rate_of_request": _safe_rate(backbone_request_overlap, request_doc_count),
-        "backbone_only_doc_count": backbone_only_doc_count,
-        "request_only_doc_count": request_only_doc_count,
-        "backbone_request_doc_sets_equal": backbone_request_doc_sets_equal,
-        "final_backbone_overlap_doc_count": final_backbone_overlap,
-        "final_request_overlap_doc_count": final_request_overlap,
-        "request_missing_from_final_doc_count": request_missing_from_final_doc_count,
-        "final_only_doc_count": final_only_doc_count,
-        "backbone_missing_from_final_doc_count": backbone_missing_from_final_doc_count,
-        "final_missing_from_backbone_doc_count": final_missing_from_backbone_doc_count,
-        "final_nonnull_ownership_doc_count": final_nonnull_ownership_doc_count,
-        "backbone_final_doc_sets_equal": backbone_final_doc_sets_equal,
-        "request_final_doc_sets_equal": request_final_doc_sets_equal,
-        "all_doc_sets_equal": all_doc_sets_equal,
-        "retrieval_status_counts": retrieval_status_counts,
-        "backbone_request_mismatch_cik_counts_top": _top_doc_mismatch_cik_counts(
-            detail_df,
-            left_flag="in_backbone",
-            right_flag="in_request",
-        ),
-        "request_final_mismatch_cik_counts_top": (
-            _top_doc_mismatch_cik_counts(detail_df, left_flag="in_request", right_flag="in_final")
-            if final_df is not None
-            else []
-        ),
-    }
+    summary = _doc_ownership_universe_summary_from_frame(detail_df, final_present=final_df is not None)
     return {"detail": detail_df, "breakdown": breakdown_df}, summary
 
 
@@ -849,7 +1272,7 @@ def _request_readme_payload(request_df: pl.DataFrame, *, request_stage: str) -> 
     }
 
 
-def _matching_retrieval_sheets(sheet_names: list[str]) -> list[str]:
+def _matching_retrieval_sheets_py(sheet_names: list[str]) -> list[str]:
     matching = [
         sheet_name
         for sheet_name in sheet_names
@@ -859,6 +1282,27 @@ def _matching_retrieval_sheets(sheet_names: list[str]) -> list[str]:
     if not matching:
         raise ValueError("filled workbook missing ownership_retrieval sheet(s)")
     return sorted(matching)
+
+
+def _matching_retrieval_sheets(sheet_names: list[str]) -> list[str]:
+    if _lm2011_rust is not None:
+        try:
+            matching = list(
+                _lm2011_rust.doc_ownership_matching_retrieval_sheets(
+                    sheet_names,
+                    DOC_OWNERSHIP_RETRIEVAL_SHEET_PREFIX,
+                )
+            )
+            _DOC_OWNERSHIP_RUST_METRICS["retrieval_sheet_fast_success"] += 1
+            if not matching:
+                raise ValueError("filled workbook missing ownership_retrieval sheet(s)")
+            return matching
+        except ValueError:
+            raise
+        except Exception:
+            _DOC_OWNERSHIP_RUST_METRICS["retrieval_sheet_fast_failures"] += 1
+    _DOC_OWNERSHIP_RUST_METRICS["retrieval_sheet_fallbacks"] += 1
+    return _matching_retrieval_sheets_py(sheet_names)
 
 
 def _parse_doc_ownership_filled_workbook(
@@ -976,7 +1420,7 @@ def _parse_doc_ownership_filled_workbook(
     )
 
 
-def _select_exact_hits(exact_raw_df: pl.DataFrame) -> tuple[dict[str, dict[str, Any]], set[str]]:
+def _select_exact_hits_py(exact_raw_df: pl.DataFrame) -> tuple[dict[str, dict[str, Any]], set[str]]:
     rows_by_doc_id: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in exact_raw_df.to_dicts():
         doc_id = _normalize_lookup_text(row.get("doc_id"))
@@ -998,7 +1442,41 @@ def _select_exact_hits(exact_raw_df: pl.DataFrame) -> tuple[dict[str, dict[str, 
     return selected, conflict_docs
 
 
-def _select_fallback_hits(
+def _select_exact_hits(exact_raw_df: pl.DataFrame) -> tuple[dict[str, dict[str, Any]], set[str]]:
+    if _lm2011_rust is not None:
+        try:
+            selected_rows, conflict_docs = _lm2011_rust.doc_ownership_select_exact_hit_columns(
+                exact_raw_df.columns,
+                [exact_raw_df.get_column(column).to_list() for column in exact_raw_df.columns],
+            )
+            _DOC_OWNERSHIP_RUST_METRICS["exact_hit_selection_column_fast_success"] += 1
+            selected = {
+                str(doc_id): {
+                    **dict(exact_raw_df.row(int(row_index), named=True)),
+                    "_cleaned_value": float(cleaned_value),
+                }
+                for doc_id, row_index, cleaned_value in selected_rows
+            }
+            return selected, {str(doc_id) for doc_id in conflict_docs}
+        except Exception:
+            _DOC_OWNERSHIP_RUST_METRICS["exact_hit_selection_column_fast_failures"] += 1
+            _DOC_OWNERSHIP_RUST_METRICS["exact_hit_selection_column_fallbacks"] += 1
+        try:
+            rows = exact_raw_df.to_dicts()
+            selected_rows, conflict_docs = _lm2011_rust.doc_ownership_select_exact_hit_rows(rows)
+            _DOC_OWNERSHIP_RUST_METRICS["exact_hit_selection_fast_success"] += 1
+            selected = {
+                str(doc_id): {**rows[int(row_index)], "_cleaned_value": float(cleaned_value)}
+                for doc_id, row_index, cleaned_value in selected_rows
+            }
+            return selected, {str(doc_id) for doc_id in conflict_docs}
+        except Exception:
+            _DOC_OWNERSHIP_RUST_METRICS["exact_hit_selection_fast_failures"] += 1
+    _DOC_OWNERSHIP_RUST_METRICS["exact_hit_selection_fallbacks"] += 1
+    return _select_exact_hits_py(exact_raw_df)
+
+
+def _select_fallback_hits_py(
     fallback_raw_df: pl.DataFrame,
     request_df: pl.DataFrame,
 ) -> tuple[dict[str, dict[str, Any]], set[str]]:
@@ -1038,8 +1516,50 @@ def _select_fallback_hits(
     return selected, conflict_docs
 
 
-def _build_fallback_request_df(request_df: pl.DataFrame, exact_raw_df: pl.DataFrame) -> pl.DataFrame:
-    exact_selected, exact_conflict_docs = _select_exact_hits(exact_raw_df)
+def _select_fallback_hits(
+    fallback_raw_df: pl.DataFrame,
+    request_df: pl.DataFrame,
+) -> tuple[dict[str, dict[str, Any]], set[str]]:
+    if _lm2011_rust is not None:
+        try:
+            selected_rows, conflict_docs = _lm2011_rust.doc_ownership_select_fallback_hit_columns(
+                fallback_raw_df.columns,
+                [fallback_raw_df.get_column(column).to_list() for column in fallback_raw_df.columns],
+                request_df.columns,
+                [request_df.get_column(column).to_list() for column in request_df.columns],
+            )
+            _DOC_OWNERSHIP_RUST_METRICS["fallback_hit_selection_column_fast_success"] += 1
+            selected = {
+                str(doc_id): {
+                    **dict(fallback_raw_df.row(int(row_index), named=True)),
+                    "_cleaned_value": float(cleaned_value),
+                }
+                for doc_id, row_index, cleaned_value in selected_rows
+            }
+            return selected, {str(doc_id) for doc_id in conflict_docs}
+        except Exception:
+            _DOC_OWNERSHIP_RUST_METRICS["fallback_hit_selection_column_fast_failures"] += 1
+            _DOC_OWNERSHIP_RUST_METRICS["fallback_hit_selection_column_fallbacks"] += 1
+        try:
+            fallback_rows = fallback_raw_df.to_dicts()
+            selected_rows, conflict_docs = _lm2011_rust.doc_ownership_select_fallback_hit_rows(
+                fallback_rows,
+                request_df.to_dicts(),
+            )
+            _DOC_OWNERSHIP_RUST_METRICS["fallback_hit_selection_fast_success"] += 1
+            selected = {
+                str(doc_id): {**fallback_rows[int(row_index)], "_cleaned_value": float(cleaned_value)}
+                for doc_id, row_index, cleaned_value in selected_rows
+            }
+            return selected, {str(doc_id) for doc_id in conflict_docs}
+        except Exception:
+            _DOC_OWNERSHIP_RUST_METRICS["fallback_hit_selection_fast_failures"] += 1
+    _DOC_OWNERSHIP_RUST_METRICS["fallback_hit_selection_fallbacks"] += 1
+    return _select_fallback_hits_py(fallback_raw_df, request_df)
+
+
+def _build_fallback_request_df_py(request_df: pl.DataFrame, exact_raw_df: pl.DataFrame) -> pl.DataFrame:
+    exact_selected, exact_conflict_docs = _select_exact_hits_py(exact_raw_df)
     request_rows: list[dict[str, Any]] = []
     for row in request_df.to_dicts():
         doc_id = _normalize_lookup_text(row.get("doc_id"))
@@ -1053,21 +1573,66 @@ def _build_fallback_request_df(request_df: pl.DataFrame, exact_raw_df: pl.DataFr
     return _build_explicit_schema_df(request_rows, _doc_ownership_request_schema()).select(DOC_OWNERSHIP_REQUEST_COLUMNS)
 
 
-def _build_doc_ownership_output_tables(
-    request_df: pl.DataFrame,
-    exact_raw_df: pl.DataFrame,
-    fallback_raw_df: pl.DataFrame,
-) -> tuple[dict[str, pl.DataFrame], dict[str, Any]]:
-    exact_selected, exact_conflict_docs = _select_exact_hits(exact_raw_df)
-    fallback_selected, fallback_conflict_docs = _select_fallback_hits(fallback_raw_df, request_df)
-    raw_df = (
-        pl.concat([df for df in (exact_raw_df, fallback_raw_df) if df.height > 0], how="vertical_relaxed")
-        if exact_raw_df.height or fallback_raw_df.height
-        else _empty_df(DOC_OWNERSHIP_RAW_COLUMNS, _doc_ownership_raw_schema())
-    )
+def _build_fallback_request_df(request_df: pl.DataFrame, exact_raw_df: pl.DataFrame) -> pl.DataFrame:
+    if _lm2011_rust is not None:
+        exact_selection: tuple[dict[str, dict[str, Any]], set[str]] | None = None
+        try:
+            exact_selection = _select_exact_hits(exact_raw_df)
+            exact_selected, exact_conflict_docs = exact_selection
+            row_indices = _lm2011_rust.doc_ownership_fallback_request_row_indices_columns(
+                request_df.columns,
+                [request_df.get_column(column).to_list() for column in request_df.columns],
+                list(exact_selected),
+                list(exact_conflict_docs),
+            )
+            _DOC_OWNERSHIP_RUST_METRICS["fallback_request_selection_column_fast_success"] += 1
+            request_rows = []
+            for row_index in row_indices:
+                row = request_df.row(int(row_index), named=True)
+                request_rows.append({name: row.get(name) for name in DOC_OWNERSHIP_REQUEST_COLUMNS})
+            if not request_rows:
+                return _empty_df(DOC_OWNERSHIP_REQUEST_COLUMNS, _doc_ownership_request_schema())
+            return _build_explicit_schema_df(request_rows, _doc_ownership_request_schema()).select(
+                DOC_OWNERSHIP_REQUEST_COLUMNS
+            )
+        except Exception:
+            _DOC_OWNERSHIP_RUST_METRICS["fallback_request_selection_column_fast_failures"] += 1
+            _DOC_OWNERSHIP_RUST_METRICS["fallback_request_selection_column_fallbacks"] += 1
+        try:
+            if exact_selection is None:
+                exact_selection = _select_exact_hits(exact_raw_df)
+            exact_selected, exact_conflict_docs = exact_selection
+            request_source_rows = request_df.to_dicts()
+            row_indices = _lm2011_rust.doc_ownership_fallback_request_row_indices(
+                request_source_rows,
+                list(exact_selected),
+                list(exact_conflict_docs),
+            )
+            _DOC_OWNERSHIP_RUST_METRICS["fallback_request_selection_fast_success"] += 1
+            request_rows = [
+                {name: request_source_rows[int(row_index)].get(name) for name in DOC_OWNERSHIP_REQUEST_COLUMNS}
+                for row_index in row_indices
+            ]
+            if not request_rows:
+                return _empty_df(DOC_OWNERSHIP_REQUEST_COLUMNS, _doc_ownership_request_schema())
+            return _build_explicit_schema_df(request_rows, _doc_ownership_request_schema()).select(
+                DOC_OWNERSHIP_REQUEST_COLUMNS
+            )
+        except Exception:
+            _DOC_OWNERSHIP_RUST_METRICS["fallback_request_selection_fast_failures"] += 1
+    _DOC_OWNERSHIP_RUST_METRICS["fallback_request_selection_fallbacks"] += 1
+    return _build_fallback_request_df_py(request_df, exact_raw_df)
 
+
+def _doc_ownership_final_rows_py(
+    request_rows: list[dict[str, Any]],
+    exact_selected: dict[str, dict[str, Any]],
+    exact_conflict_docs: set[str],
+    fallback_selected: dict[str, dict[str, Any]],
+    fallback_conflict_docs: set[str],
+) -> list[dict[str, Any]]:
     final_rows: list[dict[str, Any]] = []
-    for row in request_df.to_dicts():
+    for row in request_rows:
         doc_id = _normalize_lookup_text(row.get("doc_id"))
         if doc_id is None:
             continue
@@ -1118,6 +1683,59 @@ def _build_doc_ownership_output_tables(
                 "fallback_used": fallback_used,
             }
         )
+    return final_rows
+
+
+def _doc_ownership_final_rows(
+    request_rows: list[dict[str, Any]],
+    exact_selected: dict[str, dict[str, Any]],
+    exact_conflict_docs: set[str],
+    fallback_selected: dict[str, dict[str, Any]],
+    fallback_conflict_docs: set[str],
+) -> list[dict[str, Any]]:
+    if _lm2011_rust is not None:
+        try:
+            raw_rows = _lm2011_rust.doc_ownership_final_rows(
+                request_rows,
+                exact_selected,
+                list(exact_conflict_docs),
+                fallback_selected,
+                list(fallback_conflict_docs),
+            )
+            _DOC_OWNERSHIP_RUST_METRICS["final_row_build_fast_success"] += 1
+            return [dict(row) for row in raw_rows]
+        except Exception:
+            _DOC_OWNERSHIP_RUST_METRICS["final_row_build_fast_failures"] += 1
+    _DOC_OWNERSHIP_RUST_METRICS["final_row_build_fallbacks"] += 1
+    return _doc_ownership_final_rows_py(
+        request_rows,
+        exact_selected,
+        exact_conflict_docs,
+        fallback_selected,
+        fallback_conflict_docs,
+    )
+
+
+def _build_doc_ownership_output_tables(
+    request_df: pl.DataFrame,
+    exact_raw_df: pl.DataFrame,
+    fallback_raw_df: pl.DataFrame,
+) -> tuple[dict[str, pl.DataFrame], dict[str, Any]]:
+    exact_selected, exact_conflict_docs = _select_exact_hits(exact_raw_df)
+    fallback_selected, fallback_conflict_docs = _select_fallback_hits(fallback_raw_df, request_df)
+    raw_df = (
+        pl.concat([df for df in (exact_raw_df, fallback_raw_df) if df.height > 0], how="vertical_relaxed")
+        if exact_raw_df.height or fallback_raw_df.height
+        else _empty_df(DOC_OWNERSHIP_RAW_COLUMNS, _doc_ownership_raw_schema())
+    )
+
+    final_rows = _doc_ownership_final_rows(
+        request_df.to_dicts(),
+        exact_selected,
+        exact_conflict_docs,
+        fallback_selected,
+        fallback_conflict_docs,
+    )
 
     final_df = _build_explicit_schema_df(final_rows, _doc_ownership_final_schema()).select(DOC_OWNERSHIP_FINAL_COLUMNS)
     summary = {
@@ -1228,7 +1846,7 @@ def run_refinitiv_lm2011_doc_ownership_finalize_pipeline(
     output_dir: Path | str,
     fallback_filled_workbook_path: Path | str | None = None,
 ) -> dict[str, Path]:
-    from thesis_pkg.pipelines.refinitiv.lseg_api_common import write_parquet_atomic
+    from thesis_refinitiv.lseg_client.api_common import write_parquet_atomic
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)

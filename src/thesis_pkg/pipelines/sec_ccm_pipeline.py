@@ -1,4 +1,4 @@
-"""Artifact-producing SEC<->CCM pre-merge pipeline orchestration."""
+﻿"""Artifact-producing SEC<->CCM pre-merge pipeline orchestration."""
 
 from __future__ import annotations
 
@@ -10,6 +10,14 @@ import uuid
 from typing import Any
 
 import polars as pl
+
+try:
+    from thesis_native import _lm2011_rust
+except Exception as exc:  # pragma: no cover - optional native extension
+    _lm2011_rust = None
+    _SEC_CCM_PIPELINE_RUST_IMPORT_ERROR: str | None = f"{type(exc).__name__}: {exc}"
+else:
+    _SEC_CCM_PIPELINE_RUST_IMPORT_ERROR = None
 
 from thesis_pkg.core.ccm.sec_ccm_contracts import (
     MatchReasonCode,
@@ -30,6 +38,29 @@ from thesis_pkg.core.ccm.transforms import apply_concept_filter_flags_doc
 
 
 _FORM_COLUMNS = ("form_type", "document_type_filename", "SRCTYPE")
+_SEC_CCM_PIPELINE_RUST_METRICS: dict[str, int] = {
+    "markdown_value_fast_success": 0,
+    "markdown_value_fast_failures": 0,
+    "markdown_value_fallbacks": 0,
+    "markdown_table_column_fast_success": 0,
+    "markdown_table_column_fast_failures": 0,
+    "markdown_table_column_fallbacks": 0,
+    "markdown_table_fast_success": 0,
+    "markdown_table_fast_failures": 0,
+    "markdown_table_fallbacks": 0,
+}
+
+
+def get_sec_ccm_pipeline_rust_accel_metrics() -> dict[str, int | str | bool | None]:
+    metrics: dict[str, int | str | bool | None] = dict(_SEC_CCM_PIPELINE_RUST_METRICS)
+    metrics["rust_accel_available"] = _lm2011_rust is not None
+    metrics["rust_accel_import_error"] = _SEC_CCM_PIPELINE_RUST_IMPORT_ERROR
+    return metrics
+
+
+def reset_sec_ccm_pipeline_rust_accel_metrics() -> None:
+    for key in _SEC_CCM_PIPELINE_RUST_METRICS:
+        _SEC_CCM_PIPELINE_RUST_METRICS[key] = 0
 
 
 def _iso_utc(ts: dt.datetime) -> str:
@@ -127,7 +158,7 @@ def _step_events_to_frame(run_id: str, events: list[dict[str, Any]]) -> pl.DataF
     )
 
 
-def _fmt_markdown_value(value: object) -> str:
+def _fmt_markdown_value_py(value: object) -> str:
     """Format scalar values for markdown table rendering."""
     if value is None:
         return ""
@@ -142,7 +173,19 @@ def _fmt_markdown_value(value: object) -> str:
     return str(value).replace("|", "\\|")
 
 
-def _to_markdown_table(df: pl.DataFrame, *, max_rows: int = 25) -> str:
+def _fmt_markdown_value(value: object) -> str:
+    if _lm2011_rust is not None:
+        try:
+            out = str(_lm2011_rust.sec_ccm_markdown_value(value))
+            _SEC_CCM_PIPELINE_RUST_METRICS["markdown_value_fast_success"] += 1
+            return out
+        except Exception:
+            _SEC_CCM_PIPELINE_RUST_METRICS["markdown_value_fast_failures"] += 1
+    _SEC_CCM_PIPELINE_RUST_METRICS["markdown_value_fallbacks"] += 1
+    return _fmt_markdown_value_py(value)
+
+
+def _to_markdown_table_py(df: pl.DataFrame, *, max_rows: int = 25) -> str:
     """Render a dataframe as a bounded markdown table."""
     if df.height == 0:
         return "_No rows._"
@@ -157,6 +200,44 @@ def _to_markdown_table(df: pl.DataFrame, *, max_rows: int = 25) -> str:
     if df.height > max_rows:
         out += f"\n\n_Truncated to first {max_rows} rows._"
     return out
+
+
+def _to_markdown_table(df: pl.DataFrame, *, max_rows: int = 25) -> str:
+    """Render a dataframe as a bounded markdown table."""
+    if df.height == 0:
+        return "_No rows._"
+    if _lm2011_rust is not None:
+        try:
+            clipped = df.head(max_rows)
+            out = str(
+                _lm2011_rust.sec_ccm_markdown_table_columns(
+                    clipped.columns,
+                    [clipped.get_column(column).to_list() for column in clipped.columns],
+                    int(df.height),
+                    int(max_rows),
+                )
+            )
+            _SEC_CCM_PIPELINE_RUST_METRICS["markdown_table_column_fast_success"] += 1
+            return out
+        except Exception:
+            _SEC_CCM_PIPELINE_RUST_METRICS["markdown_table_column_fast_failures"] += 1
+            _SEC_CCM_PIPELINE_RUST_METRICS["markdown_table_column_fallbacks"] += 1
+        try:
+            clipped = df.head(max_rows)
+            out = str(
+                _lm2011_rust.sec_ccm_markdown_table(
+                    clipped.columns,
+                    clipped.to_dicts(),
+                    int(df.height),
+                    int(max_rows),
+                )
+            )
+            _SEC_CCM_PIPELINE_RUST_METRICS["markdown_table_fast_success"] += 1
+            return out
+        except Exception:
+            _SEC_CCM_PIPELINE_RUST_METRICS["markdown_table_fast_failures"] += 1
+    _SEC_CCM_PIPELINE_RUST_METRICS["markdown_table_fallbacks"] += 1
+    return _to_markdown_table_py(df, max_rows=max_rows)
 
 
 def _build_summary_metrics(final_doc_path: Path) -> dict[str, object]:

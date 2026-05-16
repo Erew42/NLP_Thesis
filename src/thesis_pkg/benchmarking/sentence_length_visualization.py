@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import dataclass
 import json
@@ -11,6 +11,14 @@ matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
 import polars as pl
+
+try:
+    from thesis_native import _lm2011_rust
+except Exception as exc:  # pragma: no cover - optional native extension
+    _lm2011_rust = None
+    _SENTENCE_LENGTH_RUST_IMPORT_ERROR: str | None = f"{type(exc).__name__}: {exc}"
+else:
+    _SENTENCE_LENGTH_RUST_IMPORT_ERROR = None
 
 
 TOKEN_COUNT_COLUMN = "finbert_token_count_512"
@@ -35,6 +43,29 @@ REQUIRED_COLUMNS: tuple[str, ...] = (
 
 BUCKET_ORDER: tuple[str, ...] = ("short", "medium", "long")
 DEFAULT_ITEM_ORDER: tuple[str, ...] = ("item_1", "item_1a", "item_7")
+_SENTENCE_LENGTH_RUST_METRICS: dict[str, int] = {
+    "ordered_item_codes_fast_success": 0,
+    "ordered_item_codes_fast_failures": 0,
+    "ordered_item_codes_fallbacks": 0,
+    "frame_records_column_fast_success": 0,
+    "frame_records_column_fast_failures": 0,
+    "frame_records_column_fallbacks": 0,
+    "frame_records_fast_success": 0,
+    "frame_records_fast_failures": 0,
+    "frame_records_fallbacks": 0,
+}
+
+
+def get_sentence_length_rust_accel_metrics() -> dict[str, int | str | bool | None]:
+    metrics: dict[str, int | str | bool | None] = dict(_SENTENCE_LENGTH_RUST_METRICS)
+    metrics["rust_accel_available"] = _lm2011_rust is not None
+    metrics["rust_accel_import_error"] = _SENTENCE_LENGTH_RUST_IMPORT_ERROR
+    return metrics
+
+
+def reset_sentence_length_rust_accel_metrics() -> None:
+    for key in _SENTENCE_LENGTH_RUST_METRICS:
+        _SENTENCE_LENGTH_RUST_METRICS[key] = 0
 
 
 @dataclass(frozen=True)
@@ -70,11 +101,23 @@ def sentence_dataset_paths(sentence_dataset_dir: Path) -> tuple[Path, ...]:
     return tuple(sorted(path for path in by_year_dir.glob("*.parquet") if path.is_file()))
 
 
-def _ordered_item_codes(codes: tuple[str, ...]) -> list[str]:
+def _ordered_item_codes_py(codes: tuple[str, ...]) -> list[str]:
     seen = set(codes)
     ordered = [code for code in DEFAULT_ITEM_ORDER if code in seen]
     ordered.extend(code for code in codes if code not in DEFAULT_ITEM_ORDER)
     return ordered
+
+
+def _ordered_item_codes(codes: tuple[str, ...]) -> list[str]:
+    if _lm2011_rust is not None:
+        try:
+            out = list(_lm2011_rust.sentence_length_ordered_item_codes(codes, DEFAULT_ITEM_ORDER))
+            _SENTENCE_LENGTH_RUST_METRICS["ordered_item_codes_fast_success"] += 1
+            return [str(code) for code in out]
+        except Exception:
+            _SENTENCE_LENGTH_RUST_METRICS["ordered_item_codes_fast_failures"] += 1
+    _SENTENCE_LENGTH_RUST_METRICS["ordered_item_codes_fallbacks"] += 1
+    return _ordered_item_codes_py(codes)
 
 
 def _required_schema(path: Path) -> None:
@@ -247,7 +290,7 @@ def analyze_sentence_lengths(
     )
 
 
-def _frame_to_records(frame: pl.DataFrame) -> list[dict[str, Any]]:
+def _frame_to_records_py(frame: pl.DataFrame) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     for row in frame.to_dicts():
         records.append(
@@ -257,6 +300,30 @@ def _frame_to_records(frame: pl.DataFrame) -> list[dict[str, Any]]:
             }
         )
     return records
+
+
+def _frame_to_records(frame: pl.DataFrame) -> list[dict[str, Any]]:
+    if _lm2011_rust is not None:
+        try:
+            out = list(
+                _lm2011_rust.sentence_length_frame_record_columns(
+                    frame.columns,
+                    [frame.get_column(column).to_list() for column in frame.columns],
+                )
+            )
+            _SENTENCE_LENGTH_RUST_METRICS["frame_records_column_fast_success"] += 1
+            return out
+        except Exception:
+            _SENTENCE_LENGTH_RUST_METRICS["frame_records_column_fast_failures"] += 1
+            _SENTENCE_LENGTH_RUST_METRICS["frame_records_column_fallbacks"] += 1
+        try:
+            out = list(_lm2011_rust.sentence_length_frame_records(frame.to_dicts()))
+            _SENTENCE_LENGTH_RUST_METRICS["frame_records_fast_success"] += 1
+            return out
+        except Exception:
+            _SENTENCE_LENGTH_RUST_METRICS["frame_records_fast_failures"] += 1
+    _SENTENCE_LENGTH_RUST_METRICS["frame_records_fallbacks"] += 1
+    return _frame_to_records_py(frame)
 
 
 def _write_frame_bundle(frame: pl.DataFrame, out_dir: Path, stem: str) -> None:

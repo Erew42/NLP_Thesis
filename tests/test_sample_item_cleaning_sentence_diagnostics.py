@@ -41,8 +41,9 @@ def _fake_annotate_token_lengths(
     *,
     text_col: str = "sentence_text",
     batch_size: int | None = None,
+    bucket_edges=None,
 ) -> pl.DataFrame:
-    del authority, text_col, batch_size
+    del authority, text_col, batch_size, bucket_edges
     return df.with_columns(
         [
             pl.lit(12, dtype=pl.Int32).alias("finbert_token_count_512"),

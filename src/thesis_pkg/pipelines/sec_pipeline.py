@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import gc
 import json
@@ -13,6 +13,14 @@ from typing import Literal
 import polars as pl
 import pyarrow as pa
 import pyarrow.parquet as pq
+
+try:
+    from thesis_native import _lm2011_rust
+except Exception as exc:  # pragma: no cover - optional native extension
+    _lm2011_rust = None
+    _SEC_PIPELINE_RUST_IMPORT_ERROR: str | None = f"{type(exc).__name__}: {exc}"
+else:
+    _SEC_PIPELINE_RUST_IMPORT_ERROR = None
 
 from thesis_pkg.core.sec.filing_text import (
     FilingItemSchema,
@@ -34,6 +42,48 @@ from thesis_pkg.io.parquet import (
     _validate_parquet_quick,
     concat_parquets_arrow,
 )
+
+_SEC_PIPELINE_RUST_METRICS: dict[str, int] = {
+    "checkpoint_years_fast_success": 0,
+    "checkpoint_years_fast_failures": 0,
+    "checkpoint_years_fallbacks": 0,
+    "no_item_aggregate_column_fast_success": 0,
+    "no_item_aggregate_column_fast_failures": 0,
+    "no_item_aggregate_column_fallbacks": 0,
+    "no_item_aggregate_fast_success": 0,
+    "no_item_aggregate_fast_failures": 0,
+    "no_item_aggregate_fallbacks": 0,
+}
+
+
+def get_sec_pipeline_rust_accel_metrics() -> dict[str, int | str | bool | None]:
+    metrics: dict[str, int | str | bool | None] = dict(_SEC_PIPELINE_RUST_METRICS)
+    metrics["rust_accel_available"] = _lm2011_rust is not None
+    metrics["rust_accel_import_error"] = _SEC_PIPELINE_RUST_IMPORT_ERROR
+    return metrics
+
+
+def reset_sec_pipeline_rust_accel_metrics() -> None:
+    for key in _SEC_PIPELINE_RUST_METRICS:
+        _SEC_PIPELINE_RUST_METRICS[key] = 0
+
+
+def _load_completed_years_checkpoint_py(checkpoint_path: Path) -> set[object]:
+    return set(json.loads(checkpoint_path.read_text()))
+
+
+def _load_completed_years_checkpoint(checkpoint_path: Path) -> set[object]:
+    if _lm2011_rust is not None:
+        try:
+            years = _lm2011_rust.lseg_string_array_json_values(checkpoint_path.read_text())
+            _SEC_PIPELINE_RUST_METRICS["checkpoint_years_fast_success"] += 1
+            return {str(year) for year in years}
+        except Exception:
+            _SEC_PIPELINE_RUST_METRICS["checkpoint_years_fast_failures"] += 1
+            _SEC_PIPELINE_RUST_METRICS["checkpoint_years_fallbacks"] += 1
+    else:
+        _SEC_PIPELINE_RUST_METRICS["checkpoint_years_fallbacks"] += 1
+    return _load_completed_years_checkpoint_py(checkpoint_path)
 
 
 def _flush_batch(records: list[dict], out_path: Path, compression: str) -> None:
@@ -224,58 +274,7 @@ def _write_no_item_stats_csv(stats_path: Path, rows: list[dict]) -> Path:
     return stats_path
 
 
-def aggregate_no_item_stats_csvs(
-    stats_csvs: Path | list[Path],
-    out_stats_csv: Path,
-    out_doc_type_csv: Path | None = None,
-) -> Path:
-    """
-    Aggregate per-year no-item stats CSVs into a full-sample stats CSV using weighted means.
-    Optionally write a compact per-doc-type totals table.
-    """
-    if isinstance(stats_csvs, list):
-        files = [Path(p) for p in stats_csvs]
-    else:
-        stats_csvs = Path(stats_csvs)
-        if stats_csvs.is_dir():
-            files = sorted(stats_csvs.glob("*_no_item_stats.csv"))
-            if not files:
-                files = sorted(stats_csvs.glob("*.csv"))
-        else:
-            files = [stats_csvs]
-
-    if not files:
-        raise ValueError("No stats CSVs provided for aggregation.")
-
-    schema_overrides = {col: pl.Utf8 for col in _NO_ITEM_STATS_COLUMNS}
-    dfs: list[pl.DataFrame] = []
-    for p in files:
-        df = pl.read_csv(p, schema_overrides=schema_overrides)
-        for col in _NO_ITEM_STATS_COLUMNS:
-            if col not in df.columns:
-                df = df.with_columns(pl.lit(None).alias(col))
-        dfs.append(df.select(_NO_ITEM_STATS_COLUMNS))
-    df = pl.concat(dfs, how="vertical")
-    if df.height == 0:
-        return _write_no_item_stats_csv(out_stats_csv, [])
-
-    df = df.with_columns(
-        pl.col("year").cast(pl.Utf8),
-        pl.col("document_type_filename").cast(pl.Utf8),
-    ).filter(
-        (pl.col("document_type_filename") != "TOTAL") & (pl.col("year") != "ALL")
-    ).with_columns(
-        pl.col("n_filings_eligible").fill_null(0).cast(pl.Int64),
-        pl.col("n_with_items").fill_null(0).cast(pl.Int64),
-        pl.col("n_no_items").fill_null(0).cast(pl.Int64),
-        pl.col("share_no_item").fill_null(0.0).cast(pl.Float64),
-        pl.col("avg_text_len_with_items").fill_null(0.0).cast(pl.Float64),
-        pl.col("avg_text_len_no_items").fill_null(0.0).cast(pl.Float64),
-    )
-
-    if df.height == 0:
-        return _write_no_item_stats_csv(out_stats_csv, [])
-
+def _aggregate_no_item_stats_rows_py(df: pl.DataFrame) -> list[dict]:
     grouped = df.group_by("document_type_filename").agg(
         pl.sum("n_with_items").alias("n_with_items"),
         pl.sum("n_no_items").alias("n_no_items"),
@@ -329,7 +328,95 @@ def aggregate_no_item_stats_csvs(
 
     grouped = grouped.select(_NO_ITEM_STATS_COLUMNS)
     totals = totals.select(_NO_ITEM_STATS_COLUMNS)
-    result = pl.concat([grouped, totals], how="vertical")
+    return pl.concat([grouped, totals], how="vertical").to_dicts()
+
+
+def _aggregate_no_item_stats_rows(df: pl.DataFrame) -> list[dict]:
+    if _lm2011_rust is not None:
+        try:
+            selected = df.select(
+                "document_type_filename",
+                "n_with_items",
+                "n_no_items",
+                "avg_text_len_with_items",
+                "avg_text_len_no_items",
+            )
+            rows = _lm2011_rust.sec_no_item_aggregate_columns(
+                selected.get_column("document_type_filename").to_list(),
+                selected.get_column("n_with_items").to_list(),
+                selected.get_column("n_no_items").to_list(),
+                selected.get_column("avg_text_len_with_items").to_list(),
+                selected.get_column("avg_text_len_no_items").to_list(),
+            )
+            _SEC_PIPELINE_RUST_METRICS["no_item_aggregate_column_fast_success"] += 1
+            return [dict(row) for row in rows]
+        except Exception:
+            _SEC_PIPELINE_RUST_METRICS["no_item_aggregate_column_fast_failures"] += 1
+            _SEC_PIPELINE_RUST_METRICS["no_item_aggregate_column_fallbacks"] += 1
+        try:
+            rows = _lm2011_rust.sec_no_item_aggregate_rows(df.select(_NO_ITEM_STATS_COLUMNS).to_dicts())
+            _SEC_PIPELINE_RUST_METRICS["no_item_aggregate_fast_success"] += 1
+            return [dict(row) for row in rows]
+        except Exception:
+            _SEC_PIPELINE_RUST_METRICS["no_item_aggregate_fast_failures"] += 1
+    _SEC_PIPELINE_RUST_METRICS["no_item_aggregate_fallbacks"] += 1
+    return _aggregate_no_item_stats_rows_py(df)
+
+
+def aggregate_no_item_stats_csvs(
+    stats_csvs: Path | list[Path],
+    out_stats_csv: Path,
+    out_doc_type_csv: Path | None = None,
+) -> Path:
+    """
+    Aggregate per-year no-item stats CSVs into a full-sample stats CSV using weighted means.
+    Optionally write a compact per-doc-type totals table.
+    """
+    if isinstance(stats_csvs, list):
+        files = [Path(p) for p in stats_csvs]
+    else:
+        stats_csvs = Path(stats_csvs)
+        if stats_csvs.is_dir():
+            files = sorted(stats_csvs.glob("*_no_item_stats.csv"))
+            if not files:
+                files = sorted(stats_csvs.glob("*.csv"))
+        else:
+            files = [stats_csvs]
+
+    if not files:
+        raise ValueError("No stats CSVs provided for aggregation.")
+
+    schema_overrides = {col: pl.Utf8 for col in _NO_ITEM_STATS_COLUMNS}
+    dfs: list[pl.DataFrame] = []
+    for p in files:
+        df = pl.read_csv(p, schema_overrides=schema_overrides)
+        for col in _NO_ITEM_STATS_COLUMNS:
+            if col not in df.columns:
+                df = df.with_columns(pl.lit(None).alias(col))
+        dfs.append(df.select(_NO_ITEM_STATS_COLUMNS))
+    df = pl.concat(dfs, how="vertical")
+    if df.height == 0:
+        return _write_no_item_stats_csv(out_stats_csv, [])
+
+    df = df.with_columns(
+        pl.col("year").cast(pl.Utf8),
+        pl.col("document_type_filename").cast(pl.Utf8),
+    ).filter(
+        (pl.col("document_type_filename") != "TOTAL") & (pl.col("year") != "ALL")
+    ).with_columns(
+        pl.col("n_filings_eligible").fill_null(0).cast(pl.Int64),
+        pl.col("n_with_items").fill_null(0).cast(pl.Int64),
+        pl.col("n_no_items").fill_null(0).cast(pl.Int64),
+        pl.col("share_no_item").fill_null(0.0).cast(pl.Float64),
+        pl.col("avg_text_len_with_items").fill_null(0.0).cast(pl.Float64),
+        pl.col("avg_text_len_no_items").fill_null(0.0).cast(pl.Float64),
+    )
+
+    if df.height == 0:
+        return _write_no_item_stats_csv(out_stats_csv, [])
+
+    result_rows = _aggregate_no_item_stats_rows(df)
+    result = pl.DataFrame(result_rows).select(_NO_ITEM_STATS_COLUMNS, strict=False)
     if out_doc_type_csv is not None:
         out_doc_type_csv.parent.mkdir(parents=True, exist_ok=True)
         compact = result.filter(
@@ -344,7 +431,7 @@ def aggregate_no_item_stats_csvs(
             ]
         )
         compact.write_csv(out_doc_type_csv)
-    return _write_no_item_stats_csv(out_stats_csv, result.to_dicts())
+    return _write_no_item_stats_csv(out_stats_csv, result_rows)
 
 
 def _load_item_accession_set(
@@ -663,10 +750,10 @@ def merge_yearly_batches(
         except Exception:
             stage_inputs = False
 
-    done: set[str] = set()
+    done: set[object] = set()
     if checkpoint_path and checkpoint_path.exists():
         try:
-            done = set(json.loads(checkpoint_path.read_text()))
+            done = _load_completed_years_checkpoint(checkpoint_path)
         except Exception:
             done = set()
 

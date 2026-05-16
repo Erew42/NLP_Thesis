@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -10,6 +10,14 @@ from typing import Literal
 
 import numpy as np
 import polars as pl
+
+try:
+    from thesis_native import _lm2011_rust
+except Exception as exc:  # pragma: no cover - optional native extension
+    _lm2011_rust = None
+    _LM2011_REGRESSION_RUST_IMPORT_ERROR: str | None = f"{type(exc).__name__}: {exc}"
+else:
+    _LM2011_REGRESSION_RUST_IMPORT_ERROR = None
 
 from thesis_pkg.core.ccm.lm2011 import attach_lm2011_industry_classifications
 from thesis_pkg.pipelines.lm2011_pipeline import (
@@ -128,6 +136,35 @@ _RANK_DEFICIENT_SKIP_REASON = "rank_deficient_design"
 _INSUFFICIENT_DOF_SKIP_REASON = "insufficient_degrees_of_freedom"
 _NONFINITE_FIT_SKIP_REASON = "non_finite_fit_statistics"
 QuarterWeighting = Literal["quarter_observation_count", "equal_quarter"]
+_LM2011_REGRESSION_RUST_METRICS: dict[str, int] = {
+    "quarter_start_fast_success": 0,
+    "quarter_start_fast_failures": 0,
+    "quarter_start_fallbacks": 0,
+    "quarter_start_batch_fast_success": 0,
+    "quarter_start_batch_fast_failures": 0,
+    "quarter_start_batch_fallbacks": 0,
+    "weighted_mean_fast_success": 0,
+    "weighted_mean_fast_failures": 0,
+    "weighted_mean_fallbacks": 0,
+    "newey_west_fast_success": 0,
+    "newey_west_fast_failures": 0,
+    "newey_west_fallbacks": 0,
+    "table_ia_ii_rows_column_fast_success": 0,
+    "table_ia_ii_rows_column_fast_failures": 0,
+    "table_ia_ii_rows_column_fallbacks": 0,
+    "table_ia_ii_rows_fast_success": 0,
+    "table_ia_ii_rows_fast_failures": 0,
+    "table_ia_ii_rows_fallbacks": 0,
+    "fama_macbeth_rows_fast_success": 0,
+    "fama_macbeth_rows_fast_failures": 0,
+    "fama_macbeth_rows_fallbacks": 0,
+    "cross_section_design_column_fast_success": 0,
+    "cross_section_design_column_fast_failures": 0,
+    "cross_section_design_column_fallbacks": 0,
+    "cross_section_design_fast_success": 0,
+    "cross_section_design_fast_failures": 0,
+    "cross_section_design_fallbacks": 0,
+}
 
 
 def _empty_lm2011_table_results_df() -> pl.DataFrame:
@@ -157,9 +194,61 @@ class _CrossSectionalOlsOutcome:
     skipped_quarter_row: dict[str, object] | None = None
 
 
-def _quarter_start(value: dt.date) -> dt.date:
+def get_lm2011_regression_rust_accel_metrics() -> dict[str, int | str | bool | None]:
+    metrics: dict[str, int | str | bool | None] = dict(_LM2011_REGRESSION_RUST_METRICS)
+    metrics["rust_accel_available"] = _lm2011_rust is not None
+    metrics["rust_accel_import_error"] = _LM2011_REGRESSION_RUST_IMPORT_ERROR
+    return metrics
+
+
+def reset_lm2011_regression_rust_accel_metrics() -> None:
+    for key in _LM2011_REGRESSION_RUST_METRICS:
+        _LM2011_REGRESSION_RUST_METRICS[key] = 0
+
+
+def _quarter_start_py(value: dt.date) -> dt.date:
     month = ((value.month - 1) // 3) * 3 + 1
     return dt.date(value.year, month, 1)
+
+
+def _quarter_start(value: dt.date) -> dt.date:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.lm2011_quarter_start(value)
+            _LM2011_REGRESSION_RUST_METRICS["quarter_start_fast_success"] += 1
+            return out
+        except Exception:
+            _LM2011_REGRESSION_RUST_METRICS["quarter_start_fast_failures"] += 1
+    _LM2011_REGRESSION_RUST_METRICS["quarter_start_fallbacks"] += 1
+    return _quarter_start_py(value)
+
+
+def _quarter_start_values_py(values: list[dt.date | None]) -> list[dt.date | None]:
+    return [None if value is None else _quarter_start_py(value) for value in values]
+
+
+def _quarter_start_values(values: list[dt.date | None]) -> list[dt.date | None]:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.lm2011_quarter_start_values(values)
+            _LM2011_REGRESSION_RUST_METRICS["quarter_start_batch_fast_success"] += 1
+            return [None if value is None else value for value in out]
+        except Exception:
+            _LM2011_REGRESSION_RUST_METRICS["quarter_start_batch_fast_failures"] += 1
+    _LM2011_REGRESSION_RUST_METRICS["quarter_start_batch_fallbacks"] += 1
+    return _quarter_start_values_py(values)
+
+
+def _date_series_from_values(series: pl.Series, values: list[dt.date | None]) -> pl.Series:
+    return pl.Series(series.name, values, dtype=pl.Date)
+
+
+def _quarter_start_expr(column_name: str) -> pl.Expr:
+    return pl.col(column_name).cast(pl.Date, strict=False).map_batches(
+        lambda series: _date_series_from_values(series, _quarter_start_values(series.to_list())),
+        return_dtype=pl.Date,
+        is_elementwise=True,
+    )
 
 
 def _unique_preserving_order(values: Sequence[str]) -> tuple[str, ...]:
@@ -402,11 +491,26 @@ def build_lm2011_normalized_difference_panel(
     )
 
 
-def _weighted_mean(values: Sequence[float], weights: Sequence[float]) -> float | None:
+def _weighted_mean_py(values: Sequence[float], weights: Sequence[float]) -> float | None:
     total_weight = sum(weights)
     if total_weight <= 0:
         return None
     return sum(weight * value for value, weight in zip(values, weights, strict=True)) / total_weight
+
+
+def _weighted_mean(values: Sequence[float], weights: Sequence[float]) -> float | None:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.lm2011_weighted_mean(
+                [float(value) for value in values],
+                [float(weight) for weight in weights],
+            )
+            _LM2011_REGRESSION_RUST_METRICS["weighted_mean_fast_success"] += 1
+            return None if out is None else float(out)
+        except Exception:
+            _LM2011_REGRESSION_RUST_METRICS["weighted_mean_fast_failures"] += 1
+    _LM2011_REGRESSION_RUST_METRICS["weighted_mean_fallbacks"] += 1
+    return _weighted_mean_py(values, weights)
 
 
 def _resolve_quarter_weights(
@@ -425,13 +529,13 @@ def _resolve_quarter_weights(
     )
 
 
-def _newey_west_standard_error(
+def _newey_west_standard_error_py(
     values: Sequence[float],
     weights: Sequence[float],
     *,
     nw_lags: int,
 ) -> float | None:
-    estimate = _weighted_mean(values, weights)
+    estimate = _weighted_mean_py(values, weights)
     total_weight = sum(weights)
     if estimate is None or total_weight <= 0:
         return None
@@ -444,6 +548,115 @@ def _newey_west_standard_error(
         covariance = sum(psi[idx] * psi[idx - lag] for idx in range(lag, len(psi)))
         variance += 2.0 * bartlett_weight * covariance
     return math.sqrt(max(variance, 0.0))
+
+
+def _newey_west_standard_error(
+    values: Sequence[float],
+    weights: Sequence[float],
+    *,
+    nw_lags: int,
+) -> float | None:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.lm2011_newey_west_standard_error(
+                [float(value) for value in values],
+                [float(weight) for weight in weights],
+                int(nw_lags),
+            )
+            _LM2011_REGRESSION_RUST_METRICS["newey_west_fast_success"] += 1
+            return None if out is None else float(out)
+        except Exception:
+            _LM2011_REGRESSION_RUST_METRICS["newey_west_fast_failures"] += 1
+    _LM2011_REGRESSION_RUST_METRICS["newey_west_fallbacks"] += 1
+    return _newey_west_standard_error_py(values, weights, nw_lags=nw_lags)
+
+
+def _fama_macbeth_result_rows_py(
+    coefficient_time_series: Mapping[str, Sequence[float]],
+    *,
+    quarter_sizes: Sequence[float],
+    quarter_weights: Sequence[float],
+    table_id: str,
+    specification_id: str,
+    text_scope: str,
+    signal_name: str,
+    dependent_variable: str,
+    weighting_rule: str,
+    nw_lags: int,
+) -> list[dict[str, object]]:
+    retained_quarters = len(quarter_sizes)
+    mean_quarter_n = sum(quarter_sizes) / float(retained_quarters)
+    rows: list[dict[str, object]] = []
+    for coefficient_name, values in coefficient_time_series.items():
+        estimate = _weighted_mean(values, quarter_weights)
+        standard_error = _newey_west_standard_error(values, quarter_weights, nw_lags=nw_lags)
+        t_stat = None
+        if estimate is not None and standard_error is not None and standard_error > 0:
+            t_stat = estimate / standard_error
+        rows.append(
+            {
+                "table_id": table_id,
+                "specification_id": specification_id,
+                "text_scope": text_scope,
+                "signal_name": signal_name,
+                "dependent_variable": dependent_variable,
+                "coefficient_name": coefficient_name,
+                "estimate": estimate,
+                "standard_error": standard_error,
+                "t_stat": t_stat,
+                "n_quarters": retained_quarters,
+                "mean_quarter_n": mean_quarter_n,
+                "weighting_rule": weighting_rule,
+                "nw_lags": nw_lags,
+            }
+        )
+    return rows
+
+
+def _fama_macbeth_result_rows(
+    coefficient_time_series: Mapping[str, Sequence[float]],
+    *,
+    quarter_sizes: Sequence[float],
+    quarter_weights: Sequence[float],
+    table_id: str,
+    specification_id: str,
+    text_scope: str,
+    signal_name: str,
+    dependent_variable: str,
+    weighting_rule: str,
+    nw_lags: int,
+) -> list[dict[str, object]]:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.lm2011_fama_macbeth_result_rows(
+                list(coefficient_time_series.items()),
+                list(quarter_sizes),
+                list(quarter_weights),
+                table_id,
+                specification_id,
+                text_scope,
+                signal_name,
+                dependent_variable,
+                weighting_rule,
+                nw_lags,
+            )
+            _LM2011_REGRESSION_RUST_METRICS["fama_macbeth_rows_fast_success"] += 1
+            return [dict(row) for row in out]
+        except Exception:
+            _LM2011_REGRESSION_RUST_METRICS["fama_macbeth_rows_fast_failures"] += 1
+    _LM2011_REGRESSION_RUST_METRICS["fama_macbeth_rows_fallbacks"] += 1
+    return _fama_macbeth_result_rows_py(
+        coefficient_time_series,
+        quarter_sizes=quarter_sizes,
+        quarter_weights=quarter_weights,
+        table_id=table_id,
+        specification_id=specification_id,
+        text_scope=text_scope,
+        signal_name=signal_name,
+        dependent_variable=dependent_variable,
+        weighting_rule=weighting_rule,
+        nw_lags=nw_lags,
+    )
 
 
 def _json_or_none(value: object) -> str | None:
@@ -484,6 +697,73 @@ def _best_effort_restoring_drop_candidates(
         if np.linalg.matrix_rank(reduced_design) == reduced_design.shape[1]:
             restoring_candidates.append(full_names[idx])
     return restoring_candidates
+
+
+def _cross_section_design_rows_py(
+    df: pl.DataFrame,
+    *,
+    dependent_variable: str,
+    industry_col: str,
+    regressor_columns: Sequence[str],
+    dummy_industries: Sequence[int],
+) -> tuple[list[float], list[list[float]]]:
+    endog: list[float] = []
+    exog_rows: list[list[float]] = []
+    for row in df.select(dependent_variable, industry_col, *regressor_columns).iter_rows(named=True):
+        design_row = [float(row[column]) for column in regressor_columns]
+        industry_value = int(row[industry_col])
+        design_row.extend(1.0 if industry_value == industry_id else 0.0 for industry_id in dummy_industries)
+        endog.append(float(row[dependent_variable]))
+        exog_rows.append(design_row)
+    return endog, exog_rows
+
+
+def _cross_section_design_rows(
+    df: pl.DataFrame,
+    *,
+    dependent_variable: str,
+    industry_col: str,
+    regressor_columns: Sequence[str],
+    dummy_industries: Sequence[int],
+) -> tuple[list[float], list[list[float]]]:
+    if _lm2011_rust is not None:
+        selected_columns = (dependent_variable, industry_col, *regressor_columns)
+        try:
+            selected = df.select(*selected_columns)
+            out = _lm2011_rust.lm2011_cross_section_design_columns(
+                selected.get_column(dependent_variable).to_list(),
+                selected.get_column(industry_col).to_list(),
+                list(regressor_columns),
+                [selected.get_column(column).to_list() for column in regressor_columns],
+                list(dummy_industries),
+            )
+            _LM2011_REGRESSION_RUST_METRICS["cross_section_design_column_fast_success"] += 1
+            endog, exog_rows = out
+            return list(endog), [list(row) for row in exog_rows]
+        except Exception:
+            _LM2011_REGRESSION_RUST_METRICS["cross_section_design_column_fast_failures"] += 1
+            _LM2011_REGRESSION_RUST_METRICS["cross_section_design_column_fallbacks"] += 1
+        try:
+            out = _lm2011_rust.lm2011_cross_section_design_rows(
+                df.select(*selected_columns).to_dicts(),
+                dependent_variable,
+                industry_col,
+                list(regressor_columns),
+                list(dummy_industries),
+            )
+            _LM2011_REGRESSION_RUST_METRICS["cross_section_design_fast_success"] += 1
+            endog, exog_rows = out
+            return list(endog), [list(row) for row in exog_rows]
+        except Exception:
+            _LM2011_REGRESSION_RUST_METRICS["cross_section_design_fast_failures"] += 1
+    _LM2011_REGRESSION_RUST_METRICS["cross_section_design_fallbacks"] += 1
+    return _cross_section_design_rows_py(
+        df,
+        dependent_variable=dependent_variable,
+        industry_col=industry_col,
+        regressor_columns=regressor_columns,
+        dummy_industries=dummy_industries,
+    )
 
 
 def _fit_cross_sectional_ols(
@@ -543,14 +823,13 @@ def _fit_cross_sectional_ols(
             skipped_quarter_row=skipped_quarter_row,
         )
 
-    endog: list[float] = []
-    exog_rows: list[list[float]] = []
-    for row in df.select(dependent_variable, industry_col, *regressor_columns).iter_rows(named=True):
-        design_row = [float(row[column]) for column in regressor_columns]
-        industry_value = int(row[industry_col])
-        design_row.extend(1.0 if industry_value == industry_id else 0.0 for industry_id in dummy_industries)
-        endog.append(float(row[dependent_variable]))
-        exog_rows.append(design_row)
+    endog, exog_rows = _cross_section_design_rows(
+        df,
+        dependent_variable=dependent_variable,
+        industry_col=industry_col,
+        regressor_columns=regressor_columns,
+        dummy_industries=dummy_industries,
+    )
     design = np.column_stack(
         (
             np.ones(n_obs, dtype=float),
@@ -746,11 +1025,7 @@ def _run_lm2011_quarterly_fama_macbeth_bundle(
         .drop_nulls(subset=list(required_columns))
     )
     with_quarters_df = (
-        selected_lf.with_columns(
-            pl.col(filing_date_col)
-            .map_elements(_quarter_start, return_dtype=pl.Date)
-            .alias("_quarter_start")
-        )
+        selected_lf.with_columns(_quarter_start_expr(filing_date_col).alias("_quarter_start"))
         .sort("_quarter_start", filing_date_col)
         .collect()
     )
@@ -829,31 +1104,18 @@ def _run_lm2011_quarterly_fama_macbeth_bundle(
             fit_row["weight"] = quarter_weight
             fit_row["weighting_rule"] = weighting_rule
 
-    mean_quarter_n = sum(quarter_sizes) / float(retained_quarters)
-    rows: list[dict[str, object]] = []
-    for coefficient_name, values in coefficient_time_series.items():
-        estimate = _weighted_mean(values, quarter_weights)
-        standard_error = _newey_west_standard_error(values, quarter_weights, nw_lags=nw_lags)
-        t_stat = None
-        if estimate is not None and standard_error is not None and standard_error > 0:
-            t_stat = estimate / standard_error
-        rows.append(
-            {
-                "table_id": table_id,
-                "specification_id": resolved_specification_id,
-                "text_scope": text_scope,
-                "signal_name": signal_column,
-                "dependent_variable": dependent_variable,
-                "coefficient_name": coefficient_name,
-                "estimate": estimate,
-                "standard_error": standard_error,
-                "t_stat": t_stat,
-                "n_quarters": retained_quarters,
-                "mean_quarter_n": mean_quarter_n,
-                "weighting_rule": weighting_rule,
-                "nw_lags": nw_lags,
-            }
-        )
+    rows = _fama_macbeth_result_rows(
+        coefficient_time_series,
+        quarter_sizes=quarter_sizes,
+        quarter_weights=quarter_weights,
+        table_id=table_id,
+        specification_id=resolved_specification_id,
+        text_scope=text_scope,
+        signal_name=signal_column,
+        dependent_variable=dependent_variable,
+        weighting_rule=weighting_rule,
+        nw_lags=nw_lags,
+    )
     return _QuarterlyFamaMacbethBundle(
         results_df=pl.DataFrame(rows, schema_overrides=_TABLE_RESULT_SCHEMA),
         skipped_quarters_df=(
@@ -1709,6 +1971,11 @@ def build_lm2011_table_ia_ii_results_from_monthly_returns(
     combined = mean_returns_df.join(summary_df, on="sort_signal_name", how="left").sort(
         "sort_signal_name"
     )
+    rows = _table_ia_ii_result_rows(combined)
+    return pl.DataFrame(rows, schema_overrides=_TABLE_RESULT_SCHEMA)
+
+
+def _table_ia_ii_result_rows_py(combined: pl.DataFrame) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     coefficient_pairs = (
         ("mean_long_short_return", "mean_long_short_return", None, None),
@@ -1761,7 +2028,49 @@ def build_lm2011_table_ia_ii_results_from_monthly_returns(
                     "nw_lags": None,
                 }
             )
-    return pl.DataFrame(rows, schema_overrides=_TABLE_RESULT_SCHEMA)
+    return rows
+
+
+def _table_ia_ii_result_rows(combined: pl.DataFrame) -> list[dict[str, object]]:
+    if _lm2011_rust is not None:
+        value_columns = (
+            "mean_long_short_return",
+            "alpha_ff3_mom",
+            "alpha_ff3_mom_standard_error",
+            "alpha_ff3_mom_t_stat",
+            "beta_market",
+            "beta_market_standard_error",
+            "beta_market_t_stat",
+            "beta_smb",
+            "beta_smb_standard_error",
+            "beta_smb_t_stat",
+            "beta_hml",
+            "beta_hml_standard_error",
+            "beta_hml_t_stat",
+            "beta_mom",
+            "beta_mom_standard_error",
+            "beta_mom_t_stat",
+            "r2",
+        )
+        try:
+            selected = combined.select("sort_signal_name", *value_columns)
+            out = _lm2011_rust.lm2011_table_ia_ii_result_columns(
+                selected.get_column("sort_signal_name").to_list(),
+                [selected.get_column(column).to_list() for column in value_columns],
+            )
+            _LM2011_REGRESSION_RUST_METRICS["table_ia_ii_rows_column_fast_success"] += 1
+            return [dict(row) for row in out]
+        except Exception:
+            _LM2011_REGRESSION_RUST_METRICS["table_ia_ii_rows_column_fast_failures"] += 1
+            _LM2011_REGRESSION_RUST_METRICS["table_ia_ii_rows_column_fallbacks"] += 1
+        try:
+            out = _lm2011_rust.lm2011_table_ia_ii_result_rows(combined.to_dicts())
+            _LM2011_REGRESSION_RUST_METRICS["table_ia_ii_rows_fast_success"] += 1
+            return [dict(row) for row in out]
+        except Exception:
+            _LM2011_REGRESSION_RUST_METRICS["table_ia_ii_rows_fast_failures"] += 1
+    _LM2011_REGRESSION_RUST_METRICS["table_ia_ii_rows_fallbacks"] += 1
+    return _table_ia_ii_result_rows_py(combined)
 
 
 def build_lm2011_table_ia_ii_results(

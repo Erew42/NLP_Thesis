@@ -44,6 +44,13 @@ def _resolve_repo_root() -> Path:
     return cwd
 
 
+def _resolve_source_root(repo_root: Path) -> Path:
+    copied_source_root = Path(__file__).resolve().parents[2]
+    if (copied_source_root / "thesis_pkg" / "pipeline.py").exists():
+        return copied_source_root
+    return repo_root / "src"
+
+
 def _resolve_colab_drive_root() -> Path:
     for candidate in (
         Path("/content/drive/MyDrive"),
@@ -477,7 +484,7 @@ def _resolve_finbert_bucket_edges(
 
 
 ROOT = _resolve_repo_root()
-SRC = ROOT / "src"
+SRC = _resolve_source_root(ROOT)
 if SRC.exists() and str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
@@ -577,7 +584,7 @@ from thesis_pkg.notebooks_and_scripts.lm2011_sample_post_refinitiv_runner import
     run_lm2011_post_refinitiv_pipeline,
 )
 from thesis_pkg.pipelines.refinitiv.doc_ownership import _build_lm2011_doc_ownership_universe_diagnostics
-from thesis_pkg.pipelines.refinitiv.lseg_ledger import LsegResumeCompatibilityError
+from thesis_refinitiv.lseg_client.ledger import LsegResumeCompatibilityError
 
 LSEG_API_READY = is_lseg_available()
 LOCAL_SAMPLE_FINBERT_YEARS: tuple[int, ...] = (2006, 2007, 2008)

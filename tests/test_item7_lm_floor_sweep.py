@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import datetime as dt
+
 import polars as pl
 
 from thesis_pkg.benchmarking.contracts import ItemTextCleaningConfig
@@ -12,7 +14,7 @@ def _make_item7_row(doc_id: str, token_count: int) -> dict[str, object]:
         "doc_id": doc_id,
         "cik_10": "0000000001",
         "accession_nodash": doc_id.replace(":", "")[-18:],
-        "filing_date": "2010-03-01",
+        "filing_date": dt.date(2010, 3, 1),
         "filing_year": 2010,
         "benchmark_row_id": f"{doc_id}:item_7",
         "benchmark_item_code": "item_7",

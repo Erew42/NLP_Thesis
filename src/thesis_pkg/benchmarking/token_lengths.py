@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from functools import lru_cache
 from typing import Sequence
@@ -8,9 +8,37 @@ import polars as pl
 from thesis_pkg.benchmarking.contracts import BucketEdgeSpec
 from thesis_pkg.benchmarking.contracts import FinbertAuthoritySpec
 
+try:
+    from thesis_native import _lm2011_rust
+except Exception as exc:  # pragma: no cover - optional native extension
+    _lm2011_rust = None
+    _FINBERT_TOKEN_RUST_IMPORT_ERROR: str | None = f"{type(exc).__name__}: {exc}"
+else:
+    _FINBERT_TOKEN_RUST_IMPORT_ERROR = None
+
 
 FINBERT_TOKEN_COUNT_COLUMN = "finbert_token_count_512"
 FINBERT_TOKEN_BUCKET_COLUMN = "finbert_token_bucket_512"
+_FINBERT_TOKEN_RUST_METRICS: dict[str, int] = {
+    "bucket_fast_success": 0,
+    "bucket_fast_failures": 0,
+    "bucket_fallbacks": 0,
+    "bucket_values_fast_success": 0,
+    "bucket_values_fast_failures": 0,
+    "bucket_values_fallbacks": 0,
+}
+
+
+def get_finbert_token_rust_accel_metrics() -> dict[str, int | str | bool | None]:
+    metrics: dict[str, int | str | bool | None] = dict(_FINBERT_TOKEN_RUST_METRICS)
+    metrics["rust_accel_available"] = _lm2011_rust is not None
+    metrics["rust_accel_import_error"] = _FINBERT_TOKEN_RUST_IMPORT_ERROR
+    return metrics
+
+
+def reset_finbert_token_rust_accel_metrics() -> None:
+    for key in _FINBERT_TOKEN_RUST_METRICS:
+        _FINBERT_TOKEN_RUST_METRICS[key] = 0
 
 
 def _import_bert_tokenizer():
@@ -46,7 +74,7 @@ def _resolved_bucket_edges(
     return BucketEdgeSpec(short_edge=short_edge, medium_edge=medium_edge)
 
 
-def assign_finbert_token_bucket(
+def assign_finbert_token_bucket_py(
     token_count: int,
     authority: FinbertAuthoritySpec,
     *,
@@ -64,6 +92,73 @@ def assign_finbert_token_bucket(
     raise ValueError(
         f"Token count {token_count} exceeds the fixed FinBERT authority max length "
         f"{authority.token_count_max_length}."
+    )
+
+
+def assign_finbert_token_bucket(
+    token_count: int,
+    authority: FinbertAuthoritySpec,
+    *,
+    bucket_edges: BucketEdgeSpec | None = None,
+) -> str:
+    resolved_bucket_edges = _resolved_bucket_edges(authority, bucket_edges)
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.assign_finbert_token_bucket_value(
+                int(token_count),
+                int(resolved_bucket_edges.short_edge),
+                int(resolved_bucket_edges.medium_edge),
+                int(authority.token_count_max_length),
+            )
+            _FINBERT_TOKEN_RUST_METRICS["bucket_fast_success"] += 1
+            return str(out)
+        except Exception:
+            _FINBERT_TOKEN_RUST_METRICS["bucket_fast_failures"] += 1
+    _FINBERT_TOKEN_RUST_METRICS["bucket_fallbacks"] += 1
+    return assign_finbert_token_bucket_py(token_count, authority, bucket_edges=resolved_bucket_edges)
+
+
+def assign_finbert_token_buckets_py(
+    token_counts: Sequence[int],
+    authority: FinbertAuthoritySpec,
+    *,
+    bucket_edges: BucketEdgeSpec | None = None,
+) -> list[str]:
+    resolved_bucket_edges = _resolved_bucket_edges(authority, bucket_edges)
+    return [
+        assign_finbert_token_bucket_py(
+            int(count),
+            authority,
+            bucket_edges=resolved_bucket_edges,
+        )
+        for count in token_counts
+    ]
+
+
+def assign_finbert_token_buckets(
+    token_counts: Sequence[int],
+    authority: FinbertAuthoritySpec,
+    *,
+    bucket_edges: BucketEdgeSpec | None = None,
+) -> list[str]:
+    resolved_bucket_edges = _resolved_bucket_edges(authority, bucket_edges)
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.assign_finbert_token_bucket_values(
+                [int(count) for count in token_counts],
+                int(resolved_bucket_edges.short_edge),
+                int(resolved_bucket_edges.medium_edge),
+                int(authority.token_count_max_length),
+            )
+            _FINBERT_TOKEN_RUST_METRICS["bucket_values_fast_success"] += 1
+            return [str(value) for value in out]
+        except Exception:
+            _FINBERT_TOKEN_RUST_METRICS["bucket_values_fast_failures"] += 1
+    _FINBERT_TOKEN_RUST_METRICS["bucket_values_fallbacks"] += 1
+    return assign_finbert_token_buckets_py(
+        token_counts,
+        authority,
+        bucket_edges=resolved_bucket_edges,
     )
 
 
@@ -91,10 +186,7 @@ def annotate_finbert_token_lengths(
     bucket_edges: BucketEdgeSpec | None = None,
 ) -> pl.DataFrame:
     token_counts = compute_finbert_token_lengths(df[text_col].to_list(), authority)
-    token_buckets = [
-        assign_finbert_token_bucket(count, authority, bucket_edges=bucket_edges)
-        for count in token_counts
-    ]
+    token_buckets = assign_finbert_token_buckets(token_counts, authority, bucket_edges=bucket_edges)
     return df.with_columns(
         [
             pl.Series(FINBERT_TOKEN_COUNT_COLUMN, token_counts, dtype=pl.Int32),

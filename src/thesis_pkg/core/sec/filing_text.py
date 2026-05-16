@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -27,6 +27,14 @@ from .patterns import (
     TOC_MARKER_PATTERN,
 )
 from .utilities import _cik_10, _digits_only, _make_doc_id
+
+try:
+    from thesis_native import _lm2011_rust
+except Exception as exc:  # pragma: no cover - optional native extension
+    _lm2011_rust = None
+    _FILING_TEXT_RUST_IMPORT_ERROR: str | None = f"{type(exc).__name__}: {exc}"
+else:
+    _FILING_TEXT_RUST_IMPORT_ERROR = None
 
 
 BOUNDARY_AUTHORITY_STATUS_TRUSTED = "trusted"
@@ -67,8 +75,32 @@ PUBLIC_BOUNDARY_SCHEMA: dict[str, pl.DataType] = {
     "boundary_authority_status": pl.Utf8,
 }
 
+_FILING_TEXT_RUST_METRICS: dict[str, int] = {
+    "filename_parse_fast_success": 0,
+    "filename_parse_fast_failures": 0,
+    "filename_parse_fallbacks": 0,
+    "boundary_status_fast_success": 0,
+    "boundary_status_fast_failures": 0,
+    "boundary_status_fallbacks": 0,
+    "boundary_payload_fast_success": 0,
+    "boundary_payload_fast_failures": 0,
+    "boundary_payload_fallbacks": 0,
+}
 
-def classify_boundary_authority_status(item: Mapping[str, object]) -> str:
+
+def get_filing_text_rust_accel_metrics() -> dict[str, int | str | bool | None]:
+    metrics: dict[str, int | str | bool | None] = dict(_FILING_TEXT_RUST_METRICS)
+    metrics["rust_accel_available"] = _lm2011_rust is not None
+    metrics["rust_accel_import_error"] = _FILING_TEXT_RUST_IMPORT_ERROR
+    return metrics
+
+
+def reset_filing_text_rust_accel_metrics() -> None:
+    for key in _FILING_TEXT_RUST_METRICS:
+        _FILING_TEXT_RUST_METRICS[key] = 0
+
+
+def _classify_boundary_authority_status_py(item: Mapping[str, object]) -> str:
     """Classify persisted boundary authority for extracted-item rows."""
 
     raw_values = {public_name: item.get(public_name) for public_name in PUBLIC_BOUNDARY_COLUMN_MAP.values()}
@@ -100,18 +132,59 @@ def classify_boundary_authority_status(item: Mapping[str, object]) -> str:
     return BOUNDARY_AUTHORITY_STATUS_TRUSTED
 
 
-def public_boundary_payload(item: Mapping[str, object]) -> dict[str, object]:
+def classify_boundary_authority_status(item: Mapping[str, object]) -> str:
+    """Classify persisted boundary authority for extracted-item rows."""
+
+    if _lm2011_rust is not None:
+        try:
+            status = str(_lm2011_rust.classify_boundary_authority_status_value(item))
+            _FILING_TEXT_RUST_METRICS["boundary_status_fast_success"] += 1
+            return status
+        except Exception:
+            _FILING_TEXT_RUST_METRICS["boundary_status_fast_failures"] += 1
+    _FILING_TEXT_RUST_METRICS["boundary_status_fallbacks"] += 1
+    return _classify_boundary_authority_status_py(item)
+
+
+def _public_boundary_payload_py(item: Mapping[str, object]) -> dict[str, object]:
     """Project extractor diagnostics into the public item-boundary contract."""
 
     payload = {
         public_name: item.get(private_name)
         for private_name, public_name in PUBLIC_BOUNDARY_COLUMN_MAP.items()
     }
-    payload["boundary_authority_status"] = classify_boundary_authority_status(payload)
+    payload["boundary_authority_status"] = _classify_boundary_authority_status_py(payload)
     return payload
 
 
-def parse_filename_minimal(filename: str) -> dict:
+def public_boundary_payload(item: Mapping[str, object]) -> dict[str, object]:
+    """Project extractor diagnostics into the public item-boundary contract."""
+
+    if _lm2011_rust is not None:
+        try:
+            payload = dict(_lm2011_rust.public_boundary_payload_value(item))
+            _FILING_TEXT_RUST_METRICS["boundary_payload_fast_success"] += 1
+            return payload
+        except Exception:
+            _FILING_TEXT_RUST_METRICS["boundary_payload_fast_failures"] += 1
+    _FILING_TEXT_RUST_METRICS["boundary_payload_fallbacks"] += 1
+    return _public_boundary_payload_py(item)
+
+
+def _filename_parse_failure() -> dict:
+    return {
+        "filename_parse_ok": False,
+        "file_date_filename": None,
+        "document_type_filename": None,
+        "cik": None,
+        "cik_10": None,
+        "accession_number": None,
+        "accession_nodash": None,
+        "doc_id": None,
+    }
+
+
+def _parse_filename_minimal_py(filename: str) -> dict:
     """
     Parse filing metadata from filename only.
 
@@ -126,16 +199,7 @@ def parse_filename_minimal(filename: str) -> dict:
     """
     m = FILENAME_PATTERN.match(filename)
     if not m:
-        return {
-            "filename_parse_ok": False,
-            "file_date_filename": None,
-            "document_type_filename": None,
-            "cik": None,
-            "cik_10": None,
-            "accession_number": None,
-            "accession_nodash": None,
-            "doc_id": None,
-        }
+        return _filename_parse_failure()
 
     date_str = m.group(1)
     doc_type = m.group(2)
@@ -159,6 +223,42 @@ def parse_filename_minimal(filename: str) -> dict:
         "accession_nodash": acc_nodash,
         "doc_id": doc_id,
     }
+
+
+def parse_filename_minimal(filename: str) -> dict:
+    """
+    Parse filing metadata from filename only.
+
+    Args:
+        filename: SEC source filename expected to match ``FILENAME_PATTERN``.
+
+    Returns:
+        dict: Parsed fields including ``filename_parse_ok``, ``file_date_filename``,
+        ``document_type_filename``, ``cik``, ``cik_10``, ``accession_number``,
+        ``accession_nodash``, and ``doc_id``. If parsing fails, values are returned
+        as ``None`` and ``filename_parse_ok`` is ``False``.
+    """
+    if _lm2011_rust is not None:
+        try:
+            parsed = _lm2011_rust.parse_sec_filename_minimal_value(str(filename))
+            _FILING_TEXT_RUST_METRICS["filename_parse_fast_success"] += 1
+            if parsed is None:
+                return _filename_parse_failure()
+            date_str, doc_type, cik_text, acc, cik10, acc_nodash, doc_id = parsed
+            return {
+                "filename_parse_ok": True,
+                "file_date_filename": str(date_str),
+                "document_type_filename": str(doc_type),
+                "cik": int(cik_text),
+                "cik_10": str(cik10),
+                "accession_number": str(acc),
+                "accession_nodash": None if acc_nodash is None else str(acc_nodash),
+                "doc_id": str(doc_id),
+            }
+        except Exception:
+            _FILING_TEXT_RUST_METRICS["filename_parse_fast_failures"] += 1
+    _FILING_TEXT_RUST_METRICS["filename_parse_fallbacks"] += 1
+    return _parse_filename_minimal_py(filename)
 
 
 @dataclass

@@ -1,15 +1,41 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import datetime as dt
 from enum import IntFlag
 
 import polars as pl
 
+try:
+    from thesis_native import _lm2011_rust
+except Exception as exc:  # pragma: no cover - optional native extension
+    _lm2011_rust = None
+    _CCM_TRANSFORMS_RUST_IMPORT_ERROR: str | None = f"{type(exc).__name__}: {exc}"
+else:
+    _CCM_TRANSFORMS_RUST_IMPORT_ERROR = None
+
 from thesis_pkg.core.ccm.canonical_links import normalize_canonical_link_table
 from thesis_pkg.core.ccm.sec_ccm_contracts import sec_ccm_non_microcap_pass
 
 
 STATUS_DTYPE = pl.UInt64
+
+_CCM_TRANSFORMS_RUST_METRICS: dict[str, int] = {
+    "form_token_fast_success": 0,
+    "form_token_fast_failures": 0,
+    "form_token_fallbacks": 0,
+}
+
+
+def get_ccm_transforms_rust_accel_metrics() -> dict[str, int | str | bool | None]:
+    metrics: dict[str, int | str | bool | None] = dict(_CCM_TRANSFORMS_RUST_METRICS)
+    metrics["rust_accel_available"] = _lm2011_rust is not None
+    metrics["rust_accel_import_error"] = _CCM_TRANSFORMS_RUST_IMPORT_ERROR
+    return metrics
+
+
+def reset_ccm_transforms_rust_accel_metrics() -> None:
+    for key in _CCM_TRANSFORMS_RUST_METRICS:
+        _CCM_TRANSFORMS_RUST_METRICS[key] = 0
 
 EXCHCD_NAME_MAP: dict[int, str] = {
     -2: "Halted by Primary Listing Exchange",
@@ -223,7 +249,7 @@ def _normalize_form_for_match(expr: pl.Expr) -> pl.Expr:
     )
 
 
-def _normalize_form_token_for_match(value: str | None) -> str | None:
+def _normalize_form_token_for_match_py(value: str | None) -> str | None:
     """Normalize a Python form token using the same rules as the Polars expression helper."""
     if value is None:
         return None
@@ -241,6 +267,19 @@ def _normalize_form_token_for_match(value: str | None) -> str | None:
     if normalized == "10K405A":
         return "10K405/A"
     return normalized
+
+
+def _normalize_form_token_for_match(value: str | None) -> str | None:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.ccm_form_match_token_value(value)
+            _CCM_TRANSFORMS_RUST_METRICS["form_token_fast_success"] += 1
+            return None if out is None else str(out)
+        except Exception:
+            _CCM_TRANSFORMS_RUST_METRICS["form_token_fast_failures"] += 1
+    _CCM_TRANSFORMS_RUST_METRICS["form_token_fallbacks"] += 1
+    return _normalize_form_token_for_match_py(value)
+
 
 def _ensure_data_status(lf: pl.LazyFrame) -> pl.LazyFrame:
     """Guarantee presence and dtype of the shared status column."""

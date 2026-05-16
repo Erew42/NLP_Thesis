@@ -11,7 +11,15 @@ from typing import Any, Callable
 
 import polars as pl
 
-from thesis_pkg.pipelines.refinitiv.lseg_api_common import (
+try:
+    from thesis_native import _lm2011_rust
+except Exception as exc:  # pragma: no cover - optional native extension
+    _lm2011_rust = None
+    _LSEG_API_EXECUTION_RUST_IMPORT_ERROR: str | None = f"{type(exc).__name__}: {exc}"
+else:
+    _LSEG_API_EXECUTION_RUST_IMPORT_ERROR = None
+
+from thesis_refinitiv.lseg_client.api_common import (
     append_json_log,
     classify_error,
     daily_limit_likely_exhausted,
@@ -21,25 +29,54 @@ from thesis_pkg.pipelines.refinitiv.lseg_api_common import (
     should_treat_as_empty_result,
     write_parquet_atomic,
 )
-from thesis_pkg.pipelines.refinitiv.lseg_batching import (
+from thesis_refinitiv.lseg_client.batching import (
     BatchDefinition,
     RequestItem,
     batch_items,
     build_batch_definition,
     split_batch,
 )
-from thesis_pkg.pipelines.refinitiv.lseg_ledger import (
+from thesis_refinitiv.lseg_client.ledger import (
     LEDGER_DEFERRED_DAILY_LIMIT,
     LEDGER_RETRYABLE_ERROR,
     LsegResumeCompatibilityError,
     RequestLedger,
     utc_now,
 )
-from thesis_pkg.pipelines.refinitiv.lseg_provider import LsegDataProvider
+from thesis_refinitiv.lseg_client.provider import LsegDataProvider
 
 
 ProviderFactory = Callable[[], Any]
 OWNERSHIP_UNIVERSE_STAGE_NAME = "ownership_universe"
+_LSEG_API_EXECUTION_RUST_METRICS: dict[str, int] = {
+    "row_count_by_item_id_fast_success": 0,
+    "row_count_by_item_id_fast_failures": 0,
+    "row_count_by_item_id_fallbacks": 0,
+    "item_result_details_fast_success": 0,
+    "item_result_details_fast_failures": 0,
+    "item_result_details_fallbacks": 0,
+    "mixed_zero_requeue_fast_success": 0,
+    "mixed_zero_requeue_fast_failures": 0,
+    "mixed_zero_requeue_fallbacks": 0,
+    "singleton_child_batches_fast_success": 0,
+    "singleton_child_batches_fast_failures": 0,
+    "singleton_child_batches_fallbacks": 0,
+    "split_child_batches_fast_success": 0,
+    "split_child_batches_fast_failures": 0,
+    "split_child_batches_fallbacks": 0,
+}
+
+
+def get_lseg_api_execution_rust_accel_metrics() -> dict[str, int | str | bool | None]:
+    metrics: dict[str, int | str | bool | None] = dict(_LSEG_API_EXECUTION_RUST_METRICS)
+    metrics["rust_accel_available"] = _lm2011_rust is not None
+    metrics["rust_accel_import_error"] = _LSEG_API_EXECUTION_RUST_IMPORT_ERROR
+    return metrics
+
+
+def reset_lseg_api_execution_rust_accel_metrics() -> None:
+    for key in _LSEG_API_EXECUTION_RUST_METRICS:
+        _LSEG_API_EXECUTION_RUST_METRICS[key] = 0
 
 
 @dataclass(frozen=True)
@@ -824,7 +861,7 @@ def _format_utc_timestamp(value: dt.datetime | None) -> str | None:
     return value.astimezone(dt.timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def _row_count_by_item_id(frame: pl.DataFrame) -> dict[str, int]:
+def _row_count_by_item_id_py(frame: pl.DataFrame) -> dict[str, int]:
     if frame.height == 0 or "item_id" not in frame.columns:
         return {}
     return {
@@ -833,7 +870,23 @@ def _row_count_by_item_id(frame: pl.DataFrame) -> dict[str, int]:
     }
 
 
-def _item_result_details(
+def _row_count_by_item_id(frame: pl.DataFrame) -> dict[str, int]:
+    if frame.height == 0 or "item_id" not in frame.columns:
+        return {}
+    if _lm2011_rust is not None:
+        try:
+            rows = _lm2011_rust.lseg_row_count_by_item_id_values(
+                frame.get_column("item_id").to_list()
+            )
+            _LSEG_API_EXECUTION_RUST_METRICS["row_count_by_item_id_fast_success"] += 1
+            return {item_id: int(count) for item_id, count in rows}
+        except Exception:
+            _LSEG_API_EXECUTION_RUST_METRICS["row_count_by_item_id_fast_failures"] += 1
+    _LSEG_API_EXECUTION_RUST_METRICS["row_count_by_item_id_fallbacks"] += 1
+    return _row_count_by_item_id_py(frame)
+
+
+def _item_result_details_py(
     batch_items_rows: list[Any],
     row_count_by_item_id: dict[str, int],
     *,
@@ -849,7 +902,54 @@ def _item_result_details(
     ]
 
 
-def _should_requeue_mixed_zero_positive_success(stage: str, item_results: list[dict[str, Any]]) -> bool:
+def _item_result_details_from_normalized(
+    batch_items_rows: list[Any],
+    row_count_by_item_id: dict[str, int],
+    normalized_instruments: list[str | None],
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "item_id": item.item_id,
+            "instrument": normalized_instruments[index],
+            "row_count": int(row_count_by_item_id.get(item.item_id, 0)),
+        }
+        for index, item in enumerate(batch_items_rows)
+    ]
+
+
+def _item_result_details(
+    batch_items_rows: list[Any],
+    row_count_by_item_id: dict[str, int],
+    *,
+    lookup_normalizer: Callable[[Any], str | None],
+) -> list[dict[str, Any]]:
+    if _lm2011_rust is not None:
+        normalized_instruments = [lookup_normalizer(item.instrument) for item in batch_items_rows]
+        try:
+            out = _lm2011_rust.lseg_item_result_detail_rows(
+                batch_items_rows,
+                row_count_by_item_id,
+                normalized_instruments,
+            )
+            _LSEG_API_EXECUTION_RUST_METRICS["item_result_details_fast_success"] += 1
+            return [dict(row) for row in out]
+        except Exception:
+            _LSEG_API_EXECUTION_RUST_METRICS["item_result_details_fast_failures"] += 1
+            _LSEG_API_EXECUTION_RUST_METRICS["item_result_details_fallbacks"] += 1
+            return _item_result_details_from_normalized(
+                batch_items_rows,
+                row_count_by_item_id,
+                normalized_instruments,
+            )
+    _LSEG_API_EXECUTION_RUST_METRICS["item_result_details_fallbacks"] += 1
+    return _item_result_details_py(
+        batch_items_rows,
+        row_count_by_item_id,
+        lookup_normalizer=lookup_normalizer,
+    )
+
+
+def _should_requeue_mixed_zero_positive_success_py(stage: str, item_results: list[dict[str, Any]]) -> bool:
     if stage != OWNERSHIP_UNIVERSE_STAGE_NAME or len(item_results) <= 1:
         return False
     has_positive = any(int(result.get("row_count") or 0) > 0 for result in item_results)
@@ -857,7 +957,34 @@ def _should_requeue_mixed_zero_positive_success(stage: str, item_results: list[d
     return has_positive and has_zero
 
 
-def _build_singleton_child_batches(batch_items_rows: list[Any]) -> list[BatchDefinition]:
+def _should_requeue_mixed_zero_positive_success(stage: str, item_results: list[dict[str, Any]]) -> bool:
+    if _lm2011_rust is not None:
+        try:
+            out = bool(_lm2011_rust.lseg_should_requeue_mixed_zero_positive_success(stage, item_results))
+            _LSEG_API_EXECUTION_RUST_METRICS["mixed_zero_requeue_fast_success"] += 1
+            return out
+        except Exception:
+            _LSEG_API_EXECUTION_RUST_METRICS["mixed_zero_requeue_fast_failures"] += 1
+    _LSEG_API_EXECUTION_RUST_METRICS["mixed_zero_requeue_fallbacks"] += 1
+    return _should_requeue_mixed_zero_positive_success_py(stage, item_results)
+
+
+def _child_batch_rows_to_definitions(rows: list[dict[str, Any]]) -> list[BatchDefinition]:
+    return [
+        BatchDefinition(
+            batch_id=str(row["batch_id"]),
+            stage=str(row["stage"]),
+            batch_key=str(row["batch_key"]),
+            fields=tuple(row["fields"]),
+            parameters=dict(row["parameters"]),
+            item_ids=tuple(str(item_id) for item_id in row["item_ids"]),
+            instruments=tuple(str(instrument) for instrument in row["instruments"]),
+        )
+        for row in rows
+    ]
+
+
+def _build_singleton_child_batches_py(batch_items_rows: list[Any]) -> list[BatchDefinition]:
     child_batches: list[BatchDefinition] = []
     for item in batch_items_rows:
         request_item = RequestItem(
@@ -879,7 +1006,19 @@ def _build_singleton_child_batches(batch_items_rows: list[Any]) -> list[BatchDef
     return child_batches
 
 
-def _build_child_batches(batch: Any, batch_items_rows: list[Any]) -> list[BatchDefinition]:
+def _build_singleton_child_batches(batch_items_rows: list[Any]) -> list[BatchDefinition]:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.lseg_singleton_child_batch_rows(batch_items_rows)
+            _LSEG_API_EXECUTION_RUST_METRICS["singleton_child_batches_fast_success"] += 1
+            return _child_batch_rows_to_definitions([dict(row) for row in out])
+        except Exception:
+            _LSEG_API_EXECUTION_RUST_METRICS["singleton_child_batches_fast_failures"] += 1
+    _LSEG_API_EXECUTION_RUST_METRICS["singleton_child_batches_fallbacks"] += 1
+    return _build_singleton_child_batches_py(batch_items_rows)
+
+
+def _build_child_batches_py(batch: Any, batch_items_rows: list[Any]) -> list[BatchDefinition]:
     parent = BatchDefinition(
         batch_id=batch.batch_id,
         stage=batch.stage,
@@ -890,6 +1029,18 @@ def _build_child_batches(batch: Any, batch_items_rows: list[Any]) -> list[BatchD
         instruments=tuple(item.instrument for item in batch_items_rows),
     )
     return split_batch(parent)
+
+
+def _build_child_batches(batch: Any, batch_items_rows: list[Any]) -> list[BatchDefinition]:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.lseg_split_child_batch_rows(batch, batch_items_rows)
+            _LSEG_API_EXECUTION_RUST_METRICS["split_child_batches_fast_success"] += 1
+            return _child_batch_rows_to_definitions([dict(row) for row in out])
+        except Exception:
+            _LSEG_API_EXECUTION_RUST_METRICS["split_child_batches_fast_failures"] += 1
+    _LSEG_API_EXECUTION_RUST_METRICS["split_child_batches_fallbacks"] += 1
+    return _build_child_batches_py(batch, batch_items_rows)
 
 
 def _validate_planned_batches(

@@ -6,7 +6,15 @@ from typing import Any
 
 import polars as pl
 
-from thesis_pkg.pipelines.refinitiv.lseg_api_common import (
+try:
+    from thesis_native import _lm2011_rust
+except Exception as exc:  # pragma: no cover - optional native extension
+    _lm2011_rust = None
+    _LSEG_LOOKUP_API_RUST_IMPORT_ERROR: str | None = f"{type(exc).__name__}: {exc}"
+else:
+    _LSEG_LOOKUP_API_RUST_IMPORT_ERROR = None
+
+from thesis_refinitiv.lseg_client.api_common import (
     append_json_log as _append_json_log,
     candidate_output_path as _candidate_output_path,
     classify_error as _classify_error,
@@ -20,14 +28,14 @@ from thesis_pkg.pipelines.refinitiv.lseg_api_common import (
     write_parquet_atomic as _write_parquet_atomic,
 )
 from thesis_pkg.pipelines.refinitiv.lseg_api_execution import run_api_batches
-from thesis_pkg.pipelines.refinitiv.lseg_batching import (
+from thesis_refinitiv.lseg_client.batching import (
     RequestItem,
     batch_items,
     batch_plan_fingerprint,
     stable_hash_id,
 )
-from thesis_pkg.pipelines.refinitiv.lseg_ledger import LsegResumeCompatibilityError, RequestLedger
-from thesis_pkg.pipelines.refinitiv.lseg_stage_audit import (
+from thesis_refinitiv.lseg_client.ledger import LsegResumeCompatibilityError, RequestLedger
+from thesis_refinitiv.lseg_client.stage_audit import (
     audit_api_stage,
     default_stage_fetch_manifest_path,
     default_stage_manifest_path,
@@ -36,7 +44,7 @@ from thesis_pkg.pipelines.refinitiv.lseg_stage_audit import (
     write_stage_completion_manifest,
     write_stage_fetch_manifest,
 )
-from thesis_pkg.pipelines.refinitiv_bridge_pipeline import (
+from thesis_refinitiv.bridge import (
     LOOKUP_IDENTIFIER_TYPES,
     RIC_LOOKUP_EXTENDED_BASE_COLUMNS,
     RIC_LOOKUP_EXTENDED_COLUMNS,
@@ -62,6 +70,42 @@ LOOKUP_FIELD_ALIASES: dict[str, tuple[str, ...]] = {
 }
 API_STAGE_MODES: frozenset[str] = frozenset({"full", "fetch_only", "finalize_only"})
 LOOKUP_BATCH_PLANNER_VERSION = "lookup_batching_v1"
+LOOKUP_RESPONSE_COLUMNS: tuple[str, ...] = (
+    "item_id",
+    "bridge_row_id",
+    "identifier_type",
+    "lookup_input",
+    "returned_ric",
+    "returned_name",
+    "returned_isin",
+    "returned_cusip",
+)
+_LSEG_LOOKUP_API_RUST_METRICS: dict[str, int] = {
+    "build_items_column_fast_success": 0,
+    "build_items_column_fast_failures": 0,
+    "build_items_column_fallbacks": 0,
+    "build_items_fast_success": 0,
+    "build_items_fast_failures": 0,
+    "build_items_fallbacks": 0,
+    "batch_response_column_fast_success": 0,
+    "batch_response_column_fast_failures": 0,
+    "batch_response_column_fallbacks": 0,
+    "batch_response_fast_success": 0,
+    "batch_response_fast_failures": 0,
+    "batch_response_fallbacks": 0,
+}
+
+
+def get_lseg_lookup_api_rust_accel_metrics() -> dict[str, int | str | bool | None]:
+    metrics: dict[str, int | str | bool | None] = dict(_LSEG_LOOKUP_API_RUST_METRICS)
+    metrics["rust_accel_available"] = _lm2011_rust is not None
+    metrics["rust_accel_import_error"] = _LSEG_LOOKUP_API_RUST_IMPORT_ERROR
+    return metrics
+
+
+def reset_lseg_lookup_api_rust_accel_metrics() -> None:
+    for key in _LSEG_LOOKUP_API_RUST_METRICS:
+        _LSEG_LOOKUP_API_RUST_METRICS[key] = 0
 
 
 def run_refinitiv_step1_lookup_api_pipeline(
@@ -226,7 +270,26 @@ def _read_lookup_snapshot(snapshot_parquet_path: Path) -> pl.DataFrame:
     ).select(RIC_LOOKUP_EXTENDED_COLUMNS)
 
 
-def _build_lookup_items(snapshot_df: pl.DataFrame) -> list[RequestItem]:
+def _lookup_item_rows_to_request_items(rows: list[tuple[str, str, str, str]]) -> list[RequestItem]:
+    return [
+        RequestItem(
+            item_id=item_id,
+            stage=LOOKUP_STAGE,
+            instrument=lookup_input,
+            batch_key=identifier_type,
+            fields=LOOKUP_FIELDS,
+            parameters={},
+            payload={
+                "bridge_row_id": bridge_row_id,
+                "identifier_type": identifier_type,
+                "lookup_input": lookup_input,
+            },
+        )
+        for item_id, bridge_row_id, identifier_type, lookup_input in rows
+    ]
+
+
+def _build_lookup_items_py(snapshot_df: pl.DataFrame) -> list[RequestItem]:
     items: list[RequestItem] = []
     for row in snapshot_df.to_dicts():
         bridge_row_id = _normalize_lookup_text(row.get("bridge_row_id"))
@@ -255,7 +318,85 @@ def _build_lookup_items(snapshot_df: pl.DataFrame) -> list[RequestItem]:
     return items
 
 
-def _normalize_lookup_batch_response(
+def _build_lookup_items(snapshot_df: pl.DataFrame) -> list[RequestItem]:
+    if _lm2011_rust is not None:
+        try:
+            raw_rows = _lm2011_rust.build_lookup_item_row_columns(
+                snapshot_df.columns,
+                [snapshot_df.get_column(column).to_list() for column in snapshot_df.columns],
+                tuple(LOOKUP_IDENTIFIER_TYPES),
+            )
+            _LSEG_LOOKUP_API_RUST_METRICS["build_items_column_fast_success"] += 1
+            return _lookup_item_rows_to_request_items(
+                [
+                    (
+                        str(item_id),
+                        str(bridge_row_id),
+                        str(identifier_type),
+                        str(lookup_input),
+                    )
+                    for item_id, bridge_row_id, identifier_type, lookup_input in raw_rows
+                ]
+            )
+        except Exception:
+            _LSEG_LOOKUP_API_RUST_METRICS["build_items_column_fast_failures"] += 1
+            _LSEG_LOOKUP_API_RUST_METRICS["build_items_column_fallbacks"] += 1
+        try:
+            raw_rows = _lm2011_rust.build_lookup_item_rows_value(
+                snapshot_df.to_dicts(),
+                tuple(LOOKUP_IDENTIFIER_TYPES),
+            )
+            _LSEG_LOOKUP_API_RUST_METRICS["build_items_fast_success"] += 1
+            return _lookup_item_rows_to_request_items(
+                [
+                    (
+                        str(item_id),
+                        str(bridge_row_id),
+                        str(identifier_type),
+                        str(lookup_input),
+                    )
+                    for item_id, bridge_row_id, identifier_type, lookup_input in raw_rows
+                ]
+            )
+        except Exception:
+            _LSEG_LOOKUP_API_RUST_METRICS["build_items_fast_failures"] += 1
+    _LSEG_LOOKUP_API_RUST_METRICS["build_items_fallbacks"] += 1
+    return _build_lookup_items_py(snapshot_df)
+
+
+def _lookup_response_rows_to_frame(rows: list[dict[str, Any]]) -> pl.DataFrame:
+    if not rows:
+        return pl.DataFrame()
+    return pl.DataFrame(rows).select(LOOKUP_RESPONSE_COLUMNS)
+
+
+def _lookup_response_raw_rows_to_frame(raw_rows: list[tuple[Any, ...]]) -> pl.DataFrame:
+    rows = [
+        {
+            "item_id": item_id,
+            "bridge_row_id": bridge_row_id,
+            "identifier_type": identifier_type,
+            "lookup_input": lookup_input,
+            "returned_ric": returned_ric,
+            "returned_name": returned_name,
+            "returned_isin": returned_isin,
+            "returned_cusip": returned_cusip,
+        }
+        for (
+            item_id,
+            bridge_row_id,
+            identifier_type,
+            lookup_input,
+            returned_ric,
+            returned_name,
+            returned_isin,
+            returned_cusip,
+        ) in raw_rows
+    ]
+    return _lookup_response_rows_to_frame(rows)
+
+
+def _normalize_lookup_batch_response_py(
     items: list[Any],
     frame: pl.DataFrame,
 ) -> pl.DataFrame:
@@ -293,7 +434,53 @@ def _normalize_lookup_batch_response(
                 "returned_cusip": matched.get("returned_cusip"),
             }
         )
-    return pl.DataFrame(rows)
+    return _lookup_response_rows_to_frame(rows)
+
+
+def _normalize_lookup_batch_response(
+    items: list[Any],
+    frame: pl.DataFrame,
+) -> pl.DataFrame:
+    normalized_frame = _standardize_field_frame(
+        frame,
+        expected_fields=LOOKUP_FIELDS,
+        field_aliases=LOOKUP_FIELD_ALIASES,
+    )
+    if _lm2011_rust is not None:
+        try:
+            raw_rows = _lm2011_rust.normalize_lookup_batch_response_columns(
+                [item.item_id for item in items],
+                [item.payload["bridge_row_id"] for item in items],
+                [item.payload["identifier_type"] for item in items],
+                [item.instrument for item in items],
+                normalized_frame.columns,
+                [normalized_frame.get_column(column).to_list() for column in normalized_frame.columns],
+            )
+            _LSEG_LOOKUP_API_RUST_METRICS["batch_response_column_fast_success"] += 1
+            return _lookup_response_raw_rows_to_frame(raw_rows)
+        except Exception:
+            _LSEG_LOOKUP_API_RUST_METRICS["batch_response_column_fast_failures"] += 1
+            _LSEG_LOOKUP_API_RUST_METRICS["batch_response_column_fallbacks"] += 1
+        try:
+            item_rows = [
+                {
+                    "item_id": item.item_id,
+                    "bridge_row_id": item.payload["bridge_row_id"],
+                    "identifier_type": item.payload["identifier_type"],
+                    "instrument": item.instrument,
+                }
+                for item in items
+            ]
+            raw_rows = _lm2011_rust.normalize_lookup_batch_response_rows_value(
+                item_rows,
+                normalized_frame.to_dicts(),
+            )
+            _LSEG_LOOKUP_API_RUST_METRICS["batch_response_fast_success"] += 1
+            return _lookup_response_raw_rows_to_frame(raw_rows)
+        except Exception:
+            _LSEG_LOOKUP_API_RUST_METRICS["batch_response_fast_failures"] += 1
+    _LSEG_LOOKUP_API_RUST_METRICS["batch_response_fallbacks"] += 1
+    return _normalize_lookup_batch_response_py(items, normalized_frame)
 
 
 def _assemble_lookup_output(

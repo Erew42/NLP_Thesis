@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import re
 from datetime import date, datetime
@@ -67,6 +67,14 @@ from .utilities import (
     _roman_to_int,
 )
 
+try:
+    from thesis_native import _lm2011_rust
+except Exception as exc:  # pragma: no cover - optional native extension
+    _lm2011_rust = None
+    _SEC_HEURISTICS_RUST_IMPORT_ERROR: str | None = f"{type(exc).__name__}: {exc}"
+else:
+    _SEC_HEURISTICS_RUST_IMPORT_ERROR = None
+
 HEADING_CONF_LOW = 0
 HEADING_CONF_MED = 1
 HEADING_CONF_HIGH = 2
@@ -78,6 +86,64 @@ START_LOOKAHEAD_GUARD_MAX_CHARS = 500
 START_SCORE_STRUCTURAL_HIGH_RATIO = 0.35
 START_SCORE_STRUCTURAL_LOW_RATIO = 0.15
 START_SCORE_TRAILING_PAGE_MIN = 3
+
+_SEC_HEURISTICS_RUST_METRICS: dict[str, int] = {
+    "toc_line_ranges_fast_success": 0,
+    "toc_line_ranges_fast_failures": 0,
+    "toc_line_ranges_fallbacks": 0,
+    "toc_end_pos_fast_success": 0,
+    "toc_end_pos_fast_failures": 0,
+    "toc_end_pos_fallbacks": 0,
+    "remove_pagination_fast_success": 0,
+    "remove_pagination_fast_failures": 0,
+    "remove_pagination_fallbacks": 0,
+    "trim_trailing_part_fast_success": 0,
+    "trim_trailing_part_fast_failures": 0,
+    "trim_trailing_part_fallbacks": 0,
+    "reserved_stub_end_fast_success": 0,
+    "reserved_stub_end_fast_failures": 0,
+    "reserved_stub_end_fallbacks": 0,
+    "line_start_item_fast_success": 0,
+    "line_start_item_fast_failures": 0,
+    "line_start_item_fallbacks": 0,
+    "prefix_cross_ref_fast_success": 0,
+    "prefix_cross_ref_fast_failures": 0,
+    "prefix_cross_ref_fallbacks": 0,
+    "compound_items_fast_success": 0,
+    "compound_items_fast_failures": 0,
+    "compound_items_fallbacks": 0,
+    "heading_suffix_prose_fast_success": 0,
+    "heading_suffix_prose_fast_failures": 0,
+    "heading_suffix_prose_fallbacks": 0,
+    "part_marker_heading_fast_success": 0,
+    "part_marker_heading_fast_failures": 0,
+    "part_marker_heading_fallbacks": 0,
+    "pageish_line_fast_success": 0,
+    "pageish_line_fast_failures": 0,
+    "pageish_line_fallbacks": 0,
+    "prefix_part_only_fast_success": 0,
+    "prefix_part_only_fast_failures": 0,
+    "prefix_part_only_fallbacks": 0,
+    "prefix_part_tail_fast_success": 0,
+    "prefix_part_tail_fast_failures": 0,
+    "prefix_part_tail_fallbacks": 0,
+    "high_confidence_truncation_fast_success": 0,
+    "high_confidence_truncation_fast_failures": 0,
+    "high_confidence_truncation_fallbacks": 0,
+}
+
+
+def get_sec_heuristics_rust_accel_metrics() -> dict[str, int | str | bool | None]:
+    metrics: dict[str, int | str | bool | None] = dict(_SEC_HEURISTICS_RUST_METRICS)
+    metrics["rust_accel_available"] = _lm2011_rust is not None
+    metrics["rust_accel_import_error"] = _SEC_HEURISTICS_RUST_IMPORT_ERROR
+    return metrics
+
+
+def reset_sec_heuristics_rust_accel_metrics() -> None:
+    for key in _SEC_HEURISTICS_RUST_METRICS:
+        _SEC_HEURISTICS_RUST_METRICS[key] = 0
+
 
 def _normalize_item_id(num_raw: str, let_raw: str | None, *, max_item: int = 20) -> str | None:
     """
@@ -234,7 +300,7 @@ def _starts_with_lowercase_title(line: str, match: re.Match[str]) -> bool:
             return ch.islower()
     return False
 
-def _part_marker_is_heading(line: str, match: re.Match[str]) -> bool:
+def _part_marker_is_heading_py(line: str, match: re.Match[str]) -> bool:
     """
     Accept PART markers that look like true headings, not cross-references.
     """
@@ -269,7 +335,22 @@ def _part_marker_is_heading(line: str, match: re.Match[str]) -> bool:
         return True
     return False
 
-def _pageish_line(line: str) -> bool:
+def _part_marker_is_heading(line: str, match: re.Match[str]) -> bool:
+    if _lm2011_rust is not None and line.isascii():
+        try:
+            out = _lm2011_rust.sec_part_marker_is_heading(
+                line,
+                int(match.start()),
+                int(match.end()),
+            )
+            _SEC_HEURISTICS_RUST_METRICS["part_marker_heading_fast_success"] += 1
+            return bool(out)
+        except Exception:
+            _SEC_HEURISTICS_RUST_METRICS["part_marker_heading_fast_failures"] += 1
+    _SEC_HEURISTICS_RUST_METRICS["part_marker_heading_fallbacks"] += 1
+    return _part_marker_is_heading_py(line, match)
+
+def _pageish_line_py(line: str) -> bool:
     s = line.strip()
     if not s:
         return False
@@ -280,12 +361,34 @@ def _pageish_line(line: str) -> bool:
         or PAGE_OF_PATTERN.match(s)
     )
 
-def _prefix_is_part_only(prefix: str) -> bool:
+def _pageish_line(line: str) -> bool:
+    if _lm2011_rust is not None and line.isascii():
+        try:
+            out = _lm2011_rust.sec_pageish_line(line)
+            _SEC_HEURISTICS_RUST_METRICS["pageish_line_fast_success"] += 1
+            return bool(out)
+        except Exception:
+            _SEC_HEURISTICS_RUST_METRICS["pageish_line_fast_failures"] += 1
+    _SEC_HEURISTICS_RUST_METRICS["pageish_line_fallbacks"] += 1
+    return _pageish_line_py(line)
+
+def _prefix_is_part_only_py(prefix: str) -> bool:
     if not prefix:
         return False
     return bool(PART_ONLY_PREFIX_PATTERN.match(prefix))
 
-def _prefix_part_tail(prefix: str) -> str | None:
+def _prefix_is_part_only(prefix: str) -> bool:
+    if _lm2011_rust is not None and prefix.isascii():
+        try:
+            out = _lm2011_rust.sec_prefix_is_part_only(prefix)
+            _SEC_HEURISTICS_RUST_METRICS["prefix_part_only_fast_success"] += 1
+            return bool(out)
+        except Exception:
+            _SEC_HEURISTICS_RUST_METRICS["prefix_part_only_fast_failures"] += 1
+    _SEC_HEURISTICS_RUST_METRICS["prefix_part_only_fallbacks"] += 1
+    return _prefix_is_part_only_py(prefix)
+
+def _prefix_part_tail_py(prefix: str) -> str | None:
     if not prefix:
         return None
     m = PART_PREFIX_TAIL_PATTERN.search(prefix)
@@ -293,7 +396,18 @@ def _prefix_part_tail(prefix: str) -> str | None:
         return None
     return m.group("part").upper()
 
-def _prefix_looks_like_cross_ref(prefix: str) -> bool:
+def _prefix_part_tail(prefix: str) -> str | None:
+    if _lm2011_rust is not None and prefix.isascii():
+        try:
+            out = _lm2011_rust.sec_prefix_part_tail(prefix)
+            _SEC_HEURISTICS_RUST_METRICS["prefix_part_tail_fast_success"] += 1
+            return None if out is None else str(out)
+        except Exception:
+            _SEC_HEURISTICS_RUST_METRICS["prefix_part_tail_fast_failures"] += 1
+    _SEC_HEURISTICS_RUST_METRICS["prefix_part_tail_fallbacks"] += 1
+    return _prefix_part_tail_py(prefix)
+
+def _prefix_looks_like_cross_ref_py(prefix: str) -> bool:
     if not prefix or not prefix.strip():
         return False
     tail = prefix.strip()[-80:]
@@ -301,10 +415,32 @@ def _prefix_looks_like_cross_ref(prefix: str) -> bool:
         return True
     return False
 
-def _line_has_compound_items(line: str) -> bool:
+def _prefix_looks_like_cross_ref(prefix: str) -> bool:
+    if _lm2011_rust is not None and prefix.isascii():
+        try:
+            out = _lm2011_rust.sec_prefix_looks_like_cross_ref(prefix)
+            _SEC_HEURISTICS_RUST_METRICS["prefix_cross_ref_fast_success"] += 1
+            return bool(out)
+        except Exception:
+            _SEC_HEURISTICS_RUST_METRICS["prefix_cross_ref_fast_failures"] += 1
+    _SEC_HEURISTICS_RUST_METRICS["prefix_cross_ref_fallbacks"] += 1
+    return _prefix_looks_like_cross_ref_py(prefix)
+
+def _line_has_compound_items_py(line: str) -> bool:
     if not line:
         return False
     return len(ITEM_MENTION_PATTERN.findall(line)) >= 2
+
+def _line_has_compound_items(line: str) -> bool:
+    if _lm2011_rust is not None and line.isascii():
+        try:
+            out = _lm2011_rust.sec_line_has_compound_items(line)
+            _SEC_HEURISTICS_RUST_METRICS["compound_items_fast_success"] += 1
+            return bool(out)
+        except Exception:
+            _SEC_HEURISTICS_RUST_METRICS["compound_items_fast_failures"] += 1
+    _SEC_HEURISTICS_RUST_METRICS["compound_items_fallbacks"] += 1
+    return _line_has_compound_items_py(line)
 
 def _heading_title_matches_item(
     item_id: str | None,
@@ -329,7 +465,7 @@ def _heading_title_matches_item(
         return any(title.startswith(norm) for title in titles)
     return False
 
-def _heading_suffix_looks_like_prose(suffix: str) -> bool:
+def _heading_suffix_looks_like_prose_py(suffix: str) -> bool:
     if not suffix:
         return False
     head = suffix.strip().lstrip(" \t:-")
@@ -352,6 +488,17 @@ def _heading_suffix_looks_like_prose(suffix: str) -> bool:
     if head.count(",") >= 2 and len(words) >= 8:
         return True
     return False
+
+def _heading_suffix_looks_like_prose(suffix: str) -> bool:
+    if _lm2011_rust is not None and suffix.isascii():
+        try:
+            out = _lm2011_rust.sec_heading_suffix_looks_like_prose(suffix)
+            _SEC_HEURISTICS_RUST_METRICS["heading_suffix_prose_fast_success"] += 1
+            return bool(out)
+        except Exception:
+            _SEC_HEURISTICS_RUST_METRICS["heading_suffix_prose_fast_failures"] += 1
+    _SEC_HEURISTICS_RUST_METRICS["heading_suffix_prose_fallbacks"] += 1
+    return _heading_suffix_looks_like_prose_py(suffix)
 
 def _heading_title_candidates(
     item_id: str | None,
@@ -1088,7 +1235,7 @@ def _repair_wrapped_headings(body: str) -> str:
     body = _ITEM_SUFFIX_PAREN_PATTERN.sub(_fix_suffix_paren, body)
     return body
 
-def _detect_toc_line_ranges(
+def _detect_toc_line_ranges_py(
     lines: list[str], *, max_lines: int | None = None
 ) -> list[tuple[int, int]]:
     """
@@ -1292,7 +1439,25 @@ def _detect_toc_line_ranges(
             merged.append((s, e))
     return merged
 
-def _infer_toc_end_pos(body: str, *, max_chars: int = 20_000) -> int | None:
+
+def _detect_toc_line_ranges(
+    lines: list[str], *, max_lines: int | None = None
+) -> list[tuple[int, int]]:
+    if _lm2011_rust is not None:
+        try:
+            raw_ranges = _lm2011_rust.sec_detect_toc_line_ranges(
+                lines,
+                None if max_lines is None else int(max_lines),
+            )
+            if raw_ranges is not None:
+                _SEC_HEURISTICS_RUST_METRICS["toc_line_ranges_fast_success"] += 1
+                return [(int(start), int(end)) for start, end in raw_ranges]
+        except Exception:
+            _SEC_HEURISTICS_RUST_METRICS["toc_line_ranges_fast_failures"] += 1
+    _SEC_HEURISTICS_RUST_METRICS["toc_line_ranges_fallbacks"] += 1
+    return _detect_toc_line_ranges_py(lines, max_lines=max_lines)
+
+def _infer_toc_end_pos_py(body: str, *, max_chars: int = 20_000) -> int | None:
     """
     Character-based TOC cutoff for filings with very few line breaks.
     Returns the end position (in `body`) of a likely TOC region, or None.
@@ -1324,6 +1489,17 @@ def _infer_toc_end_pos(body: str, *, max_chars: int = 20_000) -> int | None:
         return last_end
     return None
 
+def _infer_toc_end_pos(body: str, *, max_chars: int = 20_000) -> int | None:
+    if _lm2011_rust is not None and body.isascii():
+        try:
+            out = _lm2011_rust.sec_infer_toc_end_pos(body, int(max_chars))
+            _SEC_HEURISTICS_RUST_METRICS["toc_end_pos_fast_success"] += 1
+            return None if out is None else int(out)
+        except Exception:
+            _SEC_HEURISTICS_RUST_METRICS["toc_end_pos_fast_failures"] += 1
+    _SEC_HEURISTICS_RUST_METRICS["toc_end_pos_fallbacks"] += 1
+    return _infer_toc_end_pos_py(body, max_chars=max_chars)
+
 def _line_ranges_to_mask(ranges: list[tuple[int, int]]) -> set[int]:
     mask: set[int] = set()
     for s, e in ranges:
@@ -1331,7 +1507,7 @@ def _line_ranges_to_mask(ranges: list[tuple[int, int]]) -> set[int]:
             mask.add(i)
     return mask
 
-def _remove_pagination(text: str) -> str:
+def _remove_pagination_py(text: str) -> str:
     """
     Remove common page-number and page-header artifacts while preserving table rows.
     """
@@ -1372,7 +1548,18 @@ def _remove_pagination(text: str) -> str:
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
     return cleaned
 
-def _trim_trailing_part_marker(text: str) -> str:
+def _remove_pagination(text: str) -> str:
+    if _lm2011_rust is not None and text.isascii():
+        try:
+            out = _lm2011_rust.sec_remove_pagination(text)
+            _SEC_HEURISTICS_RUST_METRICS["remove_pagination_fast_success"] += 1
+            return str(out)
+        except Exception:
+            _SEC_HEURISTICS_RUST_METRICS["remove_pagination_fast_failures"] += 1
+    _SEC_HEURISTICS_RUST_METRICS["remove_pagination_fallbacks"] += 1
+    return _remove_pagination_py(text)
+
+def _trim_trailing_part_marker_py(text: str) -> str:
     if not text:
         return text
     lines = text.split("\n")
@@ -1390,7 +1577,18 @@ def _trim_trailing_part_marker(text: str) -> str:
             lines.pop()
     return "\n".join(lines).rstrip()
 
-def _reserved_stub_end(text: str) -> int | None:
+def _trim_trailing_part_marker(text: str) -> str:
+    if _lm2011_rust is not None and text.isascii():
+        try:
+            out = _lm2011_rust.sec_trim_trailing_part_marker(text)
+            _SEC_HEURISTICS_RUST_METRICS["trim_trailing_part_fast_success"] += 1
+            return str(out)
+        except Exception:
+            _SEC_HEURISTICS_RUST_METRICS["trim_trailing_part_fast_failures"] += 1
+    _SEC_HEURISTICS_RUST_METRICS["trim_trailing_part_fallbacks"] += 1
+    return _trim_trailing_part_marker_py(text)
+
+def _reserved_stub_end_py(text: str) -> int | None:
     if not text:
         return None
     offset = 0
@@ -1407,6 +1605,17 @@ def _reserved_stub_end(text: str) -> int | None:
         return None
     return None
 
+def _reserved_stub_end(text: str) -> int | None:
+    if _lm2011_rust is not None and text.isascii():
+        try:
+            out = _lm2011_rust.sec_reserved_stub_end(text)
+            _SEC_HEURISTICS_RUST_METRICS["reserved_stub_end_fast_success"] += 1
+            return None if out is None else int(out)
+        except Exception:
+            _SEC_HEURISTICS_RUST_METRICS["reserved_stub_end_fast_failures"] += 1
+    _SEC_HEURISTICS_RUST_METRICS["reserved_stub_end_fallbacks"] += 1
+    return _reserved_stub_end_py(text)
+
 def _item_id_to_int_simple(item_id: str | None) -> int | None:
     if not item_id:
         return None
@@ -1418,7 +1627,7 @@ def _item_id_to_int_simple(item_id: str | None) -> int | None:
 def _leading_ws_len(line: str) -> int:
     return len(line) - len(line.lstrip(" \t"))
 
-def _line_start_item_match(
+def _line_start_item_match_py(
     line: str,
     *,
     max_item: int,
@@ -1443,6 +1652,25 @@ def _line_start_item_match(
                 return item_id, part_match.end() + offset + m_item.end()
 
     return None, None
+
+def _line_start_item_match(
+    line: str,
+    *,
+    max_item: int,
+) -> tuple[str | None, int | None]:
+    if _lm2011_rust is not None and line.isascii():
+        try:
+            out = _lm2011_rust.sec_line_start_item_match(line, int(max_item))
+            if out is not None:
+                item_id, match_end = out
+                _SEC_HEURISTICS_RUST_METRICS["line_start_item_fast_success"] += 1
+                return str(item_id), int(match_end)
+            _SEC_HEURISTICS_RUST_METRICS["line_start_item_fast_success"] += 1
+            return None, None
+        except Exception:
+            _SEC_HEURISTICS_RUST_METRICS["line_start_item_fast_failures"] += 1
+    _SEC_HEURISTICS_RUST_METRICS["line_start_item_fallbacks"] += 1
+    return _line_start_item_match_py(line, max_item=max_item)
 
 def _is_late_item_start(item_id: str | None, item_part: str | None) -> bool:
     if item_part and item_part.upper() in {"III", "IV"}:
@@ -1523,7 +1751,7 @@ def _part_boundary_header_like(
             return True
     return False
 
-def _apply_high_confidence_truncation(
+def _apply_high_confidence_truncation_py(
     text: str,
     *,
     next_item_id: str | None,
@@ -1597,6 +1825,38 @@ def _apply_high_confidence_truncation(
         # end for
 
     return text, False, False
+
+def _apply_high_confidence_truncation(
+    text: str,
+    *,
+    next_item_id: str | None,
+    current_part: str | None,
+    max_item: int,
+) -> tuple[str, bool, bool]:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.sec_apply_high_confidence_truncation(
+                text,
+                next_item_id,
+                current_part,
+                int(max_item),
+            )
+            if out is not None:
+                truncated, item_truncated, part_truncated = out
+                _SEC_HEURISTICS_RUST_METRICS["high_confidence_truncation_fast_success"] += 1
+                return str(truncated), bool(item_truncated), bool(part_truncated)
+            _SEC_HEURISTICS_RUST_METRICS["high_confidence_truncation_fallbacks"] += 1
+        except Exception:
+            _SEC_HEURISTICS_RUST_METRICS["high_confidence_truncation_fast_failures"] += 1
+            _SEC_HEURISTICS_RUST_METRICS["high_confidence_truncation_fallbacks"] += 1
+    else:
+        _SEC_HEURISTICS_RUST_METRICS["high_confidence_truncation_fallbacks"] += 1
+    return _apply_high_confidence_truncation_py(
+        text,
+        next_item_id=next_item_id,
+        current_part=current_part,
+        max_item=max_item,
+    )
 
 def _select_best_boundaries(
     candidates: list["_ItemBoundary"],

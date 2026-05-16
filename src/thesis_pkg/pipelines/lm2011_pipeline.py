@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
 import datetime as dt
@@ -9,6 +9,14 @@ import shutil
 import warnings
 
 import polars as pl
+try:
+    from thesis_native import _lm2011_rust
+except Exception as exc:  # pragma: no cover - optional native extension
+    _lm2011_rust = None
+    _LM2011_PIPELINE_RUST_IMPORT_ERROR: str | None = f"{type(exc).__name__}: {exc}"
+else:
+    _LM2011_PIPELINE_RUST_IMPORT_ERROR = None
+
 try:
     import statsmodels.api as sm
 except ImportError:  # pragma: no cover - exercised only when the dependency is missing
@@ -62,6 +70,50 @@ _LM2011_TABLE_I_DEFAULT_SAMPLE_START = dt.date(1994, 1, 1)
 _LM2011_TABLE_I_DEFAULT_SAMPLE_END = dt.date(2008, 12, 31)
 DEFAULT_EVENT_WINDOW_DOC_BATCH_SIZE = 250
 _STREAMING_PARQUET_COMPRESSION = "zstd"
+_LM2011_PIPELINE_RUST_METRICS: dict[str, int] = {
+    "previous_month_end_fast_success": 0,
+    "previous_month_end_fast_failures": 0,
+    "previous_month_end_fallbacks": 0,
+    "previous_month_end_batch_fast_success": 0,
+    "previous_month_end_batch_fast_failures": 0,
+    "previous_month_end_batch_fallbacks": 0,
+    "event_window_doc_batch_size_fast_success": 0,
+    "event_window_doc_batch_size_fast_failures": 0,
+    "event_window_doc_batch_size_fallbacks": 0,
+    "event_window_days_fast_success": 0,
+    "event_window_days_fast_failures": 0,
+    "event_window_days_fallbacks": 0,
+    "event_window_end_day_fast_success": 0,
+    "event_window_end_day_fast_failures": 0,
+    "event_window_end_day_fallbacks": 0,
+    "postevent_start_day_fast_success": 0,
+    "postevent_start_day_fast_failures": 0,
+    "postevent_start_day_fallbacks": 0,
+    "finite_float_fast_success": 0,
+    "finite_float_fast_failures": 0,
+    "finite_float_fallbacks": 0,
+    "ols_alpha_rmse_fast_success": 0,
+    "ols_alpha_rmse_fast_failures": 0,
+    "ols_alpha_rmse_fallbacks": 0,
+    "regression_window_rows_column_fast_success": 0,
+    "regression_window_rows_column_fast_failures": 0,
+    "regression_window_rows_column_fallbacks": 0,
+    "regression_window_rows_fast_success": 0,
+    "regression_window_rows_fast_failures": 0,
+    "regression_window_rows_fallbacks": 0,
+    "event_window_rows_fast_success": 0,
+    "event_window_rows_fast_failures": 0,
+    "event_window_rows_fallbacks": 0,
+    "ols_coefficients_fast_success": 0,
+    "ols_coefficients_fast_failures": 0,
+    "ols_coefficients_fallbacks": 0,
+    "strategy_factor_rows_column_fast_success": 0,
+    "strategy_factor_rows_column_fast_failures": 0,
+    "strategy_factor_rows_column_fallbacks": 0,
+    "strategy_factor_rows_fast_success": 0,
+    "strategy_factor_rows_fast_failures": 0,
+    "strategy_factor_rows_fallbacks": 0,
+}
 _LM2011_TABLE_I_FULL_10K_ROW_LABELS: dict[str, str] = {
     "first_filing_per_year": "Include only first filing in a given year",
     "minimum_180_day_spacing": "At least 180 days between a given firm's 10-K filings",
@@ -183,12 +235,64 @@ def _resolve_first_existing(schema: pl.Schema, candidates: tuple[str, ...], labe
     raise ValueError(f"{label} missing any of expected columns: {list(candidates)}")
 
 
+def get_lm2011_pipeline_rust_accel_metrics() -> dict[str, int | str | bool | None]:
+    metrics: dict[str, int | str | bool | None] = dict(_LM2011_PIPELINE_RUST_METRICS)
+    metrics["rust_accel_available"] = _lm2011_rust is not None
+    metrics["rust_accel_import_error"] = _LM2011_PIPELINE_RUST_IMPORT_ERROR
+    return metrics
+
+
+def reset_lm2011_pipeline_rust_accel_metrics() -> None:
+    for key in _LM2011_PIPELINE_RUST_METRICS:
+        _LM2011_PIPELINE_RUST_METRICS[key] = 0
+
+
 def _first_day_of_month(value: dt.date) -> dt.date:
     return dt.date(value.year, value.month, 1)
 
 
-def _previous_month_end(value: dt.date) -> dt.date:
+def _previous_month_end_py(value: dt.date) -> dt.date:
     return _first_day_of_month(value) - dt.timedelta(days=1)
+
+
+def _previous_month_end(value: dt.date) -> dt.date:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.lm2011_previous_month_end(value)
+            _LM2011_PIPELINE_RUST_METRICS["previous_month_end_fast_success"] += 1
+            return out
+        except Exception:
+            _LM2011_PIPELINE_RUST_METRICS["previous_month_end_fast_failures"] += 1
+    _LM2011_PIPELINE_RUST_METRICS["previous_month_end_fallbacks"] += 1
+    return _previous_month_end_py(value)
+
+
+def _previous_month_end_values_py(values: list[dt.date | None]) -> list[dt.date | None]:
+    return [None if value is None else _previous_month_end_py(value) for value in values]
+
+
+def _previous_month_end_values(values: list[dt.date | None]) -> list[dt.date | None]:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.lm2011_previous_month_end_values(values)
+            _LM2011_PIPELINE_RUST_METRICS["previous_month_end_batch_fast_success"] += 1
+            return [None if value is None else value for value in out]
+        except Exception:
+            _LM2011_PIPELINE_RUST_METRICS["previous_month_end_batch_fast_failures"] += 1
+    _LM2011_PIPELINE_RUST_METRICS["previous_month_end_batch_fallbacks"] += 1
+    return _previous_month_end_values_py(values)
+
+
+def _date_series_from_values(series: pl.Series, values: list[dt.date | None]) -> pl.Series:
+    return pl.Series(series.name, values, dtype=pl.Date)
+
+
+def _previous_month_end_expr(column_name: str) -> pl.Expr:
+    return pl.col(column_name).cast(pl.Date, strict=False).map_batches(
+        lambda series: _date_series_from_values(series, _previous_month_end_values(series.to_list())),
+        return_dtype=pl.Date,
+        is_elementwise=True,
+    )
 
 
 def _coerce_python_date(value: object, *, label: str) -> dt.date:
@@ -317,12 +421,24 @@ def _ensure_factor_scale(df: pl.DataFrame, columns: tuple[str, ...]) -> pl.DataF
     )
 
 
-def _finite_float_or_none(value: object) -> float | None:
+def _finite_float_or_none_py(value: object) -> float | None:
     try:
         resolved = float(value)
     except (TypeError, ValueError):
         return None
     return resolved if math.isfinite(resolved) else None
+
+
+def _finite_float_or_none(value: object) -> float | None:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.finite_float_or_none_value(value)
+            _LM2011_PIPELINE_RUST_METRICS["finite_float_fast_success"] += 1
+            return None if out is None else float(out)
+        except Exception:
+            _LM2011_PIPELINE_RUST_METRICS["finite_float_fast_failures"] += 1
+    _LM2011_PIPELINE_RUST_METRICS["finite_float_fallbacks"] += 1
+    return _finite_float_or_none_py(value)
 
 
 def _frame_height(frame: pl.LazyFrame | pl.DataFrame) -> int:
@@ -331,26 +447,74 @@ def _frame_height(frame: pl.LazyFrame | pl.DataFrame) -> int:
     return int(frame.height)
 
 
-def _validated_event_window_doc_batch_size(batch_size: int) -> int:
+def _validated_event_window_doc_batch_size_py(batch_size: int) -> int:
     resolved = int(batch_size)
     if resolved < 1:
         raise ValueError("event_window_doc_batch_size must be >= 1")
     return resolved
 
 
-def _validated_event_window_days(event_window_days: int) -> int:
+def _validated_event_window_doc_batch_size(batch_size: int) -> int:
+    if _lm2011_rust is not None:
+        try:
+            out = int(_lm2011_rust.lm2011_validated_event_window_doc_batch_size(batch_size))
+            _LM2011_PIPELINE_RUST_METRICS["event_window_doc_batch_size_fast_success"] += 1
+            return out
+        except Exception:
+            _LM2011_PIPELINE_RUST_METRICS["event_window_doc_batch_size_fast_failures"] += 1
+    _LM2011_PIPELINE_RUST_METRICS["event_window_doc_batch_size_fallbacks"] += 1
+    return _validated_event_window_doc_batch_size_py(batch_size)
+
+
+def _validated_event_window_days_py(event_window_days: int) -> int:
     resolved = int(event_window_days)
     if resolved < 1:
         raise ValueError("event_window_days must be >= 1")
     return resolved
 
 
+def _validated_event_window_days(event_window_days: int) -> int:
+    if _lm2011_rust is not None:
+        try:
+            out = int(_lm2011_rust.lm2011_validated_event_window_days(event_window_days))
+            _LM2011_PIPELINE_RUST_METRICS["event_window_days_fast_success"] += 1
+            return out
+        except Exception:
+            _LM2011_PIPELINE_RUST_METRICS["event_window_days_fast_failures"] += 1
+    _LM2011_PIPELINE_RUST_METRICS["event_window_days_fallbacks"] += 1
+    return _validated_event_window_days_py(event_window_days)
+
+
+def _event_window_end_day_py(event_window_days: int) -> int:
+    return _validated_event_window_days_py(event_window_days) - 1
+
+
 def _event_window_end_day(event_window_days: int) -> int:
-    return _validated_event_window_days(event_window_days) - 1
+    if _lm2011_rust is not None:
+        try:
+            out = int(_lm2011_rust.lm2011_event_window_end_day(event_window_days))
+            _LM2011_PIPELINE_RUST_METRICS["event_window_end_day_fast_success"] += 1
+            return out
+        except Exception:
+            _LM2011_PIPELINE_RUST_METRICS["event_window_end_day_fast_failures"] += 1
+    _LM2011_PIPELINE_RUST_METRICS["event_window_end_day_fallbacks"] += 1
+    return _event_window_end_day_py(event_window_days)
+
+
+def _postevent_start_day_py(event_window_days: int) -> int:
+    return _validated_event_window_days_py(event_window_days) + 2
 
 
 def _postevent_start_day(event_window_days: int) -> int:
-    return _validated_event_window_days(event_window_days) + 2
+    if _lm2011_rust is not None:
+        try:
+            out = int(_lm2011_rust.lm2011_postevent_start_day(event_window_days))
+            _LM2011_PIPELINE_RUST_METRICS["postevent_start_day_fast_success"] += 1
+            return out
+        except Exception:
+            _LM2011_PIPELINE_RUST_METRICS["postevent_start_day_fast_failures"] += 1
+    _LM2011_PIPELINE_RUST_METRICS["postevent_start_day_fallbacks"] += 1
+    return _postevent_start_day_py(event_window_days)
 
 
 def _format_table_i_window_label(sample_start: dt.date, sample_end: dt.date) -> str:
@@ -744,41 +908,28 @@ def _attach_trade_indices(docs_df: pl.DataFrame, daily_df: pl.DataFrame) -> tupl
     return docs, daily
 
 
-def _build_window_rows(
-    docs_df: pl.DataFrame,
-    daily_df: pl.DataFrame,
-    *,
-    start_day: int = -252,
-    end_day: int = 252,
-) -> pl.DataFrame:
-    left = docs_df.lazy().rename({"KYPERMNO": "_doc_permno"})
-    right = daily_df.lazy().rename(
-        {
-            "KYPERMNO": "_daily_permno",
-            "trade_index": "_daily_trade_index",
-            "trade_date": "_daily_trade_date",
-            "VOL": "_daily_VOL",
-            "FINAL_PRC": "_daily_FINAL_PRC",
-            "PRC": "_daily_PRC",
-            "TCAP": "_daily_TCAP",
-            "SHROUT": "_daily_SHROUT",
-            "SHRCD": "_daily_SHRCD",
-            "EXCHCD": "_daily_EXCHCD",
-            "mkt_rf": "_daily_mkt_rf",
-            "smb": "_daily_smb",
-            "hml": "_daily_hml",
-            "rf": "_daily_rf",
-            "market_return": "_daily_market_return",
-        }
-    )
+_WINDOW_DAILY_RENAME: dict[str, str] = {
+    "KYPERMNO": "_daily_permno",
+    "trade_index": "_daily_trade_index",
+    "trade_date": "_daily_trade_date",
+    "VOL": "_daily_VOL",
+    "FINAL_PRC": "_daily_FINAL_PRC",
+    "PRC": "_daily_PRC",
+    "TCAP": "_daily_TCAP",
+    "SHROUT": "_daily_SHROUT",
+    "SHRCD": "_daily_SHRCD",
+    "EXCHCD": "_daily_EXCHCD",
+    "mkt_rf": "_daily_mkt_rf",
+    "smb": "_daily_smb",
+    "hml": "_daily_hml",
+    "rf": "_daily_rf",
+    "market_return": "_daily_market_return",
+}
+
+
+def _finalize_window_rows(joined: pl.DataFrame) -> pl.DataFrame:
     return (
-        left.join_where(
-            right,
-            pl.col("_doc_permno") == pl.col("_daily_permno"),
-            pl.col("_daily_trade_index") >= (pl.col("_filing_trade_index") + pl.lit(int(start_day))),
-            pl.col("_daily_trade_index") <= (pl.col("_filing_trade_index") + pl.lit(int(end_day))),
-        )
-        .with_columns(
+        joined.with_columns(
             pl.col("_daily_trade_index").cast(pl.Int32, strict=False),
             pl.col("_filing_trade_index").cast(pl.Int32, strict=False),
             (
@@ -799,9 +950,91 @@ def _build_window_rows(
             pl.col("_daily_rf").alias("rf"),
             pl.col("_daily_market_return").alias("market_return"),
         )
-        .collect()
         .sort("doc_id", "relative_day", "trade_date")
     )
+
+
+def _build_window_rows_from_index_pairs(
+    docs_df: pl.DataFrame,
+    daily_df: pl.DataFrame,
+    pairs: list[tuple[int, int]],
+    *,
+    start_day: int,
+    end_day: int,
+) -> pl.DataFrame:
+    if not pairs:
+        return _build_window_rows_py(
+            docs_df.head(0),
+            daily_df.head(0),
+            start_day=start_day,
+            end_day=end_day,
+        )
+    doc_indices = [int(doc_idx) for doc_idx, _ in pairs]
+    daily_indices = [int(daily_idx) for _, daily_idx in pairs]
+    left = docs_df.rename({"KYPERMNO": "_doc_permno"})[doc_indices]
+    right = daily_df.rename(_WINDOW_DAILY_RENAME)[daily_indices]
+    joined = pl.concat([left, right], how="horizontal")
+    return _finalize_window_rows(joined)
+
+
+def _build_window_rows_py(
+    docs_df: pl.DataFrame,
+    daily_df: pl.DataFrame,
+    *,
+    start_day: int = -252,
+    end_day: int = 252,
+) -> pl.DataFrame:
+    left = docs_df.lazy().rename({"KYPERMNO": "_doc_permno"})
+    right = daily_df.lazy().rename(_WINDOW_DAILY_RENAME)
+    joined = (
+        left.join_where(
+            right,
+            pl.col("_doc_permno") == pl.col("_daily_permno"),
+            pl.col("_daily_trade_index") >= (pl.col("_filing_trade_index") + pl.lit(int(start_day))),
+            pl.col("_daily_trade_index") <= (pl.col("_filing_trade_index") + pl.lit(int(end_day))),
+        )
+        .collect()
+    )
+    return _finalize_window_rows(joined)
+
+
+def _build_window_rows(
+    docs_df: pl.DataFrame,
+    daily_df: pl.DataFrame,
+    *,
+    start_day: int = -252,
+    end_day: int = 252,
+) -> pl.DataFrame:
+    if _lm2011_rust is not None:
+        try:
+            pairs = _lm2011_rust.lm2011_window_row_index_pairs(
+                docs_df.get_column("KYPERMNO").to_list(),
+                docs_df.get_column("_filing_trade_index").to_list(),
+                daily_df.get_column("KYPERMNO").to_list(),
+                daily_df.get_column("trade_index").to_list(),
+                int(start_day),
+                int(end_day),
+            )
+            out = _build_window_rows_from_index_pairs(
+                docs_df,
+                daily_df,
+                [(int(doc_idx), int(daily_idx)) for doc_idx, daily_idx in pairs],
+                start_day=int(start_day),
+                end_day=int(end_day),
+            )
+            _LM2011_PIPELINE_RUST_METRICS["event_window_rows_fast_success"] += 1
+            return out
+        except Exception:
+            _LM2011_PIPELINE_RUST_METRICS["event_window_rows_fast_failures"] += 1
+    _LM2011_PIPELINE_RUST_METRICS["event_window_rows_fallbacks"] += 1
+    return _build_window_rows_py(
+        docs_df,
+        daily_df,
+        start_day=start_day,
+        end_day=end_day,
+    )
+
+
 def _require_statsmodels():
     if sm is None:
         raise ImportError("statsmodels is required for LM2011 regression fitting")
@@ -847,7 +1080,7 @@ def _fit_checked_ols(
     return results
 
 
-def _ols_alpha_and_rmse(df: pl.DataFrame, *, label: str) -> tuple[float | None, float | None]:
+def _ols_alpha_and_rmse_py(df: pl.DataFrame, *, label: str) -> tuple[float | None, float | None]:
     n = df.height
     if n <= 4:
         return None, None
@@ -864,6 +1097,93 @@ def _ols_alpha_and_rmse(df: pl.DataFrame, *, label: str) -> tuple[float | None, 
     alpha = float(results.params[0])
     rmse = math.sqrt(max(float(results.mse_resid), 0.0))
     return alpha, rmse
+
+
+def _ols_alpha_and_rmse(df: pl.DataFrame, *, label: str) -> tuple[float | None, float | None]:
+    if _lm2011_rust is not None:
+        try:
+            alpha, rmse = _lm2011_rust.lm2011_ols_alpha_rmse(
+                df.get_column("_y").cast(pl.Float64, strict=False).to_list(),
+                df.get_column("_x1").cast(pl.Float64, strict=False).to_list(),
+                df.get_column("_x2").cast(pl.Float64, strict=False).to_list(),
+                df.get_column("_x3").cast(pl.Float64, strict=False).to_list(),
+            )
+            _LM2011_PIPELINE_RUST_METRICS["ols_alpha_rmse_fast_success"] += 1
+            return (None if alpha is None else float(alpha), None if rmse is None else float(rmse))
+        except Exception:
+            _LM2011_PIPELINE_RUST_METRICS["ols_alpha_rmse_fast_failures"] += 1
+    _LM2011_PIPELINE_RUST_METRICS["ols_alpha_rmse_fallbacks"] += 1
+    return _ols_alpha_and_rmse_py(df, label=label)
+
+
+def _regression_metrics_from_window_rows_py(
+    subset: pl.DataFrame,
+    *,
+    alpha_name: str,
+    rmse_name: str,
+) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for group in subset.sort("doc_id", "relative_day").partition_by("doc_id", maintain_order=True):
+        doc_id = str(group.item(0, "doc_id"))
+        alpha, rmse = _ols_alpha_and_rmse(
+            group,
+            label=f"{alpha_name} regression for doc_id={doc_id}",
+        )
+        rows.append(
+            {
+                "doc_id": doc_id,
+                alpha_name: alpha,
+                rmse_name: rmse,
+                "n_obs": group.height,
+            }
+        )
+    return rows
+
+
+def _regression_metrics_from_window_rows(
+    subset: pl.DataFrame,
+    *,
+    alpha_name: str,
+    rmse_name: str,
+) -> list[dict[str, object]]:
+    if _lm2011_rust is not None:
+        try:
+            selected = subset.select("doc_id", "relative_day", "_y", "_x1", "_x2", "_x3").sort(
+                "doc_id",
+                "relative_day",
+            )
+            out = _lm2011_rust.lm2011_regression_metrics_from_window_columns(
+                selected.get_column("doc_id").to_list(),
+                selected.get_column("_y").to_list(),
+                selected.get_column("_x1").to_list(),
+                selected.get_column("_x2").to_list(),
+                selected.get_column("_x3").to_list(),
+                alpha_name,
+                rmse_name,
+            )
+            _LM2011_PIPELINE_RUST_METRICS["regression_window_rows_column_fast_success"] += 1
+            return [dict(row) for row in out]
+        except Exception:
+            _LM2011_PIPELINE_RUST_METRICS["regression_window_rows_column_fast_failures"] += 1
+            _LM2011_PIPELINE_RUST_METRICS["regression_window_rows_column_fallbacks"] += 1
+        try:
+            out = _lm2011_rust.lm2011_regression_metrics_from_window_rows(
+                subset.select("doc_id", "relative_day", "_y", "_x1", "_x2", "_x3")
+                .sort("doc_id", "relative_day")
+                .to_dicts(),
+                alpha_name,
+                rmse_name,
+            )
+            _LM2011_PIPELINE_RUST_METRICS["regression_window_rows_fast_success"] += 1
+            return [dict(row) for row in out]
+        except Exception:
+            _LM2011_PIPELINE_RUST_METRICS["regression_window_rows_fast_failures"] += 1
+    _LM2011_PIPELINE_RUST_METRICS["regression_window_rows_fallbacks"] += 1
+    return _regression_metrics_from_window_rows_py(
+        subset,
+        alpha_name=alpha_name,
+        rmse_name=rmse_name,
+    )
 
 
 def _regression_metrics_from_window(
@@ -896,21 +1216,11 @@ def _regression_metrics_from_window(
                 "n_obs": pl.Int32,
             }
         )
-    rows: list[dict[str, object]] = []
-    for group in subset.sort("doc_id", "relative_day").partition_by("doc_id", maintain_order=True):
-        doc_id = str(group.item(0, "doc_id"))
-        alpha, rmse = _ols_alpha_and_rmse(
-            group,
-            label=f"{alpha_name} regression for doc_id={doc_id}",
-        )
-        rows.append(
-            {
-                "doc_id": doc_id,
-                alpha_name: alpha,
-                rmse_name: rmse,
-                "n_obs": group.height,
-            }
-        )
+    rows = _regression_metrics_from_window_rows(
+        subset,
+        alpha_name=alpha_name,
+        rmse_name=rmse_name,
+    )
     return pl.DataFrame(
         rows,
         schema_overrides={
@@ -1968,9 +2278,10 @@ def _attach_pre_filing_price_and_prior_month_price(event_panel_df: pl.DataFrame,
         pre_filing_exprs.append(pl.col("pre_filing_price").cast(pl.Float64, strict=False))
     out = out.with_columns(pl.coalesce(pre_filing_exprs).alias("pre_filing_price"))
 
-    lookup = out.with_columns(
-        pl.col("filing_date").map_elements(_previous_month_end, return_dtype=pl.Date).alias("_prior_month_end")
-    ).sort("KYPERMNO", "_prior_month_end")
+    lookup = out.with_columns(_previous_month_end_expr("filing_date").alias("_prior_month_end")).sort(
+        "KYPERMNO",
+        "_prior_month_end",
+    )
     prior_month = daily_price.rename({"_price": "prior_month_price"})
     return (
         lookup.join_asof(
@@ -2543,7 +2854,7 @@ def _ols_coefficients_and_r2(
     return coefficients, r2
 
 
-def _ols_coefficients_standard_errors_tstats_and_r2(
+def _ols_coefficients_standard_errors_tstats_and_r2_py(
     df: pl.DataFrame,
     *,
     y_col: str,
@@ -2581,9 +2892,57 @@ def _ols_coefficients_standard_errors_tstats_and_r2(
     return coefficients, standard_errors, t_stats, r2
 
 
-def _fit_strategy_factor_loadings(strategy_df: pl.DataFrame) -> pl.DataFrame:
-    if strategy_df.height == 0:
-        return _empty_trading_strategy_ff4_summary_df()
+def _ols_coefficients_standard_errors_tstats_and_r2(
+    df: pl.DataFrame,
+    *,
+    y_col: str,
+    x_cols: tuple[str, ...],
+) -> tuple[
+    tuple[float | None, ...],
+    tuple[float | None, ...],
+    tuple[float | None, ...],
+    float | None,
+]:
+    nonnull_predictors = [pl.col(column).is_not_null() for column in x_cols]
+    subset = df.filter(
+        pl.col(y_col).is_not_null()
+        & pl.fold(
+            acc=pl.lit(True),
+            function=lambda acc, expr: acc & expr,
+            exprs=nonnull_predictors,
+        )
+    )
+    size = len(x_cols) + 1
+    if subset.height <= len(x_cols):
+        null_values = tuple(None for _ in range(size))
+        return null_values, null_values, null_values, None
+    if _lm2011_rust is not None and x_cols == ("mkt_rf", "smb", "hml", "mom"):
+        try:
+            coefficients, standard_errors, t_stats, r2 = _lm2011_rust.lm2011_ols_ff4_coefficients(
+                subset.get_column(y_col).cast(pl.Float64, strict=False).to_list(),
+                subset.get_column("mkt_rf").cast(pl.Float64, strict=False).to_list(),
+                subset.get_column("smb").cast(pl.Float64, strict=False).to_list(),
+                subset.get_column("hml").cast(pl.Float64, strict=False).to_list(),
+                subset.get_column("mom").cast(pl.Float64, strict=False).to_list(),
+            )
+            _LM2011_PIPELINE_RUST_METRICS["ols_coefficients_fast_success"] += 1
+            return (
+                tuple(None if value is None else float(value) for value in coefficients),
+                tuple(None if value is None else float(value) for value in standard_errors),
+                tuple(None if value is None else float(value) for value in t_stats),
+                None if r2 is None else float(r2),
+            )
+        except Exception:
+            _LM2011_PIPELINE_RUST_METRICS["ols_coefficients_fast_failures"] += 1
+    _LM2011_PIPELINE_RUST_METRICS["ols_coefficients_fallbacks"] += 1
+    return _ols_coefficients_standard_errors_tstats_and_r2_py(
+        df,
+        y_col=y_col,
+        x_cols=x_cols,
+    )
+
+
+def _strategy_factor_loading_rows_py(strategy_df: pl.DataFrame) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for group in strategy_df.partition_by("sort_signal_name", maintain_order=True):
         signal_name = group.item(0, "sort_signal_name")
@@ -2621,6 +2980,43 @@ def _fit_strategy_factor_loadings(strategy_df: pl.DataFrame) -> pl.DataFrame:
                 "r2": r2,
             }
         )
+    return rows
+
+
+def _strategy_factor_loading_rows(strategy_df: pl.DataFrame) -> list[dict[str, object]]:
+    if _lm2011_rust is not None:
+        strategy_columns = ("sort_signal_name", "long_short_return", "mkt_rf", "smb", "hml", "mom")
+        try:
+            selected = strategy_df.select(*strategy_columns)
+            out = _lm2011_rust.lm2011_strategy_factor_loading_columns(
+                selected.get_column("sort_signal_name").to_list(),
+                selected.get_column("long_short_return").to_list(),
+                selected.get_column("mkt_rf").to_list(),
+                selected.get_column("smb").to_list(),
+                selected.get_column("hml").to_list(),
+                selected.get_column("mom").to_list(),
+            )
+            _LM2011_PIPELINE_RUST_METRICS["strategy_factor_rows_column_fast_success"] += 1
+            return [dict(row) for row in out]
+        except Exception:
+            _LM2011_PIPELINE_RUST_METRICS["strategy_factor_rows_column_fast_failures"] += 1
+            _LM2011_PIPELINE_RUST_METRICS["strategy_factor_rows_column_fallbacks"] += 1
+        try:
+            out = _lm2011_rust.lm2011_strategy_factor_loading_rows(
+                strategy_df.select(*strategy_columns).to_dicts()
+            )
+            _LM2011_PIPELINE_RUST_METRICS["strategy_factor_rows_fast_success"] += 1
+            return [dict(row) for row in out]
+        except Exception:
+            _LM2011_PIPELINE_RUST_METRICS["strategy_factor_rows_fast_failures"] += 1
+    _LM2011_PIPELINE_RUST_METRICS["strategy_factor_rows_fallbacks"] += 1
+    return _strategy_factor_loading_rows_py(strategy_df)
+
+
+def _fit_strategy_factor_loadings(strategy_df: pl.DataFrame) -> pl.DataFrame:
+    if strategy_df.height == 0:
+        return _empty_trading_strategy_ff4_summary_df()
+    rows = _strategy_factor_loading_rows(strategy_df)
     return pl.DataFrame(rows, schema_overrides=_empty_trading_strategy_ff4_summary_df().schema)
 
 

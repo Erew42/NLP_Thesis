@@ -1,13 +1,39 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import dataclass
 from dataclasses import field
 from pathlib import Path
 
+try:
+    from thesis_native import _lm2011_rust
+except Exception as exc:  # pragma: no cover - optional native extension
+    _lm2011_rust = None
+    _CONTRACTS_RUST_IMPORT_ERROR: str | None = f"{type(exc).__name__}: {exc}"
+else:
+    _CONTRACTS_RUST_IMPORT_ERROR = None
+
 DEFAULT_FINBERT_TOKEN_COUNT_MAX_LENGTH = 512
 
+_CONTRACTS_RUST_METRICS: dict[str, int] = {
+    "year_filter_fast_success": 0,
+    "year_filter_fast_failures": 0,
+    "year_filter_fallbacks": 0,
+}
 
-def _normalize_year_filter(
+
+def get_contracts_rust_accel_metrics() -> dict[str, int | str | bool | None]:
+    metrics: dict[str, int | str | bool | None] = dict(_CONTRACTS_RUST_METRICS)
+    metrics["rust_accel_available"] = _lm2011_rust is not None
+    metrics["rust_accel_import_error"] = _CONTRACTS_RUST_IMPORT_ERROR
+    return metrics
+
+
+def reset_contracts_rust_accel_metrics() -> None:
+    for key in _CONTRACTS_RUST_METRICS:
+        _CONTRACTS_RUST_METRICS[key] = 0
+
+
+def _normalize_year_filter_py(
     year_filter: tuple[int, ...] | None,
 ) -> tuple[int, ...] | None:
     if year_filter is None:
@@ -18,6 +44,20 @@ def _normalize_year_filter(
         if year < 0:
             raise ValueError(f"year_filter values must be positive integers, got {year!r}.")
     return normalized_years
+
+
+def _normalize_year_filter(
+    year_filter: tuple[int, ...] | None,
+) -> tuple[int, ...] | None:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.normalize_year_filter_values(year_filter)
+            _CONTRACTS_RUST_METRICS["year_filter_fast_success"] += 1
+            return None if out is None else tuple(int(year) for year in out)
+        except Exception:
+            _CONTRACTS_RUST_METRICS["year_filter_fast_failures"] += 1
+    _CONTRACTS_RUST_METRICS["year_filter_fallbacks"] += 1
+    return _normalize_year_filter_py(year_filter)
 
 
 @dataclass(frozen=True)

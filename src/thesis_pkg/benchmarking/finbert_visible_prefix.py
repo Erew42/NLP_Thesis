@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from functools import lru_cache
 from typing import Any
@@ -8,6 +8,14 @@ import polars as pl
 from thesis_pkg.benchmarking.contracts import FinbertAuthoritySpec
 from thesis_pkg.benchmarking.token_lengths import FINBERT_TOKEN_COUNT_COLUMN
 from thesis_pkg.core.sec.lm2011_text import tokenize_lm2011_text
+
+try:
+    from thesis_native import _lm2011_rust
+except Exception as exc:  # pragma: no cover - optional native extension
+    _lm2011_rust = None
+    _FINBERT_VISIBLE_PREFIX_RUST_IMPORT_ERROR: str | None = f"{type(exc).__name__}: {exc}"
+else:
+    _FINBERT_VISIBLE_PREFIX_RUST_IMPORT_ERROR = None
 
 
 VISIBLE_PREFIX_FAST_OFFSET_POLICY_ID = "bert_fast_offset_prefix_v1"
@@ -22,6 +30,26 @@ ORIGINAL_SENTENCE_CHAR_COUNT_COLUMN = "original_sentence_char_count"
 VISIBLE_SENTENCE_CHAR_COUNT_COLUMN = "visible_sentence_char_count"
 ORIGINAL_SENTENCE_LM_TOKEN_COUNT_COLUMN = "original_sentence_lm_token_count"
 VISIBLE_SENTENCE_LM_TOKEN_COUNT_COLUMN = "visible_sentence_lm_token_count"
+
+_FINBERT_VISIBLE_PREFIX_RUST_METRICS: dict[str, int] = {
+    "retained_end_fast_success": 0,
+    "retained_end_fallbacks": 0,
+    "lm_token_counts_fast_success": 0,
+    "lm_token_counts_fast_failures": 0,
+    "lm_token_counts_fallbacks": 0,
+}
+
+
+def get_finbert_visible_prefix_rust_accel_metrics() -> dict[str, int | str | bool | None]:
+    metrics: dict[str, int | str | bool | None] = dict(_FINBERT_VISIBLE_PREFIX_RUST_METRICS)
+    metrics["rust_accel_available"] = _lm2011_rust is not None
+    metrics["rust_accel_import_error"] = _FINBERT_VISIBLE_PREFIX_RUST_IMPORT_ERROR
+    return metrics
+
+
+def reset_finbert_visible_prefix_rust_accel_metrics() -> None:
+    for key in _FINBERT_VISIBLE_PREFIX_RUST_METRICS:
+        _FINBERT_VISIBLE_PREFIX_RUST_METRICS[key] = 0
 
 
 def _import_auto_tokenizer():
@@ -94,6 +122,39 @@ def _untruncated_token_count(tokenizer: Any, text: str, *, max_length: int) -> i
         return None
 
 
+def _visible_prefix_retained_end_py(offsets: Any, special_mask: Any, text_len: int) -> int:
+    retained_end = 0
+    for offset, is_special in zip(offsets, special_mask):
+        if is_special:
+            continue
+        if offset is None or len(offset) < 2:
+            continue
+        start, end = int(offset[0]), int(offset[1])
+        if end <= start:
+            continue
+        retained_end = max(retained_end, end)
+    return min(retained_end, text_len)
+
+
+def _visible_prefix_retained_end(offsets: Any, special_mask: Any, text_len: int) -> int:
+    if _lm2011_rust is not None:
+        try:
+            out = int(
+                _lm2011_rust.finbert_visible_prefix_retained_end(
+                    offsets,
+                    special_mask,
+                    int(text_len),
+                )
+            )
+            _FINBERT_VISIBLE_PREFIX_RUST_METRICS["retained_end_fast_success"] += 1
+            return out
+        except Exception:
+            _FINBERT_VISIBLE_PREFIX_RUST_METRICS["retained_end_fallbacks"] += 1
+    else:
+        _FINBERT_VISIBLE_PREFIX_RUST_METRICS["retained_end_fallbacks"] += 1
+    return _visible_prefix_retained_end_py(offsets, special_mask, text_len)
+
+
 def _fast_offset_visible_prefix(
     tokenizer: Any,
     text: str,
@@ -117,17 +178,8 @@ def _fast_offset_visible_prefix(
     else:
         special_mask = _first_sequence(special_mask)
 
-    retained_end = 0
-    for offset, is_special in zip(offsets, special_mask):
-        if is_special:
-            continue
-        if offset is None or len(offset) < 2:
-            continue
-        start, end = int(offset[0]), int(offset[1])
-        if end <= start:
-            continue
-        retained_end = max(retained_end, end)
-    return text[: min(retained_end, len(text))]
+    retained_end = _visible_prefix_retained_end(offsets, special_mask, len(text))
+    return text[:retained_end]
 
 
 def _decoded_visible_prefix(
@@ -160,7 +212,25 @@ def _decoded_visible_prefix(
 
 
 def _lm_token_count(text: str | None) -> int:
-    return len(tokenize_lm2011_text(text))
+    return _lm_token_counts([text])[0]
+
+
+def _lm_token_counts_py(texts: list[str | None]) -> list[int]:
+    return [len(tokenize_lm2011_text(text)) for text in texts]
+
+
+def _lm_token_counts(texts: list[str | None]) -> list[int]:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.count_lm2011_text_token_values(texts)
+            _FINBERT_VISIBLE_PREFIX_RUST_METRICS["lm_token_counts_fast_success"] += 1
+            return [int(value) for value in out]
+        except Exception:
+            _FINBERT_VISIBLE_PREFIX_RUST_METRICS["lm_token_counts_fast_failures"] += 1
+            _FINBERT_VISIBLE_PREFIX_RUST_METRICS["lm_token_counts_fallbacks"] += 1
+    else:
+        _FINBERT_VISIBLE_PREFIX_RUST_METRICS["lm_token_counts_fallbacks"] += 1
+    return _lm_token_counts_py(texts)
 
 
 def add_finbert_visible_sentence_prefixes(
@@ -199,17 +269,16 @@ def add_finbert_visible_sentence_prefixes(
     true_over_512: list[bool | None] = []
     original_char_counts: list[int] = []
     visible_char_counts: list[int] = []
-    original_lm_token_counts: list[int] = []
-    visible_lm_token_counts: list[int] = []
+    normalized_texts: list[str] = []
 
     texts = df[text_col].to_list()
     token_counts = df[token_count_col].to_list()
     for raw_text, raw_token_count in zip(texts, token_counts):
         text = "" if raw_text is None else str(raw_text)
+        normalized_texts.append(text)
         token_count = int(raw_token_count) if raw_token_count is not None else None
         is_at_cap = token_count == max_length
         original_char_counts.append(len(text))
-        original_lm_token_counts.append(_lm_token_count(text))
 
         if not is_at_cap:
             visible_text = text
@@ -247,7 +316,9 @@ def add_finbert_visible_sentence_prefixes(
             None if untruncated_count is None else bool(untruncated_count > max_length)
         )
         visible_char_counts.append(len(visible_text or ""))
-        visible_lm_token_counts.append(_lm_token_count(visible_text))
+
+    original_lm_token_counts = _lm_token_counts(normalized_texts)
+    visible_lm_token_counts = _lm_token_counts(visible_texts)
 
     return df.with_columns(
         [

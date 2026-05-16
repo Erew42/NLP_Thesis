@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import dataclass
 from dataclasses import field
@@ -9,6 +9,14 @@ from typing import Any
 
 import matplotlib.pyplot as plt
 import polars as pl
+
+try:
+    from thesis_native import _lm2011_rust
+except Exception as exc:  # pragma: no cover - optional native extension
+    _lm2011_rust = None
+    _SAMPLE_DIAGNOSTICS_RUST_IMPORT_ERROR: str | None = f"{type(exc).__name__}: {exc}"
+else:
+    _SAMPLE_DIAGNOSTICS_RUST_IMPORT_ERROR = None
 
 from thesis_pkg.benchmarking.contracts import DEFAULT_FINBERT_10K_ITEMS
 from thesis_pkg.benchmarking.contracts import DEFAULT_FINBERT_AUTHORITY
@@ -41,6 +49,23 @@ _ITEM_COLORS = {
     "item_1a": "#dc2626",
     "item_7": "#16a34a",
 }
+_SAMPLE_DIAGNOSTICS_RUST_METRICS: dict[str, int] = {
+    "sample_doc_ids_fast_success": 0,
+    "sample_doc_ids_fast_failures": 0,
+    "sample_doc_ids_fallbacks": 0,
+}
+
+
+def get_sample_item_diagnostics_rust_accel_metrics() -> dict[str, int | str | bool | None]:
+    metrics: dict[str, int | str | bool | None] = dict(_SAMPLE_DIAGNOSTICS_RUST_METRICS)
+    metrics["rust_accel_available"] = _lm2011_rust is not None
+    metrics["rust_accel_import_error"] = _SAMPLE_DIAGNOSTICS_RUST_IMPORT_ERROR
+    return metrics
+
+
+def reset_sample_item_diagnostics_rust_accel_metrics() -> None:
+    for key in _SAMPLE_DIAGNOSTICS_RUST_METRICS:
+        _SAMPLE_DIAGNOSTICS_RUST_METRICS[key] = 0
 
 
 @dataclass(frozen=True)
@@ -152,19 +177,13 @@ def _target_items_for_codes(item_codes: tuple[str, ...]) -> tuple[BenchmarkItemS
     return tuple(item for item in DEFAULT_FINBERT_10K_ITEMS if item.benchmark_item_code in set(item_codes))
 
 
-def _sample_doc_ids_with_scope_coverage(
-    eligible_lf: pl.LazyFrame,
+def _sample_doc_ids_from_doc_item_pairs_py(
+    doc_item_pairs: pl.DataFrame,
     *,
     item_codes: tuple[str, ...],
     sample_doc_count: int,
     seed: int,
 ) -> pl.DataFrame:
-    doc_item_pairs = (
-        eligible_lf.select(["doc_id", "benchmark_item_code"])
-        .unique()
-        .sort(["doc_id", "benchmark_item_code"])
-        .collect()
-    )
     unique_doc_ids = sorted(str(doc_id) for doc_id in doc_item_pairs["doc_id"].unique().to_list())
     if not unique_doc_ids:
         return pl.DataFrame({"doc_id": []}, schema={"doc_id": pl.Utf8})
@@ -194,6 +213,59 @@ def _sample_doc_ids_with_scope_coverage(
     remaining_rng.shuffle(remaining_doc_ids)
     selected.extend(remaining_doc_ids[: max(sample_doc_count - len(selected), 0)])
     return pl.DataFrame({"doc_id": selected}, schema={"doc_id": pl.Utf8})
+
+
+def _sample_doc_ids_from_doc_item_pairs(
+    doc_item_pairs: pl.DataFrame,
+    *,
+    item_codes: tuple[str, ...],
+    sample_doc_count: int,
+    seed: int,
+) -> pl.DataFrame:
+    if _lm2011_rust is not None:
+        try:
+            selected_doc_ids = _lm2011_rust.sample_scope_coverage_doc_ids(
+                doc_item_pairs["doc_id"].to_list(),
+                doc_item_pairs["benchmark_item_code"].to_list(),
+                item_codes,
+                int(sample_doc_count),
+                int(seed),
+            )
+            _SAMPLE_DIAGNOSTICS_RUST_METRICS["sample_doc_ids_fast_success"] += 1
+            return pl.DataFrame(
+                {"doc_id": [str(doc_id) for doc_id in selected_doc_ids]},
+                schema={"doc_id": pl.Utf8},
+            )
+        except Exception:
+            _SAMPLE_DIAGNOSTICS_RUST_METRICS["sample_doc_ids_fast_failures"] += 1
+    _SAMPLE_DIAGNOSTICS_RUST_METRICS["sample_doc_ids_fallbacks"] += 1
+    return _sample_doc_ids_from_doc_item_pairs_py(
+        doc_item_pairs,
+        item_codes=item_codes,
+        sample_doc_count=sample_doc_count,
+        seed=seed,
+    )
+
+
+def _sample_doc_ids_with_scope_coverage(
+    eligible_lf: pl.LazyFrame,
+    *,
+    item_codes: tuple[str, ...],
+    sample_doc_count: int,
+    seed: int,
+) -> pl.DataFrame:
+    doc_item_pairs = (
+        eligible_lf.select(["doc_id", "benchmark_item_code"])
+        .unique()
+        .sort(["doc_id", "benchmark_item_code"])
+        .collect()
+    )
+    return _sample_doc_ids_from_doc_item_pairs(
+        doc_item_pairs,
+        item_codes=item_codes,
+        sample_doc_count=sample_doc_count,
+        seed=seed,
+    )
 
 
 def _annotate_sampled_sections(sections_df: pl.DataFrame) -> pl.DataFrame:

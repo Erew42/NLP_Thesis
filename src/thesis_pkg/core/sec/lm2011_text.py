@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Callable, Iterable, Iterator, Mapping
@@ -9,10 +9,12 @@ from pathlib import Path
 import re
 import shutil
 import tempfile
+from typing import Any
+import warnings
 
 import polars as pl
 
-from thesis_pkg.core.ccm.lm2011 import normalize_lm2011_form_value
+from thesis_pkg.core.ccm.lm2011 import normalize_lm2011_form_expr
 from thesis_pkg.core.sec.lm2011_cleaning import Full10KCleaningContract
 from thesis_pkg.core.sec.lm2011_cleaning import clean_full_10k_for_lm2011
 from thesis_pkg.io.parquet import _copy_with_verify, _validate_parquet_quick
@@ -34,6 +36,96 @@ _LINEBREAK_HYPHEN_RE = re.compile(r"([A-Za-z])-\s*(?:\r?\n)\s*([A-Za-z])")
 _TOKEN_RE = re.compile(r"[A-Za-z]{2,}(?:[-'][A-Za-z]+)*")
 RAW_ITEM_TEXT_CLEANING_POLICY_ID = "raw_item_text"
 _STREAMING_PARQUET_COMPRESSION = "zstd"
+
+_RUST_ACCEL_IMPORT_ERROR: str | None = None
+
+try:
+    from thesis_native import _lm2011_rust
+except Exception as exc:  # pragma: no cover - optional native extension
+    _lm2011_rust = None
+    _RUST_ACCEL_IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
+
+
+_RUST_ACCEL_METRICS: dict[str, int] = {
+    "tokenize_fast_success": 0,
+    "tokenize_fast_failures": 0,
+    "tokenize_fallbacks": 0,
+    "dictionary_token_normalize_fast_success": 0,
+    "dictionary_token_normalize_fast_failures": 0,
+    "dictionary_token_normalize_fallbacks": 0,
+    "token_count_fast_success": 0,
+    "token_count_fast_failures": 0,
+    "token_count_fallbacks": 0,
+    "token_count_batch_fast_success": 0,
+    "token_count_batch_fast_failures": 0,
+    "token_count_batch_fallbacks": 0,
+    "counter_init_success": 0,
+    "counter_init_failures": 0,
+    "count_fast_success": 0,
+    "count_fast_failures": 0,
+    "count_fallbacks": 0,
+    "document_stats_column_fast_success": 0,
+    "document_stats_column_fast_failures": 0,
+    "document_stats_column_fallbacks": 0,
+    "document_stats_fast_success": 0,
+    "document_stats_fast_failures": 0,
+    "document_stats_fallbacks": 0,
+    "pass1_rows_column_fast_success": 0,
+    "pass1_rows_column_fast_failures": 0,
+    "pass1_rows_column_fallbacks": 0,
+    "pass1_rows_fast_success": 0,
+    "pass1_rows_fast_failures": 0,
+    "pass1_rows_fallbacks": 0,
+    "pass1_feature_rows_column_fast_success": 0,
+    "pass1_feature_rows_column_fast_failures": 0,
+    "pass1_feature_rows_column_fallbacks": 0,
+    "pass1_feature_rows_fast_success": 0,
+    "pass1_feature_rows_fast_failures": 0,
+    "pass1_feature_rows_fallbacks": 0,
+    "feature_rows_fast_success": 0,
+    "feature_rows_fast_failures": 0,
+    "feature_rows_fallbacks": 0,
+    "microbatch_plan_fast_success": 0,
+    "microbatch_plan_fast_failures": 0,
+    "microbatch_plan_fallbacks": 0,
+    "doc_id_validation_fast_success": 0,
+    "doc_id_validation_fast_failures": 0,
+    "doc_id_validation_fallbacks": 0,
+}
+_RUST_ACCEL_WARNING_EMITTED = False
+
+
+def _warn_rust_accel_failure_once(exc: Exception) -> None:
+    global _RUST_ACCEL_WARNING_EMITTED
+    if _RUST_ACCEL_WARNING_EMITTED:
+        return
+    _RUST_ACCEL_WARNING_EMITTED = True
+    warnings.warn(
+        (
+            "LM2011 Rust accelerator failed at runtime; falling back to the "
+            f"Python implementation. Cause: {type(exc).__name__}: {exc}"
+        ),
+        RuntimeWarning,
+        stacklevel=2,
+    )
+
+
+def get_lm2011_rust_accel_metrics() -> dict[str, int | str | bool | None]:
+    """Return LM2011 Rust accelerator counters and availability metadata."""
+    metrics: dict[str, int | str | bool | None] = dict(_RUST_ACCEL_METRICS)
+    metrics["rust_accel_available"] = _lm2011_rust is not None
+    metrics["rust_accel_import_error"] = _RUST_ACCEL_IMPORT_ERROR
+    return metrics
+
+
+def reset_lm2011_rust_accel_metrics() -> None:
+    """Reset LM2011 Rust accelerator counters and warning state."""
+    global _RUST_ACCEL_WARNING_EMITTED
+    for key in _RUST_ACCEL_METRICS:
+        _RUST_ACCEL_METRICS[key] = 0
+    _RUST_ACCEL_WARNING_EMITTED = False
+
+
 def _require_columns(lf: pl.LazyFrame, required: tuple[str, ...], label: str) -> None:
     schema = lf.collect_schema()
     missing = [name for name in required if name not in schema]
@@ -41,7 +133,7 @@ def _require_columns(lf: pl.LazyFrame, required: tuple[str, ...], label: str) ->
         raise ValueError(f"{label} missing required columns: {missing}")
 
 
-def _normalize_dictionary_tokens(values: Iterable[str] | None) -> frozenset[str]:
+def _normalize_dictionary_tokens_py(values: Iterable[str] | None) -> frozenset[str]:
     if values is None:
         return frozenset()
     tokens = {
@@ -51,6 +143,23 @@ def _normalize_dictionary_tokens(values: Iterable[str] | None) -> frozenset[str]
         for token in tokenize_lm2011_text(str(value))
     }
     return frozenset(tokens)
+
+
+def _normalize_dictionary_tokens(values: Iterable[str] | None) -> frozenset[str]:
+    if values is None:
+        return frozenset()
+    if _lm2011_rust is not None and isinstance(values, (list, tuple, set, frozenset)):
+        try:
+            tokens = _lm2011_rust.normalize_lm2011_dictionary_tokens(values)
+            _RUST_ACCEL_METRICS["dictionary_token_normalize_fast_success"] += 1
+            return frozenset(str(token) for token in tokens)
+        except Exception as exc:
+            _RUST_ACCEL_METRICS["dictionary_token_normalize_fast_failures"] += 1
+            _RUST_ACCEL_METRICS["dictionary_token_normalize_fallbacks"] += 1
+            _warn_rust_accel_failure_once(exc)
+    else:
+        _RUST_ACCEL_METRICS["dictionary_token_normalize_fallbacks"] += 1
+    return _normalize_dictionary_tokens_py(values)
 
 
 def normalize_lm2011_dictionary_lists(
@@ -68,11 +177,92 @@ def normalize_lm2011_dictionary_lists(
 
 def tokenize_lm2011_text(text: str | None) -> list[str]:
     """Return LM2011-compatible case-folded word tokens."""
-    return list(iter_lm2011_tokens(text))
+    if _lm2011_rust is not None:
+        try:
+            tokens = _lm2011_rust.tokenize_lm2011_text(text)
+            _RUST_ACCEL_METRICS["tokenize_fast_success"] += 1
+            return [str(token) for token in tokens]
+        except Exception as exc:
+            _RUST_ACCEL_METRICS["tokenize_fast_failures"] += 1
+            _RUST_ACCEL_METRICS["tokenize_fallbacks"] += 1
+            _warn_rust_accel_failure_once(exc)
+    else:
+        _RUST_ACCEL_METRICS["tokenize_fallbacks"] += 1
+    return list(_iter_lm2011_tokens_py(text))
 
 
 def iter_lm2011_tokens(text: str | None) -> Iterator[str]:
     """Yield LM2011-compatible tokens while repairing line-break hyphenation."""
+    if _lm2011_rust is not None:
+        try:
+            tokens = _lm2011_rust.tokenize_lm2011_text(text)
+            _RUST_ACCEL_METRICS["tokenize_fast_success"] += 1
+            yield from (str(token) for token in tokens)
+            return
+        except Exception as exc:
+            _RUST_ACCEL_METRICS["tokenize_fast_failures"] += 1
+            _RUST_ACCEL_METRICS["tokenize_fallbacks"] += 1
+            _warn_rust_accel_failure_once(exc)
+    else:
+        _RUST_ACCEL_METRICS["tokenize_fallbacks"] += 1
+    yield from _iter_lm2011_tokens_py(text)
+
+
+def count_lm2011_tokens(text: str | None) -> int:
+    """Return the LM2011 token count without materializing token strings when possible."""
+    if _lm2011_rust is not None:
+        try:
+            count = int(_lm2011_rust.count_lm2011_text_tokens(text))
+            _RUST_ACCEL_METRICS["token_count_fast_success"] += 1
+            return count
+        except Exception as exc:
+            _RUST_ACCEL_METRICS["token_count_fast_failures"] += 1
+            _RUST_ACCEL_METRICS["token_count_fallbacks"] += 1
+            _warn_rust_accel_failure_once(exc)
+    else:
+        _RUST_ACCEL_METRICS["token_count_fallbacks"] += 1
+    return sum(1 for _ in _iter_lm2011_tokens_py(text))
+
+
+def _count_lm2011_token_values_py(values: list[str]) -> list[int]:
+    return [sum(1 for _ in _iter_lm2011_tokens_py(value)) for value in values]
+
+
+def _count_lm2011_token_values(values: list[str]) -> list[int]:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.count_lm2011_text_token_values(values)
+            _RUST_ACCEL_METRICS["token_count_batch_fast_success"] += 1
+            return [int(value) for value in out]
+        except Exception as exc:
+            _RUST_ACCEL_METRICS["token_count_batch_fast_failures"] += 1
+            _warn_rust_accel_failure_once(exc)
+    _RUST_ACCEL_METRICS["token_count_batch_fallbacks"] += 1
+    return _count_lm2011_token_values_py(values)
+
+
+def _int64_series_from_optional_values(series: pl.Series, values: list[int | None]) -> pl.Series:
+    return pl.Series(series.name, values, dtype=pl.Int64)
+
+
+def count_lm2011_tokens_expr(column_name: str) -> pl.Expr:
+    def _map_batch(series: pl.Series) -> pl.Series:
+        values = series.to_list()
+        non_null_values = [value for value in values if value is not None]
+        counts = iter(_count_lm2011_token_values(non_null_values))
+        return _int64_series_from_optional_values(
+            series,
+            [None if value is None else next(counts) for value in values],
+        )
+
+    return pl.col(column_name).cast(pl.Utf8, strict=False).map_batches(
+        _map_batch,
+        return_dtype=pl.Int64,
+        is_elementwise=True,
+    )
+
+
+def _iter_lm2011_tokens_py(text: str | None) -> Iterator[str]:
     if text is None:
         return
     normalized = text.replace("\r\n", "\n").replace("\r", "\n")
@@ -111,11 +301,7 @@ def _lm2011_term_weight(
 def _ensure_normalized_form(df: pl.DataFrame, *, raw_form_col: str) -> pl.DataFrame:
     if "normalized_form" in df.columns:
         return df.with_columns(pl.col("normalized_form").cast(pl.Utf8, strict=False))
-    return df.with_columns(
-        pl.col(raw_form_col)
-        .map_elements(normalize_lm2011_form_value, return_dtype=pl.Utf8)
-        .alias("normalized_form")
-    )
+    return df.with_columns(normalize_lm2011_form_expr(raw_form_col).alias("normalized_form"))
 
 
 def _validated_batch_size(batch_size: int) -> int:
@@ -153,11 +339,7 @@ def _build_text_base_lf(
 
     base = base.select(*select_cols)
     if "normalized_form" not in schema:
-        base = base.with_columns(
-            pl.col(raw_form_col)
-            .map_elements(normalize_lm2011_form_value, return_dtype=pl.Utf8)
-            .alias("normalized_form")
-        )
+        base = base.with_columns(normalize_lm2011_form_expr(raw_form_col).alias("normalized_form"))
 
     normalized = base.with_columns(
         pl.col("doc_id").cast(pl.Utf8, strict=False).alias("doc_id"),
@@ -206,6 +388,66 @@ def _validated_microbatch_byte_limit(limit_bytes: int) -> int:
     return int(limit_bytes)
 
 
+def _eager_text_microbatch_spans_py(
+    byte_sizes: list[int],
+    *,
+    max_docs_per_batch: int,
+    max_input_text_bytes_per_microbatch: int,
+) -> list[tuple[int, int]]:
+    spans: list[tuple[int, int]] = []
+    current_start = 0
+    current_count = 0
+    current_bytes = 0
+    for row_index, row_bytes in enumerate(byte_sizes):
+        input_bytes = int(row_bytes or 0)
+        should_flush = current_count > 0 and (
+            current_count >= max_docs_per_batch or current_bytes + input_bytes > max_input_text_bytes_per_microbatch
+        )
+        if should_flush:
+            spans.append((current_start, current_count))
+            current_start = row_index
+            current_count = 0
+            current_bytes = 0
+        current_count += 1
+        current_bytes += input_bytes
+        if current_count >= max_docs_per_batch:
+            spans.append((current_start, current_count))
+            current_start = row_index + 1
+            current_count = 0
+            current_bytes = 0
+    if current_count > 0:
+        spans.append((current_start, current_count))
+    return spans
+
+
+def _eager_text_microbatch_spans(
+    byte_sizes: list[int],
+    *,
+    max_docs_per_batch: int,
+    max_input_text_bytes_per_microbatch: int,
+) -> list[tuple[int, int]]:
+    if _lm2011_rust is not None:
+        try:
+            spans = _lm2011_rust.plan_text_microbatch_spans(
+                byte_sizes,
+                max_docs_per_batch,
+                max_input_text_bytes_per_microbatch,
+            )
+            _RUST_ACCEL_METRICS["microbatch_plan_fast_success"] += 1
+            return [(int(start), int(count)) for start, count in spans]
+        except Exception as exc:
+            _RUST_ACCEL_METRICS["microbatch_plan_fast_failures"] += 1
+            _RUST_ACCEL_METRICS["microbatch_plan_fallbacks"] += 1
+            _warn_rust_accel_failure_once(exc)
+    else:
+        _RUST_ACCEL_METRICS["microbatch_plan_fallbacks"] += 1
+    return _eager_text_microbatch_spans_py(
+        byte_sizes,
+        max_docs_per_batch=max_docs_per_batch,
+        max_input_text_bytes_per_microbatch=max_input_text_bytes_per_microbatch,
+    )
+
+
 def _eager_text_microbatch_slices(
     batch: pl.DataFrame,
     *,
@@ -226,28 +468,13 @@ def _eager_text_microbatch_slices(
         .alias("_input_text_bytes")
     )
     byte_sizes = sized_batch.get_column("_input_text_bytes").to_list()
-    current_start = 0
-    current_count = 0
-    current_bytes = 0
-    for row_index, row_bytes in enumerate(byte_sizes):
-        input_bytes = int(row_bytes or 0)
-        should_flush = current_count > 0 and (
-            current_count >= max_docs or current_bytes + input_bytes > max_bytes
-        )
-        if should_flush:
-            yield sized_batch.slice(current_start, current_count).drop("_input_text_bytes")
-            current_start = row_index
-            current_count = 0
-            current_bytes = 0
-        current_count += 1
-        current_bytes += input_bytes
-        if current_count >= max_docs:
-            yield sized_batch.slice(current_start, current_count).drop("_input_text_bytes")
-            current_start = row_index + 1
-            current_count = 0
-            current_bytes = 0
-    if current_count > 0:
-        yield sized_batch.slice(current_start, current_count).drop("_input_text_bytes")
+    spans = _eager_text_microbatch_spans(
+        [int(row_bytes or 0) for row_bytes in byte_sizes],
+        max_docs_per_batch=max_docs,
+        max_input_text_bytes_per_microbatch=max_bytes,
+    )
+    for start, count in spans:
+        yield sized_batch.slice(start, count).drop("_input_text_bytes")
 
 
 def _source_scan_chunk_docs(*, include_item_id: bool, max_docs_per_microbatch: int) -> int:
@@ -257,7 +484,7 @@ def _source_scan_chunk_docs(*, include_item_id: bool, max_docs_per_microbatch: i
     return min(_validated_batch_size(max_docs_per_microbatch), internal_cap)
 
 
-def _validate_incremental_text_doc_ids(
+def _validate_incremental_text_doc_ids_py(
     batch: pl.DataFrame,
     *,
     seen_doc_ids: set[str | None],
@@ -274,6 +501,49 @@ def _validate_incremental_text_doc_ids(
     if duplicate_doc_ids:
         raise ValueError(f"LM2011 text scoring requires doc_id to be unique in the writer path: {duplicate_doc_ids}")
     seen_doc_ids.update(batch_seen)
+
+
+def _validate_incremental_text_doc_ids(
+    batch: pl.DataFrame,
+    *,
+    seen_doc_ids: set[str | None],
+    duplicate_limit: int = 10,
+) -> None:
+    doc_ids = batch.get_column("doc_id").cast(pl.Utf8, strict=False).to_list()
+    if _lm2011_rust is not None:
+        try:
+            raw_duplicates, raw_batch_seen = _lm2011_rust.validate_lm2011_incremental_text_doc_ids(
+                doc_ids,
+                list(seen_doc_ids),
+                int(duplicate_limit),
+            )
+        except Exception as exc:
+            _RUST_ACCEL_METRICS["doc_id_validation_fast_failures"] += 1
+            _RUST_ACCEL_METRICS["doc_id_validation_fallbacks"] += 1
+            _warn_rust_accel_failure_once(exc)
+        else:
+            _RUST_ACCEL_METRICS["doc_id_validation_fast_success"] += 1
+            duplicate_doc_ids = [
+                None if doc_id is None else str(doc_id)
+                for doc_id in raw_duplicates
+            ]
+            if duplicate_doc_ids:
+                raise ValueError(
+                    "LM2011 text scoring requires doc_id to be unique in the writer path: "
+                    f"{duplicate_doc_ids}"
+                )
+            seen_doc_ids.update(
+                None if doc_id is None else str(doc_id)
+                for doc_id in raw_batch_seen
+            )
+            return
+    else:
+        _RUST_ACCEL_METRICS["doc_id_validation_fallbacks"] += 1
+    return _validate_incremental_text_doc_ids_py(
+        batch,
+        seen_doc_ids=seen_doc_ids,
+        duplicate_limit=duplicate_limit,
+    )
 
 
 def _stage_text_source_shards(
@@ -345,7 +615,7 @@ def _emit_progress(
         progress_callback(payload)
 
 
-def _prepare_document_stats(
+def _prepare_document_stats_py(
     batches: Iterable[pl.DataFrame],
     *,
     text_col: str,
@@ -358,6 +628,10 @@ def _prepare_document_stats(
     doc_token_totals: dict[str, int] = {}
     doc_recognized_word_totals: dict[str, int] = {}
     document_frequency: Counter[str] = Counter()
+    rust_counter = _build_lm2011_rust_token_counter(
+        vocabulary=vocabulary,
+        master_dictionary_words=master_dictionary_words,
+    )
 
     for batch in batches:
         for row in batch.iter_rows(named=True):
@@ -371,6 +645,7 @@ def _prepare_document_stats(
                 text_input,
                 vocabulary=vocabulary,
                 master_dictionary_words=master_dictionary_words,
+                rust_counter=rust_counter,
             )
             base_rows.append(row_dict)
             doc_token_counts[doc_id] = counts
@@ -386,16 +661,156 @@ def _prepare_document_stats(
     return base_rows, doc_token_counts, doc_token_totals, doc_recognized_word_totals, idf_by_token
 
 
+def _clean_batch_rows_for_rust(
+    batch: pl.DataFrame,
+    *,
+    text_col: str,
+    text_cleaner: Callable[[str | None], str | None],
+) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for row in batch.iter_rows(named=True):
+        row_dict = dict(row)
+        text_value = row_dict.get(text_col)
+        text_input = text_value if isinstance(text_value, str) else None
+        row_dict[text_col] = text_cleaner(text_input)
+        rows.append(row_dict)
+    return rows
+
+
+def _prepare_document_stats(
+    batches: Iterable[pl.DataFrame],
+    *,
+    text_col: str,
+    vocabulary: frozenset[str],
+    master_dictionary_words: frozenset[str],
+    text_cleaner: Callable[[str | None], str | None] | None = None,
+) -> tuple[list[dict[str, object]], dict[str, Counter[str]], dict[str, int], dict[str, int], dict[str, float]]:
+    batch_list = list(batches)
+    if _lm2011_rust is not None:
+        batch_meta_columns: list[list[str]] = []
+        batch_meta_values: list[list[list[object]]] = []
+        batch_doc_ids: list[list[object]] = []
+        batch_text_values: list[list[object | None]] = []
+        for batch in batch_list:
+            meta_columns = [column for column in batch.columns if column != text_col]
+            raw_text_values = (
+                batch.get_column(text_col).to_list()
+                if text_col in batch.columns
+                else [None for _ in range(batch.height)]
+            )
+            text_values = [
+                text_cleaner(value if isinstance(value, str) else None)
+                for value in raw_text_values
+            ] if text_cleaner is not None else raw_text_values
+            batch_meta_columns.append(meta_columns)
+            batch_meta_values.append([batch.get_column(column).to_list() for column in meta_columns])
+            batch_doc_ids.append(batch.get_column("doc_id").to_list())
+            batch_text_values.append(text_values)
+        try:
+            (
+                raw_base_rows,
+                raw_doc_token_counts,
+                raw_doc_token_totals,
+                raw_doc_recognized_word_totals,
+                raw_idf_by_token,
+            ) = _lm2011_rust.prepare_lm2011_document_stats_columns(
+                batch_meta_columns,
+                batch_meta_values,
+                batch_doc_ids,
+                batch_text_values,
+                list(vocabulary),
+                list(master_dictionary_words),
+            )
+            _RUST_ACCEL_METRICS["document_stats_column_fast_success"] += 1
+            return (
+                [dict(row) for row in raw_base_rows],
+                {
+                    str(doc_id): Counter({str(token): int(count) for token, count in dict(counts).items()})
+                    for doc_id, counts in dict(raw_doc_token_counts).items()
+                },
+                {str(doc_id): int(total) for doc_id, total in dict(raw_doc_token_totals).items()},
+                {
+                    str(doc_id): int(total)
+                    for doc_id, total in dict(raw_doc_recognized_word_totals).items()
+                },
+                {str(token): float(value) for token, value in dict(raw_idf_by_token).items()},
+            )
+        except Exception:
+            _RUST_ACCEL_METRICS["document_stats_column_fast_failures"] += 1
+            _RUST_ACCEL_METRICS["document_stats_column_fallbacks"] += 1
+        rust_batches = (
+            [_clean_batch_rows_for_rust(batch, text_col=text_col, text_cleaner=text_cleaner) for batch in batch_list]
+            if text_cleaner is not None
+            else None
+        )
+        try:
+            (
+                raw_base_rows,
+                raw_doc_token_counts,
+                raw_doc_token_totals,
+                raw_doc_recognized_word_totals,
+                raw_idf_by_token,
+            ) = _lm2011_rust.prepare_lm2011_document_stats(
+                rust_batches if rust_batches is not None else [batch.to_dicts() for batch in batch_list],
+                text_col,
+                list(vocabulary),
+                list(master_dictionary_words),
+            )
+            _RUST_ACCEL_METRICS["document_stats_fast_success"] += 1
+            return (
+                [dict(row) for row in raw_base_rows],
+                {
+                    str(doc_id): Counter({str(token): int(count) for token, count in dict(counts).items()})
+                    for doc_id, counts in dict(raw_doc_token_counts).items()
+                },
+                {str(doc_id): int(total) for doc_id, total in dict(raw_doc_token_totals).items()},
+                {
+                    str(doc_id): int(total)
+                    for doc_id, total in dict(raw_doc_recognized_word_totals).items()
+                },
+                {str(token): float(value) for token, value in dict(raw_idf_by_token).items()},
+            )
+        except Exception as exc:
+            _RUST_ACCEL_METRICS["document_stats_fast_failures"] += 1
+            _RUST_ACCEL_METRICS["document_stats_fallbacks"] += 1
+            _warn_rust_accel_failure_once(exc)
+    else:
+        _RUST_ACCEL_METRICS["document_stats_fallbacks"] += 1
+    return _prepare_document_stats_py(
+        batch_list,
+        text_col=text_col,
+        vocabulary=vocabulary,
+        master_dictionary_words=master_dictionary_words,
+        text_cleaner=text_cleaner,
+    )
+
+
 def _count_document_tokens(
     text: str | None,
     *,
     vocabulary: frozenset[str],
     master_dictionary_words: frozenset[str],
+    rust_counter: Any | None = None,
 ) -> tuple[int, int, Counter[str]]:
+    if rust_counter is not None:
+        try:
+            token_total, recognized_word_total, raw_counts = rust_counter.count_document_tokens(text)
+            _RUST_ACCEL_METRICS["count_fast_success"] += 1
+            return (
+                int(token_total),
+                int(recognized_word_total),
+                Counter({str(token): int(count) for token, count in dict(raw_counts).items()}),
+            )
+        except Exception as exc:
+            _RUST_ACCEL_METRICS["count_fast_failures"] += 1
+            _RUST_ACCEL_METRICS["count_fallbacks"] += 1
+            _warn_rust_accel_failure_once(exc)
+    else:
+        _RUST_ACCEL_METRICS["count_fallbacks"] += 1
     token_total = 0
     recognized_word_total = 0
     counts: Counter[str] = Counter()
-    for token in iter_lm2011_tokens(text):
+    for token in _iter_lm2011_tokens_py(text):
         token_total += 1
         if token in master_dictionary_words:
             recognized_word_total += 1
@@ -404,7 +819,27 @@ def _count_document_tokens(
     return token_total, recognized_word_total, counts
 
 
-def _build_feature_rows(
+def _build_lm2011_rust_token_counter(
+    *,
+    vocabulary: frozenset[str],
+    master_dictionary_words: frozenset[str],
+) -> Any | None:
+    if _lm2011_rust is None:
+        return None
+    try:
+        counter = _lm2011_rust.Lm2011TokenCounter(
+            list(vocabulary),
+            list(master_dictionary_words),
+        )
+        _RUST_ACCEL_METRICS["counter_init_success"] += 1
+        return counter
+    except Exception as exc:
+        _RUST_ACCEL_METRICS["counter_init_failures"] += 1
+        _warn_rust_accel_failure_once(exc)
+        return None
+
+
+def _build_feature_rows_py(
     base_rows: list[dict[str, object]],
     *,
     doc_token_counts: Mapping[str, Counter[str]],
@@ -446,6 +881,49 @@ def _build_feature_rows(
                 )
         rows.append(out)
     return rows
+
+
+def _build_feature_rows(
+    base_rows: list[dict[str, object]],
+    *,
+    doc_token_counts: Mapping[str, Counter[str]],
+    doc_token_totals: Mapping[str, int],
+    doc_recognized_word_totals: Mapping[str, int],
+    idf_by_token: Mapping[str, float],
+    token_count_col: str,
+    total_token_count_col: str,
+    signal_specs: tuple[tuple[str, frozenset[str], bool], ...],
+) -> list[dict[str, object]]:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.build_lm2011_feature_rows(
+                base_rows,
+                doc_token_counts,
+                doc_token_totals,
+                doc_recognized_word_totals,
+                idf_by_token,
+                token_count_col,
+                total_token_count_col,
+                signal_specs,
+            )
+            _RUST_ACCEL_METRICS["feature_rows_fast_success"] += 1
+            return [dict(row) for row in out]
+        except Exception as exc:
+            _RUST_ACCEL_METRICS["feature_rows_fast_failures"] += 1
+            _RUST_ACCEL_METRICS["feature_rows_fallbacks"] += 1
+            _warn_rust_accel_failure_once(exc)
+    else:
+        _RUST_ACCEL_METRICS["feature_rows_fallbacks"] += 1
+    return _build_feature_rows_py(
+        base_rows,
+        doc_token_counts=doc_token_counts,
+        doc_token_totals=doc_token_totals,
+        doc_recognized_word_totals=doc_recognized_word_totals,
+        idf_by_token=idf_by_token,
+        token_count_col=token_count_col,
+        total_token_count_col=total_token_count_col,
+        signal_specs=signal_specs,
+    )
 
 
 def _feature_schema(
@@ -575,7 +1053,7 @@ def _pass1_schema(
     return schema
 
 
-def _prepare_pass1_rows(
+def _prepare_pass1_rows_py(
     batch: pl.DataFrame,
     *,
     text_col: str,
@@ -584,6 +1062,7 @@ def _prepare_pass1_rows(
     token_count_col: str,
     total_token_count_col: str,
     text_cleaner: Callable[[str | None], str | None] | None = None,
+    rust_counter: Any | None = None,
 ) -> tuple[list[dict[str, object]], Counter[str]]:
     rows: list[dict[str, object]] = []
     document_frequency: Counter[str] = Counter()
@@ -597,6 +1076,7 @@ def _prepare_pass1_rows(
             text_input,
             vocabulary=vocabulary,
             master_dictionary_words=master_dictionary_words,
+            rust_counter=rust_counter,
         )
         rows.append(
             {
@@ -608,6 +1088,83 @@ def _prepare_pass1_rows(
         )
         document_frequency.update(counts.keys())
     return rows, document_frequency
+
+
+def _prepare_pass1_rows(
+    batch: pl.DataFrame,
+    *,
+    text_col: str,
+    vocabulary: frozenset[str],
+    master_dictionary_words: frozenset[str],
+    token_count_col: str,
+    total_token_count_col: str,
+    text_cleaner: Callable[[str | None], str | None] | None = None,
+    rust_counter: Any | None = None,
+) -> tuple[list[dict[str, object]], Counter[str]]:
+    if _lm2011_rust is not None:
+        meta_columns = [column for column in batch.columns if column != text_col]
+        raw_text_values = (
+            batch.get_column(text_col).to_list()
+            if text_col in batch.columns
+            else [None for _ in range(batch.height)]
+        )
+        text_values = [
+            text_cleaner(value if isinstance(value, str) else None)
+            for value in raw_text_values
+        ] if text_cleaner is not None else raw_text_values
+        try:
+            raw_rows, raw_document_frequency = _lm2011_rust.prepare_lm2011_pass1_columns(
+                meta_columns,
+                [batch.get_column(column).to_list() for column in meta_columns],
+                text_values,
+                list(vocabulary),
+                list(master_dictionary_words),
+                token_count_col,
+                total_token_count_col,
+            )
+            _RUST_ACCEL_METRICS["pass1_rows_column_fast_success"] += 1
+            return (
+                [dict(row) for row in raw_rows],
+                Counter({str(token): int(count) for token, count in dict(raw_document_frequency).items()}),
+            )
+        except Exception:
+            _RUST_ACCEL_METRICS["pass1_rows_column_fast_failures"] += 1
+            _RUST_ACCEL_METRICS["pass1_rows_column_fallbacks"] += 1
+        rust_rows = (
+            _clean_batch_rows_for_rust(batch, text_col=text_col, text_cleaner=text_cleaner)
+            if text_cleaner is not None
+            else None
+        )
+        try:
+            raw_rows, raw_document_frequency = _lm2011_rust.prepare_lm2011_pass1_rows(
+                rust_rows if rust_rows is not None else batch.to_dicts(),
+                text_col,
+                list(vocabulary),
+                list(master_dictionary_words),
+                token_count_col,
+                total_token_count_col,
+            )
+            _RUST_ACCEL_METRICS["pass1_rows_fast_success"] += 1
+            return (
+                [dict(row) for row in raw_rows],
+                Counter({str(token): int(count) for token, count in dict(raw_document_frequency).items()}),
+            )
+        except Exception as exc:
+            _RUST_ACCEL_METRICS["pass1_rows_fast_failures"] += 1
+            _RUST_ACCEL_METRICS["pass1_rows_fallbacks"] += 1
+            _warn_rust_accel_failure_once(exc)
+    else:
+        _RUST_ACCEL_METRICS["pass1_rows_fallbacks"] += 1
+    return _prepare_pass1_rows_py(
+        batch,
+        text_col=text_col,
+        vocabulary=vocabulary,
+        master_dictionary_words=master_dictionary_words,
+        token_count_col=token_count_col,
+        total_token_count_col=total_token_count_col,
+        text_cleaner=text_cleaner,
+        rust_counter=rust_counter,
+    )
 
 
 def _feature_row_from_pass1(
@@ -664,6 +1221,111 @@ def _feature_row_from_pass1(
     return out
 
 
+def _feature_rows_from_pass1_py(
+    pass1_rows: list[dict[str, object]],
+    *,
+    raw_form_col: str,
+    token_count_col: str,
+    total_token_count_col: str,
+    signal_specs: tuple[tuple[str, frozenset[str], bool], ...],
+    idf_by_token: Mapping[str, float],
+    cleaning_policy_id: str | None,
+) -> list[dict[str, object]]:
+    return [
+        _feature_row_from_pass1(
+            row,
+            raw_form_col=raw_form_col,
+            token_count_col=token_count_col,
+            total_token_count_col=total_token_count_col,
+            signal_specs=signal_specs,
+            idf_by_token=idf_by_token,
+            cleaning_policy_id=cleaning_policy_id,
+        )
+        for row in pass1_rows
+    ]
+
+
+def _feature_rows_from_pass1(
+    pass1_rows: list[dict[str, object]],
+    *,
+    raw_form_col: str,
+    token_count_col: str,
+    total_token_count_col: str,
+    signal_specs: tuple[tuple[str, frozenset[str], bool], ...],
+    idf_by_token: Mapping[str, float],
+    cleaning_policy_id: str | None,
+) -> list[dict[str, object]]:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.build_lm2011_feature_rows_from_pass1(
+                pass1_rows,
+                raw_form_col,
+                token_count_col,
+                total_token_count_col,
+                signal_specs,
+                idf_by_token,
+                cleaning_policy_id,
+            )
+            _RUST_ACCEL_METRICS["pass1_feature_rows_fast_success"] += 1
+            return [dict(row) for row in out]
+        except Exception as exc:
+            _RUST_ACCEL_METRICS["pass1_feature_rows_fast_failures"] += 1
+            _RUST_ACCEL_METRICS["pass1_feature_rows_fallbacks"] += 1
+            _warn_rust_accel_failure_once(exc)
+    else:
+        _RUST_ACCEL_METRICS["pass1_feature_rows_fallbacks"] += 1
+    return _feature_rows_from_pass1_py(
+        pass1_rows,
+        raw_form_col=raw_form_col,
+        token_count_col=token_count_col,
+        total_token_count_col=total_token_count_col,
+        signal_specs=signal_specs,
+        idf_by_token=idf_by_token,
+        cleaning_policy_id=cleaning_policy_id,
+    )
+
+
+def _feature_rows_from_pass1_frame(
+    pass1_df: pl.DataFrame,
+    *,
+    raw_form_col: str,
+    token_count_col: str,
+    total_token_count_col: str,
+    signal_specs: tuple[tuple[str, frozenset[str], bool], ...],
+    idf_by_token: Mapping[str, float],
+    cleaning_policy_id: str | None,
+) -> list[dict[str, object]]:
+    if pass1_df.height == 0:
+        return []
+    if _lm2011_rust is not None:
+        column_names = list(pass1_df.columns)
+        try:
+            out = _lm2011_rust.build_lm2011_feature_rows_from_pass1_columns(
+                column_names,
+                [pass1_df.get_column(column).to_list() for column in column_names],
+                raw_form_col,
+                token_count_col,
+                total_token_count_col,
+                signal_specs,
+                idf_by_token,
+                cleaning_policy_id,
+            )
+            _RUST_ACCEL_METRICS["pass1_feature_rows_column_fast_success"] += 1
+            return [dict(row) for row in out]
+        except Exception:
+            _RUST_ACCEL_METRICS["pass1_feature_rows_column_fast_failures"] += 1
+            _RUST_ACCEL_METRICS["pass1_feature_rows_column_fallbacks"] += 1
+    return _feature_rows_from_pass1(
+        pass1_df.to_dicts(),
+        raw_form_col=raw_form_col,
+        token_count_col=token_count_col,
+        total_token_count_col=total_token_count_col,
+        signal_specs=signal_specs,
+        idf_by_token=idf_by_token,
+        cleaning_policy_id=cleaning_policy_id,
+    )
+
+
 def _prepare_temp_workspace(output_path: Path, temp_root: Path | None) -> Path:
     base_dir = temp_root if temp_root is not None else Path(tempfile.gettempdir())
     base_dir.mkdir(parents=True, exist_ok=True)
@@ -718,6 +1380,10 @@ def _write_streaming_text_features(
 ) -> int:
     vocabulary = frozenset().union(*(tokens for _, tokens, _ in signal_specs))
     normalized_master_dictionary_words = _normalize_master_dictionary_words(master_dictionary_words)
+    rust_counter = _build_lm2011_rust_token_counter(
+        vocabulary=vocabulary,
+        master_dictionary_words=normalized_master_dictionary_words,
+    )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     temp_dir = _prepare_temp_workspace(output_path, temp_root)
     pass1_dir = temp_dir / "pass1"
@@ -754,6 +1420,7 @@ def _write_streaming_text_features(
                 token_count_col=token_count_col,
                 total_token_count_col=total_token_count_col,
                 text_cleaner=text_cleaner,
+                rust_counter=rust_counter,
             )
             if not rows:
                 continue
@@ -796,18 +1463,15 @@ def _write_streaming_text_features(
         feature_shard_paths: list[Path] = []
         for batch_index, shard_path in enumerate(pass1_paths, start=1):
             pass1_df = pl.read_parquet(shard_path)
-            rows = [
-                _feature_row_from_pass1(
-                    row,
-                    raw_form_col=raw_form_col,
-                    token_count_col=token_count_col,
-                    total_token_count_col=total_token_count_col,
-                    signal_specs=signal_specs,
-                    idf_by_token=idf_by_token,
-                    cleaning_policy_id=cleaning_policy_id,
-                )
-                for row in pass1_df.iter_rows(named=True)
-            ]
+            rows = _feature_rows_from_pass1_frame(
+                pass1_df,
+                raw_form_col=raw_form_col,
+                token_count_col=token_count_col,
+                total_token_count_col=total_token_count_col,
+                signal_specs=signal_specs,
+                idf_by_token=idf_by_token,
+                cleaning_policy_id=cleaning_policy_id,
+            )
             if not rows:
                 continue
             feature_shard_path = feature_dir / f"{batch_index:06d}.parquet"
@@ -863,6 +1527,10 @@ def _write_production_microbatched_text_features(
 ) -> int:
     vocabulary = frozenset().union(*(tokens for _, tokens, _ in signal_specs))
     normalized_master_dictionary_words = _normalize_master_dictionary_words(master_dictionary_words)
+    rust_counter = _build_lm2011_rust_token_counter(
+        vocabulary=vocabulary,
+        master_dictionary_words=normalized_master_dictionary_words,
+    )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     temp_dir = _prepare_temp_workspace(output_path, temp_root)
     pass1_dir = temp_dir / "pass1"
@@ -922,6 +1590,7 @@ def _write_production_microbatched_text_features(
                 token_count_col=token_count_col,
                 total_token_count_col=total_token_count_col,
                 text_cleaner=text_cleaner,
+                rust_counter=rust_counter,
             )
             if rows:
                 shard_path = pass1_dir / f"{batch_index:06d}.parquet"
@@ -968,18 +1637,15 @@ def _write_production_microbatched_text_features(
         feature_shard_paths: list[Path] = []
         for batch_index, shard_path in enumerate(pass1_paths, start=1):
             pass1_df = pl.read_parquet(shard_path)
-            rows = [
-                _feature_row_from_pass1(
-                    row,
-                    raw_form_col=raw_form_col,
-                    token_count_col=token_count_col,
-                    total_token_count_col=total_token_count_col,
-                    signal_specs=signal_specs,
-                    idf_by_token=idf_by_token,
-                    cleaning_policy_id=cleaning_policy_id,
-                )
-                for row in pass1_df.iter_rows(named=True)
-            ]
+            rows = _feature_rows_from_pass1_frame(
+                pass1_df,
+                raw_form_col=raw_form_col,
+                token_count_col=token_count_col,
+                total_token_count_col=total_token_count_col,
+                signal_specs=signal_specs,
+                idf_by_token=idf_by_token,
+                cleaning_policy_id=cleaning_policy_id,
+            )
             if rows:
                 feature_shard_path = feature_dir / f"{batch_index:06d}.parquet"
                 pl.DataFrame(rows, schema_overrides=feature_schema).write_parquet(

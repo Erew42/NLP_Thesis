@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass
@@ -12,6 +12,14 @@ from thesis_pkg.benchmarking.contracts import FinbertAuthoritySpec
 from thesis_pkg.benchmarking.contracts import ItemTextCleaningConfig
 from thesis_pkg.benchmarking.contracts import SentenceDatasetConfig
 from thesis_pkg.core.sec.lm2011_text import tokenize_lm2011_text
+
+try:
+    from thesis_native import _lm2011_rust
+except Exception as exc:  # pragma: no cover - optional native extension
+    _lm2011_rust = None
+    _ITEM_CLEANING_RUST_IMPORT_ERROR: str | None = f"{type(exc).__name__}: {exc}"
+else:
+    _ITEM_CLEANING_RUST_IMPORT_ERROR = None
 
 
 ITEM_SCOPE_BY_BENCHMARK_ITEM_CODE: dict[str, str] = {
@@ -226,6 +234,96 @@ MANUAL_AUDIT_SAMPLE_SCHEMA: dict[str, pl.DataType] = {
     "body_text_nonempty": pl.Boolean,
 }
 
+_ITEM_CLEANING_RUST_METRICS: dict[str, int] = {
+    "benchmark_scope_fast_success": 0,
+    "benchmark_scope_fallbacks": 0,
+    "benchmark_scope_batch_fast_success": 0,
+    "benchmark_scope_batch_fast_failures": 0,
+    "benchmark_scope_batch_fallbacks": 0,
+    "clean_text_fast_success": 0,
+    "clean_text_fast_failures": 0,
+    "clean_text_fallbacks": 0,
+    "prepare_rows_fast_success": 0,
+    "prepare_rows_fast_failures": 0,
+    "prepare_rows_fallbacks": 0,
+    "normalize_newlines_fast_success": 0,
+    "normalize_newlines_fallbacks": 0,
+    "collapse_blank_runs_fast_success": 0,
+    "collapse_blank_runs_fallbacks": 0,
+    "activation_status_fast_success": 0,
+    "activation_status_fallbacks": 0,
+    "activation_status_batch_fast_success": 0,
+    "activation_status_batch_fast_failures": 0,
+    "activation_status_batch_fallbacks": 0,
+    "audit_period_fast_success": 0,
+    "audit_period_fallbacks": 0,
+    "audit_period_batch_fast_success": 0,
+    "audit_period_batch_fast_failures": 0,
+    "audit_period_batch_fallbacks": 0,
+    "page_marker_fast_success": 0,
+    "page_marker_fallbacks": 0,
+    "report_header_fast_success": 0,
+    "report_header_fallbacks": 0,
+    "structural_residue_fast_success": 0,
+    "structural_residue_fallbacks": 0,
+    "line_remove_layout_fast_success": 0,
+    "line_remove_layout_fast_failures": 0,
+    "line_remove_layout_fallbacks": 0,
+    "line_remove_table_fast_success": 0,
+    "line_remove_table_fast_failures": 0,
+    "line_remove_table_fallbacks": 0,
+    "table_like_fast_success": 0,
+    "table_like_fallbacks": 0,
+    "table_header_fast_success": 0,
+    "table_header_fallbacks": 0,
+    "strong_table_title_fast_success": 0,
+    "strong_table_title_fallbacks": 0,
+    "table_intro_fast_success": 0,
+    "table_intro_fallbacks": 0,
+    "table_support_fast_success": 0,
+    "table_support_fallbacks": 0,
+    "toc_like_fast_success": 0,
+    "toc_like_fallbacks": 0,
+    "toc_prefix_trim_fast_success": 0,
+    "toc_prefix_trim_fast_failures": 0,
+    "toc_prefix_trim_fallbacks": 0,
+    "tail_truncate_fast_success": 0,
+    "tail_truncate_fallbacks": 0,
+    "reference_stub_fast_success": 0,
+    "reference_stub_fallbacks": 0,
+    "lm_token_counts_fast_success": 0,
+    "lm_token_counts_fast_failures": 0,
+    "lm_token_counts_fallbacks": 0,
+    "drop_reason_fast_success": 0,
+    "drop_reason_fallbacks": 0,
+    "manual_audit_reason_fast_success": 0,
+    "manual_audit_reason_fallbacks": 0,
+    "base_row_payload_fast_success": 0,
+    "base_row_payload_fallbacks": 0,
+    "review_status_fast_success": 0,
+    "review_status_fallbacks": 0,
+    "production_eligible_fast_success": 0,
+    "production_eligible_fallbacks": 0,
+    "finalize_rows_fast_success": 0,
+    "finalize_rows_fast_failures": 0,
+    "finalize_rows_fallbacks": 0,
+    "manual_audit_sample_fast_success": 0,
+    "manual_audit_sample_fast_failures": 0,
+    "manual_audit_sample_fallbacks": 0,
+}
+
+
+def get_item_cleaning_rust_accel_metrics() -> dict[str, int | str | bool | None]:
+    metrics: dict[str, int | str | bool | None] = dict(_ITEM_CLEANING_RUST_METRICS)
+    metrics["rust_accel_available"] = _lm2011_rust is not None
+    metrics["rust_accel_import_error"] = _ITEM_CLEANING_RUST_IMPORT_ERROR
+    return metrics
+
+
+def reset_item_cleaning_rust_accel_metrics() -> None:
+    for key in _ITEM_CLEANING_RUST_METRICS:
+        _ITEM_CLEANING_RUST_METRICS[key] = 0
+
 
 @dataclass(frozen=True)
 class CleanedTextResult:
@@ -251,11 +349,55 @@ class ItemTextCleaningResult:
     manual_audit_sample_df: pl.DataFrame
 
 
-def benchmark_item_code_to_text_scope(value: str | None) -> str | None:
+def _benchmark_item_code_to_text_scope_py(value: str | None) -> str | None:
     if value is None:
         return None
     normalized = str(value).strip().casefold().replace("-", "_")
     return ITEM_SCOPE_BY_BENCHMARK_ITEM_CODE.get(normalized, normalized or None)
+
+
+def benchmark_item_code_to_text_scope(value: str | None) -> str | None:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.benchmark_item_code_to_text_scope_value(value)
+            _ITEM_CLEANING_RUST_METRICS["benchmark_scope_fast_success"] += 1
+            return None if out is None else str(out)
+        except Exception:
+            _ITEM_CLEANING_RUST_METRICS["benchmark_scope_fallbacks"] += 1
+    else:
+        _ITEM_CLEANING_RUST_METRICS["benchmark_scope_fallbacks"] += 1
+    return _benchmark_item_code_to_text_scope_py(value)
+
+
+def _utf8_series_from_optional_values(series: pl.Series, values: list[str | None]) -> pl.Series:
+    return pl.Series(series.name, values, dtype=pl.Utf8)
+
+
+def benchmark_item_code_to_text_scope_values_py(values: list[Any]) -> list[str | None]:
+    return [_benchmark_item_code_to_text_scope_py(None if value is None else str(value)) for value in values]
+
+
+def benchmark_item_code_to_text_scope_values(values: list[Any]) -> list[str | None]:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.benchmark_item_code_to_text_scope_values(values)
+            _ITEM_CLEANING_RUST_METRICS["benchmark_scope_batch_fast_success"] += 1
+            return [None if value is None else str(value) for value in out]
+        except Exception:
+            _ITEM_CLEANING_RUST_METRICS["benchmark_scope_batch_fast_failures"] += 1
+    _ITEM_CLEANING_RUST_METRICS["benchmark_scope_batch_fallbacks"] += 1
+    return benchmark_item_code_to_text_scope_values_py(values)
+
+
+def benchmark_item_code_to_text_scope_expr(column_name: str) -> pl.Expr:
+    return pl.col(column_name).cast(pl.Utf8, strict=False).map_batches(
+        lambda series: _utf8_series_from_optional_values(
+            series,
+            benchmark_item_code_to_text_scope_values(series.to_list()),
+        ),
+        return_dtype=pl.Utf8,
+        is_elementwise=True,
+    )
 
 
 def build_segment_policy_id(
@@ -301,14 +443,41 @@ def _align_to_schema(df: pl.DataFrame, schema: dict[str, pl.DataType]) -> pl.Dat
     )
 
 
-def _normalize_newlines(text: str | None) -> str:
+def _normalize_newlines_py(text: str | None) -> str:
     if text is None:
         return ""
     return str(text).replace("\r\n", "\n").replace("\r", "\n")
 
 
-def _collapse_blank_runs(text: str) -> str:
+def _normalize_newlines(text: str | None) -> str:
+    if _lm2011_rust is not None:
+        try:
+            value = None if text is None else str(text)
+            out = str(_lm2011_rust.normalize_newlines_value(value))
+            _ITEM_CLEANING_RUST_METRICS["normalize_newlines_fast_success"] += 1
+            return out
+        except Exception:
+            _ITEM_CLEANING_RUST_METRICS["normalize_newlines_fallbacks"] += 1
+    else:
+        _ITEM_CLEANING_RUST_METRICS["normalize_newlines_fallbacks"] += 1
+    return _normalize_newlines_py(text)
+
+
+def _collapse_blank_runs_py(text: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+def _collapse_blank_runs(text: str) -> str:
+    if _lm2011_rust is not None:
+        try:
+            out = str(_lm2011_rust.collapse_blank_runs_value(str(text)))
+            _ITEM_CLEANING_RUST_METRICS["collapse_blank_runs_fast_success"] += 1
+            return out
+        except Exception:
+            _ITEM_CLEANING_RUST_METRICS["collapse_blank_runs_fallbacks"] += 1
+    else:
+        _ITEM_CLEANING_RUST_METRICS["collapse_blank_runs_fallbacks"] += 1
+    return _collapse_blank_runs_py(text)
 
 
 def _snippet_start(text: str, *, length: int = 500) -> str:
@@ -319,21 +488,60 @@ def _snippet_end(text: str, *, length: int = 500) -> str:
     return text[-length:] if len(text) > length else text
 
 
-def _is_page_marker_line(line: str) -> bool:
+def _is_page_marker_line_py(line: str) -> bool:
     stripped = line.strip()
     return bool(stripped and _PAGE_MARKER_RE.match(stripped) and not _ITEM_HEADING_RE.match(stripped))
 
 
-def _is_report_header_footer_line(line: str) -> bool:
+def _is_page_marker_line(line: str) -> bool:
+    if _lm2011_rust is not None:
+        try:
+            out = bool(_lm2011_rust.cleaning_is_page_marker_line(str(line or "")))
+            _ITEM_CLEANING_RUST_METRICS["page_marker_fast_success"] += 1
+            return out
+        except Exception:
+            _ITEM_CLEANING_RUST_METRICS["page_marker_fallbacks"] += 1
+    else:
+        _ITEM_CLEANING_RUST_METRICS["page_marker_fallbacks"] += 1
+    return _is_page_marker_line_py(line)
+
+
+def _is_report_header_footer_line_py(line: str) -> bool:
     return bool(_RUNNING_HEADER_RE.match(line.strip()))
 
 
-def _is_structural_residue_line(line: str) -> bool:
+def _is_report_header_footer_line(line: str) -> bool:
+    if _lm2011_rust is not None:
+        try:
+            out = bool(_lm2011_rust.cleaning_is_report_header_footer_line(str(line or "")))
+            _ITEM_CLEANING_RUST_METRICS["report_header_fast_success"] += 1
+            return out
+        except Exception:
+            _ITEM_CLEANING_RUST_METRICS["report_header_fallbacks"] += 1
+    else:
+        _ITEM_CLEANING_RUST_METRICS["report_header_fallbacks"] += 1
+    return _is_report_header_footer_line_py(line)
+
+
+def _is_structural_residue_line_py(line: str) -> bool:
     stripped = line.strip()
     return bool(stripped and (_STRUCTURAL_TAG_RE.match(stripped) or _ATTACHMENT_FILENAME_RE.match(stripped)))
 
 
-def _is_table_like_line(line: str) -> bool:
+def _is_structural_residue_line(line: str) -> bool:
+    if _lm2011_rust is not None:
+        try:
+            out = bool(_lm2011_rust.cleaning_is_structural_residue_line(str(line or "")))
+            _ITEM_CLEANING_RUST_METRICS["structural_residue_fast_success"] += 1
+            return out
+        except Exception:
+            _ITEM_CLEANING_RUST_METRICS["structural_residue_fallbacks"] += 1
+    else:
+        _ITEM_CLEANING_RUST_METRICS["structural_residue_fallbacks"] += 1
+    return _is_structural_residue_line_py(line)
+
+
+def _is_table_like_line_py(line: str) -> bool:
     stripped = line.strip()
     if len(stripped) < 25:
         return False
@@ -346,7 +554,20 @@ def _is_table_like_line(line: str) -> bool:
     return numeric_count >= 4 and (word_count <= 3 or numeric_count >= max(4, word_count))
 
 
-def _is_table_header_like_line(line: str) -> bool:
+def _is_table_like_line(line: str) -> bool:
+    if _lm2011_rust is not None:
+        try:
+            out = bool(_lm2011_rust.cleaning_is_table_like_line(str(line or "")))
+            _ITEM_CLEANING_RUST_METRICS["table_like_fast_success"] += 1
+            return out
+        except Exception:
+            _ITEM_CLEANING_RUST_METRICS["table_like_fallbacks"] += 1
+    else:
+        _ITEM_CLEANING_RUST_METRICS["table_like_fallbacks"] += 1
+    return _is_table_like_line_py(line)
+
+
+def _is_table_header_like_line_py(line: str) -> bool:
     stripped = line.strip()
     if len(stripped) < 20:
         return False
@@ -357,7 +578,20 @@ def _is_table_header_like_line(line: str) -> bool:
     return letter_count >= 8 and (stripped.upper() == stripped or year_count >= 2 or ":" in stripped)
 
 
-def _is_strong_table_title_line(line: str) -> bool:
+def _is_table_header_like_line(line: str) -> bool:
+    if _lm2011_rust is not None:
+        try:
+            out = bool(_lm2011_rust.cleaning_is_table_header_like_line(str(line or "")))
+            _ITEM_CLEANING_RUST_METRICS["table_header_fast_success"] += 1
+            return out
+        except Exception:
+            _ITEM_CLEANING_RUST_METRICS["table_header_fallbacks"] += 1
+    else:
+        _ITEM_CLEANING_RUST_METRICS["table_header_fallbacks"] += 1
+    return _is_table_header_like_line_py(line)
+
+
+def _is_strong_table_title_line_py(line: str) -> bool:
     stripped = line.strip()
     if len(stripped) < 15:
         return False
@@ -366,7 +600,20 @@ def _is_strong_table_title_line(line: str) -> bool:
     return stripped.upper() == stripped
 
 
-def _is_table_intro_line(line: str) -> bool:
+def _is_strong_table_title_line(line: str) -> bool:
+    if _lm2011_rust is not None:
+        try:
+            out = bool(_lm2011_rust.cleaning_is_strong_table_title_line(str(line or "")))
+            _ITEM_CLEANING_RUST_METRICS["strong_table_title_fast_success"] += 1
+            return out
+        except Exception:
+            _ITEM_CLEANING_RUST_METRICS["strong_table_title_fallbacks"] += 1
+    else:
+        _ITEM_CLEANING_RUST_METRICS["strong_table_title_fallbacks"] += 1
+    return _is_strong_table_title_line_py(line)
+
+
+def _is_table_intro_line_py(line: str) -> bool:
     stripped = line.strip()
     return bool(
         stripped
@@ -375,14 +622,53 @@ def _is_table_intro_line(line: str) -> bool:
     )
 
 
-def _is_table_support_header_line(line: str) -> bool:
+def _is_table_intro_line(line: str) -> bool:
+    if _lm2011_rust is not None:
+        try:
+            out = bool(_lm2011_rust.cleaning_is_table_intro_line(str(line or "")))
+            _ITEM_CLEANING_RUST_METRICS["table_intro_fast_success"] += 1
+            return out
+        except Exception:
+            _ITEM_CLEANING_RUST_METRICS["table_intro_fallbacks"] += 1
+    else:
+        _ITEM_CLEANING_RUST_METRICS["table_intro_fallbacks"] += 1
+    return _is_table_intro_line_py(line)
+
+
+def _is_table_support_header_line_py(line: str) -> bool:
     stripped = line.strip()
     return bool(stripped and (_TABLE_UNIT_LINE_RE.match(stripped) or _TABLE_YEARS_ONLY_RE.match(stripped)))
 
 
-def _is_toc_like_line(line: str) -> bool:
+def _is_table_support_header_line(line: str) -> bool:
+    if _lm2011_rust is not None:
+        try:
+            out = bool(_lm2011_rust.cleaning_is_table_support_header_line(str(line or "")))
+            _ITEM_CLEANING_RUST_METRICS["table_support_fast_success"] += 1
+            return out
+        except Exception:
+            _ITEM_CLEANING_RUST_METRICS["table_support_fallbacks"] += 1
+    else:
+        _ITEM_CLEANING_RUST_METRICS["table_support_fallbacks"] += 1
+    return _is_table_support_header_line_py(line)
+
+
+def _is_toc_like_line_py(line: str) -> bool:
     stripped = line.strip()
     return bool(stripped and _TOC_LIKE_LINE_RE.match(stripped))
+
+
+def _is_toc_like_line(line: str) -> bool:
+    if _lm2011_rust is not None:
+        try:
+            out = bool(_lm2011_rust.cleaning_is_toc_like_line(str(line or "")))
+            _ITEM_CLEANING_RUST_METRICS["toc_like_fast_success"] += 1
+            return out
+        except Exception:
+            _ITEM_CLEANING_RUST_METRICS["toc_like_fallbacks"] += 1
+    else:
+        _ITEM_CLEANING_RUST_METRICS["toc_like_fallbacks"] += 1
+    return _is_toc_like_line_py(line)
 
 
 def _scope_body_hint_re(text_scope: str) -> re.Pattern[str]:
@@ -395,7 +681,7 @@ def _scope_body_hint_re(text_scope: str) -> re.Pattern[str]:
     return re.compile(r"\w+")
 
 
-def _trim_early_toc_prefix(
+def _trim_early_toc_prefix_py(
     text: str,
     text_scope: str,
     cfg: ItemTextCleaningConfig,
@@ -424,7 +710,32 @@ def _trim_early_toc_prefix(
     return remainder, True, len(text) - len(remainder)
 
 
-def _line_remove(
+def _trim_early_toc_prefix(
+    text: str,
+    text_scope: str,
+    cfg: ItemTextCleaningConfig,
+) -> tuple[str, bool, int]:
+    if not cfg.trim_early_toc_prefix or not text or cfg.toc_scan_char_window <= 0:
+        return text, False, 0
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.trim_early_toc_prefix_value(
+                str(text),
+                str(text_scope),
+                int(cfg.toc_scan_char_window),
+                int(cfg.toc_min_matching_lines),
+            )
+            if out is not None:
+                cleaned, trimmed, removed = out
+                _ITEM_CLEANING_RUST_METRICS["toc_prefix_trim_fast_success"] += 1
+                return str(cleaned), bool(trimmed), int(removed)
+        except Exception:
+            _ITEM_CLEANING_RUST_METRICS["toc_prefix_trim_fast_failures"] += 1
+    _ITEM_CLEANING_RUST_METRICS["toc_prefix_trim_fallbacks"] += 1
+    return _trim_early_toc_prefix_py(text, text_scope, cfg)
+
+
+def _line_remove_py(
     text: str,
     text_scope: str,
     cfg: ItemTextCleaningConfig,
@@ -534,6 +845,62 @@ def _line_remove(
     return "\n".join(kept_lines), counts
 
 
+def _line_remove(
+    text: str,
+    text_scope: str,
+    cfg: ItemTextCleaningConfig,
+    *,
+    remove_layout_lines: bool,
+    remove_table_like_lines: bool,
+) -> tuple[str, Counter[str]]:
+    if not remove_table_like_lines:
+        if _lm2011_rust is not None:
+            try:
+                cleaned, raw_counts = _lm2011_rust.cleaning_remove_layout_lines_value(
+                    str(text),
+                    bool(remove_layout_lines and cfg.drop_page_markers),
+                    bool(remove_layout_lines and cfg.drop_report_headers),
+                    bool(remove_layout_lines and cfg.drop_structural_tags),
+                )
+                _ITEM_CLEANING_RUST_METRICS["line_remove_layout_fast_success"] += 1
+                return str(cleaned), Counter(
+                    {str(key): int(value) for key, value in raw_counts.items()}
+                )
+            except Exception:
+                _ITEM_CLEANING_RUST_METRICS["line_remove_layout_fast_failures"] += 1
+        _ITEM_CLEANING_RUST_METRICS["line_remove_layout_fallbacks"] += 1
+    if remove_table_like_lines:
+        table_scope_enabled = (
+            cfg.table_like_target_text_scopes is None
+            or text_scope in cfg.table_like_target_text_scopes
+        )
+        if cfg.drop_table_like_lines and not table_scope_enabled:
+            return "\n".join(line.rstrip() for line in text.split("\n")), Counter()
+        if cfg.drop_table_like_lines and table_scope_enabled:
+            if _lm2011_rust is not None:
+                try:
+                    cleaned, raw_counts = _lm2011_rust.cleaning_remove_table_like_lines_value(
+                        str(text),
+                        int(cfg.table_like_min_consecutive_lines),
+                        bool(cfg.table_like_allow_single_line_with_header),
+                        bool(cfg.table_like_drop_header_context),
+                    )
+                    _ITEM_CLEANING_RUST_METRICS["line_remove_table_fast_success"] += 1
+                    return str(cleaned), Counter(
+                        {str(key): int(value) for key, value in raw_counts.items()}
+                    )
+                except Exception:
+                    _ITEM_CLEANING_RUST_METRICS["line_remove_table_fast_failures"] += 1
+            _ITEM_CLEANING_RUST_METRICS["line_remove_table_fallbacks"] += 1
+    return _line_remove_py(
+        text,
+        text_scope,
+        cfg,
+        remove_layout_lines=remove_layout_lines,
+        remove_table_like_lines=remove_table_like_lines,
+    )
+
+
 def _tail_marker_re(text_scope: str) -> re.Pattern[str] | None:
     markers = _TAIL_MARKERS_BY_SCOPE.get(text_scope)
     if not markers:
@@ -542,7 +909,7 @@ def _tail_marker_re(text_scope: str) -> re.Pattern[str] | None:
     return re.compile(rf"(?im)^\s*(?:{marker})[.\s:-]*")
 
 
-def _truncate_tail_bleed(
+def _truncate_tail_bleed_py(
     text: str,
     text_scope: str,
     cfg: ItemTextCleaningConfig,
@@ -575,13 +942,59 @@ def _truncate_tail_bleed(
     return truncated, True, len(text) - len(truncated)
 
 
-def _is_reference_only_stub(text: str, cfg: ItemTextCleaningConfig) -> bool:
+def _truncate_tail_bleed(
+    text: str,
+    text_scope: str,
+    cfg: ItemTextCleaningConfig,
+) -> tuple[str, bool, int]:
+    if not cfg.truncate_item_aware_tail_bleed or not text:
+        return text, False, 0
+    if _lm2011_rust is not None:
+        try:
+            best_start = _lm2011_rust.cleaning_tail_bleed_start(
+                str(text),
+                str(text_scope),
+                float(cfg.tail_scan_fraction),
+            )
+            _ITEM_CLEANING_RUST_METRICS["tail_truncate_fast_success"] += 1
+            if best_start is None:
+                return text, False, 0
+            truncated = text[: int(best_start)].rstrip()
+            return truncated, True, len(text) - len(truncated)
+        except Exception:
+            _ITEM_CLEANING_RUST_METRICS["tail_truncate_fallbacks"] += 1
+    else:
+        _ITEM_CLEANING_RUST_METRICS["tail_truncate_fallbacks"] += 1
+    return _truncate_tail_bleed_py(text, text_scope, cfg)
+
+
+def _is_reference_only_stub_py(text: str, cfg: ItemTextCleaningConfig) -> bool:
     if not cfg.drop_reference_only_stubs:
         return False
     stripped = text.strip()
     if not stripped or len(stripped) > cfg.reference_stub_max_char_count:
         return False
     return any(pattern.search(stripped) for pattern in _REFERENCE_ONLY_PATTERNS)
+
+
+def _is_reference_only_stub(text: str, cfg: ItemTextCleaningConfig) -> bool:
+    if not cfg.drop_reference_only_stubs:
+        return False
+    if _lm2011_rust is not None:
+        try:
+            out = bool(
+                _lm2011_rust.cleaning_is_reference_only_stub(
+                    str(text or ""),
+                    int(cfg.reference_stub_max_char_count),
+                )
+            )
+            _ITEM_CLEANING_RUST_METRICS["reference_stub_fast_success"] += 1
+            return out
+        except Exception:
+            _ITEM_CLEANING_RUST_METRICS["reference_stub_fallbacks"] += 1
+    else:
+        _ITEM_CLEANING_RUST_METRICS["reference_stub_fallbacks"] += 1
+    return _is_reference_only_stub_py(text, cfg)
 
 
 def _is_effectively_non_body_text(text: str) -> bool:
@@ -591,14 +1004,14 @@ def _is_effectively_non_body_text(text: str) -> bool:
     return len(tokenize_lm2011_text(stripped)) == 0
 
 
-def clean_item_text(
+def _clean_item_text_py(
     text: str | None,
     text_scope: str,
     cfg: ItemTextCleaningConfig = ItemTextCleaningConfig(),
 ) -> CleanedTextResult:
-    normalized = _normalize_newlines(text)
+    normalized = _normalize_newlines_py(text)
     if not cfg.enabled:
-        cleaned = _collapse_blank_runs(normalized)
+        cleaned = _collapse_blank_runs_py(normalized)
         return CleanedTextResult(
             cleaned_text=cleaned,
             page_marker_lines_removed=0,
@@ -613,24 +1026,24 @@ def clean_item_text(
             effectively_non_body_text=_is_effectively_non_body_text(cleaned),
         )
 
-    without_lines, line_counts = _line_remove(
+    without_lines, line_counts = _line_remove_py(
         normalized,
         text_scope,
         cfg,
         remove_layout_lines=True,
         remove_table_like_lines=False,
     )
-    without_toc, toc_trimmed, toc_removed = _trim_early_toc_prefix(without_lines, text_scope, cfg)
-    without_tail, tail_truncated, tail_removed = _truncate_tail_bleed(without_toc, text_scope, cfg)
-    reference_only_stub = _is_reference_only_stub(_collapse_blank_runs(without_tail), cfg)
-    without_tables, table_counts = _line_remove(
+    without_toc, toc_trimmed, toc_removed = _trim_early_toc_prefix_py(without_lines, text_scope, cfg)
+    without_tail, tail_truncated, tail_removed = _truncate_tail_bleed_py(without_toc, text_scope, cfg)
+    reference_only_stub = _is_reference_only_stub_py(_collapse_blank_runs_py(without_tail), cfg)
+    without_tables, table_counts = _line_remove_py(
         without_tail,
         text_scope,
         cfg,
         remove_layout_lines=False,
         remove_table_like_lines=True,
     )
-    cleaned = _collapse_blank_runs(without_tables)
+    cleaned = _collapse_blank_runs_py(without_tables)
     return CleanedTextResult(
         cleaned_text=cleaned,
         page_marker_lines_removed=int(line_counts["page_marker"]),
@@ -646,7 +1059,59 @@ def clean_item_text(
     )
 
 
-def _drop_reason(
+def _cleaned_text_result_from_payload(payload: dict[str, Any]) -> CleanedTextResult:
+    return CleanedTextResult(
+        cleaned_text=str(payload.get("cleaned_text") or ""),
+        page_marker_lines_removed=int(payload.get("page_marker_lines_removed") or 0),
+        report_header_footer_lines_removed=int(payload.get("report_header_footer_lines_removed") or 0),
+        structural_tag_lines_removed=int(payload.get("structural_tag_lines_removed") or 0),
+        table_like_lines_removed=int(payload.get("table_like_lines_removed") or 0),
+        toc_prefix_trimmed=bool(payload.get("toc_prefix_trimmed")),
+        toc_prefix_trimmed_char_count=int(payload.get("toc_prefix_trimmed_char_count") or 0),
+        tail_truncated=bool(payload.get("tail_truncated")),
+        tail_truncated_char_count=int(payload.get("tail_truncated_char_count") or 0),
+        reference_only_stub=bool(payload.get("reference_only_stub")),
+        effectively_non_body_text=bool(payload.get("effectively_non_body_text")),
+    )
+
+
+def clean_item_text(
+    text: str | None,
+    text_scope: str,
+    cfg: ItemTextCleaningConfig = ItemTextCleaningConfig(),
+) -> CleanedTextResult:
+    if _lm2011_rust is not None:
+        try:
+            raw = _lm2011_rust.item_cleaning_clean_text_value(
+                None if text is None else str(text),
+                str(text_scope),
+                bool(cfg.enabled),
+                bool(cfg.drop_page_markers),
+                bool(cfg.drop_report_headers),
+                bool(cfg.drop_structural_tags),
+                bool(cfg.trim_early_toc_prefix),
+                bool(cfg.truncate_item_aware_tail_bleed),
+                bool(cfg.drop_reference_only_stubs),
+                bool(cfg.drop_table_like_lines),
+                int(cfg.table_like_min_consecutive_lines),
+                bool(cfg.table_like_drop_header_context),
+                bool(cfg.table_like_allow_single_line_with_header),
+                cfg.table_like_target_text_scopes,
+                int(cfg.toc_scan_char_window),
+                int(cfg.toc_min_matching_lines),
+                float(cfg.tail_scan_fraction),
+                int(cfg.reference_stub_max_char_count),
+            )
+            if raw is not None:
+                _ITEM_CLEANING_RUST_METRICS["clean_text_fast_success"] += 1
+                return _cleaned_text_result_from_payload(dict(raw))
+        except Exception:
+            _ITEM_CLEANING_RUST_METRICS["clean_text_fast_failures"] += 1
+    _ITEM_CLEANING_RUST_METRICS["clean_text_fallbacks"] += 1
+    return _clean_item_text_py(text, text_scope, cfg)
+
+
+def _drop_reason_py(
     *,
     cleaned_text: str,
     text_scope: str,
@@ -673,7 +1138,44 @@ def _drop_reason(
     return None
 
 
-def _manual_audit_reason(row: dict[str, Any]) -> str | None:
+def _drop_reason(
+    *,
+    cleaned_text: str,
+    text_scope: str,
+    cleaning_result: CleanedTextResult,
+    cleaned_lm_total_token_count: int,
+    cfg: ItemTextCleaningConfig,
+) -> str | None:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.item_cleaning_drop_reason_value(
+                str(cleaned_text),
+                str(text_scope),
+                bool(cfg.enabled),
+                bool(cfg.drop_blank_after_cleaning),
+                bool(cleaning_result.reference_only_stub),
+                bool(cleaning_result.effectively_non_body_text),
+                bool(cfg.enforce_item7_lm_token_floor),
+                int(cleaned_lm_total_token_count),
+                int(cfg.item7_min_lm_tokens),
+                None if cfg.hard_drop_min_clean_char_count is None else int(cfg.hard_drop_min_clean_char_count),
+            )
+            _ITEM_CLEANING_RUST_METRICS["drop_reason_fast_success"] += 1
+            return None if out is None else str(out)
+        except Exception:
+            _ITEM_CLEANING_RUST_METRICS["drop_reason_fallbacks"] += 1
+    else:
+        _ITEM_CLEANING_RUST_METRICS["drop_reason_fallbacks"] += 1
+    return _drop_reason_py(
+        cleaned_text=cleaned_text,
+        text_scope=text_scope,
+        cleaning_result=cleaning_result,
+        cleaned_lm_total_token_count=cleaned_lm_total_token_count,
+        cfg=cfg,
+    )
+
+
+def _manual_audit_reason_py(row: dict[str, Any]) -> str | None:
     reasons: list[str] = []
     if row["dropped_after_cleaning"]:
         reasons.append(str(row["drop_reason"] or "dropped"))
@@ -692,7 +1194,48 @@ def _manual_audit_reason(row: dict[str, Any]) -> str | None:
     return "|".join(dict.fromkeys(reasons)) if reasons else None
 
 
-def _base_row_payload(row: dict[str, Any], *, text_scope: str) -> dict[str, Any]:
+def _manual_audit_reason(row: dict[str, Any]) -> str | None:
+    if _lm2011_rust is not None:
+        try:
+            drop_reason = row["drop_reason"]
+            out = _lm2011_rust.item_cleaning_manual_audit_reason_value(
+                bool(row["dropped_after_cleaning"]),
+                bool(row["warning_large_removal"]),
+                bool(row["toc_prefix_trimmed"]),
+                bool(row["tail_truncated"]),
+                bool(row["reference_only_stub"]),
+                bool(row["item7_lm_token_floor_failed"]),
+                bool(row["warning_below_clean_char_count"]),
+                None if drop_reason is None else str(drop_reason),
+            )
+            _ITEM_CLEANING_RUST_METRICS["manual_audit_reason_fast_success"] += 1
+            return None if out is None else str(out)
+        except Exception:
+            _ITEM_CLEANING_RUST_METRICS["manual_audit_reason_fallbacks"] += 1
+    else:
+        _ITEM_CLEANING_RUST_METRICS["manual_audit_reason_fallbacks"] += 1
+    return _manual_audit_reason_py(row)
+
+
+def _lm_token_counts_py(texts: list[str | None]) -> list[int]:
+    return [len(tokenize_lm2011_text(text)) for text in texts]
+
+
+def _lm_token_counts(texts: list[str | None]) -> list[int]:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.count_lm2011_text_token_values(texts)
+            _ITEM_CLEANING_RUST_METRICS["lm_token_counts_fast_success"] += 1
+            return [int(value) for value in out]
+        except Exception:
+            _ITEM_CLEANING_RUST_METRICS["lm_token_counts_fast_failures"] += 1
+            _ITEM_CLEANING_RUST_METRICS["lm_token_counts_fallbacks"] += 1
+    else:
+        _ITEM_CLEANING_RUST_METRICS["lm_token_counts_fallbacks"] += 1
+    return _lm_token_counts_py(texts)
+
+
+def _base_row_payload_py(row: dict[str, Any], *, text_scope: str) -> dict[str, Any]:
     return {
         "doc_id": row.get("doc_id"),
         "cik_10": row.get("cik_10"),
@@ -716,7 +1259,20 @@ def _base_row_payload(row: dict[str, Any], *, text_scope: str) -> dict[str, Any]
     }
 
 
-def _review_status(
+def _base_row_payload(row: dict[str, Any], *, text_scope: str) -> dict[str, Any]:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.item_cleaning_base_row_payload_value(row, text_scope)
+            _ITEM_CLEANING_RUST_METRICS["base_row_payload_fast_success"] += 1
+            return dict(out)
+        except Exception:
+            _ITEM_CLEANING_RUST_METRICS["base_row_payload_fallbacks"] += 1
+    else:
+        _ITEM_CLEANING_RUST_METRICS["base_row_payload_fallbacks"] += 1
+    return _base_row_payload_py(row, text_scope=text_scope)
+
+
+def _review_status_py(
     *,
     manual_audit_candidate: bool,
     boundary_authority_status: str | None,
@@ -731,45 +1287,73 @@ def _review_status(
     return REVIEW_STATUS_NOT_REQUIRED
 
 
-def _production_eligible(review_status: str) -> bool:
+def _review_status(
+    *,
+    manual_audit_candidate: bool,
+    boundary_authority_status: str | None,
+    existing_review_status: str | None = None,
+) -> str:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.item_cleaning_review_status_value(
+                manual_audit_candidate,
+                boundary_authority_status,
+                existing_review_status,
+            )
+            _ITEM_CLEANING_RUST_METRICS["review_status_fast_success"] += 1
+            return str(out)
+        except Exception:
+            _ITEM_CLEANING_RUST_METRICS["review_status_fallbacks"] += 1
+    else:
+        _ITEM_CLEANING_RUST_METRICS["review_status_fallbacks"] += 1
+    return _review_status_py(
+        manual_audit_candidate=manual_audit_candidate,
+        boundary_authority_status=boundary_authority_status,
+        existing_review_status=existing_review_status,
+    )
+
+
+def _production_eligible_py(review_status: str) -> bool:
     return review_status in {REVIEW_STATUS_NOT_REQUIRED, REVIEW_STATUS_APPROVED}
 
 
-def clean_item_scopes_with_audit(
-    sections_df: pl.DataFrame,
-    cfg: ItemTextCleaningConfig = ItemTextCleaningConfig(),
-    *,
-    segment_policy_id: str | None = None,
-) -> ItemTextCleaningResult:
-    if sections_df.is_empty():
-        empty_audit = _empty_frame(CLEANING_ROW_AUDIT_SCHEMA)
-        return ItemTextCleaningResult(
-            cleaned_scope_df=_empty_frame(CLEANED_ITEM_SCOPE_SCHEMA),
-            row_audit_df=empty_audit,
-            flagged_rows_df=empty_audit,
-            scope_diagnostics_df=_empty_frame(SCOPE_DIAGNOSTICS_SCHEMA),
-            manual_audit_sample_df=_empty_frame(MANUAL_AUDIT_SAMPLE_SCHEMA),
-        )
+def _production_eligible(review_status: str) -> bool:
+    if _lm2011_rust is not None:
+        try:
+            out = bool(_lm2011_rust.item_cleaning_production_eligible_value(review_status))
+            _ITEM_CLEANING_RUST_METRICS["production_eligible_fast_success"] += 1
+            return out
+        except Exception:
+            _ITEM_CLEANING_RUST_METRICS["production_eligible_fallbacks"] += 1
+    else:
+        _ITEM_CLEANING_RUST_METRICS["production_eligible_fallbacks"] += 1
+    return _production_eligible_py(review_status)
 
-    segment_policy = segment_policy_id or "unknown_segment_policy"
+
+def _finalize_cleaning_rows_py(
+    prepared_rows: list[dict[str, Any]],
+    cleaned_token_counts: list[int],
+    *,
+    cfg: ItemTextCleaningConfig,
+    segment_policy: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     cleaned_rows: list[dict[str, Any]] = []
     audit_rows: list[dict[str, Any]] = []
-    for row in sections_df.iter_rows(named=True):
-        benchmark_item_code = row.get("benchmark_item_code")
-        text_scope = benchmark_item_code_to_text_scope(benchmark_item_code) or str(benchmark_item_code or "")
-        original_text = _normalize_newlines(row.get("full_text"))
-        cleaning_result = clean_item_text(original_text, text_scope, cfg)
-        cleaned_text = cleaning_result.cleaned_text
-        original_char_count = len(original_text)
-        cleaned_char_count = len(cleaned_text)
-        removed_char_count = max(original_char_count - cleaned_char_count, 0)
-        removal_ratio = (removed_char_count / original_char_count) if original_char_count else 0.0
-        cleaned_lm_total_token_count = len(tokenize_lm2011_text(cleaned_text))
-        reason = _drop_reason(
+    for prepared, cleaned_lm_total_token_count in zip(prepared_rows, cleaned_token_counts):
+        row = prepared["row"]
+        text_scope = str(prepared["text_scope"])
+        original_text = str(prepared["original_text"])
+        cleaning_result = prepared["cleaning_result"]
+        cleaned_text = str(prepared["cleaned_text"])
+        original_char_count = int(prepared["original_char_count"])
+        cleaned_char_count = int(prepared["cleaned_char_count"])
+        removed_char_count = int(prepared["removed_char_count"])
+        removal_ratio = float(prepared["removal_ratio"])
+        reason = _drop_reason_py(
             cleaned_text=cleaned_text,
             text_scope=text_scope,
             cleaning_result=cleaning_result,
-            cleaned_lm_total_token_count=cleaned_lm_total_token_count,
+            cleaned_lm_total_token_count=int(cleaned_lm_total_token_count),
             cfg=cfg,
         )
         dropped = reason is not None
@@ -789,13 +1373,13 @@ def clean_item_scopes_with_audit(
         )
 
         common_payload = {
-            **_base_row_payload(row, text_scope=text_scope),
+            **_base_row_payload_py(row, text_scope=text_scope),
             "cleaning_policy_id": cfg.cleaning_policy_id if cfg.enabled else "raw_item_text",
             "original_char_count": original_char_count,
             "cleaned_char_count": cleaned_char_count,
             "removed_char_count": removed_char_count,
             "removal_ratio": removal_ratio,
-            "cleaned_lm_total_token_count": cleaned_lm_total_token_count,
+            "cleaned_lm_total_token_count": int(cleaned_lm_total_token_count),
             "dropped_after_cleaning": dropped,
             "drop_reason": reason,
             "segment_policy_id": segment_policy,
@@ -822,14 +1406,14 @@ def clean_item_scopes_with_audit(
             "original_end_snippet": _snippet_end(original_text),
             "cleaned_end_snippet": _snippet_end(cleaned_text),
         }
-        audit_payload["manual_audit_reason"] = _manual_audit_reason(audit_payload)
+        audit_payload["manual_audit_reason"] = _manual_audit_reason_py(audit_payload)
         audit_payload["manual_audit_candidate"] = audit_payload["manual_audit_reason"] is not None
-        audit_payload["review_status"] = _review_status(
+        audit_payload["review_status"] = _review_status_py(
             manual_audit_candidate=audit_payload["manual_audit_candidate"],
             boundary_authority_status=common_payload.get("boundary_authority_status"),
             existing_review_status=row.get("review_status"),
         )
-        audit_payload["production_eligible"] = _production_eligible(audit_payload["review_status"])
+        audit_payload["production_eligible"] = _production_eligible_py(audit_payload["review_status"])
         audit_rows.append(audit_payload)
         if not dropped:
             cleaned_rows.append(
@@ -840,6 +1424,173 @@ def clean_item_scopes_with_audit(
                     "production_eligible": audit_payload["production_eligible"],
                 }
             )
+    return audit_rows, cleaned_rows
+
+
+def _finalize_cleaning_rows(
+    prepared_rows: list[dict[str, Any]],
+    cleaned_token_counts: list[int],
+    *,
+    cfg: ItemTextCleaningConfig,
+    segment_policy: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    if _lm2011_rust is not None:
+        try:
+            records: list[dict[str, Any]] = []
+            for prepared, cleaned_lm_total_token_count in zip(prepared_rows, cleaned_token_counts):
+                cleaning_result = prepared["cleaning_result"]
+                records.append(
+                    {
+                        "row": prepared["row"],
+                        "text_scope": prepared["text_scope"],
+                        "original_text": prepared["original_text"],
+                        "cleaned_text": prepared["cleaned_text"],
+                        "original_char_count": prepared["original_char_count"],
+                        "cleaned_char_count": prepared["cleaned_char_count"],
+                        "removed_char_count": prepared["removed_char_count"],
+                        "removal_ratio": prepared["removal_ratio"],
+                        "cleaned_lm_total_token_count": cleaned_lm_total_token_count,
+                        "page_marker_lines_removed": cleaning_result.page_marker_lines_removed,
+                        "report_header_footer_lines_removed": cleaning_result.report_header_footer_lines_removed,
+                        "structural_tag_lines_removed": cleaning_result.structural_tag_lines_removed,
+                        "table_like_lines_removed": cleaning_result.table_like_lines_removed,
+                        "toc_prefix_trimmed": cleaning_result.toc_prefix_trimmed,
+                        "toc_prefix_trimmed_char_count": cleaning_result.toc_prefix_trimmed_char_count,
+                        "tail_truncated": cleaning_result.tail_truncated,
+                        "tail_truncated_char_count": cleaning_result.tail_truncated_char_count,
+                        "reference_only_stub": cleaning_result.reference_only_stub,
+                        "effectively_non_body_text": cleaning_result.effectively_non_body_text,
+                    }
+                )
+            audit_rows, cleaned_rows = _lm2011_rust.item_cleaning_finalize_rows(
+                records,
+                bool(cfg.enabled),
+                cfg.cleaning_policy_id if cfg.enabled else "raw_item_text",
+                bool(cfg.drop_blank_after_cleaning),
+                None if cfg.hard_drop_min_clean_char_count is None else int(cfg.hard_drop_min_clean_char_count),
+                int(cfg.warn_below_clean_char_count),
+                float(cfg.large_removal_warning_threshold),
+                bool(cfg.enforce_item7_lm_token_floor),
+                int(cfg.item7_min_lm_tokens),
+                segment_policy,
+            )
+            _ITEM_CLEANING_RUST_METRICS["finalize_rows_fast_success"] += 1
+            return [dict(row) for row in audit_rows], [dict(row) for row in cleaned_rows]
+        except Exception:
+            _ITEM_CLEANING_RUST_METRICS["finalize_rows_fast_failures"] += 1
+    _ITEM_CLEANING_RUST_METRICS["finalize_rows_fallbacks"] += 1
+    return _finalize_cleaning_rows_py(
+        prepared_rows,
+        cleaned_token_counts,
+        cfg=cfg,
+        segment_policy=segment_policy,
+    )
+
+
+def _prepare_cleaning_rows_py(
+    sections_df: pl.DataFrame,
+    cfg: ItemTextCleaningConfig,
+) -> list[dict[str, Any]]:
+    prepared_rows: list[dict[str, Any]] = []
+    for row in sections_df.iter_rows(named=True):
+        benchmark_item_code = row.get("benchmark_item_code")
+        text_scope = _benchmark_item_code_to_text_scope_py(benchmark_item_code) or str(benchmark_item_code or "")
+        original_text = _normalize_newlines_py(row.get("full_text"))
+        cleaning_result = _clean_item_text_py(original_text, text_scope, cfg)
+        cleaned_text = cleaning_result.cleaned_text
+        original_char_count = len(original_text)
+        cleaned_char_count = len(cleaned_text)
+        removed_char_count = max(original_char_count - cleaned_char_count, 0)
+        removal_ratio = (removed_char_count / original_char_count) if original_char_count else 0.0
+        prepared_rows.append(
+            {
+                "row": row,
+                "text_scope": text_scope,
+                "original_text": original_text,
+                "cleaning_result": cleaning_result,
+                "cleaned_text": cleaned_text,
+                "original_char_count": original_char_count,
+                "cleaned_char_count": cleaned_char_count,
+                "removed_char_count": removed_char_count,
+                "removal_ratio": removal_ratio,
+            }
+        )
+    return prepared_rows
+
+
+def _prepared_cleaning_row_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "row": dict(payload["row"]),
+        "text_scope": str(payload.get("text_scope") or ""),
+        "original_text": str(payload.get("original_text") or ""),
+        "cleaning_result": _cleaned_text_result_from_payload(payload),
+        "cleaned_text": str(payload.get("cleaned_text") or ""),
+        "original_char_count": int(payload.get("original_char_count") or 0),
+        "cleaned_char_count": int(payload.get("cleaned_char_count") or 0),
+        "removed_char_count": int(payload.get("removed_char_count") or 0),
+        "removal_ratio": float(payload.get("removal_ratio") or 0.0),
+    }
+
+
+def _prepare_cleaning_rows(
+    sections_df: pl.DataFrame,
+    cfg: ItemTextCleaningConfig,
+) -> list[dict[str, Any]]:
+    if _lm2011_rust is not None:
+        try:
+            raw_rows = _lm2011_rust.item_cleaning_prepare_rows_value(
+                sections_df.to_dicts(),
+                bool(cfg.enabled),
+                bool(cfg.drop_page_markers),
+                bool(cfg.drop_report_headers),
+                bool(cfg.drop_structural_tags),
+                bool(cfg.trim_early_toc_prefix),
+                bool(cfg.truncate_item_aware_tail_bleed),
+                bool(cfg.drop_reference_only_stubs),
+                bool(cfg.drop_table_like_lines),
+                int(cfg.table_like_min_consecutive_lines),
+                bool(cfg.table_like_drop_header_context),
+                bool(cfg.table_like_allow_single_line_with_header),
+                cfg.table_like_target_text_scopes,
+                int(cfg.toc_scan_char_window),
+                int(cfg.toc_min_matching_lines),
+                float(cfg.tail_scan_fraction),
+                int(cfg.reference_stub_max_char_count),
+            )
+            if raw_rows is not None:
+                _ITEM_CLEANING_RUST_METRICS["prepare_rows_fast_success"] += 1
+                return [_prepared_cleaning_row_from_payload(dict(row)) for row in raw_rows]
+        except Exception:
+            _ITEM_CLEANING_RUST_METRICS["prepare_rows_fast_failures"] += 1
+    _ITEM_CLEANING_RUST_METRICS["prepare_rows_fallbacks"] += 1
+    return _prepare_cleaning_rows_py(sections_df, cfg)
+
+
+def clean_item_scopes_with_audit(
+    sections_df: pl.DataFrame,
+    cfg: ItemTextCleaningConfig = ItemTextCleaningConfig(),
+    *,
+    segment_policy_id: str | None = None,
+) -> ItemTextCleaningResult:
+    if sections_df.is_empty():
+        empty_audit = _empty_frame(CLEANING_ROW_AUDIT_SCHEMA)
+        return ItemTextCleaningResult(
+            cleaned_scope_df=_empty_frame(CLEANED_ITEM_SCOPE_SCHEMA),
+            row_audit_df=empty_audit,
+            flagged_rows_df=empty_audit,
+            scope_diagnostics_df=_empty_frame(SCOPE_DIAGNOSTICS_SCHEMA),
+            manual_audit_sample_df=_empty_frame(MANUAL_AUDIT_SAMPLE_SCHEMA),
+        )
+
+    segment_policy = segment_policy_id or "unknown_segment_policy"
+    prepared_rows = _prepare_cleaning_rows(sections_df, cfg)
+    cleaned_token_counts = _lm_token_counts([str(item["cleaned_text"]) for item in prepared_rows])
+    audit_rows, cleaned_rows = _finalize_cleaning_rows(
+        prepared_rows,
+        cleaned_token_counts,
+        cfg=cfg,
+        segment_policy=segment_policy,
+    )
 
     row_audit_df = _frame_from_rows(audit_rows, CLEANING_ROW_AUDIT_SCHEMA)
     cleaned_scope_df = _frame_from_rows(cleaned_rows, CLEANED_ITEM_SCOPE_SCHEMA)
@@ -887,12 +1638,53 @@ def _flagged_rows(row_audit_df: pl.DataFrame) -> pl.DataFrame:
     )
 
 
-def _activation_status(text_scope: str) -> str:
+def _activation_status_py(text_scope: str) -> str:
     if text_scope in PRIMARY_ACTIVATION_TEXT_SCOPES:
         return "blocked_pending_manual_audit"
     if text_scope in ROBUSTNESS_ONLY_TEXT_SCOPES:
         return "robustness_only_pending_manual_audit"
     return "diagnostic_only"
+
+
+def _activation_status(text_scope: str) -> str:
+    if _lm2011_rust is not None:
+        try:
+            out = str(_lm2011_rust.item_cleaning_activation_status(str(text_scope or "")))
+            _ITEM_CLEANING_RUST_METRICS["activation_status_fast_success"] += 1
+            return out
+        except Exception:
+            _ITEM_CLEANING_RUST_METRICS["activation_status_fallbacks"] += 1
+    else:
+        _ITEM_CLEANING_RUST_METRICS["activation_status_fallbacks"] += 1
+    return _activation_status_py(text_scope)
+
+
+def _activation_status_values_py(values: list[Any]) -> list[str]:
+    return [_activation_status_py(str(value or "")) for value in values]
+
+
+def _activation_status_values(values: list[Any]) -> list[str]:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.item_cleaning_activation_status_values(values)
+            _ITEM_CLEANING_RUST_METRICS["activation_status_batch_fast_success"] += 1
+            return [str(value) for value in out]
+        except Exception:
+            _ITEM_CLEANING_RUST_METRICS["activation_status_batch_fast_failures"] += 1
+    _ITEM_CLEANING_RUST_METRICS["activation_status_batch_fallbacks"] += 1
+    return _activation_status_values_py(values)
+
+
+def _utf8_series_from_values(series: pl.Series, values: list[str]) -> pl.Series:
+    return pl.Series(series.name, values, dtype=pl.Utf8)
+
+
+def _activation_status_expr(column_name: str) -> pl.Expr:
+    return pl.col(column_name).map_batches(
+        lambda series: _utf8_series_from_values(series, _activation_status_values(series.to_list())),
+        return_dtype=pl.Utf8,
+        is_elementwise=True,
+    )
 
 
 def _build_scope_diagnostics(row_audit_df: pl.DataFrame) -> pl.DataFrame:
@@ -940,16 +1732,14 @@ def _build_scope_diagnostics(row_audit_df: pl.DataFrame) -> pl.DataFrame:
                     / pl.max_horizontal(pl.col("n_filings_candidate").cast(pl.Float64), pl.lit(1.0))
                 ).alias("extraction_rate"),
                 pl.lit(None, dtype=pl.Float64).alias("manual_audit_pass_rate"),
-                pl.col("text_scope")
-                .map_elements(_activation_status, return_dtype=pl.Utf8)
-                .alias("activation_status"),
+                _activation_status_expr("text_scope").alias("activation_status"),
             ]
         )
     )
     return _align_to_schema(diagnostics, SCOPE_DIAGNOSTICS_SCHEMA).sort(["calendar_year", "text_scope"])
 
 
-def _audit_period(calendar_year: int | None) -> str:
+def _audit_period_py(calendar_year: int | None) -> str:
     if calendar_year is None:
         return "unknown"
     if calendar_year <= 2008:
@@ -959,6 +1749,43 @@ def _audit_period(calendar_year: int | None) -> str:
     return "2017_2024"
 
 
+def _audit_period(calendar_year: int | None) -> str:
+    if _lm2011_rust is not None:
+        try:
+            out = str(_lm2011_rust.item_cleaning_audit_period(calendar_year))
+            _ITEM_CLEANING_RUST_METRICS["audit_period_fast_success"] += 1
+            return out
+        except Exception:
+            _ITEM_CLEANING_RUST_METRICS["audit_period_fallbacks"] += 1
+    else:
+        _ITEM_CLEANING_RUST_METRICS["audit_period_fallbacks"] += 1
+    return _audit_period_py(calendar_year)
+
+
+def _audit_period_values_py(values: list[Any]) -> list[str]:
+    return [_audit_period_py(None if value is None else int(value)) for value in values]
+
+
+def _audit_period_values(values: list[Any]) -> list[str]:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.item_cleaning_audit_period_values(values)
+            _ITEM_CLEANING_RUST_METRICS["audit_period_batch_fast_success"] += 1
+            return [str(value) for value in out]
+        except Exception:
+            _ITEM_CLEANING_RUST_METRICS["audit_period_batch_fast_failures"] += 1
+    _ITEM_CLEANING_RUST_METRICS["audit_period_batch_fallbacks"] += 1
+    return _audit_period_values_py(values)
+
+
+def _audit_period_expr(column_name: str) -> pl.Expr:
+    return pl.col(column_name).map_batches(
+        lambda series: _utf8_series_from_values(series, _audit_period_values(series.to_list())),
+        return_dtype=pl.Utf8,
+        is_elementwise=True,
+    )
+
+
 def _sample_reason(row: dict[str, Any]) -> str:
     reason = row.get("manual_audit_reason")
     if reason:
@@ -966,16 +1793,14 @@ def _sample_reason(row: dict[str, Any]) -> str:
     return "background_scope_period_sample"
 
 
-def _build_manual_audit_sample(row_audit_df: pl.DataFrame) -> pl.DataFrame:
+def _build_manual_audit_sample_py(row_audit_df: pl.DataFrame) -> pl.DataFrame:
     if row_audit_df.is_empty():
         return _empty_frame(MANUAL_AUDIT_SAMPLE_SCHEMA)
 
     rows = (
         row_audit_df.with_columns(
             [
-                pl.col("calendar_year")
-                .map_elements(_audit_period, return_dtype=pl.Utf8)
-                .alias("audit_period"),
+                _audit_period_expr("calendar_year").alias("audit_period"),
                 pl.when(pl.col("manual_audit_candidate"))
                 .then(pl.lit(0))
                 .otherwise(pl.lit(1))
@@ -1027,3 +1852,39 @@ def _build_manual_audit_sample(row_audit_df: pl.DataFrame) -> pl.DataFrame:
     if not selected:
         return _empty_frame(MANUAL_AUDIT_SAMPLE_SCHEMA)
     return _frame_from_rows(selected, MANUAL_AUDIT_SAMPLE_SCHEMA)
+
+
+def _build_manual_audit_sample(row_audit_df: pl.DataFrame) -> pl.DataFrame:
+    if row_audit_df.is_empty():
+        return _empty_frame(MANUAL_AUDIT_SAMPLE_SCHEMA)
+
+    prepared_rows = (
+        row_audit_df.with_columns(
+            [
+                _audit_period_expr("calendar_year").alias("audit_period"),
+                pl.when(pl.col("manual_audit_candidate"))
+                .then(pl.lit(0))
+                .otherwise(pl.lit(1))
+                .alias("_sample_priority"),
+            ]
+        )
+        .sort(["text_scope", "audit_period", "_sample_priority", "calendar_year", "doc_id", "benchmark_row_id"])
+        .to_dicts()
+    )
+
+    if _lm2011_rust is not None:
+        try:
+            raw_rows = _lm2011_rust.item_cleaning_manual_audit_sample_rows(
+                prepared_rows,
+                int(DEFAULT_MANUAL_AUDIT_SAMPLE_ROWS_PER_SCOPE_PERIOD),
+            )
+            _ITEM_CLEANING_RUST_METRICS["manual_audit_sample_fast_success"] += 1
+            rows = [dict(row) for row in raw_rows]
+            if not rows:
+                return _empty_frame(MANUAL_AUDIT_SAMPLE_SCHEMA)
+            return _frame_from_rows(rows, MANUAL_AUDIT_SAMPLE_SCHEMA)
+        except Exception:
+            _ITEM_CLEANING_RUST_METRICS["manual_audit_sample_fast_failures"] += 1
+
+    _ITEM_CLEANING_RUST_METRICS["manual_audit_sample_fallbacks"] += 1
+    return _build_manual_audit_sample_py(row_audit_df)

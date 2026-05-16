@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import datetime as dt
 import json
@@ -9,6 +9,14 @@ from pathlib import Path
 from typing import Any
 
 import polars as pl
+
+try:
+    from thesis_native import _lm2011_rust
+except Exception as exc:  # pragma: no cover - optional native extension
+    _LM2011_VALIDATION_AUDIT_RUST_IMPORT_ERROR: str | None = f"{type(exc).__name__}: {exc}"
+    _lm2011_rust = None
+else:
+    _LM2011_VALIDATION_AUDIT_RUST_IMPORT_ERROR = None
 
 from thesis_pkg.benchmarking.contracts import BenchmarkItemSpec
 from thesis_pkg.benchmarking.contracts import FinbertSectionUniverseConfig
@@ -26,6 +34,8 @@ from thesis_pkg.core.sec.lm2011_dictionary import load_lm2011_master_dictionary_
 from thesis_pkg.core.sec.lm2011_cleaning import _apply_lm2011_paper_cleaning
 from thesis_pkg.core.sec.lm2011_text import tokenize_lm2011_text
 from thesis_pkg.pipelines.lm2011_pipeline import _attach_pre_filing_price_and_prior_month_price
+from thesis_pkg.pipelines.lm2011_pipeline import _previous_month_end_expr as _pipeline_previous_month_end_expr
+from thesis_pkg.pipelines.lm2011_pipeline import _previous_month_end as _pipeline_previous_month_end
 from thesis_pkg.pipelines.refinitiv.analyst import select_refinitiv_lm2011_doc_analyst_inputs
 
 
@@ -69,6 +79,72 @@ _EXTRACTION_ITEM_LABELS: dict[str, str] = {
     "1A": "item_1a",
     "7": "item_7",
 }
+
+_LM2011_VALIDATION_AUDIT_RUST_METRICS: dict[str, int] = {
+    "legacy_tokenize_fast_success": 0,
+    "legacy_tokenize_fast_failures": 0,
+    "legacy_tokenize_fallbacks": 0,
+    "marker_flags_fast_success": 0,
+    "marker_flags_fast_failures": 0,
+    "marker_flags_fallbacks": 0,
+    "truncate_text_fast_success": 0,
+    "truncate_text_fast_failures": 0,
+    "truncate_text_fallbacks": 0,
+    "count_true_fast_success": 0,
+    "count_true_fast_failures": 0,
+    "count_true_fallbacks": 0,
+    "count_series_fast_success": 0,
+    "count_series_fast_failures": 0,
+    "count_series_fallbacks": 0,
+    "normalized_form_counts_fast_success": 0,
+    "normalized_form_counts_fast_failures": 0,
+    "normalized_form_counts_fallbacks": 0,
+    "form_count_rows_fast_success": 0,
+    "form_count_rows_fast_failures": 0,
+    "form_count_rows_fallbacks": 0,
+    "term_counts_update_fast_success": 0,
+    "term_counts_update_fast_failures": 0,
+    "term_counts_update_fallbacks": 0,
+    "event_attrition_rows_fast_success": 0,
+    "event_attrition_rows_fast_failures": 0,
+    "event_attrition_rows_fallbacks": 0,
+    "units_row_fast_success": 0,
+    "units_row_fast_failures": 0,
+    "units_row_fallbacks": 0,
+    "packet_d_coverage_row_fast_success": 0,
+    "packet_d_coverage_row_fast_failures": 0,
+    "packet_d_coverage_row_fallbacks": 0,
+    "packet_a_mda_rows_column_fast_success": 0,
+    "packet_a_mda_rows_column_fast_failures": 0,
+    "packet_a_mda_rows_column_fallbacks": 0,
+    "packet_a_mda_rows_fast_success": 0,
+    "packet_a_mda_rows_fast_failures": 0,
+    "packet_a_mda_rows_fallbacks": 0,
+    "packet_a_delta_summary_fast_success": 0,
+    "packet_a_delta_summary_fast_failures": 0,
+    "packet_a_delta_summary_fallbacks": 0,
+    "packet_a_summary_frame_fast_success": 0,
+    "packet_a_summary_frame_fast_failures": 0,
+    "packet_a_summary_frame_fallbacks": 0,
+    "packet_a_strip_comparison_frame_fast_success": 0,
+    "packet_a_strip_comparison_frame_fast_failures": 0,
+    "packet_a_strip_comparison_frame_fallbacks": 0,
+    "packet_a_examples_frame_fast_success": 0,
+    "packet_a_examples_frame_fast_failures": 0,
+    "packet_a_examples_frame_fallbacks": 0,
+}
+
+
+def get_lm2011_validation_audit_rust_accel_metrics() -> dict[str, int | str | bool | None]:
+    metrics: dict[str, int | str | bool | None] = dict(_LM2011_VALIDATION_AUDIT_RUST_METRICS)
+    metrics["rust_accel_available"] = _lm2011_rust is not None
+    metrics["rust_accel_import_error"] = _LM2011_VALIDATION_AUDIT_RUST_IMPORT_ERROR
+    return metrics
+
+
+def reset_lm2011_validation_audit_rust_accel_metrics() -> None:
+    for key in _LM2011_VALIDATION_AUDIT_RUST_METRICS:
+        _LM2011_VALIDATION_AUDIT_RUST_METRICS[key] = 0
 
 
 @dataclass(frozen=True)
@@ -715,8 +791,7 @@ def _year_filter_expr(column_name: str, year_filter: tuple[int, ...] | None, *, 
 
 
 def _previous_month_end(value: dt.date) -> dt.date:
-    first_of_month = value.replace(day=1)
-    return first_of_month - dt.timedelta(days=1)
+    return _pipeline_previous_month_end(value)
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -831,10 +906,22 @@ def _load_master_dictionary_tokens(additional_data_dir: Path) -> frozenset[str]:
     )
 
 
-def _legacy_tokenize_lm2011_text(text: str | None) -> list[str]:
+def _legacy_tokenize_lm2011_text_py(text: str | None) -> list[str]:
     if text is None:
         return []
     return [token.casefold() for token in _LEGACY_TOKEN_RE.findall(text)]
+
+
+def _legacy_tokenize_lm2011_text(text: str | None) -> list[str]:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.legacy_lm2011_tokens_value(text)
+            _LM2011_VALIDATION_AUDIT_RUST_METRICS["legacy_tokenize_fast_success"] += 1
+            return [str(token) for token in out]
+        except Exception:
+            _LM2011_VALIDATION_AUDIT_RUST_METRICS["legacy_tokenize_fast_failures"] += 1
+    _LM2011_VALIDATION_AUDIT_RUST_METRICS["legacy_tokenize_fallbacks"] += 1
+    return _legacy_tokenize_lm2011_text_py(text)
 
 
 def _load_backbone_doc_years(
@@ -1001,7 +1088,7 @@ def _doc_year_groups(df: pl.DataFrame) -> dict[int, pl.DataFrame]:
     return groups
 
 
-def _marker_flags_and_snippet(text: str | None, snippet_char_limit: int) -> tuple[dict[str, bool], str | None]:
+def _marker_flags_and_snippet_py(text: str | None, snippet_char_limit: int) -> tuple[dict[str, bool], str | None]:
     if text is None:
         return {name: False for name, _ in _MARKER_PATTERNS}, None
     flags: dict[str, bool] = {}
@@ -1015,11 +1102,27 @@ def _marker_flags_and_snippet(text: str | None, snippet_char_limit: int) -> tupl
     if first_match_start is not None:
         start = max(0, first_match_start - 80)
         end = min(len(text), first_match_start + snippet_char_limit)
-        snippet = _truncate_text(text[start:end], snippet_char_limit)
+        snippet = _truncate_text_py(text[start:end], snippet_char_limit)
     return flags, snippet
 
 
-def _truncate_text(text: str | None, limit: int) -> str | None:
+def _marker_flags_and_snippet(text: str | None, snippet_char_limit: int) -> tuple[dict[str, bool], str | None]:
+    if _lm2011_rust is not None:
+        try:
+            raw_flags, snippet = _lm2011_rust.lm2011_validation_marker_flags_and_snippet(
+                text,
+                snippet_char_limit,
+            )
+            flags = {name: bool(raw_flags.get(name, False)) for name, _ in _MARKER_PATTERNS}
+            _LM2011_VALIDATION_AUDIT_RUST_METRICS["marker_flags_fast_success"] += 1
+            return flags, snippet
+        except (TypeError, ValueError, OverflowError, RuntimeError):
+            _LM2011_VALIDATION_AUDIT_RUST_METRICS["marker_flags_fast_failures"] += 1
+    _LM2011_VALIDATION_AUDIT_RUST_METRICS["marker_flags_fallbacks"] += 1
+    return _marker_flags_and_snippet_py(text, snippet_char_limit)
+
+
+def _truncate_text_py(text: str | None, limit: int) -> str | None:
     if text is None:
         return None
     cleaned = re.sub(r"\s+", " ", text).strip()
@@ -1028,15 +1131,54 @@ def _truncate_text(text: str | None, limit: int) -> str | None:
     return f"{cleaned[: max(limit - 3, 0)].rstrip()}..."
 
 
-def _count_true(rows: list[dict[str, Any]], key: str) -> int:
+def _truncate_text(text: str | None, limit: int) -> str | None:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.lm2011_validation_truncate_text(text, limit)
+            _LM2011_VALIDATION_AUDIT_RUST_METRICS["truncate_text_fast_success"] += 1
+            return out
+        except (TypeError, ValueError, OverflowError, RuntimeError):
+            _LM2011_VALIDATION_AUDIT_RUST_METRICS["truncate_text_fast_failures"] += 1
+    _LM2011_VALIDATION_AUDIT_RUST_METRICS["truncate_text_fallbacks"] += 1
+    return _truncate_text_py(text, limit)
+
+
+def _count_true_py(rows: list[dict[str, Any]], key: str) -> int:
     return sum(1 for row in rows if bool(row.get(key)))
 
 
-def _count_series(values: list[str]) -> dict[str, int]:
+def _count_true(rows: list[dict[str, Any]], key: str) -> int:
+    if _lm2011_rust is not None:
+        try:
+            out = int(_lm2011_rust.lm2011_validation_count_true(rows, key))
+            _LM2011_VALIDATION_AUDIT_RUST_METRICS["count_true_fast_success"] += 1
+            return out
+        except (TypeError, ValueError, OverflowError, RuntimeError):
+            _LM2011_VALIDATION_AUDIT_RUST_METRICS["count_true_fast_failures"] += 1
+    _LM2011_VALIDATION_AUDIT_RUST_METRICS["count_true_fallbacks"] += 1
+    return _count_true_py(rows, key)
+
+
+def _count_series_py(values: list[str]) -> dict[str, int]:
     counts: dict[str, int] = {}
     for value in values:
         counts[value] = counts.get(value, 0) + 1
     return counts
+
+
+def _count_series(values: list[str]) -> dict[str, int]:
+    if _lm2011_rust is not None:
+        try:
+            out = {
+                str(key): int(value)
+                for key, value in _lm2011_rust.lm2011_validation_count_series(values).items()
+            }
+            _LM2011_VALIDATION_AUDIT_RUST_METRICS["count_series_fast_success"] += 1
+            return out
+        except (TypeError, ValueError, OverflowError, RuntimeError):
+            _LM2011_VALIDATION_AUDIT_RUST_METRICS["count_series_fast_failures"] += 1
+    _LM2011_VALIDATION_AUDIT_RUST_METRICS["count_series_fallbacks"] += 1
+    return _count_series_py(values)
 
 
 def _collect_form_counts_from_year_merged(
@@ -1050,16 +1192,35 @@ def _collect_form_counts_from_year_merged(
             .select(pl.col("document_type_filename").cast(pl.Utf8, strict=False).alias("document_type_filename"))
             .collect()
         )
-        forms = [
-            normalize_lm2011_form_value(value, other_value="Other")
-            for value in year_df.get_column("document_type_filename").drop_nulls().to_list()
-        ]
-        for key, value in _count_series(forms).items():
+        for key, value in _normalized_form_counts(year_df.get_column("document_type_filename").to_list()).items():
             counts[key] = counts.get(key, 0) + value
     return counts
 
 
-def _form_count_rows(corpus_label: str, counts: dict[str, int]) -> list[dict[str, Any]]:
+def _normalized_form_counts_py(values: list[Any]) -> dict[str, int]:
+    forms = [
+        form
+        for value in values
+        if value is not None
+        for form in [normalize_lm2011_form_value(value, other_value="Other")]
+        if form is not None
+    ]
+    return _count_series(forms)
+
+
+def _normalized_form_counts(values: list[Any]) -> dict[str, int]:
+    if _lm2011_rust is not None:
+        try:
+            counts = _lm2011_rust.lm2011_validation_normalized_form_counts(values, "Other")
+            _LM2011_VALIDATION_AUDIT_RUST_METRICS["normalized_form_counts_fast_success"] += 1
+            return {str(key): int(value) for key, value in dict(counts).items()}
+        except (TypeError, ValueError, OverflowError, RuntimeError):
+            _LM2011_VALIDATION_AUDIT_RUST_METRICS["normalized_form_counts_fast_failures"] += 1
+    _LM2011_VALIDATION_AUDIT_RUST_METRICS["normalized_form_counts_fallbacks"] += 1
+    return _normalized_form_counts_py(values)
+
+
+def _form_count_rows_py(corpus_label: str, counts: dict[str, int]) -> list[dict[str, Any]]:
     return [
         {
             "corpus_label": corpus_label,
@@ -1070,7 +1231,19 @@ def _form_count_rows(corpus_label: str, counts: dict[str, int]) -> list[dict[str
     ]
 
 
-def _update_term_counts(stats: dict[str, int], year_df: pl.DataFrame) -> None:
+def _form_count_rows(corpus_label: str, counts: dict[str, int]) -> list[dict[str, Any]]:
+    if _lm2011_rust is not None:
+        try:
+            rows = _lm2011_rust.lm2011_validation_form_count_rows(corpus_label, counts)
+            _LM2011_VALIDATION_AUDIT_RUST_METRICS["form_count_rows_fast_success"] += 1
+            return [dict(row) for row in rows]
+        except (TypeError, ValueError, OverflowError, RuntimeError):
+            _LM2011_VALIDATION_AUDIT_RUST_METRICS["form_count_rows_fast_failures"] += 1
+    _LM2011_VALIDATION_AUDIT_RUST_METRICS["form_count_rows_fallbacks"] += 1
+    return _form_count_rows_py(corpus_label, counts)
+
+
+def _update_term_counts_py(stats: dict[str, int], year_df: pl.DataFrame) -> None:
     if year_df.is_empty():
         return
     stats["doc_count"] += int(year_df.height)
@@ -1079,6 +1252,26 @@ def _update_term_counts(stats: dict[str, int], year_df: pl.DataFrame) -> None:
         for _, term in _REPRESENTATIVE_TERMS:
             if term in token_set:
                 stats[term] += 1
+
+
+def _update_term_counts(stats: dict[str, int], year_df: pl.DataFrame) -> None:
+    if year_df.is_empty():
+        return
+    if _lm2011_rust is not None:
+        try:
+            doc_count, counts = _lm2011_rust.lm2011_validation_term_count_updates(
+                year_df.get_column("full_text").to_list(),
+                [term for _, term in _REPRESENTATIVE_TERMS],
+            )
+            stats["doc_count"] += int(doc_count)
+            for term, count in dict(counts).items():
+                stats[str(term)] += int(count)
+            _LM2011_VALIDATION_AUDIT_RUST_METRICS["term_counts_update_fast_success"] += 1
+            return
+        except (TypeError, ValueError, OverflowError, RuntimeError):
+            _LM2011_VALIDATION_AUDIT_RUST_METRICS["term_counts_update_fast_failures"] += 1
+    _LM2011_VALIDATION_AUDIT_RUST_METRICS["term_counts_update_fallbacks"] += 1
+    _update_term_counts_py(stats, year_df)
 
 
 def _parquet_row_count(path: Path) -> int:
@@ -1298,86 +1491,157 @@ def _packet_a_mda_rows(
             .unique(subset=["doc_id"], keep="first", maintain_order=True)
             .collect()
         )
-        for row in items_df.iter_rows(named=True):
-            full_text = row.get("full_text")
-            current_tokens = _legacy_tokenize_lm2011_text(full_text if isinstance(full_text, str) else None)
-            appendix_tokens = tokenize_lm2011_text(full_text if isinstance(full_text, str) else None)
-            recognized_word_count = sum(1 for token in appendix_tokens if token in master_dictionary)
-            rows.append(
-                {
-                    "text_scope": "mda",
-                    "doc_id": row["doc_id"],
-                    "filing_year": filing_year,
-                    "threshold": MDA_THRESHOLD,
-                    "current_token_count": len(current_tokens),
-                    "appendix_token_count": len(appendix_tokens),
-                    "recognized_word_count": recognized_word_count,
-                    "current_threshold_pass": len(current_tokens) >= MDA_THRESHOLD,
-                    "appendix_threshold_pass": len(appendix_tokens) >= MDA_THRESHOLD,
-                    "recognized_threshold_pass": recognized_word_count >= MDA_THRESHOLD,
-                    "threshold_flip": (len(current_tokens) >= MDA_THRESHOLD) != (len(appendix_tokens) >= MDA_THRESHOLD),
-                    "has_sec_header": False,
-                    "has_html_marker": False,
-                    "has_table_marker": False,
-                    "has_exhibit_marker": False,
-                    "any_marker": False,
-                    "edgar_stripped_current_token_count": len(current_tokens),
-                    "edgar_stripped_appendix_token_count": len(appendix_tokens),
-                    "edgar_stripped_recognized_word_count": recognized_word_count,
-                    "edgar_stripped_has_sec_header": False,
-                    "edgar_stripped_has_html_marker": False,
-                    "edgar_stripped_has_table_marker": False,
-                    "edgar_stripped_has_exhibit_marker": False,
-                    "edgar_stripped_any_marker": False,
-                    "paper_cleaned_current_token_count": len(current_tokens),
-                    "paper_cleaned_appendix_token_count": len(appendix_tokens),
-                    "paper_cleaned_recognized_word_count": recognized_word_count,
-                    "paper_cleaned_current_threshold_pass": len(current_tokens) >= MDA_THRESHOLD,
-                    "paper_cleaned_appendix_threshold_pass": len(appendix_tokens) >= MDA_THRESHOLD,
-                    "paper_cleaned_recognized_threshold_pass": recognized_word_count >= MDA_THRESHOLD,
-                    "paper_cleaned_threshold_flip": (len(current_tokens) >= MDA_THRESHOLD) != (len(appendix_tokens) >= MDA_THRESHOLD),
-                    "paper_cleaned_has_sec_header": False,
-                    "paper_cleaned_has_html_marker": False,
-                    "paper_cleaned_has_table_marker": False,
-                    "paper_cleaned_has_exhibit_marker": False,
-                    "paper_cleaned_any_marker": False,
-                    "paper_cleaned_cut_reason": "no_tail_anchor",
-                    "paper_cleaned_cut_start": None,
-                    "paper_cleaned_cut_share": None,
-                    "paper_cleaned_anchor_text": None,
-                    "example_snippet": _truncate_text(full_text, cfg.snippet_char_limit),
-                    "edgar_stripped_example_snippet": _truncate_text(full_text, cfg.snippet_char_limit),
-                    "paper_cleaned_example_snippet": _truncate_text(full_text, cfg.snippet_char_limit),
-                    "paper_cleaned_pre_cut_tail_snippet": None,
-                    "paper_cleaned_post_cut_tail_snippet": _truncate_text(full_text, cfg.snippet_char_limit),
-                }
-            )
+        rows.extend(_packet_a_mda_rows_from_items(items_df, filing_year, master_dictionary, cfg.snippet_char_limit))
     return rows
 
 
-def _packet_a_summary_frame(rows: list[dict[str, Any]]) -> pl.DataFrame:
-    if not rows:
-        return pl.DataFrame(
-            schema={
-                "text_scope": pl.Utf8,
-                "filing_year": pl.Int32,
-                "doc_count": pl.Int64,
-                "docs_with_any_marker": pl.Int64,
-                "docs_with_any_marker_after_edgar_strip": pl.Int64,
-                "docs_with_any_marker_after_paper_cleaning": pl.Int64,
-                "docs_with_exhibit_marker_after_paper_cleaning": pl.Int64,
-                "current_threshold_pass_count": pl.Int64,
-                "appendix_threshold_pass_count": pl.Int64,
-                "recognized_threshold_pass_count": pl.Int64,
-                "threshold_flip_count": pl.Int64,
-                "mean_token_drop_after_edgar_strip": pl.Float64,
-                "mean_token_drop_after_paper_cleaning": pl.Float64,
-                "mean_recognized_word_drop_after_paper_cleaning": pl.Float64,
-                "paper_cleaned_threshold_flip_count": pl.Int64,
-                "paper_cleaned_appendix_threshold_pass_count": pl.Int64,
-                "paper_cleaned_truncated_doc_count": pl.Int64,
+def _packet_a_mda_rows_from_items_py(
+    items_df: pl.DataFrame,
+    filing_year: int,
+    master_dictionary: frozenset[str],
+    snippet_char_limit: int,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for row in items_df.iter_rows(named=True):
+        full_text = row.get("full_text")
+        current_tokens = _legacy_tokenize_lm2011_text(full_text if isinstance(full_text, str) else None)
+        appendix_tokens = tokenize_lm2011_text(full_text if isinstance(full_text, str) else None)
+        recognized_word_count = sum(1 for token in appendix_tokens if token in master_dictionary)
+        rows.append(
+            {
+                "text_scope": "mda",
+                "doc_id": row["doc_id"],
+                "filing_year": filing_year,
+                "threshold": MDA_THRESHOLD,
+                "current_token_count": len(current_tokens),
+                "appendix_token_count": len(appendix_tokens),
+                "recognized_word_count": recognized_word_count,
+                "current_threshold_pass": len(current_tokens) >= MDA_THRESHOLD,
+                "appendix_threshold_pass": len(appendix_tokens) >= MDA_THRESHOLD,
+                "recognized_threshold_pass": recognized_word_count >= MDA_THRESHOLD,
+                "threshold_flip": (len(current_tokens) >= MDA_THRESHOLD) != (len(appendix_tokens) >= MDA_THRESHOLD),
+                "has_sec_header": False,
+                "has_html_marker": False,
+                "has_table_marker": False,
+                "has_exhibit_marker": False,
+                "any_marker": False,
+                "edgar_stripped_current_token_count": len(current_tokens),
+                "edgar_stripped_appendix_token_count": len(appendix_tokens),
+                "edgar_stripped_recognized_word_count": recognized_word_count,
+                "edgar_stripped_has_sec_header": False,
+                "edgar_stripped_has_html_marker": False,
+                "edgar_stripped_has_table_marker": False,
+                "edgar_stripped_has_exhibit_marker": False,
+                "edgar_stripped_any_marker": False,
+                "paper_cleaned_current_token_count": len(current_tokens),
+                "paper_cleaned_appendix_token_count": len(appendix_tokens),
+                "paper_cleaned_recognized_word_count": recognized_word_count,
+                "paper_cleaned_current_threshold_pass": len(current_tokens) >= MDA_THRESHOLD,
+                "paper_cleaned_appendix_threshold_pass": len(appendix_tokens) >= MDA_THRESHOLD,
+                "paper_cleaned_recognized_threshold_pass": recognized_word_count >= MDA_THRESHOLD,
+                "paper_cleaned_threshold_flip": (len(current_tokens) >= MDA_THRESHOLD) != (len(appendix_tokens) >= MDA_THRESHOLD),
+                "paper_cleaned_has_sec_header": False,
+                "paper_cleaned_has_html_marker": False,
+                "paper_cleaned_has_table_marker": False,
+                "paper_cleaned_has_exhibit_marker": False,
+                "paper_cleaned_any_marker": False,
+                "paper_cleaned_cut_reason": "no_tail_anchor",
+                "paper_cleaned_cut_start": None,
+                "paper_cleaned_cut_share": None,
+                "paper_cleaned_anchor_text": None,
+                "example_snippet": _truncate_text(full_text, snippet_char_limit),
+                "edgar_stripped_example_snippet": _truncate_text(full_text, snippet_char_limit),
+                "paper_cleaned_example_snippet": _truncate_text(full_text, snippet_char_limit),
+                "paper_cleaned_pre_cut_tail_snippet": None,
+                "paper_cleaned_post_cut_tail_snippet": _truncate_text(full_text, snippet_char_limit),
             }
         )
+    return rows
+
+
+def _packet_a_mda_rows_from_items(
+    items_df: pl.DataFrame,
+    filing_year: int,
+    master_dictionary: frozenset[str],
+    snippet_char_limit: int,
+) -> list[dict[str, Any]]:
+    if items_df.is_empty():
+        return []
+    if _lm2011_rust is not None:
+        try:
+            selected = items_df.select("doc_id", "full_text")
+            rows = _lm2011_rust.lm2011_validation_packet_a_mda_row_columns(
+                selected.columns,
+                [selected.get_column(column).to_list() for column in selected.columns],
+                int(filing_year),
+                list(master_dictionary),
+                MDA_THRESHOLD,
+                int(snippet_char_limit),
+            )
+            _LM2011_VALIDATION_AUDIT_RUST_METRICS["packet_a_mda_rows_column_fast_success"] += 1
+            return [dict(row) for row in rows]
+        except (TypeError, ValueError, OverflowError, RuntimeError):
+            _LM2011_VALIDATION_AUDIT_RUST_METRICS["packet_a_mda_rows_column_fast_failures"] += 1
+            _LM2011_VALIDATION_AUDIT_RUST_METRICS["packet_a_mda_rows_column_fallbacks"] += 1
+        try:
+            rows = _lm2011_rust.lm2011_validation_packet_a_mda_rows(
+                items_df.select("doc_id", "full_text").to_dicts(),
+                int(filing_year),
+                list(master_dictionary),
+                MDA_THRESHOLD,
+                int(snippet_char_limit),
+            )
+            _LM2011_VALIDATION_AUDIT_RUST_METRICS["packet_a_mda_rows_fast_success"] += 1
+            return [dict(row) for row in rows]
+        except (TypeError, ValueError, OverflowError, RuntimeError):
+            _LM2011_VALIDATION_AUDIT_RUST_METRICS["packet_a_mda_rows_fast_failures"] += 1
+    _LM2011_VALIDATION_AUDIT_RUST_METRICS["packet_a_mda_rows_fallbacks"] += 1
+    return _packet_a_mda_rows_from_items_py(items_df, filing_year, master_dictionary, snippet_char_limit)
+
+
+_PACKET_A_SUMMARY_SCHEMA: dict[str, pl.DataType] = {
+    "text_scope": pl.Utf8,
+    "filing_year": pl.Int32,
+    "doc_count": pl.Int64,
+    "docs_with_any_marker": pl.Int64,
+    "docs_with_any_marker_after_edgar_strip": pl.Int64,
+    "docs_with_any_marker_after_paper_cleaning": pl.Int64,
+    "docs_with_exhibit_marker_after_paper_cleaning": pl.Int64,
+    "current_threshold_pass_count": pl.Int64,
+    "appendix_threshold_pass_count": pl.Int64,
+    "recognized_threshold_pass_count": pl.Int64,
+    "threshold_flip_count": pl.Int64,
+    "mean_token_drop_after_edgar_strip": pl.Float64,
+    "mean_token_drop_after_paper_cleaning": pl.Float64,
+    "mean_recognized_word_drop_after_paper_cleaning": pl.Float64,
+    "paper_cleaned_threshold_flip_count": pl.Int64,
+    "paper_cleaned_appendix_threshold_pass_count": pl.Int64,
+    "paper_cleaned_truncated_doc_count": pl.Int64,
+}
+_PACKET_A_SUMMARY_OUTPUT_COLUMNS: tuple[str, ...] = (
+    "text_scope",
+    "filing_year",
+    "doc_count",
+    "docs_with_any_marker",
+    "docs_with_any_marker_after_edgar_strip",
+    "docs_with_any_marker_after_paper_cleaning",
+    "docs_with_exhibit_marker_after_paper_cleaning",
+    "current_threshold_pass_count",
+    "appendix_threshold_pass_count",
+    "recognized_threshold_pass_count",
+    "threshold_flip_count",
+    "paper_cleaned_threshold_flip_count",
+    "paper_cleaned_appendix_threshold_pass_count",
+    "paper_cleaned_truncated_doc_count",
+    "mean_token_drop_after_edgar_strip",
+    "mean_token_drop_after_paper_cleaning",
+    "mean_recognized_word_drop_after_paper_cleaning",
+)
+
+
+def _packet_a_summary_frame_py(rows: list[dict[str, Any]]) -> pl.DataFrame:
+    if not rows:
+        return pl.DataFrame(schema=_PACKET_A_SUMMARY_SCHEMA)
     base = pl.DataFrame(rows)
     per_year = (
         base.group_by("text_scope", "filing_year")
@@ -1440,6 +1704,22 @@ def _packet_a_summary_frame(rows: list[dict[str, Any]]) -> pl.DataFrame:
         .sort("text_scope")
     )
     return pl.concat([per_year, overall], how="vertical_relaxed")
+
+
+def _packet_a_summary_frame(rows: list[dict[str, Any]]) -> pl.DataFrame:
+    if not rows:
+        return _packet_a_summary_frame_py(rows)
+    if _lm2011_rust is not None:
+        try:
+            raw_rows = _lm2011_rust.lm2011_validation_packet_a_summary_rows(rows)
+            _LM2011_VALIDATION_AUDIT_RUST_METRICS["packet_a_summary_frame_fast_success"] += 1
+            return pl.DataFrame(raw_rows, schema=_PACKET_A_SUMMARY_SCHEMA).select(
+                list(_PACKET_A_SUMMARY_OUTPUT_COLUMNS)
+            )
+        except (TypeError, ValueError, OverflowError, RuntimeError):
+            _LM2011_VALIDATION_AUDIT_RUST_METRICS["packet_a_summary_frame_fast_failures"] += 1
+    _LM2011_VALIDATION_AUDIT_RUST_METRICS["packet_a_summary_frame_fallbacks"] += 1
+    return _packet_a_summary_frame_py(rows)
 
 
 def _packet_a_threshold_frame(rows: list[dict[str, Any]]) -> pl.DataFrame:
@@ -1536,27 +1816,28 @@ def _packet_a_threshold_frame(rows: list[dict[str, Any]]) -> pl.DataFrame:
     )
 
 
-def _packet_a_strip_comparison_frame(rows: list[dict[str, Any]]) -> pl.DataFrame:
+_PACKET_A_STRIP_COMPARISON_SCHEMA: dict[str, pl.DataType] = {
+    "text_scope": pl.Utf8,
+    "filing_year": pl.Int32,
+    "doc_count": pl.Int64,
+    "docs_with_any_marker_before": pl.Int64,
+    "docs_with_any_marker_after_edgar_strip": pl.Int64,
+    "docs_with_any_marker_after_paper_cleaning": pl.Int64,
+    "docs_with_sec_header_after_edgar_strip": pl.Int64,
+    "docs_with_html_marker_after_edgar_strip": pl.Int64,
+    "docs_with_table_marker_after_edgar_strip": pl.Int64,
+    "docs_with_exhibit_marker_after_edgar_strip": pl.Int64,
+    "docs_with_sec_header_after_paper_cleaning": pl.Int64,
+    "docs_with_html_marker_after_paper_cleaning": pl.Int64,
+    "docs_with_table_marker_after_paper_cleaning": pl.Int64,
+    "docs_with_exhibit_marker_after_paper_cleaning": pl.Int64,
+    "truncated_doc_count": pl.Int64,
+}
+
+
+def _packet_a_strip_comparison_frame_py(rows: list[dict[str, Any]]) -> pl.DataFrame:
     if not rows:
-        return pl.DataFrame(
-            schema={
-                "text_scope": pl.Utf8,
-                "filing_year": pl.Int32,
-                "doc_count": pl.Int64,
-                "docs_with_any_marker_before": pl.Int64,
-                "docs_with_any_marker_after_edgar_strip": pl.Int64,
-                "docs_with_any_marker_after_paper_cleaning": pl.Int64,
-                "docs_with_sec_header_after_edgar_strip": pl.Int64,
-                "docs_with_html_marker_after_edgar_strip": pl.Int64,
-                "docs_with_table_marker_after_edgar_strip": pl.Int64,
-                "docs_with_exhibit_marker_after_edgar_strip": pl.Int64,
-                "docs_with_sec_header_after_paper_cleaning": pl.Int64,
-                "docs_with_html_marker_after_paper_cleaning": pl.Int64,
-                "docs_with_table_marker_after_paper_cleaning": pl.Int64,
-                "docs_with_exhibit_marker_after_paper_cleaning": pl.Int64,
-                "truncated_doc_count": pl.Int64,
-            }
-        )
+        return pl.DataFrame(schema=_PACKET_A_STRIP_COMPARISON_SCHEMA)
     base = pl.DataFrame(rows)
     per_year = (
         base.group_by("text_scope", "filing_year")
@@ -1605,7 +1886,42 @@ def _packet_a_strip_comparison_frame(rows: list[dict[str, Any]]) -> pl.DataFrame
     return pl.concat([per_year, overall], how="vertical_relaxed")
 
 
-def _packet_a_examples_frame(rows: list[dict[str, Any]], max_rows: int) -> pl.DataFrame:
+def _packet_a_strip_comparison_frame(rows: list[dict[str, Any]]) -> pl.DataFrame:
+    if not rows:
+        return _packet_a_strip_comparison_frame_py(rows)
+    if _lm2011_rust is not None:
+        try:
+            raw_rows = _lm2011_rust.lm2011_validation_packet_a_strip_comparison_rows(rows)
+            _LM2011_VALIDATION_AUDIT_RUST_METRICS["packet_a_strip_comparison_frame_fast_success"] += 1
+            return pl.DataFrame(raw_rows, schema=_PACKET_A_STRIP_COMPARISON_SCHEMA).select(
+                list(_PACKET_A_STRIP_COMPARISON_SCHEMA)
+            )
+        except (TypeError, ValueError, OverflowError, RuntimeError):
+            _LM2011_VALIDATION_AUDIT_RUST_METRICS["packet_a_strip_comparison_frame_fast_failures"] += 1
+    _LM2011_VALIDATION_AUDIT_RUST_METRICS["packet_a_strip_comparison_frame_fallbacks"] += 1
+    return _packet_a_strip_comparison_frame_py(rows)
+
+
+_PACKET_A_EXAMPLES_SCHEMA: dict[str, pl.DataType] = {
+    "text_scope": pl.Utf8,
+    "doc_id": pl.Utf8,
+    "filing_year": pl.Int32,
+    "threshold_flip": pl.Boolean,
+    "any_marker": pl.Boolean,
+    "edgar_stripped_any_marker": pl.Boolean,
+    "paper_cleaned_any_marker": pl.Boolean,
+    "paper_cleaned_threshold_flip": pl.Boolean,
+    "paper_cleaned_cut_reason": pl.Utf8,
+    "paper_cleaned_cut_share": pl.Float64,
+    "example_snippet": pl.Utf8,
+    "edgar_stripped_example_snippet": pl.Utf8,
+    "paper_cleaned_example_snippet": pl.Utf8,
+    "paper_cleaned_pre_cut_tail_snippet": pl.Utf8,
+    "paper_cleaned_post_cut_tail_snippet": pl.Utf8,
+}
+
+
+def _packet_a_examples_frame_py(rows: list[dict[str, Any]], max_rows: int) -> pl.DataFrame:
     example_rows = [
         row
         for row in rows
@@ -1617,25 +1933,7 @@ def _packet_a_examples_frame(rows: list[dict[str, Any]], max_rows: int) -> pl.Da
         or row["paper_cleaned_cut_reason"] != "no_tail_anchor"
     ]
     if not example_rows:
-        return pl.DataFrame(
-            schema={
-                "text_scope": pl.Utf8,
-                "doc_id": pl.Utf8,
-                "filing_year": pl.Int32,
-                "threshold_flip": pl.Boolean,
-                "any_marker": pl.Boolean,
-                "edgar_stripped_any_marker": pl.Boolean,
-                "paper_cleaned_any_marker": pl.Boolean,
-                "paper_cleaned_threshold_flip": pl.Boolean,
-                "paper_cleaned_cut_reason": pl.Utf8,
-                "paper_cleaned_cut_share": pl.Float64,
-                "example_snippet": pl.Utf8,
-                "edgar_stripped_example_snippet": pl.Utf8,
-                "paper_cleaned_example_snippet": pl.Utf8,
-                "paper_cleaned_pre_cut_tail_snippet": pl.Utf8,
-                "paper_cleaned_post_cut_tail_snippet": pl.Utf8,
-            }
-        )
+        return pl.DataFrame(schema=_PACKET_A_EXAMPLES_SCHEMA)
     ordered = sorted(
         example_rows,
         key=lambda row: (
@@ -1668,7 +1966,23 @@ def _packet_a_examples_frame(rows: list[dict[str, Any]], max_rows: int) -> pl.Da
     )
 
 
-def _packet_a_delta_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+def _packet_a_examples_frame(rows: list[dict[str, Any]], max_rows: int) -> pl.DataFrame:
+    if not rows:
+        return _packet_a_examples_frame_py(rows, max_rows)
+    if _lm2011_rust is not None:
+        try:
+            raw_rows = _lm2011_rust.lm2011_validation_packet_a_example_rows(rows, int(max_rows))
+            _LM2011_VALIDATION_AUDIT_RUST_METRICS["packet_a_examples_frame_fast_success"] += 1
+            return pl.DataFrame(raw_rows, schema=_PACKET_A_EXAMPLES_SCHEMA).select(
+                list(_PACKET_A_EXAMPLES_SCHEMA)
+            )
+        except (TypeError, ValueError, OverflowError, RuntimeError):
+            _LM2011_VALIDATION_AUDIT_RUST_METRICS["packet_a_examples_frame_fast_failures"] += 1
+    _LM2011_VALIDATION_AUDIT_RUST_METRICS["packet_a_examples_frame_fallbacks"] += 1
+    return _packet_a_examples_frame_py(rows, max_rows)
+
+
+def _packet_a_delta_summary_py(rows: list[dict[str, Any]]) -> dict[str, Any]:
     summary: dict[str, Any] = {}
     for scope in ("full_10k", "mda"):
         scoped_rows = [row for row in rows if row["text_scope"] == scope]
@@ -1695,6 +2009,40 @@ def _packet_a_delta_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         summary[f"{scope}_mean_current_minus_appendix_token_delta"] = float(mean_current_minus_appendix)
         summary[f"{scope}_mean_appendix_minus_recognized_token_delta"] = float(mean_appendix_minus_recognized)
     return summary
+
+
+def _packet_a_delta_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    if _lm2011_rust is not None:
+        try:
+            (
+                full_doc_count,
+                full_current_vs_appendix_doc_count,
+                full_appendix_vs_recognized_doc_count,
+                full_mean_current_minus_appendix,
+                full_mean_appendix_minus_recognized,
+                mda_doc_count,
+                mda_current_vs_appendix_doc_count,
+                mda_appendix_vs_recognized_doc_count,
+                mda_mean_current_minus_appendix,
+                mda_mean_appendix_minus_recognized,
+            ) = _lm2011_rust.lm2011_validation_packet_a_delta_summary(rows)
+            _LM2011_VALIDATION_AUDIT_RUST_METRICS["packet_a_delta_summary_fast_success"] += 1
+            return {
+                "full_10k_doc_count": int(full_doc_count),
+                "full_10k_current_vs_appendix_doc_count": int(full_current_vs_appendix_doc_count),
+                "full_10k_appendix_vs_recognized_doc_count": int(full_appendix_vs_recognized_doc_count),
+                "full_10k_mean_current_minus_appendix_token_delta": float(full_mean_current_minus_appendix),
+                "full_10k_mean_appendix_minus_recognized_token_delta": float(full_mean_appendix_minus_recognized),
+                "mda_doc_count": int(mda_doc_count),
+                "mda_current_vs_appendix_doc_count": int(mda_current_vs_appendix_doc_count),
+                "mda_appendix_vs_recognized_doc_count": int(mda_appendix_vs_recognized_doc_count),
+                "mda_mean_current_minus_appendix_token_delta": float(mda_mean_current_minus_appendix),
+                "mda_mean_appendix_minus_recognized_token_delta": float(mda_mean_appendix_minus_recognized),
+            }
+        except (TypeError, ValueError, OverflowError, RuntimeError):
+            _LM2011_VALIDATION_AUDIT_RUST_METRICS["packet_a_delta_summary_fast_failures"] += 1
+    _LM2011_VALIDATION_AUDIT_RUST_METRICS["packet_a_delta_summary_fallbacks"] += 1
+    return _packet_a_delta_summary_py(rows)
 
 
 def _format_delta_finding(
@@ -1865,6 +2213,14 @@ def _packet_b_event_attrition(
     year_filter: tuple[int, ...] | None,
 ) -> pl.DataFrame:
     event_df = _load_doc_year_frame(paths.event_panel_path, year_filter)
+    rows = _packet_b_event_attrition_rows(accepted_backbone, event_df)
+    return pl.DataFrame(rows).sort("filing_year")
+
+
+def _packet_b_event_attrition_rows_py(
+    accepted_backbone: pl.DataFrame,
+    event_df: pl.DataFrame,
+) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for filing_year in sorted(accepted_backbone["filing_year"].unique().to_list()):
         backbone_year = accepted_backbone.filter(pl.col("filing_year") == filing_year)
@@ -1885,7 +2241,27 @@ def _packet_b_event_attrition(
             "lost_doc_count": int(accepted_backbone.join(event_df.select("doc_id"), on="doc_id", how="anti").height),
         }
     )
-    return pl.DataFrame(rows).sort("filing_year")
+    return rows
+
+
+def _packet_b_event_attrition_rows(
+    accepted_backbone: pl.DataFrame,
+    event_df: pl.DataFrame,
+) -> list[dict[str, Any]]:
+    if _lm2011_rust is not None:
+        try:
+            rows = _lm2011_rust.lm2011_validation_event_attrition_rows(
+                accepted_backbone.get_column("doc_id").to_list(),
+                accepted_backbone.get_column("filing_year").to_list(),
+                event_df.get_column("doc_id").to_list(),
+                event_df.get_column("filing_year").to_list(),
+            )
+            _LM2011_VALIDATION_AUDIT_RUST_METRICS["event_attrition_rows_fast_success"] += 1
+            return [dict(row) for row in rows]
+        except (TypeError, ValueError, OverflowError, RuntimeError):
+            _LM2011_VALIDATION_AUDIT_RUST_METRICS["event_attrition_rows_fast_failures"] += 1
+    _LM2011_VALIDATION_AUDIT_RUST_METRICS["event_attrition_rows_fallbacks"] += 1
+    return _packet_b_event_attrition_rows_py(accepted_backbone, event_df)
 
 
 def _packet_c_units_audit(paths: _ResolvedAuditPaths) -> pl.DataFrame:
@@ -1978,9 +2354,7 @@ def _packet_c_denominator_audit(
         check_sortedness=False,
     )
     matched_df = matched_df.with_columns(
-        pl.col("matched_announcement_date")
-        .map_elements(_previous_month_end, return_dtype=pl.Date)
-        .alias("_announcement_prior_month_end")
+        _pipeline_previous_month_end_expr("matched_announcement_date").alias("_announcement_prior_month_end")
     )
     matched_df = matched_df.join_asof(
         daily_price.rename({"trade_date": "_announcement_prior_month_trade_date", "_price": "announcement_prior_month_price"}),
@@ -2105,7 +2479,7 @@ def _prepare_price_lookup_df(daily_panel_path: Path, permnos: list[int]) -> pl.D
     )
 
 
-def _units_row(
+def _units_row_py(
     artifact_name: str,
     field_name: str,
     df: pl.DataFrame,
@@ -2122,6 +2496,111 @@ def _units_row(
         "mean_abs_paper_display_equivalent": (mean_abs * paper_multiplier) if mean_abs is not None else None,
         "classification": "clearly_internal_unit",
     }
+
+
+def _units_row(
+    artifact_name: str,
+    field_name: str,
+    df: pl.DataFrame,
+    paper_multiplier: float,
+) -> dict[str, Any]:
+    if _lm2011_rust is not None:
+        try:
+            row = _lm2011_rust.lm2011_validation_units_row(
+                artifact_name,
+                field_name,
+                df.get_column(field_name).to_list(),
+                paper_multiplier,
+            )
+            _LM2011_VALIDATION_AUDIT_RUST_METRICS["units_row_fast_success"] += 1
+            return dict(row)
+        except (TypeError, ValueError, OverflowError, RuntimeError):
+            _LM2011_VALIDATION_AUDIT_RUST_METRICS["units_row_fast_failures"] += 1
+    _LM2011_VALIDATION_AUDIT_RUST_METRICS["units_row_fallbacks"] += 1
+    return _units_row_py(artifact_name, field_name, df, paper_multiplier)
+
+
+def _packet_d_coverage_row_py(
+    *,
+    run_name: str,
+    finbert_backbone_path: str | None,
+    sample_backbone_path: str,
+    finbert_backbone_matches_sample_backbone: bool,
+    finbert_backbone_path_matches_sample_backbone: bool,
+    reported_backbone_doc_count: int,
+    actual_filtered_doc_count: int | None,
+    sample_backbone_filtered_doc_count: int | None,
+    reported_covered_doc_count: int,
+    actual_covered_doc_count: int,
+) -> dict[str, Any]:
+    return {
+        "run_name": run_name,
+        "finbert_backbone_path": finbert_backbone_path,
+        "sample_backbone_path": sample_backbone_path,
+        "finbert_backbone_matches_sample_backbone": finbert_backbone_matches_sample_backbone,
+        "finbert_backbone_path_matches_sample_backbone": finbert_backbone_path_matches_sample_backbone,
+        "reported_backbone_doc_count": reported_backbone_doc_count,
+        "actual_filtered_doc_count": actual_filtered_doc_count,
+        "sample_backbone_filtered_doc_count": sample_backbone_filtered_doc_count,
+        "reported_covered_doc_count": reported_covered_doc_count,
+        "actual_covered_doc_count": actual_covered_doc_count,
+        "denominator_gap": (
+            reported_backbone_doc_count - actual_filtered_doc_count
+            if actual_filtered_doc_count is not None
+            else None
+        ),
+        "sample_backbone_denominator_gap": (
+            reported_backbone_doc_count - sample_backbone_filtered_doc_count
+            if sample_backbone_filtered_doc_count is not None
+            else None
+        ),
+    }
+
+
+def _packet_d_coverage_row(
+    *,
+    run_name: str,
+    finbert_backbone_path: str | None,
+    sample_backbone_path: str,
+    finbert_backbone_matches_sample_backbone: bool,
+    finbert_backbone_path_matches_sample_backbone: bool,
+    reported_backbone_doc_count: int,
+    actual_filtered_doc_count: int | None,
+    sample_backbone_filtered_doc_count: int | None,
+    reported_covered_doc_count: int,
+    actual_covered_doc_count: int,
+) -> dict[str, Any]:
+    if _lm2011_rust is not None:
+        try:
+            row = _lm2011_rust.lm2011_validation_packet_d_coverage_row(
+                run_name,
+                finbert_backbone_path,
+                sample_backbone_path,
+                finbert_backbone_matches_sample_backbone,
+                finbert_backbone_path_matches_sample_backbone,
+                reported_backbone_doc_count,
+                actual_filtered_doc_count,
+                sample_backbone_filtered_doc_count,
+                reported_covered_doc_count,
+                actual_covered_doc_count,
+            )
+            _LM2011_VALIDATION_AUDIT_RUST_METRICS["packet_d_coverage_row_fast_success"] += 1
+            return dict(row)
+        except (TypeError, ValueError, OverflowError, RuntimeError):
+            _LM2011_VALIDATION_AUDIT_RUST_METRICS["packet_d_coverage_row_fast_failures"] += 1
+    _LM2011_VALIDATION_AUDIT_RUST_METRICS["packet_d_coverage_row_fallbacks"] += 1
+    return _packet_d_coverage_row_py(
+        run_name=run_name,
+        finbert_backbone_path=finbert_backbone_path,
+        sample_backbone_path=sample_backbone_path,
+        finbert_backbone_matches_sample_backbone=finbert_backbone_matches_sample_backbone,
+        finbert_backbone_path_matches_sample_backbone=finbert_backbone_path_matches_sample_backbone,
+        reported_backbone_doc_count=reported_backbone_doc_count,
+        actual_filtered_doc_count=actual_filtered_doc_count,
+        sample_backbone_filtered_doc_count=sample_backbone_filtered_doc_count,
+        reported_covered_doc_count=reported_covered_doc_count,
+        actual_covered_doc_count=actual_covered_doc_count,
+    )
 
 
 def _packet_d_reconciliation_table(
@@ -2326,37 +2805,25 @@ def _packet_d_coverage_reconciliation(
     normalized_sample_backbone = str(sample_backbone_path.resolve())
     return pl.DataFrame(
         [
-            {
-                "run_name": str(run_manifest.get("run_name") or ""),
-                "finbert_backbone_path": normalized_finbert_backbone,
-                "sample_backbone_path": normalized_sample_backbone,
-                "finbert_backbone_matches_sample_backbone": (
-                    _packet_d_contract_match(
-                        candidate_contract,
-                        expected_contract=expected_contract,
-                    )
+            _packet_d_coverage_row(
+                run_name=str(run_manifest.get("run_name") or ""),
+                finbert_backbone_path=normalized_finbert_backbone,
+                sample_backbone_path=normalized_sample_backbone,
+                finbert_backbone_matches_sample_backbone=_packet_d_contract_match(
+                    candidate_contract,
+                    expected_contract=expected_contract,
                 ),
-                "finbert_backbone_path_matches_sample_backbone": (
+                finbert_backbone_path_matches_sample_backbone=(
                     normalized_finbert_backbone == normalized_sample_backbone
                     if normalized_finbert_backbone is not None
                     else False
                 ),
-                "reported_backbone_doc_count": reported_backbone_doc_count,
-                "actual_filtered_doc_count": actual_filtered_doc_count,
-                "sample_backbone_filtered_doc_count": sample_backbone_filtered_doc_count,
-                "reported_covered_doc_count": int(reported.get("covered_doc_count") or 0),
-                "actual_covered_doc_count": covered_doc_count,
-                "denominator_gap": (
-                    reported_backbone_doc_count - actual_filtered_doc_count
-                    if actual_filtered_doc_count is not None
-                    else None
-                ),
-                "sample_backbone_denominator_gap": (
-                    reported_backbone_doc_count - sample_backbone_filtered_doc_count
-                    if sample_backbone_filtered_doc_count is not None
-                    else None
-                ),
-            }
+                reported_backbone_doc_count=reported_backbone_doc_count,
+                actual_filtered_doc_count=actual_filtered_doc_count,
+                sample_backbone_filtered_doc_count=sample_backbone_filtered_doc_count,
+                reported_covered_doc_count=int(reported.get("covered_doc_count") or 0),
+                actual_covered_doc_count=covered_doc_count,
+            )
         ]
     )
 

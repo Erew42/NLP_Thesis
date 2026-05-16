@@ -12,6 +12,7 @@ from polars.testing import assert_frame_equal
 from thesis_pkg.benchmarking.finbert_tail_features import TAIL_FEATURE_COLUMNS
 from thesis_pkg.benchmarking.manifest_contracts import MANIFEST_PATH_SEMANTICS_RELATIVE
 from thesis_pkg.notebooks_and_scripts import lm2011_finbert_robustness_runner as runner
+from thesis_pkg.pipelines import lm2011_extension
 
 
 def _write_parquet(path: Path, df: pl.DataFrame) -> None:
@@ -300,6 +301,7 @@ def test_lm2011_finbert_robustness_runner_emits_variant_tagged_outputs(tmp_path:
         },
     )
 
+    lm2011_extension.reset_lm2011_extension_rust_accel_metrics()
     artifacts = runner.run_lm2011_finbert_robustness(
         runner.FinbertRobustnessRunConfig(
             extension_run_dir=extension_run_dir,
@@ -309,6 +311,39 @@ def test_lm2011_finbert_robustness_runner_emits_variant_tagged_outputs(tmp_path:
             run_name="unit_test_finbert_robustness",
         )
     )
+    metrics = lm2011_extension.get_lm2011_extension_rust_accel_metrics()
+    if metrics["rust_accel_available"]:
+        assert (
+            metrics["quarterly_fit_rows_fast_success"]
+            + metrics.get("quarterly_fit_rows_column_fast_success", 0)
+            > 0
+        )
+        assert (
+            metrics["skipped_quarter_rows_fast_success"]
+            + metrics.get("skipped_quarter_rows_column_fast_success", 0)
+            > 0
+        )
+        assert (
+            metrics["quarterly_difference_rows_fast_success"]
+            + metrics.get("quarterly_difference_rows_column_fast_success", 0)
+            > 0
+        )
+        assert (
+            metrics["fit_summary_row_fast_success"]
+            + metrics.get("fit_summary_row_column_fast_success", 0)
+            > 0
+        )
+        assert (
+            metrics["fit_comparison_row_fast_success"]
+            + metrics.get("fit_comparison_row_column_fast_success", 0)
+            > 0
+        )
+    else:
+        assert metrics["quarterly_fit_rows_fallbacks"] > 0
+        assert metrics["skipped_quarter_rows_fallbacks"] > 0
+        assert metrics["quarterly_difference_rows_fallbacks"] > 0
+        assert metrics["fit_summary_row_fallbacks"] > 0
+        assert metrics["fit_comparison_row_fallbacks"] > 0
 
     existing_scale_coefficients = pl.read_parquet(artifacts.existing_scale_coefficients_path)
     tail_coefficients = pl.read_parquet(artifacts.tail_coefficients_path)

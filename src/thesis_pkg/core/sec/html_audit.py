@@ -1,10 +1,18 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import html
 import random
 import re
 from collections import defaultdict
 from pathlib import Path
+
+try:
+    from thesis_native import _lm2011_rust
+except Exception as exc:  # pragma: no cover - optional native extension
+    _lm2011_rust = None
+    _HTML_AUDIT_RUST_IMPORT_ERROR: str | None = f"{type(exc).__name__}: {exc}"
+else:
+    _HTML_AUDIT_RUST_IMPORT_ERROR = None
 
 from .extraction import _strip_edgar_metadata
 from .heuristics import _repair_wrapped_headings
@@ -35,6 +43,51 @@ DEFAULT_SAMPLE_WEIGHTS: dict[str, float] = {
     STATUS_WARNING: 0.3,
     STATUS_FAIL: 0.2,
 }
+
+_HTML_AUDIT_RUST_METRICS: dict[str, int] = {
+    "safe_slug_fast_success": 0,
+    "safe_slug_fast_failures": 0,
+    "safe_slug_fallbacks": 0,
+    "parse_bool_fast_success": 0,
+    "parse_bool_fast_failures": 0,
+    "parse_bool_fallbacks": 0,
+    "parse_int_fast_success": 0,
+    "parse_int_fast_failures": 0,
+    "parse_int_fallbacks": 0,
+    "part_rank_fast_success": 0,
+    "part_rank_fast_failures": 0,
+    "part_rank_fallbacks": 0,
+    "item_id_sort_key_fast_success": 0,
+    "item_id_sort_key_fast_failures": 0,
+    "item_id_sort_key_fallbacks": 0,
+    "quartile_edges_fast_success": 0,
+    "quartile_edges_fast_failures": 0,
+    "quartile_edges_fallbacks": 0,
+    "quartile_bucket_fast_success": 0,
+    "quartile_bucket_fast_failures": 0,
+    "quartile_bucket_fallbacks": 0,
+    "filing_status_fast_success": 0,
+    "filing_status_fast_failures": 0,
+    "filing_status_fallbacks": 0,
+    "stratified_sample_fast_success": 0,
+    "stratified_sample_fast_failures": 0,
+    "stratified_sample_fallbacks": 0,
+    "status_sample_fast_success": 0,
+    "status_sample_fast_failures": 0,
+    "status_sample_fallbacks": 0,
+}
+
+
+def get_html_audit_rust_accel_metrics() -> dict[str, int | str | bool | None]:
+    metrics: dict[str, int | str | bool | None] = dict(_HTML_AUDIT_RUST_METRICS)
+    metrics["rust_accel_available"] = _lm2011_rust is not None
+    metrics["rust_accel_import_error"] = _HTML_AUDIT_RUST_IMPORT_ERROR
+    return metrics
+
+
+def reset_html_audit_rust_accel_metrics() -> None:
+    for key in _HTML_AUDIT_RUST_METRICS:
+        _HTML_AUDIT_RUST_METRICS[key] = 0
 
 
 def _base_style() -> str:
@@ -151,8 +204,20 @@ def _base_style() -> str:
     """.strip()
 
 
-def _safe_slug(value: str) -> str:
+def _safe_slug_py(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9_-]+", "_", value).strip("_") or "unknown"
+
+
+def _safe_slug(value: str) -> str:
+    if _lm2011_rust is not None:
+        try:
+            out = str(_lm2011_rust.html_audit_safe_slug_value(str(value)))
+            _HTML_AUDIT_RUST_METRICS["safe_slug_fast_success"] += 1
+            return out
+        except Exception:
+            _HTML_AUDIT_RUST_METRICS["safe_slug_fast_failures"] += 1
+    _HTML_AUDIT_RUST_METRICS["safe_slug_fallbacks"] += 1
+    return _safe_slug_py(value)
 
 
 def _html_escape(value: object) -> str:
@@ -161,7 +226,7 @@ def _html_escape(value: object) -> str:
     return html.escape(str(value))
 
 
-def _parse_bool(value: object) -> bool:
+def _parse_bool_py(value: object) -> bool:
     if isinstance(value, bool):
         return value
     if value is None:
@@ -169,23 +234,71 @@ def _parse_bool(value: object) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "y", "t"}
 
 
-def _parse_int(value: object, *, default: int = 0) -> int:
+def _parse_bool(value: object) -> bool:
+    if _lm2011_rust is not None:
+        try:
+            out = bool(_lm2011_rust.html_audit_parse_bool_value(value))
+            _HTML_AUDIT_RUST_METRICS["parse_bool_fast_success"] += 1
+            return out
+        except Exception:
+            _HTML_AUDIT_RUST_METRICS["parse_bool_fast_failures"] += 1
+    _HTML_AUDIT_RUST_METRICS["parse_bool_fallbacks"] += 1
+    return _parse_bool_py(value)
+
+
+def _parse_int_py(value: object, *, default: int = 0) -> int:
     try:
         return int(str(value).strip())
     except Exception:
         return default
 
 
-def _part_rank(value: str) -> int:
+def _parse_int(value: object, *, default: int = 0) -> int:
+    if _lm2011_rust is not None:
+        try:
+            out = int(_lm2011_rust.html_audit_parse_int_value(value, default=default))
+            _HTML_AUDIT_RUST_METRICS["parse_int_fast_success"] += 1
+            return out
+        except Exception:
+            _HTML_AUDIT_RUST_METRICS["parse_int_fast_failures"] += 1
+    _HTML_AUDIT_RUST_METRICS["parse_int_fallbacks"] += 1
+    return _parse_int_py(value, default=default)
+
+
+def _part_rank_py(value: str) -> int:
     return {"I": 1, "II": 2, "III": 3, "IV": 4}.get(value.strip().upper(), 99)
 
 
-def _item_id_sort_key(value: str) -> tuple[int, str]:
+def _part_rank(value: str) -> int:
+    if _lm2011_rust is not None:
+        try:
+            out = int(_lm2011_rust.html_audit_part_rank_value(str(value)))
+            _HTML_AUDIT_RUST_METRICS["part_rank_fast_success"] += 1
+            return out
+        except Exception:
+            _HTML_AUDIT_RUST_METRICS["part_rank_fast_failures"] += 1
+    _HTML_AUDIT_RUST_METRICS["part_rank_fallbacks"] += 1
+    return _part_rank_py(value)
+
+
+def _item_id_sort_key_py(value: str) -> tuple[int, str]:
     cleaned = value.strip().upper()
     match = re.match(r"^(\d+)([A-Z]?)$", cleaned)
     if match:
         return (int(match.group(1)), match.group(2))
     return (999, cleaned)
+
+
+def _item_id_sort_key(value: str) -> tuple[int, str]:
+    if _lm2011_rust is not None:
+        try:
+            number, suffix = _lm2011_rust.html_audit_item_id_sort_key_value(str(value))
+            _HTML_AUDIT_RUST_METRICS["item_id_sort_key_fast_success"] += 1
+            return (int(number), str(suffix))
+        except Exception:
+            _HTML_AUDIT_RUST_METRICS["item_id_sort_key_fast_failures"] += 1
+    _HTML_AUDIT_RUST_METRICS["item_id_sort_key_fallbacks"] += 1
+    return _item_id_sort_key_py(value)
 
 
 def _filing_filename(doc_id: str, accession: str) -> str:
@@ -223,7 +336,7 @@ def normalize_sample_weights(weights: dict[str, float] | None) -> dict[str, floa
     return {key: max(0.0, value) for key, value in merged.items()}
 
 
-def classify_filing_status(row: dict[str, object]) -> str:
+def _classify_filing_status_py(row: dict[str, object]) -> str:
     """Classify a filing row into pass/warning/fail status.
 
     Classification is field-driven:
@@ -236,13 +349,25 @@ def classify_filing_status(row: dict[str, object]) -> str:
     Returns:
         str: One of ``pass``, ``warning``, or ``fail``.
     """
-    any_fail = _parse_bool(row.get("any_fail"))
+    any_fail = _parse_bool_py(row.get("any_fail"))
     exclusion = str(row.get("filing_exclusion_reason") or "").strip()
     if any_fail or exclusion:
         return STATUS_FAIL
-    if _parse_bool(row.get("any_warn")):
+    if _parse_bool_py(row.get("any_warn")):
         return STATUS_WARNING
     return STATUS_PASS
+
+
+def classify_filing_status(row: dict[str, object]) -> str:
+    if _lm2011_rust is not None:
+        try:
+            out = str(_lm2011_rust.html_audit_filing_status_value(row))
+            _HTML_AUDIT_RUST_METRICS["filing_status_fast_success"] += 1
+            return out
+        except Exception:
+            _HTML_AUDIT_RUST_METRICS["filing_status_fast_failures"] += 1
+    _HTML_AUDIT_RUST_METRICS["filing_status_fallbacks"] += 1
+    return _classify_filing_status_py(row)
 
 
 def _status_label(status: str) -> str:
@@ -262,7 +387,7 @@ def _status_badge(status: str) -> str:
     return f"<span class=\"badge {badge_class}\">{_status_label(status)}</span>"
 
 
-def _quartile_edges(values: list[int]) -> tuple[int, int, int]:
+def _quartile_edges_py(values: list[int]) -> tuple[int, int, int]:
     if not values:
         return (0, 0, 0)
     ordered = sorted(values)
@@ -273,7 +398,19 @@ def _quartile_edges(values: list[int]) -> tuple[int, int, int]:
     return (q1, q2, q3)
 
 
-def _quartile_bucket(value: int, edges: tuple[int, int, int]) -> str:
+def _quartile_edges(values: list[int]) -> tuple[int, int, int]:
+    if _lm2011_rust is not None:
+        try:
+            q1, q2, q3 = _lm2011_rust.html_audit_quartile_edges_value([int(value) for value in values])
+            _HTML_AUDIT_RUST_METRICS["quartile_edges_fast_success"] += 1
+            return (int(q1), int(q2), int(q3))
+        except Exception:
+            _HTML_AUDIT_RUST_METRICS["quartile_edges_fast_failures"] += 1
+    _HTML_AUDIT_RUST_METRICS["quartile_edges_fallbacks"] += 1
+    return _quartile_edges_py(values)
+
+
+def _quartile_bucket_py(value: int, edges: tuple[int, int, int]) -> str:
     q1, q2, q3 = edges
     if value <= q1:
         return "Q1"
@@ -282,6 +419,18 @@ def _quartile_bucket(value: int, edges: tuple[int, int, int]) -> str:
     if value <= q3:
         return "Q3"
     return "Q4"
+
+
+def _quartile_bucket(value: int, edges: tuple[int, int, int]) -> str:
+    if _lm2011_rust is not None:
+        try:
+            out = str(_lm2011_rust.html_audit_quartile_bucket_value(int(value), tuple(int(edge) for edge in edges)))
+            _HTML_AUDIT_RUST_METRICS["quartile_bucket_fast_success"] += 1
+            return out
+        except Exception:
+            _HTML_AUDIT_RUST_METRICS["quartile_bucket_fast_failures"] += 1
+    _HTML_AUDIT_RUST_METRICS["quartile_bucket_fallbacks"] += 1
+    return _quartile_bucket_py(value, edges)
 
 
 def _stratified_sample(
@@ -353,7 +502,7 @@ def _missing_items_display(row: dict[str, object]) -> str:
     return str(row.get("missing_core_items") or "")
 
 
-def _sample_stratified_rows(
+def _sample_stratified_rows_py(
     rows: list[dict[str, object]],
     *,
     sample_size: int,
@@ -374,7 +523,24 @@ def _sample_stratified_rows(
     return _stratified_sample(strata, sample_size=sample_size, seed=seed)
 
 
-def sample_filings_by_status(
+def _sample_stratified_rows(
+    rows: list[dict[str, object]],
+    *,
+    sample_size: int,
+    seed: int,
+) -> list[dict[str, object]]:
+    if _lm2011_rust is not None:
+        try:
+            raw_rows = _lm2011_rust.html_audit_sample_stratified_rows(rows, int(sample_size), int(seed))
+            _HTML_AUDIT_RUST_METRICS["stratified_sample_fast_success"] += 1
+            return [dict(row) for row in raw_rows]
+        except Exception:
+            _HTML_AUDIT_RUST_METRICS["stratified_sample_fast_failures"] += 1
+    _HTML_AUDIT_RUST_METRICS["stratified_sample_fallbacks"] += 1
+    return _sample_stratified_rows_py(rows, sample_size=sample_size, seed=seed)
+
+
+def sample_filings_by_status_py(
     rows: list[dict[str, object]],
     *,
     sample_size: int,
@@ -461,13 +627,57 @@ def sample_filings_by_status(
         if target <= 0:
             continue
         sampled.extend(
-            _sample_stratified_rows(
+            _sample_stratified_rows_py(
                 status_rows[status],
                 sample_size=target,
                 seed=seed + (idx + 1) * 101,
             )
         )
     return sampled
+
+
+def sample_filings_by_status(
+    rows: list[dict[str, object]],
+    *,
+    sample_size: int,
+    seed: int,
+    weights: dict[str, float] | None = None,
+) -> list[dict[str, object]]:
+    """Sample filing rows with status-stratified weighted allocation.
+
+    Target allocations are derived from status weights and adjusted for stratum
+    capacity. Remaining slots are filled pseudo-randomly among statuses that still
+    have available rows.
+
+    Args:
+        rows: Filing-level diagnostics rows.
+        sample_size: Requested sample size.
+        seed: Base random seed for deterministic sampling.
+        weights: Optional status weight overrides.
+
+    Returns:
+        list[dict[str, object]]: Sampled rows.
+    """
+    normalized_weights = normalize_sample_weights(weights)
+    if _lm2011_rust is not None:
+        try:
+            raw_rows = _lm2011_rust.html_audit_sample_filings_by_status(
+                rows,
+                int(sample_size),
+                int(seed),
+                normalized_weights,
+            )
+            _HTML_AUDIT_RUST_METRICS["status_sample_fast_success"] += 1
+            return [dict(row) for row in raw_rows]
+        except Exception:
+            _HTML_AUDIT_RUST_METRICS["status_sample_fast_failures"] += 1
+    _HTML_AUDIT_RUST_METRICS["status_sample_fallbacks"] += 1
+    return sample_filings_by_status_py(
+        rows,
+        sample_size=sample_size,
+        seed=seed,
+        weights=normalized_weights,
+    )
 
 
 def write_html_audit(

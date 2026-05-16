@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import re
 import warnings
@@ -88,8 +88,23 @@ except Exception as exc:  # pragma: no cover - runtime fallback when extension i
     _extraction_fast = None
     _FASTPATH_IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
 
+_FASTPATH_EXTENSION_MODULE = _extraction_fast
+_RUST_IMPORT_ERROR: str | None = None
+
+try:
+    from thesis_native import _lm2011_rust
+except Exception as exc:  # pragma: no cover - runtime fallback when extension is unavailable
+    _lm2011_rust = None
+    _RUST_IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
+
 
 _FASTPATH_METRICS: dict[str, int] = {
+    "strip_edgar_metadata_fast_success": 0,
+    "strip_edgar_metadata_fast_failures": 0,
+    "strip_edgar_metadata_fallbacks": 0,
+    "scan_part_markers_rust_fast_success": 0,
+    "scan_part_markers_rust_fast_failures": 0,
+    "scan_part_markers_rust_fallbacks": 0,
     "scan_part_markers_fast_success": 0,
     "scan_part_markers_fast_failures": 0,
     "scan_part_markers_fallbacks": 0,
@@ -98,6 +113,7 @@ _FASTPATH_METRICS: dict[str, int] = {
     "scan_item_boundaries_fallbacks": 0,
 }
 _FASTPATH_WARNING_EMITTED: dict[str, bool] = {
+    "strip_edgar_metadata": False,
     "scan_part_markers": False,
     "scan_item_boundaries": False,
 }
@@ -122,11 +138,14 @@ def get_extraction_fastpath_metrics() -> dict[str, int | str | bool | None]:
 
     Returns:
         dict[str, int | str | bool | None]: Snapshot of fast-path counters plus:
-        ``fastpath_extension_available`` and ``fastpath_import_error``.
+        ``fastpath_extension_available``, ``fastpath_import_error``,
+        ``rust_accel_available``, and ``rust_accel_import_error``.
     """
     metrics: dict[str, int | str | bool | None] = dict(_FASTPATH_METRICS)
     metrics["fastpath_extension_available"] = _extraction_fast is not None
     metrics["fastpath_import_error"] = _FASTPATH_IMPORT_ERROR
+    metrics["rust_accel_available"] = _lm2011_rust is not None
+    metrics["rust_accel_import_error"] = _RUST_IMPORT_ERROR
     return metrics
 
 
@@ -152,7 +171,7 @@ def _strip_leading_header_block(full_text: str) -> str:
         return full_text
     return full_text[m.end() :]
 
-def _strip_edgar_metadata(full_text: str) -> str:
+def _strip_edgar_metadata_py(full_text: str) -> str:
     """
     Remove EDGAR metadata blocks like <SEC-Header>, <Header>, <FileStats>, and <XML_Chars>.
     """
@@ -163,6 +182,21 @@ def _strip_edgar_metadata(full_text: str) -> str:
     # Guard against truncated header tags that lack closing markers.
     text = EDGAR_TRAILING_TAG_PATTERN.sub("", text)
     return text
+
+def _strip_edgar_metadata(full_text: str) -> str:
+    """
+    Remove EDGAR metadata blocks like <SEC-Header>, <Header>, <FileStats>, and <XML_Chars>.
+    """
+    if _lm2011_rust is not None and full_text.isascii():
+        try:
+            out = _lm2011_rust.sec_strip_edgar_metadata(full_text)
+            _FASTPATH_METRICS["strip_edgar_metadata_fast_success"] += 1
+            return str(out)
+        except Exception as exc:
+            _FASTPATH_METRICS["strip_edgar_metadata_fast_failures"] += 1
+            _warn_fastpath_failure_once("strip_edgar_metadata", exc)
+    _FASTPATH_METRICS["strip_edgar_metadata_fallbacks"] += 1
+    return _strip_edgar_metadata_py(full_text)
 
 def _extract_fallback_items_10k(
     lines: list[str],
@@ -302,6 +336,39 @@ def _scan_part_markers_v2(
     toc_mask: set[int],
     is_10q: bool = False,
 ) -> list[_PartMarker]:
+    fastpath_was_monkeypatched = (
+        _extraction_fast is not None and _extraction_fast is not _FASTPATH_EXTENSION_MODULE
+    )
+    if _lm2011_rust is not None and not fastpath_was_monkeypatched:
+        try:
+            markers_raw = _lm2011_rust.sec_scan_part_markers_v2(
+                lines,
+                line_starts,
+                sorted(allowed_parts),
+                bool(scan_sparse_layout),
+                sorted(toc_mask),
+                bool(is_10q),
+            )
+            if markers_raw is not None:
+                markers = [
+                    _PartMarker(
+                        start=int(start),
+                        part=str(part),
+                        line_index=int(line_index),
+                        high_confidence=bool(high_confidence),
+                    )
+                    for start, part, line_index, high_confidence in markers_raw
+                ]
+                _FASTPATH_METRICS["scan_part_markers_rust_fast_success"] += 1
+                _FASTPATH_METRICS["scan_part_markers_fast_success"] += 1
+                return markers
+            _FASTPATH_METRICS["scan_part_markers_rust_fallbacks"] += 1
+        except Exception:
+            _FASTPATH_METRICS["scan_part_markers_rust_fast_failures"] += 1
+            _FASTPATH_METRICS["scan_part_markers_rust_fallbacks"] += 1
+    else:
+        _FASTPATH_METRICS["scan_part_markers_rust_fallbacks"] += 1
+
     if _extraction_fast is not None:
         try:
             markers_raw = _extraction_fast.scan_part_markers_v2_fast(

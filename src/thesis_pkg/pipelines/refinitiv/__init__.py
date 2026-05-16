@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from thesis_pkg.pipelines.refinitiv.bridge import (
+from thesis_refinitiv.bridge import (
     build_refinitiv_step1_bridge_universe,
     run_refinitiv_step1_bridge_pipeline,
 )
@@ -40,7 +40,7 @@ from thesis_pkg.pipelines.refinitiv.lseg_ownership_api import (
     run_refinitiv_lm2011_doc_ownership_fallback_api_pipeline,
     run_refinitiv_step1_ownership_universe_api_pipeline,
 )
-from thesis_pkg.pipelines.refinitiv.lseg_provider import is_lseg_available
+from thesis_refinitiv.lseg_client.provider import is_lseg_available
 from thesis_pkg.pipelines.refinitiv.ownership import (
     build_refinitiv_ownership_universe_row_summary,
     build_refinitiv_step1_ownership_universe_handoff,

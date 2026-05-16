@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import math
@@ -37,7 +37,60 @@ from thesis_pkg.benchmarking.sentences import derive_sentence_frame
 from thesis_pkg.benchmarking.token_lengths import FINBERT_TOKEN_BUCKET_COLUMN
 from thesis_pkg.benchmarking.token_lengths import load_finbert_tokenizer
 
+try:
+    from thesis_native import _lm2011_rust
+except Exception as exc:  # pragma: no cover - optional native extension
+    _lm2011_rust = None
+    _FINBERT_BENCHMARK_RUST_IMPORT_ERROR: str | None = f"{type(exc).__name__}: {exc}"
+else:
+    _FINBERT_BENCHMARK_RUST_IMPORT_ERROR = None
+
 SENTENCE_DATASET_FILENAME = "finbert_10k_item_sentences.parquet"
+
+_FINBERT_BENCHMARK_RUST_METRICS: dict[str, int] = {
+    "label_normalize_fast_success": 0,
+    "label_normalize_fast_failures": 0,
+    "label_normalize_fallbacks": 0,
+    "label_mapping_fast_success": 0,
+    "label_mapping_fast_failures": 0,
+    "label_mapping_fallbacks": 0,
+    "softmax_row_fast_success": 0,
+    "softmax_row_fast_failures": 0,
+    "softmax_row_fallbacks": 0,
+    "softmax_rows_fast_success": 0,
+    "softmax_rows_fast_failures": 0,
+    "softmax_rows_fallbacks": 0,
+    "probability_labels_fast_success": 0,
+    "probability_labels_fast_failures": 0,
+    "probability_labels_fallbacks": 0,
+    "median_fast_success": 0,
+    "median_fast_failures": 0,
+    "median_fallbacks": 0,
+    "bucket_max_length_fast_success": 0,
+    "bucket_max_length_fast_failures": 0,
+    "bucket_max_length_fallbacks": 0,
+    "device_index_fast_success": 0,
+    "device_index_fast_failures": 0,
+    "device_index_fallbacks": 0,
+    "amp_dtype_fast_success": 0,
+    "amp_dtype_fast_failures": 0,
+    "amp_dtype_fallbacks": 0,
+    "stage_summary_fast_success": 0,
+    "stage_summary_fast_failures": 0,
+    "stage_summary_fallbacks": 0,
+}
+
+
+def get_finbert_benchmark_rust_accel_metrics() -> dict[str, int | str | bool | None]:
+    metrics: dict[str, int | str | bool | None] = dict(_FINBERT_BENCHMARK_RUST_METRICS)
+    metrics["rust_accel_available"] = _lm2011_rust is not None
+    metrics["rust_accel_import_error"] = _FINBERT_BENCHMARK_RUST_IMPORT_ERROR
+    return metrics
+
+
+def reset_finbert_benchmark_rust_accel_metrics() -> None:
+    for key in _FINBERT_BENCHMARK_RUST_METRICS:
+        _FINBERT_BENCHMARK_RUST_METRICS[key] = 0
 
 
 def _import_bert_model_class():
@@ -244,7 +297,7 @@ def load_finbert_model(
     return model.to(torch.device(device))
 
 
-def _bucket_max_length(
+def _bucket_max_length_py(
     bucket: str,
     run_cfg_or_bucket_lengths: FinbertBenchmarkRunConfig | BucketLengthSpec,
 ) -> int:
@@ -260,6 +313,33 @@ def _bucket_max_length(
     if bucket == "long":
         return bucket_lengths.long_max_length
     raise ValueError(f"Unknown bucket: {bucket!r}")
+
+
+def _bucket_max_length(
+    bucket: str,
+    run_cfg_or_bucket_lengths: FinbertBenchmarkRunConfig | BucketLengthSpec,
+) -> int:
+    bucket_lengths = (
+        run_cfg_or_bucket_lengths.bucket_lengths
+        if isinstance(run_cfg_or_bucket_lengths, FinbertBenchmarkRunConfig)
+        else run_cfg_or_bucket_lengths
+    )
+    if _lm2011_rust is not None:
+        try:
+            out = int(
+                _lm2011_rust.finbert_bucket_value_for_name(
+                    bucket,
+                    bucket_lengths.short_max_length,
+                    bucket_lengths.medium_max_length,
+                    bucket_lengths.long_max_length,
+                )
+            )
+            _FINBERT_BENCHMARK_RUST_METRICS["bucket_max_length_fast_success"] += 1
+            return out
+        except Exception:
+            _FINBERT_BENCHMARK_RUST_METRICS["bucket_max_length_fast_failures"] += 1
+    _FINBERT_BENCHMARK_RUST_METRICS["bucket_max_length_fallbacks"] += 1
+    return _bucket_max_length_py(bucket, run_cfg_or_bucket_lengths)
 
 
 def _bucket_frame(sentences_df: pl.DataFrame, bucket: str) -> pl.DataFrame:
@@ -282,7 +362,7 @@ def _peak_vram_gb(torch_mod, device: str) -> float | None:
     return None
 
 
-def _resolved_amp_dtype_name(torch_mod, runtime: FinbertRuntimeConfig, device: str) -> str | None:
+def _resolved_amp_dtype_name_py(torch_mod, runtime: FinbertRuntimeConfig, device: str) -> str | None:
     if not runtime.use_autocast or not device.startswith("cuda") or not torch_mod.cuda.is_available():
         return None
     if runtime.amp_dtype == "auto":
@@ -290,6 +370,24 @@ def _resolved_amp_dtype_name(torch_mod, runtime: FinbertRuntimeConfig, device: s
     if runtime.amp_dtype in {"float16", "bfloat16"}:
         return runtime.amp_dtype
     raise ValueError(f"Unsupported amp_dtype: {runtime.amp_dtype!r}")
+
+
+def _resolved_amp_dtype_name(torch_mod, runtime: FinbertRuntimeConfig, device: str) -> str | None:
+    if _lm2011_rust is not None:
+        try:
+            cuda_available = bool(torch_mod.cuda.is_available())
+            out = _lm2011_rust.resolve_finbert_amp_dtype_name(
+                bool(runtime.use_autocast),
+                cuda_available,
+                str(device),
+                str(runtime.amp_dtype),
+            )
+            _FINBERT_BENCHMARK_RUST_METRICS["amp_dtype_fast_success"] += 1
+            return None if out is None else str(out)
+        except Exception:
+            _FINBERT_BENCHMARK_RUST_METRICS["amp_dtype_fast_failures"] += 1
+    _FINBERT_BENCHMARK_RUST_METRICS["amp_dtype_fallbacks"] += 1
+    return _resolved_amp_dtype_name_py(torch_mod, runtime, device)
 
 
 def _autocast_context(torch_mod, runtime: FinbertRuntimeConfig, device: str):
@@ -305,7 +403,7 @@ def _autocast_context(torch_mod, runtime: FinbertRuntimeConfig, device: str):
     return torch_mod.autocast(device_type="cuda", dtype=dtype)
 
 
-def _device_index(device: str) -> int:
+def _device_index_py(device: str) -> int:
     if ":" not in device:
         return 0
     _, index = device.split(":", maxsplit=1)
@@ -313,6 +411,18 @@ def _device_index(device: str) -> int:
         return int(index)
     except ValueError:
         return 0
+
+
+def _device_index(device: str) -> int:
+    if _lm2011_rust is not None:
+        try:
+            out = int(_lm2011_rust.parse_device_index_value(str(device)))
+            _FINBERT_BENCHMARK_RUST_METRICS["device_index_fast_success"] += 1
+            return out
+        except Exception:
+            _FINBERT_BENCHMARK_RUST_METRICS["device_index_fast_failures"] += 1
+    _FINBERT_BENCHMARK_RUST_METRICS["device_index_fallbacks"] += 1
+    return _device_index_py(device)
 
 
 def _runtime_environment(runtime: FinbertRuntimeConfig, device: str) -> dict[str, Any]:
@@ -397,11 +507,23 @@ def _move_batch_to_device(batch: Any, device: str) -> Any:
     }
 
 
-def _median(values: list[float]) -> float:
+def _median_py(values: list[float]) -> float:
     return float(statistics.median(values)) if values else 0.0
 
 
-def _normalize_finbert_label_name(label: str) -> str | None:
+def _median(values: list[float]) -> float:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.finbert_median_value([float(value) for value in values])
+            _FINBERT_BENCHMARK_RUST_METRICS["median_fast_success"] += 1
+            return float(out)
+        except Exception:
+            _FINBERT_BENCHMARK_RUST_METRICS["median_fast_failures"] += 1
+    _FINBERT_BENCHMARK_RUST_METRICS["median_fallbacks"] += 1
+    return _median_py(values)
+
+
+def _normalize_finbert_label_name_py(label: str) -> str | None:
     cleaned = re.sub(r"[^a-z0-9]+", "", str(label).strip().lower())
     if cleaned in {"negative", "neg", "bearish"}:
         return "negative"
@@ -412,14 +534,19 @@ def _normalize_finbert_label_name(label: str) -> str | None:
     return None
 
 
-def resolve_finbert_label_mapping(model) -> dict[int, str]:
-    config = getattr(model, "config", None)
-    if config is None:
-        raise ValueError("Model does not expose a config object with FinBERT labels.")
+def _normalize_finbert_label_name(label: str) -> str | None:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.normalize_finbert_label_name(str(label))
+            _FINBERT_BENCHMARK_RUST_METRICS["label_normalize_fast_success"] += 1
+            return out
+        except Exception:
+            _FINBERT_BENCHMARK_RUST_METRICS["label_normalize_fast_failures"] += 1
+    _FINBERT_BENCHMARK_RUST_METRICS["label_normalize_fallbacks"] += 1
+    return _normalize_finbert_label_name_py(label)
 
-    raw_id2label = getattr(config, "id2label", None)
-    raw_label2id = getattr(config, "label2id", None)
 
+def _resolve_finbert_label_mapping_py(raw_id2label: Any, raw_label2id: Any) -> dict[int, str]:
     pairs: list[tuple[int, str]] = []
     if isinstance(raw_id2label, dict):
         for key, value in raw_id2label.items():
@@ -454,6 +581,27 @@ def resolve_finbert_label_mapping(model) -> dict[int, str]:
     return dict(sorted(normalized.items()))
 
 
+def resolve_finbert_label_mapping(model) -> dict[int, str]:
+    config = getattr(model, "config", None)
+    if config is None:
+        raise ValueError("Model does not expose a config object with FinBERT labels.")
+
+    raw_id2label = getattr(config, "id2label", None)
+    raw_label2id = getattr(config, "label2id", None)
+
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.resolve_finbert_label_mapping(raw_id2label, raw_label2id)
+            _FINBERT_BENCHMARK_RUST_METRICS["label_mapping_fast_success"] += 1
+            return {int(key): str(value) for key, value in dict(out).items()}
+        except Exception:
+            _FINBERT_BENCHMARK_RUST_METRICS["label_mapping_fast_failures"] += 1
+            _FINBERT_BENCHMARK_RUST_METRICS["label_mapping_fallbacks"] += 1
+    else:
+        _FINBERT_BENCHMARK_RUST_METRICS["label_mapping_fallbacks"] += 1
+    return _resolve_finbert_label_mapping_py(raw_id2label, raw_label2id)
+
+
 def _empty_sentence_score_frame() -> pl.DataFrame:
     return pl.DataFrame(
         schema={
@@ -466,7 +614,7 @@ def _empty_sentence_score_frame() -> pl.DataFrame:
     )
 
 
-def _softmax_row(values: list[float]) -> list[float]:
+def _softmax_row_py(values: list[float]) -> list[float]:
     if not values:
         return []
     max_value = max(values)
@@ -475,6 +623,18 @@ def _softmax_row(values: list[float]) -> list[float]:
     if denom == 0.0:
         return [0.0 for _ in values]
     return [value / denom for value in exp_values]
+
+
+def _softmax_row(values: list[float]) -> list[float]:
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.finbert_softmax_row([float(value) for value in values])
+            _FINBERT_BENCHMARK_RUST_METRICS["softmax_row_fast_success"] += 1
+            return [float(value) for value in out]
+        except Exception:
+            _FINBERT_BENCHMARK_RUST_METRICS["softmax_row_fast_failures"] += 1
+    _FINBERT_BENCHMARK_RUST_METRICS["softmax_row_fallbacks"] += 1
+    return _softmax_row_py(values)
 
 
 def _to_nested_float_list(values: Any) -> list[list[float]]:
@@ -493,7 +653,68 @@ def _probability_rows_from_logits(logits: Any, torch_mod) -> list[list[float]]:
     softmax = getattr(functional, "softmax", None)
     if callable(softmax):
         return _to_nested_float_list(softmax(logits, dim=-1))
-    return [_softmax_row(row) for row in _to_nested_float_list(logits)]
+    nested = _to_nested_float_list(logits)
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.finbert_softmax_rows(nested)
+            _FINBERT_BENCHMARK_RUST_METRICS["softmax_rows_fast_success"] += 1
+            return [[float(value) for value in row] for row in out]
+        except Exception:
+            _FINBERT_BENCHMARK_RUST_METRICS["softmax_rows_fast_failures"] += 1
+    _FINBERT_BENCHMARK_RUST_METRICS["softmax_rows_fallbacks"] += 1
+    return [_softmax_row_py(row) for row in nested]
+
+
+def _probability_columns_and_predicted_labels_py(
+    probability_rows: list[list[float]],
+    label_mapping: dict[int, str],
+) -> tuple[dict[str, list[float]], list[str]]:
+    probability_columns: dict[str, list[float]] = {
+        "negative_prob": [],
+        "neutral_prob": [],
+        "positive_prob": [],
+    }
+    predicted_labels: list[str] = []
+    for row in probability_rows:
+        normalized_probs = {
+            label_mapping[index]: float(probability)
+            for index, probability in enumerate(row)
+            if index in label_mapping
+        }
+        for label in ("negative", "neutral", "positive"):
+            probability_columns[f"{label}_prob"].append(normalized_probs[label])
+        predicted_labels.append(
+            max(
+                ("negative", "neutral", "positive"),
+                key=lambda label: normalized_probs[label],
+            )
+        )
+    return probability_columns, predicted_labels
+
+
+def _probability_columns_and_predicted_labels(
+    probability_rows: list[list[float]],
+    label_mapping: dict[int, str],
+) -> tuple[dict[str, list[float]], list[str]]:
+    if _lm2011_rust is not None:
+        try:
+            negative, neutral, positive, predicted = _lm2011_rust.finbert_probability_columns_and_predicted_labels(
+                probability_rows,
+                label_mapping,
+            )
+            _FINBERT_BENCHMARK_RUST_METRICS["probability_labels_fast_success"] += 1
+            return (
+                {
+                    "negative_prob": [float(value) for value in negative],
+                    "neutral_prob": [float(value) for value in neutral],
+                    "positive_prob": [float(value) for value in positive],
+                },
+                [str(value) for value in predicted],
+            )
+        except Exception:
+            _FINBERT_BENCHMARK_RUST_METRICS["probability_labels_fast_failures"] += 1
+    _FINBERT_BENCHMARK_RUST_METRICS["probability_labels_fallbacks"] += 1
+    return _probability_columns_and_predicted_labels_py(probability_rows, label_mapping)
 
 
 def score_sentence_frame(
@@ -523,9 +744,8 @@ def score_sentence_frame(
         batch_size = batch_config.batch_size_for_bucket(bucket)
         max_length = _bucket_max_length(bucket, bucket_lengths)
         probability_columns: dict[str, list[float]] = {
-            "negative_prob": [],
-            "neutral_prob": [],
-            "positive_prob": [],
+            label: []
+            for label in ("negative_prob", "neutral_prob", "positive_prob")
         }
         predicted_labels: list[str] = []
 
@@ -541,20 +761,13 @@ def score_sentence_frame(
                     outputs = model(**_move_batch_to_device(batch, device))
                     logits = outputs.logits if hasattr(outputs, "logits") else outputs["logits"]
                     probability_rows = _probability_rows_from_logits(logits, torch)
-                    for row in probability_rows:
-                        normalized_probs = {
-                            label_mapping[index]: float(probability)
-                            for index, probability in enumerate(row)
-                            if index in label_mapping
-                        }
-                        for label in ("negative", "neutral", "positive"):
-                            probability_columns[f"{label}_prob"].append(normalized_probs[label])
-                        predicted_labels.append(
-                            max(
-                                ("negative", "neutral", "positive"),
-                                key=lambda label: normalized_probs[label],
-                            )
-                        )
+                    batch_columns, batch_predicted_labels = _probability_columns_and_predicted_labels(
+                        probability_rows,
+                        label_mapping,
+                    )
+                    for column_name in probability_columns:
+                        probability_columns[column_name].extend(batch_columns[column_name])
+                    predicted_labels.extend(batch_predicted_labels)
 
         records.append(
             frame.with_columns(
@@ -810,7 +1023,7 @@ def benchmark_full_pipeline(
     return pl.DataFrame(records)
 
 
-def _stage_summary(df: pl.DataFrame) -> dict[str, Any]:
+def _stage_summary_py(df: pl.DataFrame) -> dict[str, Any]:
     total_rows = int(df["rows"].sum()) if df.height else 0
     total_seconds = float(df["median_seconds"].sum()) if df.height else 0.0
     peak_vram = None
@@ -823,6 +1036,34 @@ def _stage_summary(df: pl.DataFrame) -> dict[str, Any]:
         "rows_per_second": (total_rows / total_seconds) if total_seconds else None,
         "peak_vram_gb": peak_vram,
     }
+
+
+def _stage_summary(df: pl.DataFrame) -> dict[str, Any]:
+    if _lm2011_rust is not None:
+        try:
+            rows = [int(value) for value in df["rows"].to_list()] if df.height else []
+            seconds = [float(value) for value in df["median_seconds"].to_list()] if df.height else []
+            peak_vram = (
+                [None if value is None else float(value) for value in df["peak_vram_gb"].to_list()]
+                if "peak_vram_gb" in df.columns
+                else None
+            )
+            total_rows, total_seconds, rows_per_second, peak = _lm2011_rust.finbert_stage_summary(
+                rows,
+                seconds,
+                peak_vram,
+            )
+            _FINBERT_BENCHMARK_RUST_METRICS["stage_summary_fast_success"] += 1
+            return {
+                "rows": int(total_rows),
+                "seconds": float(total_seconds),
+                "rows_per_second": None if rows_per_second is None else float(rows_per_second),
+                "peak_vram_gb": None if peak is None else float(peak),
+            }
+        except Exception:
+            _FINBERT_BENCHMARK_RUST_METRICS["stage_summary_fast_failures"] += 1
+    _FINBERT_BENCHMARK_RUST_METRICS["stage_summary_fallbacks"] += 1
+    return _stage_summary_py(df)
 
 
 def run_finbert_benchmark(

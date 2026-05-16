@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import argparse
 import datetime as dt
@@ -40,6 +40,13 @@ def _resolve_repo_root() -> Path:
     raise RuntimeError("Could not resolve repository root containing src/thesis_pkg/pipeline.py")
 
 
+def _resolve_source_root(repo_root: Path) -> Path:
+    copied_source_root = Path(__file__).resolve().parents[2]
+    if (copied_source_root / "thesis_pkg" / "pipeline.py").exists():
+        return copied_source_root
+    return repo_root / "src"
+
+
 def _resolve_colab_drive_root() -> Path:
     for candidate in (
         Path("/content/drive/MyDrive"),
@@ -52,7 +59,7 @@ def _resolve_colab_drive_root() -> Path:
 
 
 ROOT = _resolve_repo_root()
-SRC = ROOT / "src"
+SRC = _resolve_source_root(ROOT)
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
@@ -96,11 +103,19 @@ from thesis_pkg.core.sec.lm2011_text import (
     _feature_schema,
     build_lm2011_text_features_full_10k,
     build_lm2011_text_features_mda,
+    count_lm2011_tokens_expr,
     normalize_lm2011_dictionary_lists,
-    tokenize_lm2011_text,
     write_lm2011_text_features_full_10k_parquet,
     write_lm2011_text_features_mda_parquet,
 )
+try:
+    from thesis_native import _lm2011_rust
+except Exception as exc:  # pragma: no cover - optional native extension
+    _lm2011_rust = None
+    _RUNNER_RUST_IMPORT_ERROR: str | None = f"{type(exc).__name__}: {exc}"
+else:
+    _RUNNER_RUST_IMPORT_ERROR = None
+
 from thesis_pkg.io.parquet import _copy_with_verify
 from thesis_pkg.pipelines.lm2011_pipeline import (
     build_lm2011_event_panel,
@@ -455,6 +470,23 @@ EXTENSION_STAGE_ARTIFACT_FILENAMES: dict[str, str] = {
     "extension_fit_skipped_quarters": "lm2011_extension_fit_skipped_quarters.parquet",
     "extension_results": "lm2011_extension_results.parquet",
 }
+_RUNNER_RUST_METRICS: dict[str, int] = {
+    "extension_csv_json_batch_fast_success": 0,
+    "extension_csv_json_batch_fast_failures": 0,
+    "extension_csv_json_batch_fallbacks": 0,
+}
+
+
+def get_lm2011_sample_runner_rust_accel_metrics() -> dict[str, int | str | bool | None]:
+    metrics: dict[str, int | str | bool | None] = dict(_RUNNER_RUST_METRICS)
+    metrics["rust_accel_available"] = _lm2011_rust is not None
+    metrics["rust_accel_import_error"] = _RUNNER_RUST_IMPORT_ERROR
+    return metrics
+
+
+def reset_lm2011_sample_runner_rust_accel_metrics() -> None:
+    for key in _RUNNER_RUST_METRICS:
+        _RUNNER_RUST_METRICS[key] = 0
 EXTENSION_NW_LAG_SENSITIVITY_FILENAMES: dict[str, str] = {
     EXTENSION_RESULTS_NW_LAG_SENSITIVITY_STAGE_NAME: EXTENSION_RESULTS_NW_LAG_SENSITIVITY_FILENAME,
     EXTENSION_FIT_COMPARISONS_NW_LAG_SENSITIVITY_STAGE_NAME: EXTENSION_FIT_COMPARISONS_NW_LAG_SENSITIVITY_FILENAME,
@@ -1994,21 +2026,44 @@ def _extension_csv_companion_path(output_dir: Path, stage_name: str) -> Path:
     return output_dir / f"{Path(EXTENSION_STAGE_ARTIFACT_FILENAMES[stage_name]).stem}.csv"
 
 
+def _extension_csv_json_values_py(values: list[Any]) -> list[str | None]:
+    return [
+        json.dumps(value.to_list() if hasattr(value, "to_list") else value) if value is not None else None
+        for value in values
+    ]
+
+
+def _extension_csv_json_values(values: list[Any]) -> list[str | None]:
+    normalized_values = [value.to_list() if hasattr(value, "to_list") else value for value in values]
+    if _lm2011_rust is not None:
+        try:
+            out = _lm2011_rust.extension_csv_json_dumps_values(normalized_values)
+            _RUNNER_RUST_METRICS["extension_csv_json_batch_fast_success"] += 1
+            return [None if value is None else str(value) for value in out]
+        except Exception:
+            _RUNNER_RUST_METRICS["extension_csv_json_batch_fast_failures"] += 1
+    _RUNNER_RUST_METRICS["extension_csv_json_batch_fallbacks"] += 1
+    return _extension_csv_json_values_py(normalized_values)
+
+
+def _utf8_series_from_values(series: pl.Series, values: list[str | None]) -> pl.Series:
+    return pl.Series(series.name, values, dtype=pl.Utf8)
+
+
+def _extension_csv_json_expr(column: str) -> pl.Expr:
+    return pl.col(column).map_batches(
+        lambda series: _utf8_series_from_values(series, _extension_csv_json_values(series.to_list())),
+        return_dtype=pl.Utf8,
+        is_elementwise=True,
+    )
+
+
 def _write_extension_csv_companion(frame: pl.DataFrame, csv_path: Path) -> None:
     csv_ready = frame
     for column in ("signal_inputs", "left_signal_inputs", "right_signal_inputs"):
         if column not in csv_ready.columns:
             continue
-        csv_ready = csv_ready.with_columns(
-            pl.col(column)
-            .map_elements(
-                lambda values: json.dumps(values.to_list() if hasattr(values, "to_list") else values)
-                if values is not None
-                else None,
-                return_dtype=pl.Utf8,
-            )
-            .alias(column)
-        )
+        csv_ready = csv_ready.with_columns(_extension_csv_json_expr(column).alias(column))
     csv_ready.write_csv(csv_path)
 
 
@@ -2478,11 +2533,6 @@ def _write_finbert_visible_prefix_base_source_shards(
         source_paths.append(source_path)
     return tuple(source_paths)
 
-
-def _lm2011_visible_prefix_token_count(text: str | None) -> int:
-    return len(tokenize_lm2011_text(text))
-
-
 def _build_finbert_visible_prefix_base_source_lf(sentences_lf: pl.LazyFrame) -> pl.LazyFrame:
     separator_chars = (pl.col("sentence_count") - pl.lit(1, dtype=pl.Int64)) * pl.lit(2, dtype=pl.Int64)
     return (
@@ -2543,12 +2593,8 @@ def _build_finbert_visible_prefix_base_source_lf(sentences_lf: pl.LazyFrame) -> 
         .with_columns(
             (pl.col("original_char_count") + separator_chars).alias("original_char_count"),
             (pl.col("visible_prefix_char_count") + separator_chars).alias("visible_prefix_char_count"),
-            pl.col("_original_cleaned_text")
-            .map_elements(_lm2011_visible_prefix_token_count, return_dtype=pl.Int64)
-            .alias("original_lm_token_count"),
-            pl.col("cleaned_text")
-            .map_elements(_lm2011_visible_prefix_token_count, return_dtype=pl.Int64)
-            .alias("visible_prefix_lm_token_count"),
+            count_lm2011_tokens_expr("_original_cleaned_text").alias("original_lm_token_count"),
+            count_lm2011_tokens_expr("cleaned_text").alias("visible_prefix_lm_token_count"),
         )
         .select(list(_finbert_visible_prefix_source_schema()))
     )

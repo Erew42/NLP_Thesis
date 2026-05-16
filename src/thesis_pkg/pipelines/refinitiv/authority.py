@@ -9,7 +9,15 @@ from typing import Any
 
 import polars as pl
 
-from thesis_pkg.pipelines.refinitiv_bridge_pipeline import (
+try:
+    from thesis_native import _lm2011_rust
+except Exception as exc:  # pragma: no cover - optional native extension
+    _lm2011_rust = None
+    _AUTHORITY_RUST_IMPORT_ERROR: str | None = f"{type(exc).__name__}: {exc}"
+else:
+    _AUTHORITY_RUST_IMPORT_ERROR = None
+
+from thesis_refinitiv.bridge import (
     OWNERSHIP_UNIVERSE_RESULTS_COLUMNS,
     OWNERSHIP_UNIVERSE_ROW_SUMMARY_COLUMNS,
     RIC_LOOKUP_RESOLUTION_OUTPUT_COLUMNS,
@@ -38,6 +46,76 @@ BENIGN_ALIAS_MIN_OVERLAP_CATEGORY_COUNT = 3
 BENIGN_ALIAS_MIN_OVERLAP_SHARE_OF_SMALLER_HISTORY = 0.50
 DATE_EXTENSION_MAX_GAP_DAYS = 365
 MEANINGFUL_STATIC_COVERAGE_LOSS_THRESHOLD = 0.80
+
+_AUTHORITY_RUST_METRICS: dict[str, int] = {
+    "date_span_fast_success": 0,
+    "date_span_fast_failures": 0,
+    "date_span_fallbacks": 0,
+    "values_match_fast_success": 0,
+    "values_match_fast_failures": 0,
+    "values_match_fallbacks": 0,
+    "distinct_values_fast_success": 0,
+    "distinct_values_fast_failures": 0,
+    "distinct_values_fallbacks": 0,
+    "candidate_key_fast_success": 0,
+    "candidate_key_fast_failures": 0,
+    "candidate_key_fallbacks": 0,
+    "allowlist_keys_column_fast_success": 0,
+    "allowlist_keys_column_fast_failures": 0,
+    "allowlist_keys_column_fallbacks": 0,
+    "allowlist_keys_fast_success": 0,
+    "allowlist_keys_fast_failures": 0,
+    "allowlist_keys_fallbacks": 0,
+    "candidate_metrics_column_fast_success": 0,
+    "candidate_metrics_column_fast_failures": 0,
+    "candidate_metrics_column_fallbacks": 0,
+    "candidate_metrics_fast_success": 0,
+    "candidate_metrics_fast_failures": 0,
+    "candidate_metrics_fallbacks": 0,
+    "final_panel_column_fast_success": 0,
+    "final_panel_column_fast_failures": 0,
+    "final_panel_column_fallbacks": 0,
+    "final_panel_rows_fast_success": 0,
+    "final_panel_rows_fast_failures": 0,
+    "final_panel_rows_fallbacks": 0,
+    "review_required_column_fast_success": 0,
+    "review_required_column_fast_failures": 0,
+    "review_required_column_fallbacks": 0,
+    "source_family_fast_success": 0,
+    "source_family_fast_failures": 0,
+    "source_family_fallbacks": 0,
+    "component_id_fast_success": 0,
+    "component_id_fast_failures": 0,
+    "component_id_fallbacks": 0,
+    "merge_intervals_fast_success": 0,
+    "merge_intervals_fast_failures": 0,
+    "merge_intervals_fallbacks": 0,
+    "pairwise_alias_diagnostics_fast_success": 0,
+    "pairwise_alias_diagnostics_fast_failures": 0,
+    "pairwise_alias_diagnostics_fallbacks": 0,
+    "conventional_components_meta_fast_success": 0,
+    "conventional_components_meta_fast_failures": 0,
+    "conventional_components_meta_fallbacks": 0,
+    "conventional_components_fast_success": 0,
+    "conventional_components_fast_failures": 0,
+    "conventional_components_fallbacks": 0,
+}
+
+
+def get_refinitiv_authority_rust_accel_metrics() -> dict[str, int | str | bool | None]:
+    metrics: dict[str, int | str | bool | None] = dict(_AUTHORITY_RUST_METRICS)
+    metrics["rust_accel_available"] = _lm2011_rust is not None
+    metrics["rust_accel_import_error"] = _AUTHORITY_RUST_IMPORT_ERROR
+    return metrics
+
+
+def reset_refinitiv_authority_rust_accel_metrics() -> None:
+    for key in _AUTHORITY_RUST_METRICS:
+        _AUTHORITY_RUST_METRICS[key] = 0
+
+
+def _frame_column_values(df: pl.DataFrame, columns: list[str] | tuple[str, ...]) -> list[list[Any]]:
+    return [df.get_column(column).to_list() for column in columns]
 
 
 CANDIDATE_METRIC_COLUMNS: tuple[str, ...] = (
@@ -340,13 +418,30 @@ def _empty_df(columns: tuple[str, ...], schema: dict[str, pl.DataType]) -> pl.Da
     return _build_explicit_schema_df([], schema).select(columns)
 
 
-def _date_span_days(start_date: dt.date | None, end_date: dt.date | None) -> int:
+def _date_span_days_py(start_date: dt.date | None, end_date: dt.date | None) -> int:
     if start_date is None or end_date is None or end_date < start_date:
         return 0
     return (end_date - start_date).days + 1
 
 
-def _values_match(left: float | None, right: float | None) -> bool:
+def _date_span_days(start_date: dt.date | None, end_date: dt.date | None) -> int:
+    if _lm2011_rust is not None:
+        try:
+            out = int(
+                _lm2011_rust.refinitiv_authority_date_span_days(
+                    None if start_date is None else start_date.toordinal(),
+                    None if end_date is None else end_date.toordinal(),
+                )
+            )
+            _AUTHORITY_RUST_METRICS["date_span_fast_success"] += 1
+            return out
+        except Exception:
+            _AUTHORITY_RUST_METRICS["date_span_fast_failures"] += 1
+    _AUTHORITY_RUST_METRICS["date_span_fallbacks"] += 1
+    return _date_span_days_py(start_date, end_date)
+
+
+def _values_match_py(left: float | None, right: float | None) -> bool:
     if left is None and right is None:
         return True
     if left is None or right is None:
@@ -354,11 +449,35 @@ def _values_match(left: float | None, right: float | None) -> bool:
     return abs(left - right) <= VALUE_EQUALITY_TOLERANCE
 
 
-def _distinct_values(values: set[float | None]) -> list[float]:
+def _values_match(left: float | None, right: float | None) -> bool:
+    if _lm2011_rust is not None:
+        try:
+            out = bool(_lm2011_rust.refinitiv_authority_values_match(left, right, VALUE_EQUALITY_TOLERANCE))
+            _AUTHORITY_RUST_METRICS["values_match_fast_success"] += 1
+            return out
+        except Exception:
+            _AUTHORITY_RUST_METRICS["values_match_fast_failures"] += 1
+    _AUTHORITY_RUST_METRICS["values_match_fallbacks"] += 1
+    return _values_match_py(left, right)
+
+
+def _distinct_values_py(values: set[float | None]) -> list[float]:
     return sorted(value for value in values if value is not None)
 
 
-def _source_family_from_flags(has_conventional_support: bool, has_ticker_support: bool) -> str:
+def _distinct_values(values: set[float | None]) -> list[float]:
+    if _lm2011_rust is not None:
+        try:
+            out = list(_lm2011_rust.refinitiv_authority_distinct_values(values))
+            _AUTHORITY_RUST_METRICS["distinct_values_fast_success"] += 1
+            return out
+        except Exception:
+            _AUTHORITY_RUST_METRICS["distinct_values_fast_failures"] += 1
+    _AUTHORITY_RUST_METRICS["distinct_values_fallbacks"] += 1
+    return _distinct_values_py(values)
+
+
+def _source_family_from_flags_py(has_conventional_support: bool, has_ticker_support: bool) -> str:
     if has_conventional_support and has_ticker_support:
         return "MIXED"
     if has_conventional_support:
@@ -366,15 +485,59 @@ def _source_family_from_flags(has_conventional_support: bool, has_ticker_support
     return "TICKER"
 
 
-def _component_id(kypermno: str, component_index: int) -> str:
+def _source_family_from_flags(has_conventional_support: bool, has_ticker_support: bool) -> str:
+    if _lm2011_rust is not None:
+        try:
+            out = str(
+                _lm2011_rust.refinitiv_authority_source_family_from_flags(
+                    bool(has_conventional_support),
+                    bool(has_ticker_support),
+                )
+            )
+            _AUTHORITY_RUST_METRICS["source_family_fast_success"] += 1
+            return out
+        except Exception:
+            _AUTHORITY_RUST_METRICS["source_family_fast_failures"] += 1
+    _AUTHORITY_RUST_METRICS["source_family_fallbacks"] += 1
+    return _source_family_from_flags_py(has_conventional_support, has_ticker_support)
+
+
+def _component_id_py(kypermno: str, component_index: int) -> str:
     return f"{kypermno}|COMPONENT|{component_index:02d}"
 
 
-def _candidate_key(record: dict[str, Any]) -> tuple[str | None, str | None]:
+def _component_id(kypermno: str, component_index: int) -> str:
+    if _lm2011_rust is not None:
+        try:
+            out = str(_lm2011_rust.refinitiv_authority_component_id(str(kypermno), int(component_index)))
+            _AUTHORITY_RUST_METRICS["component_id_fast_success"] += 1
+            return out
+        except Exception:
+            _AUTHORITY_RUST_METRICS["component_id_fast_failures"] += 1
+    _AUTHORITY_RUST_METRICS["component_id_fallbacks"] += 1
+    return _component_id_py(kypermno, component_index)
+
+
+def _candidate_key_py(record: dict[str, Any]) -> tuple[str | None, str | None]:
     return (
         _normalize_lookup_text(record.get("KYPERMNO")),
         _normalize_lookup_text(record.get("candidate_ric")),
     )
+
+
+def _candidate_key(record: dict[str, Any]) -> tuple[str | None, str | None]:
+    if _lm2011_rust is not None:
+        try:
+            key = _lm2011_rust.refinitiv_authority_candidate_key(
+                record.get("KYPERMNO"),
+                record.get("candidate_ric"),
+            )
+            _AUTHORITY_RUST_METRICS["candidate_key_fast_success"] += 1
+            return key[0], key[1]
+        except Exception:
+            _AUTHORITY_RUST_METRICS["candidate_key_fast_failures"] += 1
+    _AUTHORITY_RUST_METRICS["candidate_key_fallbacks"] += 1
+    return _candidate_key_py(record)
 
 
 class _UnionFind:
@@ -394,7 +557,7 @@ class _UnionFind:
             self.parent[right_root] = left_root
 
 
-def _merge_intervals(
+def _merge_intervals_py(
     intervals: list[tuple[dt.date, dt.date]],
     *,
     max_gap_days: int,
@@ -410,6 +573,25 @@ def _merge_intervals(
         else:
             merged.append((start_date, end_date))
     return merged
+
+
+def _merge_intervals(
+    intervals: list[tuple[dt.date, dt.date]],
+    *,
+    max_gap_days: int,
+) -> list[tuple[dt.date, dt.date]]:
+    if not intervals:
+        return []
+    if _lm2011_rust is not None:
+        try:
+            ordinal_intervals = [(start_date.toordinal(), end_date.toordinal()) for start_date, end_date in intervals]
+            merged = _lm2011_rust.refinitiv_authority_merge_intervals(ordinal_intervals, int(max_gap_days))
+            _AUTHORITY_RUST_METRICS["merge_intervals_fast_success"] += 1
+            return [(dt.date.fromordinal(int(start)), dt.date.fromordinal(int(end))) for start, end in merged]
+        except Exception:
+            _AUTHORITY_RUST_METRICS["merge_intervals_fast_failures"] += 1
+    _AUTHORITY_RUST_METRICS["merge_intervals_fallbacks"] += 1
+    return _merge_intervals_py(intervals, max_gap_days=max_gap_days)
 
 
 def _normalize_resolution_df(resolution_df: pl.DataFrame) -> pl.DataFrame:
@@ -482,7 +664,7 @@ def _read_reviewed_ticker_allowlist_artifact(parquet_path: Path | str | None) ->
     return _normalize_allowlist_df(df)
 
 
-def _allowlist_keys(allowlist_df: pl.DataFrame) -> set[tuple[str | None, str | None]]:
+def _allowlist_keys_py(allowlist_df: pl.DataFrame) -> set[tuple[str | None, str | None]]:
     return {
         (
             _normalize_lookup_text(row.get("KYPERMNO")),
@@ -492,7 +674,29 @@ def _allowlist_keys(allowlist_df: pl.DataFrame) -> set[tuple[str | None, str | N
     }
 
 
-def _build_candidate_metrics(
+def _allowlist_keys(allowlist_df: pl.DataFrame) -> set[tuple[str | None, str | None]]:
+    if _lm2011_rust is not None:
+        try:
+            keys = _lm2011_rust.refinitiv_authority_allowlist_key_columns(
+                allowlist_df.get_column("KYPERMNO").to_list(),
+                allowlist_df.get_column("candidate_ric").to_list(),
+            )
+            _AUTHORITY_RUST_METRICS["allowlist_keys_column_fast_success"] += 1
+            return {(key[0], key[1]) for key in keys}
+        except Exception:
+            _AUTHORITY_RUST_METRICS["allowlist_keys_column_fast_failures"] += 1
+            _AUTHORITY_RUST_METRICS["allowlist_keys_column_fallbacks"] += 1
+        try:
+            keys = _lm2011_rust.refinitiv_authority_allowlist_keys(allowlist_df.to_dicts())
+            _AUTHORITY_RUST_METRICS["allowlist_keys_fast_success"] += 1
+            return {(key[0], key[1]) for key in keys}
+        except Exception:
+            _AUTHORITY_RUST_METRICS["allowlist_keys_fast_failures"] += 1
+    _AUTHORITY_RUST_METRICS["allowlist_keys_fallbacks"] += 1
+    return _allowlist_keys_py(allowlist_df)
+
+
+def _build_candidate_metrics_py(
     row_summary_records: list[dict[str, Any]],
     results_records: list[dict[str, Any]],
 ) -> tuple[pl.DataFrame, dict[tuple[str, str], dict[str, Any]], dict[str, set[dt.date]], dict[str, set[tuple[dt.date, str, float | None]]]]:
@@ -616,7 +820,265 @@ def _build_candidate_metrics(
     return df, candidate_meta, permno_date_sets, permno_row_sets
 
 
-def _build_pairwise_alias_diagnostics(
+def _candidate_metrics_from_rust_records(
+    records: list[dict[str, Any]],
+) -> tuple[pl.DataFrame, dict[tuple[str, str], dict[str, Any]], dict[str, set[dt.date]], dict[str, set[tuple[dt.date, str, float | None]]]]:
+    rows: list[dict[str, Any]] = []
+    candidate_meta: dict[tuple[str, str], dict[str, Any]] = {}
+    permno_date_sets: dict[str, set[dt.date]] = defaultdict(set)
+    permno_row_sets: dict[str, set[tuple[dt.date, str, float | None]]] = defaultdict(set)
+
+    for record in records:
+        row = {name: record.get(name) for name in CANDIDATE_METRIC_COLUMNS}
+        kypermno = str(row["KYPERMNO"])
+        candidate_ric = str(row["candidate_ric"])
+        observation_value_sets: dict[tuple[dt.date, str], set[float | None]] = defaultdict(set)
+        for date_value, category, values in record.get("observation_value_sets", []):
+            observation_value_sets[(date_value, str(category))] = set(values)
+        unique_row_set = {
+            (date_value, str(category), value)
+            for date_value, category, value in record.get("unique_row_set", [])
+        }
+        meta_row: dict[str, Any] = {
+            **row,
+            "role_set": set(record.get("role_set", [])),
+            "observation_value_sets": observation_value_sets,
+            "unique_row_set": unique_row_set,
+        }
+        if "request_rows" in record:
+            meta_row["request_rows"] = list(record.get("request_rows", []))
+        if "result_rows" in record:
+            meta_row["result_rows"] = list(record.get("result_rows", []))
+        candidate_meta[(kypermno, candidate_ric)] = meta_row
+        rows.append(row)
+        permno_date_sets[kypermno].update(date_value for date_value, _ in observation_value_sets)
+        permno_row_sets[kypermno].update(unique_row_set)
+
+    df = _build_explicit_schema_df(rows, _candidate_metric_schema()).select(CANDIDATE_METRIC_COLUMNS)
+    return df, candidate_meta, permno_date_sets, permno_row_sets
+
+
+def _build_candidate_metrics(
+    row_summary_records: list[dict[str, Any]],
+    results_records: list[dict[str, Any]],
+) -> tuple[pl.DataFrame, dict[tuple[str, str], dict[str, Any]], dict[str, set[dt.date]], dict[str, set[tuple[dt.date, str, float | None]]]]:
+    if _lm2011_rust is not None:
+        try:
+            raw_records = _lm2011_rust.refinitiv_authority_candidate_metric_records(
+                row_summary_records,
+                results_records,
+                list(CONVENTIONAL_OWNERSHIP_LOOKUP_ROLES),
+                TICKER_OWNERSHIP_LOOKUP_ROLE,
+            )
+            _AUTHORITY_RUST_METRICS["candidate_metrics_fast_success"] += 1
+            return _candidate_metrics_from_rust_records([dict(record) for record in raw_records])
+        except Exception:
+            _AUTHORITY_RUST_METRICS["candidate_metrics_fast_failures"] += 1
+    _AUTHORITY_RUST_METRICS["candidate_metrics_fallbacks"] += 1
+    return _build_candidate_metrics_py(row_summary_records, results_records)
+
+
+def _build_candidate_metrics_from_frames(
+    row_summary_df: pl.DataFrame,
+    results_df: pl.DataFrame,
+) -> tuple[pl.DataFrame, dict[tuple[str, str], dict[str, Any]], dict[str, set[dt.date]], dict[str, set[tuple[dt.date, str, float | None]]]]:
+    if _lm2011_rust is not None:
+        try:
+            raw_records = _lm2011_rust.refinitiv_authority_candidate_metric_record_columns(
+                row_summary_df.columns,
+                _frame_column_values(row_summary_df, row_summary_df.columns),
+                results_df.columns,
+                _frame_column_values(results_df, results_df.columns),
+                list(CONVENTIONAL_OWNERSHIP_LOOKUP_ROLES),
+                TICKER_OWNERSHIP_LOOKUP_ROLE,
+            )
+            _AUTHORITY_RUST_METRICS["candidate_metrics_column_fast_success"] += 1
+            return _candidate_metrics_from_rust_records([dict(record) for record in raw_records])
+        except Exception:
+            _AUTHORITY_RUST_METRICS["candidate_metrics_column_fast_failures"] += 1
+            _AUTHORITY_RUST_METRICS["candidate_metrics_column_fallbacks"] += 1
+    return _build_candidate_metrics(row_summary_df.to_dicts(), results_df.to_dicts())
+
+
+def _authority_final_panel_rows_py(
+    results_records: list[dict[str, Any]],
+    assignment_records: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], set[str]]:
+    assignments_by_permno: dict[str, dict[str, dict[str, Any]]] = defaultdict(dict)
+    permno_order: list[str] = []
+    for assignment in assignment_records:
+        kypermno = _normalize_lookup_text(assignment.get("KYPERMNO"))
+        source_candidate_ric = _normalize_lookup_text(assignment.get("source_candidate_ric"))
+        if kypermno is None or source_candidate_ric is None:
+            continue
+        if kypermno not in assignments_by_permno:
+            permno_order.append(kypermno)
+        assignments_by_permno[kypermno][source_candidate_ric] = assignment
+
+    results_rows_by_permno: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for result_row in results_records:
+        kypermno = _normalize_lookup_text(result_row.get("KYPERMNO"))
+        if kypermno is not None and kypermno in assignments_by_permno:
+            results_rows_by_permno[kypermno].append(result_row)
+
+    final_panel_rows: list[dict[str, Any]] = []
+    conflict_permnos: set[str] = set()
+    for kypermno in permno_order:
+        selected_meta = assignments_by_permno.get(kypermno, {})
+        grouped_rows: dict[tuple[dt.date, str], list[dict[str, Any]]] = defaultdict(list)
+        for result_row in results_rows_by_permno.get(kypermno, []):
+            source_candidate_ric = _normalize_lookup_text(result_row.get("candidate_ric"))
+            returned_date = result_row.get("returned_date")
+            returned_category = _normalize_lookup_text(result_row.get("returned_category"))
+            if source_candidate_ric not in selected_meta or returned_date is None or returned_category is None:
+                continue
+            grouped_rows[(returned_date, returned_category)].append(result_row)
+
+        panel_conflict_detected = False
+        panel_rows_for_permno: list[dict[str, Any]] = []
+        for (returned_date, returned_category), group_rows in grouped_rows.items():
+            unique_values: list[float] = []
+            for group_row in group_rows:
+                returned_value = group_row.get("returned_value")
+                if returned_value is None:
+                    continue
+                if not any(_values_match(float(returned_value), seen_value) for seen_value in unique_values):
+                    unique_values.append(float(returned_value))
+            if len(unique_values) > 1:
+                panel_conflict_detected = True
+                break
+            preferred_row = min(
+                group_rows,
+                key=lambda row: (
+                    0
+                    if selected_meta[str(row["candidate_ric"])]["authoritative_source_family"] == "CONVENTIONAL"
+                    else 1,
+                    0 if _normalize_lookup_text(row.get("ownership_lookup_role")) == "UNIVERSE_EFFECTIVE" else 1,
+                    _normalize_lookup_text(row.get("candidate_ric")) or "",
+                ),
+            )
+            source_candidate_ric = _normalize_lookup_text(preferred_row.get("candidate_ric"))
+            authoritative_assignment = selected_meta.get(source_candidate_ric or "")
+            if authoritative_assignment is None:
+                continue
+            panel_rows_for_permno.append(
+                {
+                    "KYPERMNO": kypermno,
+                    "authoritative_ric": authoritative_assignment.get("authoritative_ric"),
+                    "authoritative_source_family": authoritative_assignment.get("authoritative_source_family"),
+                    "authoritative_component_id": authoritative_assignment.get("authoritative_component_id"),
+                    "authority_decision_status": authoritative_assignment.get("authority_decision_status"),
+                    "source_candidate_ric": source_candidate_ric,
+                    "returned_date": returned_date,
+                    "returned_category": returned_category,
+                    "returned_value": None if not unique_values else unique_values[0],
+                }
+            )
+
+        if panel_conflict_detected:
+            conflict_permnos.add(kypermno)
+        else:
+            final_panel_rows.extend(panel_rows_for_permno)
+
+    return final_panel_rows, conflict_permnos
+
+
+def _authority_final_panel_rows(
+    results_records: list[dict[str, Any]],
+    assignment_records: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], set[str]]:
+    if _lm2011_rust is not None:
+        try:
+            raw_rows, raw_conflicts = _lm2011_rust.refinitiv_authority_final_panel_rows(
+                results_records,
+                assignment_records,
+            )
+            _AUTHORITY_RUST_METRICS["final_panel_rows_fast_success"] += 1
+            return [dict(row) for row in raw_rows], set(str(value) for value in raw_conflicts)
+        except Exception:
+            _AUTHORITY_RUST_METRICS["final_panel_rows_fast_failures"] += 1
+    _AUTHORITY_RUST_METRICS["final_panel_rows_fallbacks"] += 1
+    return _authority_final_panel_rows_py(results_records, assignment_records)
+
+
+def _authority_final_panel_rows_from_frame(
+    results_df: pl.DataFrame,
+    assignment_records: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], set[str]]:
+    if not assignment_records:
+        return [], set()
+    if _lm2011_rust is not None:
+        try:
+            raw_rows, raw_conflicts = _lm2011_rust.refinitiv_authority_final_panel_rows_columns(
+                results_df.columns,
+                _frame_column_values(results_df, results_df.columns),
+                assignment_records,
+            )
+            _AUTHORITY_RUST_METRICS["final_panel_column_fast_success"] += 1
+            return [dict(row) for row in raw_rows], set(str(value) for value in raw_conflicts)
+        except Exception:
+            _AUTHORITY_RUST_METRICS["final_panel_column_fast_failures"] += 1
+    _AUTHORITY_RUST_METRICS["final_panel_column_fallbacks"] += 1
+    return _authority_final_panel_rows(results_df.to_dicts(), assignment_records)
+
+
+def _review_required_rows_py(
+    decision_df: pl.DataFrame,
+    candidate_metrics_df: pl.DataFrame,
+) -> list[dict[str, Any]]:
+    candidate_rows_by_permno: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for candidate in candidate_metrics_df.to_dicts():
+        kypermno = _normalize_lookup_text(candidate.get("KYPERMNO"))
+        if kypermno is not None:
+            candidate_rows_by_permno[kypermno].append(candidate)
+
+    review_required_rows = []
+    for decision_row in decision_df.to_dicts():
+        if not bool(decision_row.get("requires_review")):
+            continue
+        kypermno = _normalize_lookup_text(decision_row.get("KYPERMNO"))
+        conventional_rics = sorted(
+            candidate["candidate_ric"]
+            for candidate in candidate_rows_by_permno.get(kypermno or "", [])
+            if candidate["KYPERMNO"] == kypermno and bool(candidate["candidate_has_conventional_support"])
+        )
+        ticker_rics = sorted(
+            candidate["candidate_ric"]
+            for candidate in candidate_rows_by_permno.get(kypermno or "", [])
+            if candidate["KYPERMNO"] == kypermno and bool(candidate["candidate_has_ticker_support"])
+        )
+        review_required_rows.append(
+            {
+                **decision_row,
+                "conventional_candidate_rics": "|".join(conventional_rics),
+                "ticker_candidate_rics": "|".join(ticker_rics),
+            }
+        )
+    return review_required_rows
+
+
+def _review_required_rows_from_frames(
+    decision_df: pl.DataFrame,
+    candidate_metrics_df: pl.DataFrame,
+) -> list[dict[str, Any]]:
+    if _lm2011_rust is not None:
+        try:
+            raw_rows = _lm2011_rust.refinitiv_authority_review_required_rows_columns(
+                decision_df.columns,
+                _frame_column_values(decision_df, decision_df.columns),
+                candidate_metrics_df.columns,
+                _frame_column_values(candidate_metrics_df, candidate_metrics_df.columns),
+                list(AUTHORITY_DECISION_COLUMNS),
+            )
+            _AUTHORITY_RUST_METRICS["review_required_column_fast_success"] += 1
+            return [dict(row) for row in raw_rows]
+        except Exception:
+            _AUTHORITY_RUST_METRICS["review_required_column_fast_failures"] += 1
+    _AUTHORITY_RUST_METRICS["review_required_column_fallbacks"] += 1
+    return _review_required_rows_py(decision_df, candidate_metrics_df)
+
+
+def _build_pairwise_alias_diagnostics_py(
     *,
     permno_order: list[str],
     candidate_meta: dict[tuple[str, str], dict[str, Any]],
@@ -726,7 +1188,58 @@ def _build_pairwise_alias_diagnostics(
     return df, pair_meta
 
 
-def _build_conventional_components(
+def _build_pairwise_alias_diagnostics(
+    *,
+    permno_order: list[str],
+    candidate_meta: dict[tuple[str, str], dict[str, Any]],
+) -> tuple[pl.DataFrame, dict[tuple[str, str, str], dict[str, Any]]]:
+    if _lm2011_rust is not None:
+        try:
+            candidate_records = [
+                {
+                    "KYPERMNO": kypermno,
+                    "candidate_ric": candidate_ric,
+                    "candidate_source_family": meta["candidate_source_family"],
+                    "candidate_has_conventional_support": meta["candidate_has_conventional_support"],
+                    "candidate_has_effective_support": meta["candidate_has_effective_support"],
+                    "candidate_first_ownership_date": meta["candidate_first_ownership_date"],
+                    "candidate_last_ownership_date": meta["candidate_last_ownership_date"],
+                    "candidate_bridge_start_date": meta["candidate_bridge_start_date"],
+                    "candidate_bridge_end_date": meta["candidate_bridge_end_date"],
+                    "candidate_internal_same_date_same_category_differing_value_count": meta[
+                        "candidate_internal_same_date_same_category_differing_value_count"
+                    ],
+                    "observation_value_sets": meta["observation_value_sets"],
+                }
+                for (kypermno, candidate_ric), meta in candidate_meta.items()
+            ]
+            raw_rows = _lm2011_rust.refinitiv_authority_pairwise_alias_diagnostic_rows(
+                list(permno_order),
+                candidate_records,
+                VALUE_EQUALITY_TOLERANCE,
+                BENIGN_ALIAS_MIN_OVERLAP_DATE_CATEGORY_COUNT,
+                BENIGN_ALIAS_MIN_OVERLAP_DATE_COUNT,
+                BENIGN_ALIAS_MIN_OVERLAP_CATEGORY_COUNT,
+                BENIGN_ALIAS_MIN_OVERLAP_SHARE_OF_SMALLER_HISTORY,
+            )
+            rows = [dict(row) for row in raw_rows]
+            pair_meta: dict[tuple[str, str, str], dict[str, Any]] = {}
+            for row in rows:
+                kypermno = str(row["KYPERMNO"])
+                left_ric = str(row["left_candidate_ric"])
+                right_ric = str(row["right_candidate_ric"])
+                pair_meta[(kypermno, left_ric, right_ric)] = row
+                pair_meta[(kypermno, right_ric, left_ric)] = row
+            df = _build_explicit_schema_df(rows, _alias_diagnostic_schema()).select(ALIAS_DIAGNOSTIC_COLUMNS)
+            _AUTHORITY_RUST_METRICS["pairwise_alias_diagnostics_fast_success"] += 1
+            return df, pair_meta
+        except Exception:
+            _AUTHORITY_RUST_METRICS["pairwise_alias_diagnostics_fast_failures"] += 1
+    _AUTHORITY_RUST_METRICS["pairwise_alias_diagnostics_fallbacks"] += 1
+    return _build_pairwise_alias_diagnostics_py(permno_order=permno_order, candidate_meta=candidate_meta)
+
+
+def _build_conventional_components_py(
     *,
     permno_order: list[str],
     candidate_meta: dict[tuple[str, str], dict[str, Any]],
@@ -841,6 +1354,134 @@ def _build_conventional_components(
     return component_map_by_permno, component_meta_by_permno
 
 
+def _conventional_component_candidate_records(
+    candidate_meta: dict[tuple[str, str], dict[str, Any]],
+) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for (kypermno, candidate_ric), meta in candidate_meta.items():
+        records.append(
+            {
+                "KYPERMNO": kypermno,
+                "candidate_ric": candidate_ric,
+                "candidate_has_conventional_support": meta["candidate_has_conventional_support"],
+                "candidate_has_effective_support": meta["candidate_has_effective_support"],
+                "candidate_ownership_date_count": meta["candidate_ownership_date_count"],
+                "candidate_bridge_span_day_count": meta["candidate_bridge_span_day_count"],
+                "candidate_bridge_start_date": meta["candidate_bridge_start_date"],
+                "candidate_bridge_end_date": meta["candidate_bridge_end_date"],
+                "observation_value_sets": [
+                    (date_value, category, list(values))
+                    for (date_value, category), values in meta["observation_value_sets"].items()
+                ],
+                "unique_row_set": list(meta["unique_row_set"]),
+            }
+        )
+    return records
+
+
+def _conventional_component_pair_records(
+    pair_meta: dict[tuple[str, str, str], dict[str, Any]],
+) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for (kypermno, left_ric, right_ric), row in pair_meta.items():
+        records.append(
+            {
+                "KYPERMNO": kypermno,
+                "left_candidate_ric": left_ric,
+                "right_candidate_ric": right_ric,
+                "pair_benign_alias_supported": row["pair_benign_alias_supported"],
+                "pair_value_conflict_present": row["pair_value_conflict_present"],
+                "pair_regime_split_supported": row["pair_regime_split_supported"],
+                "pair_requires_review": row["pair_requires_review"],
+            }
+        )
+    return records
+
+
+def _conventional_components_from_rust_records(
+    permno_order: list[str],
+    map_records: list[dict[str, Any]],
+    component_records: list[dict[str, Any]],
+) -> tuple[dict[str, dict[str, str]], dict[str, dict[str, dict[str, Any]]]]:
+    component_map_by_permno: dict[str, dict[str, str]] = defaultdict(dict)
+    for row in map_records:
+        component_map_by_permno[str(row["KYPERMNO"])][str(row["candidate_ric"])] = str(row["component_id"])
+
+    component_meta_by_permno: dict[str, dict[str, dict[str, Any]]] = defaultdict(dict)
+    for row in component_records:
+        kypermno = str(row["KYPERMNO"])
+        component_id = str(row["component_id"])
+        union_value_sets: dict[tuple[dt.date, str], set[float | None]] = defaultdict(set)
+        for date_value, category, values in row.get("union_value_sets", []):
+            union_value_sets[(date_value, str(category))] = set(values)
+        component_meta_by_permno[kypermno][component_id] = {
+            "component_id": component_id,
+            "member_rics": list(row["member_rics"]),
+            "canonical_ric": row["canonical_ric"],
+            "canonical_best_candidate_date_count": int(row["canonical_best_candidate_date_count"]),
+            "ownership_date_count": int(row["ownership_date_count"]),
+            "ownership_row_count": int(row["ownership_row_count"]),
+            "bridge_start_date": row["bridge_start_date"],
+            "bridge_end_date": row["bridge_end_date"],
+            "first_ownership_date": row["first_ownership_date"],
+            "last_ownership_date": row["last_ownership_date"],
+            "merged_bridge_windows": [tuple(window) for window in row["merged_bridge_windows"]],
+            "union_value_sets": union_value_sets,
+            "component_requires_review": bool(row["component_requires_review"]),
+            "coverage_share_of_best_candidate": row["coverage_share_of_best_candidate"],
+        }
+    for kypermno in permno_order:
+        component_map_by_permno.setdefault(str(kypermno), {})
+        component_meta_by_permno.setdefault(str(kypermno), {})
+    return dict(component_map_by_permno), {key: dict(value) for key, value in component_meta_by_permno.items()}
+
+
+def _build_conventional_components(
+    *,
+    permno_order: list[str],
+    candidate_meta: dict[tuple[str, str], dict[str, Any]],
+    pair_meta: dict[tuple[str, str, str], dict[str, Any]],
+) -> tuple[dict[str, dict[str, str]], dict[str, dict[str, dict[str, Any]]]]:
+    if _lm2011_rust is not None:
+        try:
+            map_records, component_records = _lm2011_rust.refinitiv_authority_conventional_components_from_meta(
+                list(permno_order),
+                candidate_meta,
+                pair_meta,
+                DATE_EXTENSION_MAX_GAP_DAYS,
+            )
+            _AUTHORITY_RUST_METRICS["conventional_components_meta_fast_success"] += 1
+            return _conventional_components_from_rust_records(
+                list(permno_order),
+                [dict(row) for row in map_records],
+                [dict(row) for row in component_records],
+            )
+        except Exception:
+            _AUTHORITY_RUST_METRICS["conventional_components_meta_fast_failures"] += 1
+            _AUTHORITY_RUST_METRICS["conventional_components_meta_fallbacks"] += 1
+        try:
+            map_records, component_records = _lm2011_rust.refinitiv_authority_conventional_components(
+                list(permno_order),
+                _conventional_component_candidate_records(candidate_meta),
+                _conventional_component_pair_records(pair_meta),
+                DATE_EXTENSION_MAX_GAP_DAYS,
+            )
+            _AUTHORITY_RUST_METRICS["conventional_components_fast_success"] += 1
+            return _conventional_components_from_rust_records(
+                list(permno_order),
+                [dict(row) for row in map_records],
+                [dict(row) for row in component_records],
+            )
+        except Exception:
+            _AUTHORITY_RUST_METRICS["conventional_components_fast_failures"] += 1
+    _AUTHORITY_RUST_METRICS["conventional_components_fallbacks"] += 1
+    return _build_conventional_components_py(
+        permno_order=permno_order,
+        candidate_meta=candidate_meta,
+        pair_meta=pair_meta,
+    )
+
+
 def build_refinitiv_step1_ownership_authority_tables(
     resolution_df: pl.DataFrame,
     ownership_results_df: pl.DataFrame,
@@ -862,18 +1503,19 @@ def build_refinitiv_step1_ownership_authority_tables(
         for kypermno in normalized_resolution_df.get_column("KYPERMNO").drop_nulls().unique(maintain_order=True).to_list()
         if _normalize_lookup_text(kypermno) is not None
     ]
-    resolution_records = normalized_resolution_df.to_dicts()
-    row_summary_records = normalized_row_summary_df.to_dicts()
-    results_records = normalized_results_df.to_dicts()
-    results_rows_by_permno: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for record in results_records:
-        kypermno = _normalize_lookup_text(record.get("KYPERMNO"))
-        if kypermno is not None:
-            results_rows_by_permno[kypermno].append(record)
+    resolution_conflict_by_permno: dict[str, bool] = {}
+    for kypermno, has_conflict in (
+        normalized_resolution_df.group_by("KYPERMNO", maintain_order=True)
+        .agg(pl.col("conventional_identity_conflict").fill_null(False).any().alias("has_conflict"))
+        .iter_rows()
+    ):
+        normalized_kypermno = _normalize_lookup_text(kypermno)
+        if normalized_kypermno is not None:
+            resolution_conflict_by_permno[normalized_kypermno] = bool(has_conflict)
 
-    candidate_metrics_df, candidate_meta, permno_date_sets, permno_row_sets = _build_candidate_metrics(
-        row_summary_records,
-        results_records,
+    candidate_metrics_df, candidate_meta, permno_date_sets, permno_row_sets = _build_candidate_metrics_from_frames(
+        normalized_row_summary_df,
+        normalized_results_df,
     )
     alias_diagnostics_df, pair_meta = _build_pairwise_alias_diagnostics(
         permno_order=permno_order,
@@ -886,23 +1528,18 @@ def build_refinitiv_step1_ownership_authority_tables(
     )
     allowlist_keys = _allowlist_keys(normalized_allowlist_df)
 
-    resolution_by_permno: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for record in resolution_records:
-        kypermno = _normalize_lookup_text(record.get("KYPERMNO"))
-        if kypermno is not None:
-            resolution_by_permno[kypermno].append(record)
     candidate_meta_by_permno: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for candidate in candidate_meta.values():
         candidate_meta_by_permno[str(candidate["KYPERMNO"])].append(candidate)
 
     pair_rows_by_permno: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for row in alias_diagnostics_df.to_dicts():
+    for row in pair_meta.values():
         pair_rows_by_permno[str(row["KYPERMNO"])].append(row)
 
     decision_rows: list[dict[str, Any]] = []
     exception_rows: list[dict[str, Any]] = []
     ticker_rows: list[dict[str, Any]] = []
-    final_panel_rows: list[dict[str, Any]] = []
+    authority_assignment_rows: list[dict[str, Any]] = []
 
     for kypermno in permno_order:
         permno_candidates = sorted(
@@ -913,7 +1550,6 @@ def build_refinitiv_step1_ownership_authority_tables(
         ticker_candidates = [row for row in permno_candidates if bool(row["candidate_has_ticker_support"])]
         effective_candidates = [row for row in permno_candidates if bool(row["candidate_has_effective_support"])]
         component_meta = component_meta_by_permno.get(kypermno, {})
-        permno_resolution_rows = resolution_by_permno.get(kypermno, [])
         permno_pair_rows = pair_rows_by_permno.get(kypermno, [])
 
         permno_overlap_dates: set[dt.date] = set()
@@ -947,9 +1583,7 @@ def build_refinitiv_step1_ownership_authority_tables(
         authority_decision_status = "NO_CONVENTIONAL_AUTHORITY"
         authority_decision_reason = "no_conventional_component"
 
-        review_flag_conventional_identity_conflict = any(
-            bool(row.get("conventional_identity_conflict")) for row in permno_resolution_rows
-        )
+        review_flag_conventional_identity_conflict = bool(resolution_conflict_by_permno.get(kypermno, False))
         review_flag_effective_overlap_conflict = any(
             bool(pair_row["pair_value_conflict_present"])
             and (
@@ -1256,12 +1890,10 @@ def build_refinitiv_step1_ownership_authority_tables(
         if requires_review:
             continue
 
-        selected_candidate_rics: set[str] = set()
         selected_meta: dict[str, tuple[str, str, str]] = {}
         for component_id in selected_component_ids:
             component = component_meta[component_id]
             for candidate_ric in component["member_rics"]:
-                selected_candidate_rics.add(candidate_ric)
                 selected_meta[candidate_ric] = (
                     str(component["canonical_ric"]),
                     "CONVENTIONAL",
@@ -1269,102 +1901,45 @@ def build_refinitiv_step1_ownership_authority_tables(
                 )
         if authority_decision_status == "REVIEWED_TICKER_ALLOWLIST_ONLY":
             for candidate_ric in selected_allowlist_candidates:
-                selected_candidate_rics.add(candidate_ric)
                 selected_meta[candidate_ric] = (
                     candidate_ric,
                     "TICKER_ALLOWLIST",
                     f"TICKER_ALLOWLIST|{candidate_ric}",
                 )
 
-        grouped_rows: dict[tuple[dt.date, str], list[dict[str, Any]]] = defaultdict(list)
-        for result_row in results_rows_by_permno.get(kypermno, []):
-            result_kypermno = _normalize_lookup_text(result_row.get("KYPERMNO"))
-            source_candidate_ric = _normalize_lookup_text(result_row.get("candidate_ric"))
-            returned_date = result_row.get("returned_date")
-            returned_category = _normalize_lookup_text(result_row.get("returned_category"))
-            if (
-                result_kypermno != kypermno
-                or source_candidate_ric not in selected_candidate_rics
-                or returned_date is None
-                or returned_category is None
-            ):
-                continue
-            grouped_rows[(returned_date, returned_category)].append(result_row)
-
-        panel_conflict_detected = False
-        panel_rows_for_permno: list[dict[str, Any]] = []
-        for (returned_date, returned_category), group_rows in grouped_rows.items():
-            unique_values: list[float] = []
-            for group_row in group_rows:
-                returned_value = group_row.get("returned_value")
-                if returned_value is None:
-                    continue
-                if not any(_values_match(float(returned_value), seen_value) for seen_value in unique_values):
-                    unique_values.append(float(returned_value))
-            if len(unique_values) > 1:
-                panel_conflict_detected = True
-                break
-            preferred_row = min(
-                group_rows,
-                key=lambda row: (
-                    0 if selected_meta[str(row["candidate_ric"])][1] == "CONVENTIONAL" else 1,
-                    0 if _normalize_lookup_text(row.get("ownership_lookup_role")) == "UNIVERSE_EFFECTIVE" else 1,
-                    _normalize_lookup_text(row.get("candidate_ric")) or "",
-                ),
-            )
-            source_candidate_ric = _normalize_lookup_text(preferred_row.get("candidate_ric"))
-            authoritative_assignment = selected_meta.get(source_candidate_ric or "")
-            if authoritative_assignment is None:
-                continue
-            authoritative_assignment_ric, authoritative_family, authoritative_assignment_component = authoritative_assignment
-            panel_rows_for_permno.append(
+        for source_candidate_ric, (
+            authoritative_assignment_ric,
+            authoritative_family,
+            authoritative_assignment_component,
+        ) in selected_meta.items():
+            authority_assignment_rows.append(
                 {
                     "KYPERMNO": kypermno,
+                    "source_candidate_ric": source_candidate_ric,
                     "authoritative_ric": authoritative_assignment_ric,
                     "authoritative_source_family": authoritative_family,
                     "authoritative_component_id": authoritative_assignment_component,
                     "authority_decision_status": authority_decision_status,
-                    "source_candidate_ric": source_candidate_ric,
-                    "returned_date": returned_date,
-                    "returned_category": returned_category,
-                    "returned_value": None if not unique_values else unique_values[0],
                 }
             )
 
-        if panel_conflict_detected:
+    final_panel_rows, panel_conflict_permnos = _authority_final_panel_rows_from_frame(
+        normalized_results_df,
+        authority_assignment_rows,
+    )
+    if panel_conflict_permnos:
+        for decision_row in decision_rows:
+            if (_normalize_lookup_text(decision_row.get("KYPERMNO")) or "") not in panel_conflict_permnos:
+                continue
             decision_row["requires_review"] = True
             decision_row["authority_decision_status"] = "REVIEW_REQUIRED"
             decision_row["authority_decision_reason"] = "selected_authority_rows_conflict_on_same_date_category"
             decision_row["review_flag_unresolved_multi_ric_structure"] = True
-            continue
-
-        final_panel_rows.extend(panel_rows_for_permno)
 
     decision_df = _build_explicit_schema_df(decision_rows, _authority_decision_schema()).select(
         AUTHORITY_DECISION_COLUMNS
     )
-    review_required_rows = []
-    for decision_row in decision_df.to_dicts():
-        if not bool(decision_row.get("requires_review")):
-            continue
-        kypermno = _normalize_lookup_text(decision_row.get("KYPERMNO"))
-        conventional_rics = sorted(
-            candidate["candidate_ric"]
-            for candidate in candidate_meta_by_permno.get(kypermno or "", [])
-            if candidate["KYPERMNO"] == kypermno and bool(candidate["candidate_has_conventional_support"])
-        )
-        ticker_rics = sorted(
-            candidate["candidate_ric"]
-            for candidate in candidate_meta_by_permno.get(kypermno or "", [])
-            if candidate["KYPERMNO"] == kypermno and bool(candidate["candidate_has_ticker_support"])
-        )
-        review_required_rows.append(
-            {
-                **decision_row,
-                "conventional_candidate_rics": "|".join(conventional_rics),
-                "ticker_candidate_rics": "|".join(ticker_rics),
-            }
-        )
+    review_required_rows = _review_required_rows_from_frames(decision_df, candidate_metrics_df)
 
     tables = {
         "candidate_metrics": candidate_metrics_df,
