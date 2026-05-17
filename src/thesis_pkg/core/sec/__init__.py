@@ -10,6 +10,7 @@ import sys
 
 from thesis_native import _lm2011_rust
 
-sys.modules[f"{__name__}._lm2011_rust"] = _lm2011_rust
+if _lm2011_rust is not None:
+    sys.modules[f"{__name__}._lm2011_rust"] = _lm2011_rust
 
 __all__ = ["_lm2011_rust"]

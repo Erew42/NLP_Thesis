@@ -1,9 +1,17 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from setuptools import Extension, find_packages, setup
-from setuptools_rust import Binding, RustExtension, Strip
+
+
+_DISABLE_NATIVE_ENV = "NLP_THESIS_DISABLE_NATIVE_EXTENSIONS"
+
+
+def _native_extensions_enabled() -> bool:
+    value = os.environ.get(_DISABLE_NATIVE_ENV, "")
+    return value.strip().lower() not in {"1", "true", "yes", "on"}
 
 
 def _build_extensions() -> list[Extension]:
@@ -33,11 +41,16 @@ def _cythonize_extensions() -> list[Extension]:
     )
 
 
-setup(
-    packages=find_packages(where="src"),
-    package_dir={"": "src"},
-    ext_modules=_cythonize_extensions(),
-    rust_extensions=[
+def _rust_extensions() -> list[object]:
+    try:
+        from setuptools_rust import Binding, RustExtension, Strip
+    except ImportError as exc:  # pragma: no cover - build-time guard
+        raise RuntimeError(
+            "setuptools-rust is required to build native Rust accelerators. "
+            f"Install it or set {_DISABLE_NATIVE_ENV}=1 for a pure-Python build."
+        ) from exc
+
+    return [
         RustExtension(
             "thesis_native._lm2011_rust",
             "rust/lm2011_rust/Cargo.toml",
@@ -45,6 +58,19 @@ setup(
             debug=False,
             strip=Strip.Debug,
         )
-    ],
-    zip_safe=False,
+    ]
+
+
+setup_kwargs = {
+    "packages": find_packages(where="src"),
+    "package_dir": {"": "src"},
+    "zip_safe": False,
+}
+
+if _native_extensions_enabled():
+    setup_kwargs["ext_modules"] = _cythonize_extensions()
+    setup_kwargs["rust_extensions"] = _rust_extensions()
+
+setup(
+    **setup_kwargs,
 )

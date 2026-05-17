@@ -13,8 +13,8 @@ from typing import Any
 import polars as pl
 from polars.testing import assert_frame_equal
 
-SRC_ROOT = Path(__file__).resolve().parent
-REPO_ROOT = SRC_ROOT.parent
+REPO_ROOT = Path(__file__).resolve().parents[1]
+SRC_ROOT = REPO_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
@@ -24,17 +24,17 @@ from thesis_pkg.pipelines.refinitiv import authority
 
 TARGET_STATIC_CHECKS: tuple[tuple[Path, str, tuple[str, ...]], ...] = (
     (
-        SRC_ROOT / "rust" / "lm2011_rust" / "src" / "refinitiv_bridge.rs",
+        REPO_ROOT / "rust" / "lm2011_rust" / "src" / "refinitiv_bridge.rs",
         "refinitiv_bridge_resolution_frame_rows_from_columns",
         ("refinitiv_bridge_py_dict_rows_from_column_values",),
     ),
     (
-        SRC_ROOT / "rust" / "lm2011_rust" / "src" / "refinitiv_bridge.rs",
+        REPO_ROOT / "rust" / "lm2011_rust" / "src" / "refinitiv_bridge.rs",
         "refinitiv_bridge_ownership_universe_handoff_columns",
         ("refinitiv_bridge_py_dict_rows_from_column_values",),
     ),
     (
-        SRC_ROOT / "rust" / "lm2011_rust" / "src" / "refinitiv_authority.rs",
+        REPO_ROOT / "rust" / "lm2011_rust" / "src" / "refinitiv_authority.rs",
         "refinitiv_authority_candidate_metric_record_columns",
         (
             "py_dict_rows_from_column_values",
@@ -44,12 +44,12 @@ TARGET_STATIC_CHECKS: tuple[tuple[Path, str, tuple[str, ...]], ...] = (
         ),
     ),
     (
-        SRC_ROOT / "rust" / "lm2011_rust" / "src" / "refinitiv_authority.rs",
+        REPO_ROOT / "rust" / "lm2011_rust" / "src" / "refinitiv_authority.rs",
         "refinitiv_authority_final_panel_rows_columns",
         ("py_dict_rows_from_column_values", "py_dict_from_column_row"),
     ),
     (
-        SRC_ROOT / "rust" / "lm2011_rust" / "src" / "refinitiv_authority.rs",
+        REPO_ROOT / "rust" / "lm2011_rust" / "src" / "refinitiv_authority.rs",
         "refinitiv_authority_review_required_rows_columns",
         ("py_dict_rows_from_column_values", "py_dict_from_column_row"),
     ),
@@ -71,7 +71,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-json",
         type=Path,
-        default=SRC_ROOT / "benchmark_results" / "refinitiv_column_native_benchmark.json",
+        default=REPO_ROOT / "output" / "benchmark_results" / "refinitiv_column_native_benchmark.json",
     )
     parser.add_argument("--subset-permnos", type=int, default=750)
     parser.add_argument(

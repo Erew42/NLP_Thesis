@@ -150,9 +150,28 @@ Use `--stage retained` when retained `items_analysis` and
 
 ## Installation
 
+Recommended development install with native Cython/Rust accelerators:
+
 ```bash
 pip install -e .
 ```
+
+This path expects a working C/Cython build environment and Rust/Cargo.
+
+Pure-Python install without native accelerators:
+
+```powershell
+$env:NLP_THESIS_DISABLE_NATIVE_EXTENSIONS = "1"
+pip install -e .
+```
+
+```bash
+NLP_THESIS_DISABLE_NATIVE_EXTENSIONS=1 pip install -e .
+```
+
+In constrained environments that also lack native build Python packages, use
+the same environment variable with `--no-build-isolation` after ensuring
+`setuptools` is installed.
 
 Development and documentation extras:
 

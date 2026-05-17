@@ -435,17 +435,14 @@ pub(crate) fn finbert_visible_prefix_retained_end(
     text_len: usize,
 ) -> usize {
     let mut retained_end = 0usize;
-    for (index, offset) in offsets.into_iter().enumerate() {
-        if special_mask
-            .get(index)
-            .is_some_and(|is_special| *is_special != 0)
-        {
+    for (offset, is_special) in offsets.into_iter().zip(special_mask.into_iter()) {
+        if is_special != 0 {
             continue;
         }
         let Some((start, end)) = offset else {
             continue;
         };
-        if end <= start {
+        if end <= start || end <= 0 {
             continue;
         }
         retained_end = retained_end.max(end as usize);

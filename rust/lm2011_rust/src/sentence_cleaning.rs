@@ -256,15 +256,49 @@ pub(crate) fn has_separator_run(text: &str) -> bool {
     false
 }
 
+fn is_ascii_regex_word(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || ch == '_'
+}
+
 pub(crate) fn count_table_numeric_tokens(text: &str) -> usize {
-    text.split_whitespace()
-        .filter(|token| token.chars().next().is_some_and(|ch| ch.is_ascii_digit()))
-        .filter(|token| {
-            token
-                .chars()
-                .all(|ch| ch.is_ascii_digit() || matches!(ch, ',' | '(' | ')' | '.' | '%' | '-'))
-        })
-        .count()
+    let chars: Vec<char> = text.chars().collect();
+    let mut count = 0usize;
+    let mut pos = 0usize;
+    while pos < chars.len() {
+        let ch = chars[pos];
+        let previous_is_word = pos > 0 && is_ascii_regex_word(chars[pos - 1]);
+        if !ch.is_ascii_digit() || previous_is_word {
+            pos += 1;
+            continue;
+        }
+
+        let mut end = pos + 1;
+        while end < chars.len()
+            && (chars[end].is_ascii_digit()
+                || matches!(chars[end], ',' | '(' | ')' | '.' | '%' | '-'))
+        {
+            end += 1;
+        }
+
+        let mut match_end = None;
+        for candidate_end in ((pos + 1)..=end).rev() {
+            let left_is_word = is_ascii_regex_word(chars[candidate_end - 1]);
+            let right_is_word =
+                candidate_end < chars.len() && is_ascii_regex_word(chars[candidate_end]);
+            if left_is_word != right_is_word {
+                match_end = Some(candidate_end);
+                break;
+            }
+        }
+
+        if let Some(candidate_end) = match_end {
+            count += 1;
+            pos = candidate_end.max(pos + 1);
+        } else {
+            pos += 1;
+        }
+    }
+    count
 }
 
 pub(crate) fn count_uppercase_tokens(text: &str) -> usize {
@@ -565,17 +599,16 @@ pub(crate) fn cleaning_is_table_unit_line_impl(stripped: &str) -> bool {
         .trim_end_matches(')')
         .trim()
         .to_ascii_lowercase();
-    matches!(
-        lowered.as_str(),
-        "dollars in millions"
-            | "dollars in thousands"
-            | "millions"
-            | "thousands"
-            | "in millions of dollars"
-            | "in thousands of dollars"
-            | "millions of dollars"
-            | "thousands of dollars"
-    )
+    let tokens: Vec<&str> = lowered.split_whitespace().collect();
+    match tokens.as_slice() {
+        ["million" | "millions" | "thousand" | "thousands"] => true,
+        ["dollar" | "dollars", "in", "million" | "millions" | "thousand" | "thousands"] => true,
+        ["million" | "millions" | "thousand" | "thousands", "of", "dollar" | "dollars"] => true,
+        ["in", "million" | "millions" | "thousand" | "thousands", "of", "dollar" | "dollars"] => {
+            true
+        }
+        _ => false,
+    }
 }
 
 pub(crate) fn cleaning_years_only_line_impl(stripped: &str) -> bool {
@@ -589,6 +622,10 @@ pub(crate) fn cleaning_years_only_line_impl(stripped: &str) -> bool {
         "years through",
         "year ended",
         "year ending",
+        "year shown",
+        "year later",
+        "year compared",
+        "year through",
         "as of",
     ] {
         if lowered.starts_with(prefix) {
