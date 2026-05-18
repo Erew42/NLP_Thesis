@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 from pathlib import Path
+import tempfile
 
 import polars as pl
 
@@ -56,6 +57,7 @@ def build_or_reuse_ccm_daily_stage(
     bridge_surface_name: str | None = None,
     cik_history_window_policy: CikHistoryWindowPolicy | str = CikHistoryWindowPolicy.HISTORY_OPEN_START_EARLIEST_PER_GVKEY,
     verbose: int = 0,
+    merge_permno_batch_size: int | None = None,
 ) -> dict[str, Path]:
     """Build or reuse CCM daily artifacts with canonical link-table wiring."""
     mode = run_mode.strip().upper()
@@ -129,6 +131,7 @@ def build_or_reuse_ccm_daily_stage(
             output_dir=ccm_derived_dir,
             final_name="final_flagged_data.parquet",
             verbose=verbose,
+            permno_batch_size=merge_permno_batch_size,
         )
 
         merged_with_desc_lf = attach_company_description(pl.scan_parquet(merged_path), tables["companydescription"])
@@ -184,8 +187,140 @@ def merge_histories(
     temp_name: str = "temp_step1_sec_merge.parquet",
     final_name: str = "final_flagged_data.parquet",
     verbose: int = 0,
+    permno_batch_size: int | None = None,
 ) -> Path:
     """RAM-safe merge of security and company histories without dropping bad rows."""
+    if permno_batch_size is not None:
+        if permno_batch_size <= 0:
+            raise ValueError("permno_batch_size must be a positive integer when provided.")
+        return _merge_histories_by_permno_batches(
+            price_lf,
+            sec_hist_lf,
+            sec_header_lf,
+            comp_hist_lf,
+            output_dir,
+            temp_name=temp_name,
+            final_name=final_name,
+            verbose=verbose,
+            permno_batch_size=permno_batch_size,
+        )
+
+    return _merge_histories_unbatched(
+        price_lf,
+        sec_hist_lf,
+        sec_header_lf,
+        comp_hist_lf,
+        output_dir,
+        temp_name=temp_name,
+        final_name=final_name,
+        verbose=verbose,
+    )
+
+
+def _merge_histories_by_permno_batches(
+    price_lf: pl.LazyFrame,
+    sec_hist_lf: pl.LazyFrame,
+    sec_header_lf: pl.LazyFrame,
+    comp_hist_lf: pl.LazyFrame,
+    output_dir: Path,
+    *,
+    temp_name: str,
+    final_name: str,
+    verbose: int,
+    permno_batch_size: int,
+) -> Path:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    final_path = output_dir / final_name
+    schema = price_lf.collect_schema()
+    if "KYPERMNO" not in schema:
+        raise ValueError("permno_batch_size requires price_lf to contain KYPERMNO.")
+
+    permno_expr = pl.col("KYPERMNO").cast(pl.Int64, strict=False)
+    permnos = (
+        price_lf.select(permno_expr.alias("_batch_permno"))
+        .drop_nulls(subset=["_batch_permno"])
+        .unique()
+        .sort("_batch_permno")
+        .collect()
+        .get_column("_batch_permno")
+        .to_list()
+    )
+    has_null_permno = (
+        price_lf.filter(permno_expr.is_null())
+        .limit(1)
+        .select(pl.len())
+        .collect()
+        .item()
+        > 0
+    )
+
+    if not permnos and not has_null_permno:
+        return _merge_histories_unbatched(
+            price_lf,
+            sec_hist_lf,
+            sec_header_lf,
+            comp_hist_lf,
+            output_dir,
+            temp_name=temp_name,
+            final_name=final_name,
+            verbose=verbose,
+        )
+
+    with tempfile.TemporaryDirectory(prefix=f"_{Path(final_name).stem}_permno_batches_", dir=output_dir) as tmp_dir:
+        batch_root = Path(tmp_dir)
+        part_paths: list[Path] = []
+        batch_index = 0
+        for offset in range(0, len(permnos), permno_batch_size):
+            batch_index += 1
+            batch_permnos = permnos[offset : offset + permno_batch_size]
+            batch_dir = batch_root / f"batch_{batch_index:06d}"
+            batch_path = _merge_histories_unbatched(
+                price_lf.filter(permno_expr.is_in(batch_permnos)),
+                sec_hist_lf,
+                sec_header_lf,
+                comp_hist_lf,
+                batch_dir,
+                temp_name=temp_name,
+                final_name=f"part_{batch_index:06d}.parquet",
+                verbose=verbose,
+            )
+            part_paths.append(batch_path)
+
+        if has_null_permno:
+            batch_index += 1
+            batch_dir = batch_root / f"batch_{batch_index:06d}"
+            batch_path = _merge_histories_unbatched(
+                price_lf.filter(permno_expr.is_null()),
+                sec_hist_lf,
+                sec_header_lf,
+                comp_hist_lf,
+                batch_dir,
+                temp_name=temp_name,
+                final_name=f"part_{batch_index:06d}.parquet",
+                verbose=verbose,
+            )
+            part_paths.append(batch_path)
+
+        if len(part_paths) == 1:
+            pl.scan_parquet(part_paths[0]).sink_parquet(final_path, compression="zstd")
+        else:
+            pl.concat(
+                [pl.scan_parquet(path) for path in part_paths],
+                how="vertical_relaxed",
+            ).sink_parquet(final_path, compression="zstd")
+    return final_path
+
+
+def _merge_histories_unbatched(
+    price_lf: pl.LazyFrame,
+    sec_hist_lf: pl.LazyFrame,
+    sec_header_lf: pl.LazyFrame,
+    comp_hist_lf: pl.LazyFrame,
+    output_dir: Path,
+    temp_name: str = "temp_step1_sec_merge.parquet",
+    final_name: str = "final_flagged_data.parquet",
+    verbose: int = 0,
+) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
     temp_path = output_dir / temp_name
     final_path = output_dir / final_name

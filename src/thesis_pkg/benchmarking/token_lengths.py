@@ -213,15 +213,15 @@ def annotate_finbert_token_lengths_in_batches(
             bucket_edges=bucket_edges,
         )
 
-    chunks: list[pl.DataFrame] = []
+    token_counts: list[int] = []
     for offset in range(0, df.height, batch_size):
-        chunk = df.slice(offset, batch_size)
-        chunks.append(
-            annotate_finbert_token_lengths(
-                chunk,
-                authority,
-                text_col=text_col,
-                bucket_edges=bucket_edges,
-            )
-        )
-    return pl.concat(chunks, how="vertical_relaxed")
+        texts = df[text_col].slice(offset, batch_size).to_list()
+        token_counts.extend(compute_finbert_token_lengths(texts, authority))
+
+    token_buckets = assign_finbert_token_buckets(token_counts, authority, bucket_edges=bucket_edges)
+    return df.with_columns(
+        [
+            pl.Series(FINBERT_TOKEN_COUNT_COLUMN, token_counts, dtype=pl.Int32),
+            pl.Series(FINBERT_TOKEN_BUCKET_COLUMN, token_buckets, dtype=pl.Utf8),
+        ]
+    )

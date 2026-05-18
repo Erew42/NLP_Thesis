@@ -94,6 +94,40 @@ def test_annotate_finbert_token_lengths_in_batches_preserves_row_order(monkeypat
     assert result["finbert_token_count_512"].to_list() == [1, 2, 3, 4]
 
 
+def test_annotate_finbert_token_lengths_in_batches_avoids_chunk_frame_concat(monkeypatch) -> None:
+    from thesis_pkg.benchmarking import token_lengths
+
+    call_sizes: list[int] = []
+
+    def _fake_compute(texts, authority):
+        del authority
+        call_sizes.append(len(texts))
+        return [len(text) for text in texts]
+
+    def _raise_on_concat(*args, **kwargs):
+        del args, kwargs
+        raise AssertionError("annotate_finbert_token_lengths_in_batches should not concatenate chunk frames")
+
+    monkeypatch.setattr(token_lengths, "compute_finbert_token_lengths", _fake_compute)
+    monkeypatch.setattr(token_lengths.pl, "concat", _raise_on_concat)
+    df = pl.DataFrame(
+        {
+            "doc_id": [f"doc_{idx:03d}" for idx in range(75)],
+            "full_text": [f"text {idx:03d}" for idx in range(75)],
+        }
+    )
+
+    result = annotate_finbert_token_lengths_in_batches(
+        df,
+        DEFAULT_FINBERT_AUTHORITY,
+        batch_size=20,
+    )
+
+    assert call_sizes == [20, 20, 20, 15]
+    assert result["doc_id"].to_list() == df["doc_id"].to_list()
+    assert result["finbert_token_count_512"].to_list() == [len(text) for text in df["full_text"].to_list()]
+
+
 class _WhitespaceFastTokenizer:
     is_fast = True
 

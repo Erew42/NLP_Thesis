@@ -187,6 +187,47 @@ def test_extension_dictionary_features_score_combined_items_from_concatenated_cl
     assert combined["lm_negative_prop"] == pytest.approx(3 / 9)
 
 
+def test_extension_dictionary_features_cleaned_scopes_cover_75_doc_scope_sample() -> None:
+    rows: list[dict[str, object]] = []
+    for idx in range(75):
+        doc_id = f"doc_{idx:03d}"
+        for item_id, text_scope, cleaned_text in (
+            ("1A", "item_1a_risk_factors", "loss uncertain recognized"),
+            ("7", "item_7_mda", "loss gain recognized must"),
+        ):
+            rows.append(
+                {
+                    "doc_id": doc_id,
+                    "cik_10": f"{idx + 1:010d}",
+                    "filing_date": dt.date(2009, 1, 2) + dt.timedelta(days=idx),
+                    "document_type_raw": "10-K",
+                    "item_id": item_id,
+                    "text_scope": text_scope,
+                    "cleaning_policy_id": "item_text_clean_v2",
+                    "cleaned_text": cleaned_text,
+                }
+            )
+    cleaned_scopes = pl.DataFrame(rows)
+
+    features = build_lm2011_extension_dictionary_features_from_cleaned_scopes(
+        cleaned_scopes.lazy(),
+        dictionary_lists=_dictionary_lists(),
+        harvard_negative_word_list=["bad"],
+        master_dictionary_words=["loss", "gain", "uncertain", "lawsuit", "must", "may", "recognized", "bad"],
+        text_scopes=("item_7_mda", "items_1a_7_combined"),
+    ).collect()
+
+    assert features.select(pl.col("doc_id").n_unique()).item() == 75
+    assert features.filter(pl.col("text_scope") == "item_7_mda").height == 75
+    assert features.filter(pl.col("text_scope") == "items_1a_7_combined").height == 75
+    combined = features.filter(
+        (pl.col("doc_id") == "doc_000") & (pl.col("text_scope") == "items_1a_7_combined")
+    ).row(0, named=True)
+    assert combined["total_token_count"] == 7
+    assert combined["token_count"] == 7
+    assert combined["lm_negative_prop"] == pytest.approx(2 / 7)
+
+
 def test_extension_panel_rejects_mismatched_cleaned_dictionary_and_model_universes(tmp_path: Path) -> None:
     dictionary_features = pl.DataFrame(
         {

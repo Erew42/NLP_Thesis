@@ -687,10 +687,6 @@ def build_lm2011_extension_dictionary_features_from_cleaned_scopes(
             (normalize_lm2011_extension_text_scope_expr(pl.col("text_scope")) == pl.lit(text_scope))
             & (pl.col("item_id").cast(pl.Utf8, strict=False).str.to_uppercase() == pl.lit(item_id.upper()))
         )
-        # The existing LM2011 scorer materializes text into Python counters and cannot infer
-        # its empty output schema for an absent scoped slice.
-        if scope_lf.select(pl.len()).collect().item() == 0:
-            continue
         scored_lf = build_lm2011_text_features_mda(
             scope_lf,
             dictionary_lists=dictionary_lists,
@@ -805,38 +801,37 @@ def build_lm2011_extension_dictionary_features_from_cleaned_scopes(
                 text_col,
             )
         )
-        if combined_lf.select(pl.len()).collect().item() > 0:
-            scored_lf = build_lm2011_text_features_mda(
-                combined_lf,
-                dictionary_lists=dictionary_lists,
-                harvard_negative_word_list=harvard_negative_word_list,
-                master_dictionary_words=master_dictionary_words,
-                text_col=text_col,
-                raw_form_col=raw_form_col,
-                required_item_id=combined_item_id,
+        scored_lf = build_lm2011_text_features_mda(
+            combined_lf,
+            dictionary_lists=dictionary_lists,
+            harvard_negative_word_list=harvard_negative_word_list,
+            master_dictionary_words=master_dictionary_words,
+            text_col=text_col,
+            raw_form_col=raw_form_col,
+            required_item_id=combined_item_id,
+        )
+        combined_metadata_lf = combined_lf.select(
+            pl.col("doc_id").cast(pl.Utf8, strict=False),
+            pl.col("item_id").cast(pl.Utf8, strict=False),
+            pl.col("text_scope").cast(pl.Utf8, strict=False),
+            pl.col("cleaning_policy_id").cast(pl.Utf8, strict=False),
+        ).unique(subset=["doc_id", "item_id"], keep="first")
+        frames.append(
+            scored_lf.join(combined_metadata_lf, on=["doc_id", "item_id"], how="left")
+            .with_columns(
+                pl.lit(EXTENSION_COMBINED_ITEM_1A_7_SCOPE, dtype=pl.Utf8).alias("text_scope"),
+                pl.coalesce(
+                    [
+                        pl.col("cleaning_policy_id_right").cast(pl.Utf8, strict=False),
+                        pl.col("cleaning_policy_id").cast(pl.Utf8, strict=False),
+                    ]
+                ).alias("cleaning_policy_id"),
+                pl.lit(dictionary_family, dtype=pl.Utf8).alias("dictionary_family"),
+                pl.col("total_token_count_mda").cast(pl.Int32, strict=False).alias("total_token_count"),
+                pl.col("token_count_mda").cast(pl.Int32, strict=False).alias("token_count"),
             )
-            combined_metadata_lf = combined_lf.select(
-                pl.col("doc_id").cast(pl.Utf8, strict=False),
-                pl.col("item_id").cast(pl.Utf8, strict=False),
-                pl.col("text_scope").cast(pl.Utf8, strict=False),
-                pl.col("cleaning_policy_id").cast(pl.Utf8, strict=False),
-            ).unique(subset=["doc_id", "item_id"], keep="first")
-            frames.append(
-                scored_lf.join(combined_metadata_lf, on=["doc_id", "item_id"], how="left")
-                .with_columns(
-                    pl.lit(EXTENSION_COMBINED_ITEM_1A_7_SCOPE, dtype=pl.Utf8).alias("text_scope"),
-                    pl.coalesce(
-                        [
-                            pl.col("cleaning_policy_id_right").cast(pl.Utf8, strict=False),
-                            pl.col("cleaning_policy_id").cast(pl.Utf8, strict=False),
-                        ]
-                    ).alias("cleaning_policy_id"),
-                    pl.lit(dictionary_family, dtype=pl.Utf8).alias("dictionary_family"),
-                    pl.col("total_token_count_mda").cast(pl.Int32, strict=False).alias("total_token_count"),
-                    pl.col("token_count_mda").cast(pl.Int32, strict=False).alias("token_count"),
-                )
-                .select(_empty_extension_dictionary_features_df().columns)
-            )
+            .select(_empty_extension_dictionary_features_df().columns)
+        )
     if not frames:
         return _empty_extension_dictionary_features_df().lazy()
     return pl.concat(frames, how="vertical_relaxed")

@@ -6,6 +6,7 @@ from pathlib import Path
 import warnings
 
 import polars as pl
+from polars.testing import assert_frame_equal
 import pytest
 
 from thesis_pkg.core.ccm.sec_ccm_contracts import (
@@ -758,6 +759,67 @@ def test_end_to_end_pipeline_outputs_doc_grain_artifacts(tmp_path: Path):
     assert "Step Performance" in report_text
     assert "phase_b_alignment_mode" in report_text
     assert "phase_b_daily_join_mode" in report_text
+
+
+def test_premerge_phase_a_doc_batches_match_unbatched_on_60_doc_sample(tmp_path: Path) -> None:
+    sec = pl.DataFrame(
+        {
+            "doc_id": [f"doc_{idx:03d}" for idx in range(60)],
+            "cik_10": [f"{idx + 1:010d}" for idx in range(60)],
+            "filing_date": [dt.date(2024, 1, 2) + dt.timedelta(days=idx % 7) for idx in range(60)],
+            "document_type_filename": ["10-K"] * 60,
+        }
+    )
+    link_rows: list[dict[str, object]] = []
+    for idx in range(60):
+        cik = f"{idx + 1:010d}"
+        if idx % 11 == 0:
+            continue
+        link_rows.append(
+            {
+                "cik_10": cik,
+                "gvkey": f"{1000 + idx}",
+                "kypermno": 2000 + idx,
+                "link_quality": 4.0 if idx % 17 else 3.0,
+            }
+        )
+        if idx % 17 == 0:
+            link_rows.append(
+                {
+                    "cik_10": cik,
+                    "gvkey": f"{3000 + idx}",
+                    "kypermno": 4000 + idx,
+                    "link_quality": 3.0,
+                }
+            )
+    links = _canonical_links(link_rows)
+    trading_calendar = pl.DataFrame(
+        {"CALDT": [dt.date(2024, 1, 2) + dt.timedelta(days=idx) for idx in range(14)]}
+    )
+    join_spec = SecCcmJoinSpecV2(daily_join_enabled=False)
+
+    unbatched = run_sec_ccm_premerge_pipeline(
+        sec.lazy(),
+        links.lazy(),
+        trading_calendar.lazy(),
+        tmp_path / "unbatched",
+        join_spec=join_spec,
+        emit_run_report=False,
+    )
+    batched = run_sec_ccm_premerge_pipeline(
+        sec.lazy(),
+        links.lazy(),
+        trading_calendar.lazy(),
+        tmp_path / "batched",
+        join_spec=join_spec,
+        emit_run_report=False,
+        phase_a_doc_batch_size=13,
+    )
+
+    for key in ("sec_ccm_links_doc", "final_flagged_data", "sec_ccm_match_status"):
+        left = pl.read_parquet(unbatched[key]).sort("doc_id")
+        right = pl.read_parquet(batched[key]).sort("doc_id")
+        assert_frame_equal(left, right)
 
 
 def test_end_to_end_pipeline_matches_phase_b_surface_projection(tmp_path: Path) -> None:

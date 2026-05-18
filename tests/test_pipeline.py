@@ -3,6 +3,7 @@ from pathlib import Path
 import warnings
 
 import polars as pl
+from polars.testing import assert_frame_equal
 import pytest
 
 from thesis_pkg.pipeline import (
@@ -1029,6 +1030,74 @@ def test_merge_histories_keeps_rows_and_sets_attempt_bits(tmp_path: Path):
     assert without_keys == int(DataStatus.NONE)
     assert merged.filter(pl.col("KYGVKEY_final").is_not_null()).select("CUSIP").item() == "HISTCUSIP"
     assert merged.filter(pl.col("KYGVKEY_final").is_null()).select("CUSIP").item() is None
+
+
+def test_merge_histories_permno_batches_match_unbatched_on_60_permno_sample(tmp_path: Path):
+    permnos = list(range(1, 61))
+    gvkeys = [f"{1000 + permno}" for permno in permnos]
+    price = pl.DataFrame(
+        {
+            "KYPERMNO": permnos,
+            "CALDT": [dt.date(2024, 1, 2)] * len(permnos),
+            "KYGVKEY_final": gvkeys,
+            "LIID": ["A"] * len(permnos),
+            "data_status": [int(DataStatus.HAS_RET) if permno % 2 else 0 for permno in permnos],
+        }
+    )
+    sec_hist = pl.DataFrame(
+        {
+            "KYGVKEY": gvkeys,
+            "KYIID": ["A"] * len(permnos),
+            "HSCHGDT": [dt.date(2023, 1, 1)] * len(permnos),
+            "HSCHGENDDT": [None] * len(permnos),
+            "HTPCI": ["USA"] * len(permnos),
+            "HEXCNTRY": ["US"] * len(permnos),
+            "HSCUSIP": [f"CUSIP{permno:03d}" for permno in permnos],
+            "HISIN": [f"ISIN{permno:03d}" for permno in permnos],
+        }
+    )
+    sec_header = pl.DataFrame(
+        {
+            "KYGVKEY": gvkeys,
+            "KYIID": ["A"] * len(permnos),
+            "SBEGDT": [dt.date(2023, 1, 1)] * len(permnos),
+            "SENDDT": [None] * len(permnos),
+            "SCUSIP": [f"HDR{permno:03d}" for permno in permnos],
+            "ISIN": [f"HDRISIN{permno:03d}" for permno in permnos],
+        }
+    )
+    comp_hist = pl.DataFrame(
+        {
+            "KYGVKEY": gvkeys,
+            "HCHGDT": [dt.date(2023, 1, 1)] * len(permnos),
+            "HCHGENDDT": [None] * len(permnos),
+            "HCIK": [f"CIK{permno:03d}" for permno in permnos],
+            "HSIC": [100 + permno for permno in permnos],
+            "HNAICS": [f"NAICS{permno:03d}" for permno in permnos],
+            "HGSUBIND": [f"Sub{permno:03d}" for permno in permnos],
+        }
+    )
+
+    unbatched_path = merge_histories(
+        price.lazy(),
+        sec_hist.lazy(),
+        sec_header.lazy(),
+        comp_hist.lazy(),
+        tmp_path / "unbatched",
+    )
+    batched_path = merge_histories(
+        price.lazy(),
+        sec_hist.lazy(),
+        sec_header.lazy(),
+        comp_hist.lazy(),
+        tmp_path / "batched",
+        permno_batch_size=13,
+    )
+
+    unbatched = pl.read_parquet(unbatched_path).sort("KYPERMNO")
+    batched = pl.read_parquet(batched_path).sort("KYPERMNO").select(unbatched.columns)
+    assert_frame_equal(batched, unbatched)
+    assert not any((tmp_path / "batched").glob("_final_flagged_data_permno_batches_*"))
 
 
 def test_merge_histories_open_ended_segments_are_valid(tmp_path: Path):

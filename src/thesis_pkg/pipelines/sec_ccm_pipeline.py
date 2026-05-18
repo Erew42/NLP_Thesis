@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 from pathlib import Path
+import tempfile
 import time
 import uuid
 from typing import Any
@@ -109,6 +110,54 @@ def _assert_unique_doc_id(lf: pl.LazyFrame, label: str) -> None:
     if dup.height > 0:
         samples = dup.to_dicts()
         raise ValueError(f"{label} has non-unique doc_id values; sample duplicates: {samples}")
+
+
+def _write_phase_a_links_doc_batches(
+    phase_a_norm: pl.LazyFrame,
+    link_universe_lf: pl.LazyFrame,
+    output_path: Path,
+    *,
+    doc_batch_size: int,
+    compression: str = "zstd",
+) -> tuple[Path, int]:
+    """Resolve and write Phase A link output in bounded doc-id batches."""
+    if doc_batch_size < 1:
+        raise ValueError("phase_a_doc_batch_size must be >= 1 when provided.")
+
+    doc_id_frame = (
+        phase_a_norm.select(pl.col("doc_id").cast(pl.Utf8, strict=False).alias("doc_id"))
+        .unique()
+        .sort("doc_id")
+        .collect()
+    )
+    if doc_id_frame.select(pl.col("doc_id").is_null().any()).item():
+        raise ValueError("sec_filings contains null doc_id values; Phase A doc batching requires non-null doc_id.")
+
+    doc_ids = doc_id_frame.get_column("doc_id").to_list()
+    if not doc_ids:
+        _write_lazy_parquet(resolve_links_phase_a(phase_a_norm, link_universe_lf), output_path, compression=compression)
+        return output_path, 0
+
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    batch_count = 0
+    with tempfile.TemporaryDirectory(prefix="phase_a_doc_batches_", dir=output_path.parent) as tmp_dir:
+        batch_paths: list[Path] = []
+        for start in range(0, len(doc_ids), doc_batch_size):
+            batch_count += 1
+            batch_doc_ids = doc_ids[start : start + doc_batch_size]
+            batch_path = Path(tmp_dir) / f"part_{batch_count:05d}.parquet"
+            batch_lf = phase_a_norm.filter(pl.col("doc_id").cast(pl.Utf8, strict=False).is_in(batch_doc_ids))
+            _write_lazy_parquet(
+                resolve_links_phase_a(batch_lf, link_universe_lf),
+                batch_path,
+                compression=compression,
+            )
+            batch_paths.append(batch_path)
+
+        _write_lazy_parquet(pl.scan_parquet(batch_paths), output_path, compression=compression)
+
+    return output_path, batch_count
 
 
 def _step_events_to_frame(run_id: str, events: list[dict[str, Any]]) -> pl.DataFrame:
@@ -543,6 +592,7 @@ def run_sec_ccm_premerge_pipeline(
     daily_lf: pl.LazyFrame | None = None,
     join_spec: SecCcmJoinSpecV1 | SecCcmJoinSpecV2 = SecCcmJoinSpecV1(),
     emit_run_report: bool = True,
+    phase_a_doc_batch_size: int | None = None,
 ) -> dict[str, Path]:
     """
     Run the two-phase SEC-CCM pre-merge pipeline and persist canonical artifacts.
@@ -561,6 +611,9 @@ def run_sec_ccm_premerge_pipeline(
         join_spec: Join configuration (V1 or V2; normalized internally to V2).
         emit_run_report: Whether run-step artifacts, manifest, and markdown report
             are generated.
+        phase_a_doc_batch_size: Optional doc-id batch size for Phase A link
+            resolution. When set, the candidate link join is resolved and written
+            in independent doc-id shards before downstream Phase B processing.
 
     Returns:
         dict[str, Path]: Artifact-key to output-path mapping. Keys include
@@ -616,20 +669,36 @@ def run_sec_ccm_premerge_pipeline(
     _assert_unique_doc_id(phase_a_norm, "sec_filings")
     _record_step("phase_a_normalize")
 
-    phase_a_links = resolve_links_phase_a(phase_a_norm, link_universe_lf)
-    _assert_unique_doc_id(phase_a_links, "Phase A links")
-    _record_step("phase_a_resolve_links")
-
     paths: dict[str, Path] = {}
-    paths["sec_ccm_links_doc"] = _write_lazy_parquet(
-        phase_a_links,
-        output_dir / "sec_ccm_links_doc.parquet",
-    )
+    if phase_a_doc_batch_size is None:
+        phase_a_links = resolve_links_phase_a(phase_a_norm, link_universe_lf)
+        _assert_unique_doc_id(phase_a_links, "Phase A links")
+        _record_step("phase_a_resolve_links")
+
+        paths["sec_ccm_links_doc"] = _write_lazy_parquet(
+            phase_a_links,
+            output_dir / "sec_ccm_links_doc.parquet",
+        )
+    else:
+        paths["sec_ccm_links_doc"], phase_a_batch_count = _write_phase_a_links_doc_batches(
+            phase_a_norm,
+            link_universe_lf,
+            output_dir / "sec_ccm_links_doc.parquet",
+            doc_batch_size=phase_a_doc_batch_size,
+        )
+        phase_a_links = pl.scan_parquet(paths["sec_ccm_links_doc"])
+        _assert_unique_doc_id(phase_a_links, "Phase A links")
+        _record_step(
+            "phase_a_resolve_links",
+            notes=f"doc_batch_size={phase_a_doc_batch_size}; batches={phase_a_batch_count}",
+        )
+
     _record_step(
         "write_sec_ccm_links_doc",
         artifact_key="sec_ccm_links_doc",
         artifact_path=paths["sec_ccm_links_doc"],
         rows_out=_count_parquet_rows(paths["sec_ccm_links_doc"]),
+        notes=("written during batched Phase A resolution" if phase_a_doc_batch_size is not None else None),
     )
 
     phase_b_aligned = align_doc_dates_phase_b(phase_a_links, trading_calendar_lf, join_spec_v2)

@@ -955,6 +955,7 @@ def test_main_rebuilds_lm2011_backbone_when_sec_ccm_premerge_runs(
 ) -> None:
     paths = _configure_minimal_main_env(monkeypatch, tmp_path)
     monkeypatch.setenv("SEC_CCM_RUN_SEC_CCM_PREMERGE", "true")
+    monkeypatch.setenv("SEC_CCM_PREMERGE_DOC_BATCH_SIZE", "23")
     monkeypatch.setenv("SEC_CCM_YEARS", "[1995, 2010]")
     monkeypatch.setattr(runner, "LSEG_API_READY", False)
 
@@ -985,14 +986,16 @@ def test_main_rebuilds_lm2011_backbone_when_sec_ccm_premerge_runs(
         }
     ).write_parquet(paths["sec_year_merged_dir"] / "2010.parquet")
 
-    monkeypatch.setattr(
-        runner,
-        "run_sec_ccm_premerge_pipeline",
-        lambda **_: {
+    captured_premerge: dict[str, object] = {}
+
+    def _run_premerge_stub(**kwargs: object) -> dict[str, Path]:
+        captured_premerge.update(kwargs)
+        return {
             "sec_ccm_matched_clean": matched_clean_path,
             "sec_ccm_match_status": match_status_path,
-        },
-    )
+        }
+
+    monkeypatch.setattr(runner, "run_sec_ccm_premerge_pipeline", _run_premerge_stub)
     captured: dict[str, object] = {}
 
     def _write_backbone_stub(
@@ -1026,6 +1029,7 @@ def test_main_rebuilds_lm2011_backbone_when_sec_ccm_premerge_runs(
     assert captured["filingdates_path"] == filingdates_path
     assert captured["sec_year_paths"] == [paths["sec_year_merged_dir"] / "1995.parquet"]
     assert captured["output_path"] == sec_ccm_output_dir / "lm2011_sample_backbone.parquet"
+    assert captured_premerge["phase_a_doc_batch_size"] == 23
     assert (sec_ccm_output_dir / "lm2011_sample_backbone.parquet").exists()
 
 

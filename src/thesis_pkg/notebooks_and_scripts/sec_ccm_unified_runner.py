@@ -1701,6 +1701,14 @@ def main() -> None:
         "SEC_CCM_RAM_LOG_INTERVAL_BATCHES",
         10,
     )
+    CCM_MERGE_PERMNO_BATCH_SIZE = _env_optional_int(
+        "SEC_CCM_CCM_MERGE_PERMNO_BATCH_SIZE",
+        None,
+    )
+    SEC_CCM_PREMERGE_DOC_BATCH_SIZE = _env_optional_int(
+        "SEC_CCM_PREMERGE_DOC_BATCH_SIZE",
+        None,
+    )
     FINBERT_OUTPUT_DIR = _env_path(
         "SEC_CCM_FINBERT_OUTPUT_DIR",
         RUN_ROOT / "finbert_item_analysis",
@@ -2011,6 +2019,8 @@ def main() -> None:
             "LM2011_EVENT_WINDOW_DOC_BATCH_SIZE": LM2011_EVENT_WINDOW_DOC_BATCH_SIZE,
             "PRINT_RAM_STATS": PRINT_RAM_STATS,
             "RAM_LOG_INTERVAL_BATCHES": RAM_LOG_INTERVAL_BATCHES,
+            "CCM_MERGE_PERMNO_BATCH_SIZE": CCM_MERGE_PERMNO_BATCH_SIZE,
+            "SEC_CCM_PREMERGE_DOC_BATCH_SIZE": SEC_CCM_PREMERGE_DOC_BATCH_SIZE,
             "RUN_FINBERT": RUN_FINBERT,
             "RUN_FINBERT_PREPROCESS": RUN_FINBERT_PREPROCESS,
             "RUN_FINBERT_ANALYSIS": RUN_FINBERT_ANALYSIS,
@@ -2111,6 +2121,7 @@ def main() -> None:
         canonical_name=CANONICAL_LINK_NAME,
         daily_name=CCM_DAILY_NAME,
         verbose=1,
+        merge_permno_batch_size=CCM_MERGE_PERMNO_BATCH_SIZE,
     )
 
     ccm_daily_path = ccm_stage_paths["ccm_daily_path"]
@@ -2792,6 +2803,7 @@ def main() -> None:
             daily_lf=ccm_daily_phase_b_lf,
             join_spec=join_spec,
             emit_run_report=True,
+            phase_a_doc_batch_size=SEC_CCM_PREMERGE_DOC_BATCH_SIZE,
         )
 
         for key in sorted(sec_ccm_paths):
