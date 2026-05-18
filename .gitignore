@@ -41,6 +41,7 @@ output/
 submission_Ewen_10060297/
 archive/
 src_rust_migration/
+experimental/
 rust/**/target/
 # Agent ephemeral state and memory
 .agent/
